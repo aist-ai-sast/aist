@@ -107,7 +107,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         output_dir =  params.output_dir
         rebuild_images = params.rebuild_images
         analyzers = params.analyzers
-        time_class_level = params.time_class_level # FIXME: if analyzer is from slower time class it will be skipped
+        time_class_level = params.time_class_level
         script_path = params.script_path
         dockerfile_path = params.dockerfile_path
 
