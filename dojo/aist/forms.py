@@ -59,7 +59,7 @@ class AISTPipelineRunForm(forms.Form):
     )
     languages = forms.MultipleChoiceField(choices=[], required=False, label="Languages", widget=forms.CheckboxSelectMultiple)
     analyzers = forms.MultipleChoiceField(choices=[], required=False, label="Analyzers to launch", widget=forms.CheckboxSelectMultiple)
-    time_class_level = forms.ChoiceField(choices=[], required=False, label="Maximum time class", initial="medium")
+    time_class_level = forms.ChoiceField(choices=[], required=False, label="Maximum time class", initial="slow")
     selection_signature = forms.CharField(required=False, widget=forms.HiddenInput)
 
     def __init__(self, *args, **kwargs):
@@ -141,6 +141,6 @@ class AISTPipelineRunForm(forms.Form):
             log_level=self.cleaned_data.get("log_level") or "INFO",
             selected_languages=self.cleaned_data.get("languages") or [],
             analyzers=self.cleaned_data.get("analyzers") or [],
-            time_class_level=self.cleaned_data.get("time_class_level"),
+            time_class_level=None, # Here list of analyzer is presented every time, so it's overwrites this option.
             ask_push_to_ai=self.cleaned_data.get("ask_push_to_ai") or True,
         )
