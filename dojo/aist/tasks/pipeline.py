@@ -23,7 +23,7 @@ from celery.exceptions import Ignore
 
 
 def postprocess_findings(pipeline_id, repo_path, finding_ids, trim_path, test_ids, log_level, project_version_descriptor):
-    local_run = project_version_descriptor['type'] == 'FILE_HASH'
+    local_run = project_version_descriptor.get('type', 'FILE_HASH') == 'FILE_HASH'
     repo_params = {}
     if not local_run:
         try:
