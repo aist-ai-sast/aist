@@ -13,7 +13,10 @@ from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 from celery import states
 from celery.result import AsyncResult
 from django.conf import settings
+from django.db import transaction
 from django.urls import reverse
+
+from dojo.signals import pipeline_finished
 
 from .models import AISTPipeline, AISTStatus
 
@@ -75,6 +78,14 @@ def has_unfinished_pipeline(project_version) -> bool:
     )
 
 
+def finish_pipeline(pipeline):
+    pipeline.status = AISTStatus.FINISHED
+    pipeline.save(update_fields=["status", "updated"])
+    transaction.on_commit(lambda: pipeline_finished.send(
+        sender=type(pipeline), pipeline_id=pipeline.id,
+    ))
+
+
 def create_pipeline_object(aist_project, project_version, pull_request):
     return AISTPipeline.objects.create(
         id=uuid.uuid4().hex[:8],
@@ -123,19 +134,19 @@ def stop_pipeline(pipeline: AISTPipeline) -> None:
     Stop all Celery tasks associated with an AISTPipeline.
 
     Revokes both the run and deduplication watcher tasks (if present),
-    tears down any related containers, and updates the pipeline status
-    to FINISHED. The caller should save() the pipeline afterwards.
+    tears down any related containers.
     """
-    cleanup_pipeline_containers(pipeline.id)
+    with transaction.atomic():
+        cleanup_pipeline_containers(pipeline.id)
 
-    run_id = getattr(pipeline, "run_task_id", None)
-    watch_id = getattr(pipeline, "watch_dedup_task_id", None)
-    _revoke_task(run_id)
-    _revoke_task(watch_id)
+        run_id = getattr(pipeline, "run_task_id", None)
+        watch_id = getattr(pipeline, "watch_dedup_task_id", None)
+        _revoke_task(run_id)
+        _revoke_task(watch_id)
 
-    pipeline.run_task_id = None
-    pipeline.watch_dedup_task_id = None
-    pipeline.status = AISTStatus.FINISHED
+        pipeline.run_task_id = None
+        pipeline.watch_dedup_task_id = None
+        finish_pipeline(pipeline)
 
 
 def _best_effort_outbound_ip() -> str:

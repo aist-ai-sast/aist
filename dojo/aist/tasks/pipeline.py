@@ -10,7 +10,7 @@ from django.utils import timezone
 from dojo.aist.logging_transport import _install_db_logging, get_redis
 from dojo.aist.models import AISTPipeline, AISTProjectVersion, AISTStatus
 from dojo.aist.pipeline_args import PipelineArguments
-from dojo.aist.utils import _import_sast_pipeline_package
+from dojo.aist.utils import _import_sast_pipeline_package, finish_pipeline
 from dojo.models import Finding, Test
 
 from .enrich import make_enrich_chord
@@ -206,9 +206,8 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
             with transaction.atomic():
                 pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
                 pipeline.tests.set(tests, clear=True)
-                pipeline.status = AISTStatus.FINISHED
                 logger.info("No findings to enrich; Finishing pipeline")
-                pipeline.save(update_fields=["status", "updated"])
+                finish_pipeline(pipeline)
         else:
             raise self.replace(
                 postprocess_findings(
@@ -222,9 +221,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         if pipeline is not None:
             try:
                 with transaction.atomic():
-                    p = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-                    p.status = AISTStatus.FINISHED
-                    p.save(update_fields=["status", "updated"])
+                    finish_pipeline(pipeline)
             except Exception:
                 logger.exception("Failed to mark pipeline as FINISHED after exception.")
         raise

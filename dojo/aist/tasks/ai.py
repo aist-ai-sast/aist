@@ -9,7 +9,7 @@ from django.db import transaction
 
 from dojo.aist.logging_transport import _install_db_logging
 from dojo.aist.models import AISTPipeline, AISTStatus
-from dojo.aist.utils import build_callback_url
+from dojo.aist.utils import build_callback_url, finish_pipeline
 
 
 def _csv(items: Iterable[Any]) -> str:
@@ -80,8 +80,7 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
             resp.raise_for_status()
         except requests.RequestException:
             log.exception("AI triage POST failed")
-            pipeline.status = AISTStatus.FINISHED
-            pipeline.save(update_fields=["status", "updated"])
+            finish_pipeline(pipeline)
             return
 
         pipeline.status = AISTStatus.WAITING_RESULT_FROM_AI
