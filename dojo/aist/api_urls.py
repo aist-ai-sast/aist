@@ -6,6 +6,7 @@ from .api import (
     PipelineAPI,
     PipelineListAPI,
     PipelineStartAPI,
+    ProjectVersionCreateAPI,
     ProjectVersionFileBlobAPI,
 )
 
@@ -20,5 +21,10 @@ urlpatterns = [
         "projects_version/<int:project_version_id>/files/blob/<path:subpath>",
         ProjectVersionFileBlobAPI.as_view(),
         name="project_version_file_blob",
+    ),
+    path(
+        "projects/<int:project_id>/versions/create/",
+        ProjectVersionCreateAPI.as_view(),
+        name="project_version_create",
     ),
 ]

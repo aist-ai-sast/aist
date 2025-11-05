@@ -73,11 +73,7 @@ class LinkBuilder:
         return f"{repo_url.rstrip('/')}/blob/{ref}/{fp}"
 
     def contains_excluded_path(self, url: str) -> bool:
-        for path in self.excluded_path:
-            if path in url:
-                return True
-        return False
-
+        return any(path in url for path in self.excluded_path)
 
     def remote_link_exists(self, url: str, timeout: int = 5, max_retries: int = 3) -> bool | None:
         """Return True if GET 200/3xx, False if 404, None for other errors. Retries on 429."""

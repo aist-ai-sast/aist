@@ -8,18 +8,22 @@ Covers:
 - GET  /aist/pipeline/{id} (returns status and response_from_ai)
 - Negative: POST /aist/pipeline/start with unknown project -> 404
 
-All comments are in English by request.
 """
-
+import io
+import zipfile
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
+from rest_framework import status
 from rest_framework.test import APIClient
 
-from dojo.aist.models import AISTPipeline, AISTProject, AISTProjectVersion, AISTStatus
-from dojo.models import Product, Product_Type, SLA_Configuration
+from dojo.aist.models import AISTPipeline, AISTProject, AISTProjectVersion, AISTStatus, VersionType
+from dojo.aist.tasks.enrich import enrich_finding_task
+from dojo.models import DojoMeta, Engagement, Finding, Product, Product_Type, SLA_Configuration, Test, Test_Type
 
 
 class AISTApiTests(TestCase):
@@ -193,3 +197,220 @@ class AISTApiTests(TestCase):
         # Ensure the object is gone
         with self.assertRaises(AISTProject.DoesNotExist):
             AISTProject.objects.get(id=self.project.id)
+
+    def _make_zip(self, filename: str, content: bytes) -> bytes:
+        """Helper to create an in-memory zip archive with a single file."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr(filename, content)
+        buf.seek(0)
+        return buf.read()
+
+    def test_create_version_file_hash_ok(self):
+        """FILE_HASH must accept source_archive and return created object."""
+        url = reverse(
+            "dojo_aist_api:project_version_create",
+            kwargs={"project_id": self.project.id},
+        )
+        # in urls you already have trailing slash, so keep it as is
+
+        archive_bytes = self._make_zip("a.txt", b"content")
+        uploaded = SimpleUploadedFile(
+            name="src.zip", content=archive_bytes, content_type="application/zip",
+        )
+
+        payload = {
+            # if VersionType.FILE_HASH.value is enum -> .value, but in your test file
+            # you were actually sending name, so do the same:
+            "version_type": VersionType.FILE_HASH.value,
+            "source_archive": uploaded,
+        }
+
+        resp = self.client.post(url, payload)
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+
+        data = resp.json()
+        self.assertIn("id", data)
+        self.assertEqual(data["project"], self.project.id)
+        self.assertEqual(data["version_type"], VersionType.FILE_HASH.value)
+        # in your model save() will put sha256 into version if it was FILE_HASH
+        self.assertTrue(
+            AISTProjectVersion.objects.filter(
+                id=data["id"], project=self.project,
+            ).exists(),
+        )
+
+    def test_create_version_file_hash_missing_archive(self):
+        """FILE_HASH without source_archive must return 400 with field error."""
+        url = reverse(
+            "dojo_aist_api:project_version_create",
+            kwargs={"project_id": self.project.id},
+        )
+        payload = {
+            "version_type": VersionType.FILE_HASH.value,
+        }
+        resp = self.client.post(url, payload)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        data = resp.json()
+        self.assertIn("source_archive", data)
+
+    def test_create_version_git_hash_ok(self):
+        """GIT_HASH must accept 'version' and return it in the response."""
+        url = reverse(
+            "dojo_aist_api:project_version_create",
+            kwargs={"project_id": self.project.id},
+        )
+        payload = {
+            "version_type": VersionType.GIT_HASH,
+            "version": "main",
+        }
+        resp = self.client.post(url, payload, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        data = resp.json()
+        self.assertIn("id", data)
+        self.assertEqual(data["project"], self.project.id)
+        self.assertEqual(data["version_type"], VersionType.GIT_HASH)
+        self.assertEqual(data["version"], "main")
+
+    def test_create_version_git_hash_missing_version(self):
+        """GIT_HASH without version must return 400."""
+        url = reverse(
+            "dojo_aist_api:project_version_create",
+            kwargs={"project_id": self.project.id},
+        )
+        payload = {
+            "version_type": VersionType.GIT_HASH.value,
+        }
+        resp = self.client.post(url, payload, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        data = resp.json()
+        self.assertIn("version", data)
+
+    def test_create_version_duplicate_git_hash(self):
+        """Duplicate (project, version) must be rejected by serializer."""
+        AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH.value,
+            version="dup",
+        )
+
+        url = reverse(
+            "dojo_aist_api:project_version_create",
+            kwargs={"project_id": self.project.id},
+        )
+        payload = {
+            "version_type": VersionType.GIT_HASH.value,
+            "version": "dup",
+        }
+        resp = self.client.post(url, payload, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        data = resp.json()
+
+        self.assertTrue(
+            "version" in data or "non_field_errors" in data,
+            data,
+        )
+
+    def test_create_version_404_for_unknown_project(self):
+        """Unknown project_id should return 404."""
+        url = reverse(
+            "dojo_aist_api:project_version_create",
+            kwargs={"project_id": 999999},
+        )
+        payload = {
+            "version_type": VersionType.GIT_HASH.value,
+            "version": "some",
+        }
+        resp = self.client.post(url, payload, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_create_version_with_wrong_version_type(self):
+        """Invalid version_type must return 400 from ChoiceField."""
+        url = reverse(
+            "dojo_aist_api:project_version_create",
+            kwargs={"project_id": self.project.id},
+        )
+        payload = {
+            "version_type": "WRONG_TYPE",
+            "version": "anything",
+        }
+        resp = self.client.post(url, payload, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        data = resp.json()
+        # DRF ChoiceField usually returns "“WRONG_TYPE” is not a valid choice."
+        self.assertIn("version_type", data)
+
+    def test_enrich_excluded_path_deletes_findings(self):
+        """Findings with an excluded path should be deleted by enrich_finding_task."""
+        self.project.profile = {"paths": {"exclude": ["skipme"]}}
+        self.project.save()
+
+        engagement = Engagement.objects.create(
+            product=self.product,
+            name="Test Engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+        )
+        test_type = Test_Type.objects.create(name="AISTTestType")
+        test = Test.objects.create(
+            engagement=engagement,
+            test_type=test_type,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+        )
+        version = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH.value,
+            version="abc123",
+        )
+
+        f_excluded = Finding.objects.create(
+            test=test,
+            title="Excluded",
+            severity="Low",
+            description="Should be deleted",
+            file_path="src/skipme/file.cpp",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        f_kept = Finding.objects.create(
+            test=test,
+            title="Kept",
+            severity="Low",
+            description="Should remain",
+            file_path="src/keepme/file.cpp",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+
+        descriptor = {
+            "id": version.id,
+            "excluded_paths": ["skipme"],
+            "type": "FILE_HASH",
+        }
+
+        # signature: (finding_id, repo_url, ref, trim_path, descriptor)
+        enrich_finding_task.run(
+            f_excluded.id,
+            "",
+            None,
+            "",
+            descriptor,
+        )
+        enrich_finding_task.run(
+            f_kept.id,
+            "",
+            None,
+            "",
+            descriptor,
+        )
+
+        self.assertFalse(Finding.objects.filter(id=f_excluded.id).exists())
+        self.assertTrue(Finding.objects.filter(id=f_kept.id).exists())
+
+        self.assertTrue(
+            DojoMeta.objects.filter(
+                finding=f_kept,
+                name="sourcefile_link",
+            ).exists(),
+        )
