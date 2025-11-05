@@ -310,10 +310,7 @@ def pipeline_detail(request, pipeline_id: str):
 def stop_pipeline_view(request, pipeline_id: str):
     """POST-only endpoint to stop a running pipeline (Celery revoke). Sets FINISHED regardless of current state to keep UI consistent."""
     pipeline = get_object_or_404(AISTPipeline, id=pipeline_id)
-    with transaction.atomic():
-        stop_pipeline(pipeline)
-        pipeline.save(update_fields=["status"])
-
+    stop_pipeline(pipeline)
     return redirect("dojo_aist:pipeline_detail", pipeline_id=pipeline.id)
 
 

@@ -18,6 +18,7 @@ from dojo.models import Finding, Test
 
 from .logging_transport import _install_db_logging
 from .models import AISTAIResponse, AISTPipeline, AISTStatus
+from .utils import finish_pipeline
 
 
 def _severity_rank_case():
@@ -248,7 +249,6 @@ def pipeline_callback(request, pipeline_id: str):
             .get(id=pipeline_id)
         )
         AISTAIResponse.objects.create(pipeline=pipeline, payload=response_from_ai)
-        pipeline.status = AISTStatus.FINISHED
-        pipeline.save(update_fields=["status", "updated"])
+        finish_pipeline(pipeline)
 
     return Response({"ok": True})
