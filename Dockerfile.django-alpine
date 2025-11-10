@@ -84,6 +84,9 @@ COPY dojo/ ./dojo/
 # Add extra fixtures to docker image which are loaded by the initializer
 COPY docker/extra_fixtures/* /app/dojo/fixtures/
 
+COPY sast-combinator/sast-pipeline/ /app/pipeline
+ENV AIST_PIPELINE_CODE_PATH=/app/pipeline
+
 RUN \
   # Remove placeholder copied from docker/certs
   rm -f /readme.txt && \
