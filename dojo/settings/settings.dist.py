@@ -2132,7 +2132,7 @@ PGHISTORY_OBJ_FIELD = pghistory.ObjForeignKey(db_index=True)
 
 AIST_PIPELINE_CODE_PATH = env(
     "AIST_PIPELINE_CODE_PATH",
-    default=str(Path(__file__).resolve().parent.parent.parent / "sast-combinator" / "tools" / "sast-pipeline"),
+    default=str(Path(__file__).resolve().parent.parent.parent / "sast-combinator" / "sast-pipeline"),
 )
 
 # TODO: probably need re-arrange locations
