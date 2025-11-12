@@ -5,6 +5,7 @@ from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from dojo.models import DojoMeta
 
 from dojo.models import Product, Product_Type  # already used in GH flow
 
@@ -91,17 +92,22 @@ class ImportProjectFromGitlabAPI(APIView):
             defaults={"prod_type": product_type, "description": description},
         )
 
+        DojoMeta.objects.update_or_create(
+            product=product,
+            name="scm-type",
+            defaults={"value": 'gitlab'},
+        )
+
         # 4) Create/Update RepositoryInfo (GITLAB)
         repo_info, _ = RepositoryInfo.objects.get_or_create(
             type=ScmType.GITLAB,
-            repo_owner=owner_ns,  # may include subgroups (allowed by updated validator)
+            repo_owner=owner_ns,
             repo_name=repo_name,
             defaults={"base_url": inferred_base},
         )
 
-        # 5) Ensure GitLab binding with token (TODO: move to secret manager)
         binding, created = ScmGitlabBinding.objects.get_or_create(scm=repo_info)
-        # Store securely in the future (Vault/Keyring); for MVP, keep minimal footprint
+
         if token and binding.personal_access_token != token:
             binding.personal_access_token = token
             binding.save(update_fields=["personal_access_token"])
@@ -111,7 +117,7 @@ class ImportProjectFromGitlabAPI(APIView):
             product=product,
             defaults={
                 "supported_languages": langs,
-                "script_path": "INVALID",  # same as GH MVP
+                "script_path": "INVALID",
                 "compilable": False,
                 "profile": {},
                 "repository": repo_info,
