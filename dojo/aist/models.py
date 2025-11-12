@@ -10,6 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from django.conf import settings
+from encrypted_model_fields.fields import EncryptedCharField
 from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
 from django.core.validators import RegexValidator
@@ -20,8 +21,8 @@ from django_github_app.models import Installation
 from dojo.models import Finding, Product, Test
 
 _repo_part_validator = RegexValidator(
-    regex=r"^[A-Za-z0-9._-]+$",
-    message="Only letters, digits, dot, underscore and hyphen are allowed.",
+    regex=r"^[A-Za-z0-9._/\-]+$",
+    message="Only letters, digits, dot, underscore, hyphen and slash are allowed.",
 )
 
 # --------- Error/validation messages (TRY003/EM101) ----------
@@ -104,7 +105,7 @@ class ScmGitlabBinding(models.Model):
 
     scm = models.OneToOneField(RepositoryInfo, on_delete=models.CASCADE, related_name="gitlab_binding")
     # just stub
-    personal_access_token = models.CharField(max_length=255, blank=True, default="")  # TODO: change to vault
+    personal_access_token = EncryptedCharField(max_length=255, blank=True, default="")  # TODO: change to vault
     # or: ci_job_token = models.CharField(...), oauth_app_id, oauth_secret, и т.п.
 
     def _host(self, scm: RepositoryInfo) -> str:
