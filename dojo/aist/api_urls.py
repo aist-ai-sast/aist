@@ -9,6 +9,7 @@ from .api import (
     ProjectVersionCreateAPI,
     ProjectVersionFileBlobAPI,
 )
+from .gitlab_integration_api import ImportProjectFromGitlabAPI
 
 app_name = "dojo_aist_api"
 urlpatterns = [
@@ -27,4 +28,5 @@ urlpatterns = [
         ProjectVersionCreateAPI.as_view(),
         name="project_version_create",
     ),
+    path("import_project_from_gitlab", ImportProjectFromGitlabAPI.as_view(), name="import_project_from_gitlab"),
 ]

@@ -2,13 +2,13 @@ version: '3.9'
 services:
   nginx:
     environment:
-      AIST_PIPELINE_CODE_PATH: /app/sast-pipeline
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
       GENERATE_TLS_CERTIFICATE: 'true'
       USE_TLS: 'true'
 
   uwsgi:
     environment:
-      AIST_PIPELINE_CODE_PATH: /app/sast-pipeline
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
       DD_SESSION_COOKIE_SECURE: 'True'
       DD_CSRF_COOKIE_SECURE: 'True'
       WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
@@ -22,20 +22,18 @@ services:
         source: ./docker/extra_settings
         target: /app/docker/extra_settings
       - defectdojo_media:${DD_MEDIA_ROOT:-/app/media}
-      - ./sast-combinator/tools/sast-pipeline:/app/sast-pipeline
 
   celerybeat:
     environment:
-      AIST_PIPELINE_CODE_PATH: /app/sast-pipeline
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
     volumes:
       - type: bind
         source: ./docker/extra_settings
         target: /app/docker/extra_settings
-      - ./sast-combinator/tools/sast-pipeline:/app/sast-pipeline
 
   celeryworker:
     environment:
-      AIST_PIPELINE_CODE_PATH: /app/sast-pipeline
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
       C_FORCE_ROOT: '1'
       DOCKER_HOST: unix:///var/run/docker.sock
       DOCKER_BUILDKIT: 1
@@ -51,13 +49,12 @@ services:
         source: ./docker/extra_settings
         target: /app/docker/extra_settings
       - defectdojo_media:${DD_MEDIA_ROOT:-/app/media}
-      - ./sast-combinator/tools/sast-pipeline:/app/sast-pipeline
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/aist/:/tmp/aist/
 
   initializer:
     environment:
-      AIST_PIPELINE_CODE_PATH: /app/sast-pipeline
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
       WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
       GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
       CLIENT_ID: "${CLIENT_ID:-}"
@@ -68,7 +65,6 @@ services:
       - type: bind
         source: ./docker/extra_settings
         target: /app/docker/extra_settings
-      - ./sast-combinator/tools/sast-pipeline:/app/sast-pipeline
 
   postgres:
     ports:
