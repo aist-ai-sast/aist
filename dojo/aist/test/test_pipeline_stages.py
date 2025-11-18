@@ -49,7 +49,7 @@ def _mk_pipeline(**overrides):
 
 def _call_after_upload_enrich(*, enriched_count_list, pipeline, test_ids, log_level="INFO"):
     # Patched dependencies via context managers (no inline imports -> no PLC0415)
-    with patch("dojo.aist.tasks.enrich._install_db_logging", return_value=DummyLogger()) as _mock_log, \
+    with patch("dojo.aist.tasks.enrich.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
          patch("dojo.aist.tasks.enrich.AISTPipeline") as mock_model, \
          patch("dojo.aist.tasks.enrich.watch_deduplication") as mock_watch:
 
@@ -87,7 +87,7 @@ class AfterUploadEnrichTests(TestCase):
 
 
 def _call_watch_dedup(*, pipeline):
-    with patch("dojo.aist.tasks.dedup._install_db_logging", return_value=DummyLogger()) as _mock_log, \
+    with patch("dojo.aist.tasks.dedup.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
          patch("dojo.aist.tasks.dedup.AISTPipeline") as mock_model:
         mock_model.objects.get.return_value = pipeline
         _watch_deduplication.run(pipeline_id=pipeline.id, log_level="INFO")
@@ -122,7 +122,7 @@ class WatchDeduplicationTests(TestCase):
 class PushRequestToAITests(TestCase):
     def test_does_not_push_when_not_ready(self):
         with patch("dojo.aist.tasks.ai.requests.post") as mock_post, \
-             patch("dojo.aist.tasks.ai._install_db_logging", return_value=DummyLogger()) as _mock_log, \
+             patch("dojo.aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
              patch("dojo.aist.tasks.ai.AISTPipeline") as mock_model:
             pipeline = _mk_pipeline(status="WAITING_CONFIRMATION_TO_PUSH_TO_AI")
             mock_model.objects.select_for_update().select_related().get.return_value = pipeline
@@ -134,7 +134,7 @@ class PushRequestToAITests(TestCase):
 
     def test_push_success_transitions_to_waiting_result(self):
         with patch("dojo.aist.tasks.ai.requests.post") as mock_post, \
-             patch("dojo.aist.tasks.ai._install_db_logging", return_value=DummyLogger()) as _mock_log, \
+             patch("dojo.aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
              patch("dojo.aist.tasks.ai.AISTPipeline") as mock_model:
             pipeline = _mk_pipeline(status="PUSH_TO_AI")
             mock_model.objects.select_for_update().select_related().get.return_value = pipeline
@@ -157,7 +157,7 @@ class PushRequestToAITests(TestCase):
 
 class SendRequestToAITests(TestCase):
     def test_send_request_pushes_when_confirmed(self):
-        with patch("dojo.aist.ai_views._install_db_logging", return_value=DummyLogger()) as _mock_log, \
+        with patch("dojo.aist.ai_views.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
              patch("dojo.aist.ai_views.push_request_to_ai") as mock_push, \
              patch("dojo.aist.ai_views.AISTPipeline") as mock_pipeline_model, \
              patch("dojo.aist.ai_views.Finding") as mock_finding:

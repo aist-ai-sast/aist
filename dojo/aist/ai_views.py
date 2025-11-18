@@ -16,7 +16,7 @@ from rest_framework.response import Response
 from dojo.aist.tasks import push_request_to_ai
 from dojo.models import Finding, Test
 
-from .logging_transport import _install_db_logging
+from .logging_transport import install_pipeline_logging
 from .models import AISTAIResponse, AISTPipeline, AISTStatus
 from .utils import finish_pipeline
 
@@ -196,7 +196,7 @@ def send_request_to_ai(request, pipeline_id: str):
         return HttpResponseBadRequest("No valid findings for this pipeline/product")
 
     try:
-        logger = _install_db_logging(pipeline_id)
+        logger = install_pipeline_logging(pipeline_id)
         with transaction.atomic():
             pipeline = (
                 AISTPipeline.objects
@@ -238,7 +238,7 @@ def pipeline_callback(request, pipeline_id: str):
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     errors = response_from_ai.pop("errors", None)
-    logger = _install_db_logging(pipeline_id)
+    logger = install_pipeline_logging(pipeline_id)
     if errors:
         logger.error(errors)
 

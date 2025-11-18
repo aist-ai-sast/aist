@@ -7,7 +7,7 @@ from celery import shared_task
 from django.conf import settings
 from django.db import transaction
 
-from dojo.aist.logging_transport import _install_db_logging
+from dojo.aist.logging_transport import install_pipeline_logging
 from dojo.aist.models import AISTPipeline, AISTStatus
 from dojo.aist.utils import build_callback_url, finish_pipeline
 
@@ -27,7 +27,7 @@ def _csv(items: Iterable[Any]) -> str:
 
 @shared_task(bind=True)
 def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="INFO") -> None:
-    log = _install_db_logging(pipeline_id, log_level)
+    log = install_pipeline_logging(pipeline_id, log_level)
     webhook_url = getattr(
         settings,
         "AIST_AI_TRIAGE_WEBHOOK_URL",

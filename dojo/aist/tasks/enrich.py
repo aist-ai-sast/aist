@@ -6,7 +6,7 @@ from celery import chain, chord, shared_task
 from django.db import transaction
 
 from dojo.aist.link_builder import LinkBuilder
-from dojo.aist.logging_transport import _install_db_logging, get_redis
+from dojo.aist.logging_transport import get_redis, install_pipeline_logging
 from dojo.aist.models import AISTPipeline, AISTStatus
 from dojo.models import DojoMeta, Finding, Test
 
@@ -26,7 +26,7 @@ def after_upload_enrich_and_watch(results: list[int],
                                   pipeline_id: str,
                                   test_ids: list[int],
                                   log_level) -> None:
-    logger = _install_db_logging(pipeline_id, log_level)
+    logger = install_pipeline_logging(pipeline_id, log_level)
     enriched = sum(int(v or 0) for v in results)
 
     with transaction.atomic():
@@ -80,8 +80,7 @@ def enrich_finding_task(
                 )
             else:
                 f.delete()
-            return 1
-
+            return 1  # noqa: TRY300
         except Exception:
             return 0
 
@@ -122,7 +121,7 @@ def make_enrich_chord(
 
     """
     workers = int(os.getenv("DD_CELERY_WORKER_AUTOSCALE_MAX", "4") or 4)
-    logger = _install_db_logging(pipeline_id, log_level)
+    logger = install_pipeline_logging(pipeline_id, log_level)
     logger.info(f"Number of workers for enrichment available: {workers}")
 
     # Edge case: no findings -> return body-only path (caller's code can skip).

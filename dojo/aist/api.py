@@ -30,6 +30,7 @@ from pipeline.defect_dojo.repo_info import read_repo_params  # type: ignore[impo
 # Module-level error messages
 # ----------------------------
 ERR_FILE_NOT_FOUND_IN_ARCHIVE = "File not found in version archive"
+ERR_FILE_NOT_FOUND_IN_REPOSITORY = "File not found in remote repository"
 
 
 class PipelineStartRequestSerializer(serializers.Serializer):
@@ -296,7 +297,7 @@ class ProjectVersionFileBlobAPI(generics.GenericAPIView):
         response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
 
         if response.status_code == 404:
-            raise Http404("File not found in remote repository")
+            raise Http404(ERR_FILE_NOT_FOUND_IN_REPOSITORY)
         response.raise_for_status()
 
         content_type, _ = guess_type(filename)

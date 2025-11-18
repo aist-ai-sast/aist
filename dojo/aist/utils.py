@@ -18,20 +18,22 @@ from django.urls import reverse
 
 from dojo.signals import pipeline_finished
 
+from .logging_transport import uninstall_pipeline_file_logging
 from .models import AISTPipeline, AISTStatus
 
 _logger = logging.getLogger(__name__)
+
+BUILD_DIR_WARNING = "AIST_PROJECTS_BUILD_DIR is not set"
 
 
 def get_project_build_path(project_name, project_version):
     project_build_path = getattr(settings, "AIST_PROJECTS_BUILD_DIR", None)
     if not project_build_path:
-        raise RuntimeError("AIST_PROJECTS_BUILD_DIR is not set")
+        raise RuntimeError(BUILD_DIR_WARNING)
 
-    project_build_path = str(
+    return str(
         Path(project_build_path) / (project_name or "project") / (project_version or "default"),
     )
-    return project_build_path
 
 
 def _flatten_single_root_directory(root: Path) -> None:
@@ -95,6 +97,7 @@ def finish_pipeline(pipeline):
     transaction.on_commit(lambda: pipeline_finished.send(
         sender=type(pipeline), pipeline_id=pipeline.id,
     ))
+    uninstall_pipeline_file_logging(pipeline.id)
 
 
 def create_pipeline_object(aist_project, project_version, pull_request):

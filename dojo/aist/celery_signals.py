@@ -12,7 +12,7 @@ from .models import AISTProject, AISTProjectVersion, ProcessedFinding, TestDedup
 
 
 @receiver(post_save, sender=AISTProject, dispatch_uid="aistproject_autoversion_master")
-def create_default_master_version(sender, instance: AISTProject, created: bool, **kwargs):
+def create_default_master_version(sender, instance: AISTProject, created: bool, **kwargs):  # noqa: FBT001
     if not created:
         return
 

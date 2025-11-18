@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import time
 from contextlib import suppress
 
@@ -22,7 +23,7 @@ from .forms import (  # type: ignore[import-not-found]
     _load_analyzers_config,
     _signature,
 )
-from .logging_transport import BACKLOG_COUNT, PUBSUB_CHANNEL_TPL, STREAM_KEY, get_redis
+from .logging_transport import BACKLOG_COUNT, PUBSUB_CHANNEL_TPL, STREAM_KEY, get_pipeline_log_path, get_redis
 from .models import AISTPipeline, AISTProject, AISTStatus, TestDeduplicationProgress
 from .utils import _fmt_duration, _qs_without, create_pipeline_object, stop_pipeline
 
@@ -30,6 +31,95 @@ from .utils import _fmt_duration, _qs_without, create_pipeline_object, stop_pipe
 ERR_PIPELINE_NOT_FOUND = "Pipeline not found"
 ERR_PROJECT_NOT_FOUND = "Project not found"
 ERR_CONFIG_NOT_LOADED = "config not loaded"
+
+
+@require_http_methods(["GET"])
+def pipeline_logs_progressive(request, pipeline_id: str):
+    """
+    Progressive log API similar to Jenkins/GitLab.
+    GET params:
+    - start=<int>: byte offset to read from (default 0). Returns data from this offset to EOF.
+    - tail=<int>: last N lines to return initially (ignored if start is provided).
+    Response headers:
+    - X-Log-Size: current file size in bytes (use as next start).
+    Body:
+    - plain text chunk (UTF-8).
+    """
+    pipeline = get_object_or_404(AISTPipeline, id=pipeline_id)
+    path = get_pipeline_log_path(pipeline.id)
+    data = ""
+    size = 0
+    start = request.GET.get("start")
+    tail = request.GET.get("tail")
+
+    # parse params
+    try:
+        start = int(start) if start is not None else None
+    except ValueError:
+        start = None
+    try:
+        tail = max(0, int(tail)) if tail is not None else None
+    except ValueError:
+        tail = None
+
+    if pathlib.Path(path).exists():
+        size = pathlib.Path(path).stat().st_size
+        # if tail return latest N lines
+        if tail:
+            # read last N lines
+            with pathlib.Path(path).open("rb") as f:
+                lines = f.readlines()[-tail:]
+            decoded = [ln.decode("utf-8", errors="ignore").rstrip("\r\n") for ln in lines]
+            data = "\n".join(decoded)
+        elif start is not None:
+            # read from bite offset until end
+            start = max(0, min(start, size))
+            with pathlib.Path(path).open("rb") as f:
+                f.seek(start)
+                chunk = f.read()
+            data = chunk.decode("utf-8", errors="ignore")
+        else:
+            # by default return all file
+            with pathlib.Path(path).open("r", encoding="utf-8", errors="ignore") as f:
+                data = f.read()
+
+    resp = HttpResponse(data, content_type="text/plain; charset=utf-8")
+    resp["X-Log-Size"] = str(size)
+    return resp
+
+
+def get_logs_content(pipeline: AISTPipeline):
+    path = get_pipeline_log_path(pipeline.id)
+    if pathlib.Path(path).exists():
+        with pathlib.Path(path).open("r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    else:
+        content = ""
+    return content
+
+
+@require_http_methods(["GET"])
+def pipeline_logs_full(request, pipeline_id: str) -> HttpResponse:
+    """Return the entire log file as text/plain."""
+    pipeline = get_object_or_404(AISTPipeline, id=pipeline_id)
+    content = get_logs_content(pipeline)
+    return HttpResponse(content, content_type="text/plain; charset=utf-8")
+
+
+@require_http_methods(["GET"])
+def pipeline_logs_raw(request, pipeline_id: str) -> HttpResponse:
+    """Raw log content (same as full) used by 'Copy to clipboard'."""
+    return pipeline_logs_full(request, pipeline_id)
+
+
+@require_http_methods(["GET"])
+def pipeline_logs_download(request, pipeline_id: str) -> HttpResponse:
+    """Force download of the entire log as a .log file."""
+    pipeline = get_object_or_404(AISTPipeline, id=pipeline_id)
+    content = get_logs_content(pipeline)
+    resp = HttpResponse(content, content_type="text/plain; charset=utf-8")
+    resp["Content-Disposition"] = f'attachment; filename="pipeline-{pipeline_id}.log"'
+    return resp
 
 
 @login_required

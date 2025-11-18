@@ -1,5 +1,6 @@
 # --- add near other imports in api.py ---
 import requests  # std HTTP client
+from django.db import transaction
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -7,9 +8,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from dojo.models import DojoMeta, Product, Product_Type
-from django.db import transaction
 
-from .models import AISTProject, RepositoryInfo, ScmGitlabBinding, ScmType, AISTProjectVersion, VersionType
+from .models import AISTProject, AISTProjectVersion, RepositoryInfo, ScmGitlabBinding, ScmType, VersionType
 from .utils import _load_analyzers_config  # same helper as GH flow uses
 
 
@@ -108,12 +108,11 @@ class ImportProjectFromGitlabAPI(APIView):
             defaults={"base_url": inferred_base},
         )
 
-        binding, created = ScmGitlabBinding.objects.get_or_create(scm=repo_info)
+        binding, _created = ScmGitlabBinding.objects.get_or_create(scm=repo_info)
 
         if token and binding.personal_access_token != token:
             binding.personal_access_token = token
             binding.save(update_fields=["personal_access_token"])
-
 
         with transaction.atomic():
             aist_project, _ = AISTProject.objects.get_or_create(
