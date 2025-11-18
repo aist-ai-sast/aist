@@ -3,7 +3,7 @@ import time
 from celery import shared_task
 from django.db import OperationalError, transaction
 
-from dojo.aist.logging_transport import _install_db_logging
+from dojo.aist.logging_transport import install_pipeline_logging
 from dojo.aist.models import AISTPipeline, AISTStatus, TestDeduplicationProgress
 from dojo.aist.utils import finish_pipeline
 from dojo.models import Test
@@ -23,7 +23,7 @@ def watch_deduplication(self, pipeline_id: str, log_level) -> None:
     """
     pipeline = AISTPipeline.objects.get(id=pipeline_id)
 
-    logger = _install_db_logging(pipeline_id, log_level)
+    logger = install_pipeline_logging(pipeline_id, log_level)
     if not pipeline.tests.exists():
         finish_pipeline(pipeline)
         logger.warning("No tests to wait")

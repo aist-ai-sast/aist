@@ -19,14 +19,22 @@ urlpatterns = [
 
     path("pipelines/<str:pipeline_id>/delete/", views.delete_pipeline_view, name="pipeline_delete"),
     path("pipelines/<str:pipeline_id>/logs/stream/", views.stream_logs_sse, name="pipeline_logs_stream"),
-    path("pipelines/<str:pipeline_id>/progress/deduplication", views.deduplication_progress_json, name="deduplication_progress"),
+    path("pipelines/<str:pipeline_id>/logs/progressive/", views.pipeline_logs_progressive,
+         name="pipeline_logs_progressive"),
+    path("pipelines/<str:pipeline_id>/logs/", views.pipeline_logs_full, name="pipeline_logs_full"),
+    path("pipelines/<str:pipeline_id>/logs/raw.txt", views.pipeline_logs_raw, name="pipeline_logs_raw"),
+    path("pipelines/<str:pipeline_id>/logs/download/", views.pipeline_logs_download, name="pipeline_logs_download"),
+    path("pipelines/<str:pipeline_id>/progress/deduplication", views.deduplication_progress_json,
+         name="deduplication_progress"),
 
     path("pipeline/<str:pipeline_id>/status/stream/", views.pipeline_status_stream, name="pipeline_status_stream"),
     path("aist/default-analyzers/", views.default_analyzers, name="default_analyzers"),
     path("pipelines/", views.pipeline_list, name="pipeline_list"),
-    path("pipelines/<str:pipeline_id>/set_status_push_to_ai", views.pipeline_set_status, name="pipeline_set_status"),  # TODO: make generic
+    path("pipelines/<str:pipeline_id>/set_status_push_to_ai", views.pipeline_set_status, name="pipeline_set_status"),
+    # TODO: make generic
     path("projects/<int:pk>/meta.json", views.project_meta, name="project_meta"),
-    path("pipeline/<str:pipeline_id>/progress/enrichment", views.pipeline_enrich_progress_sse, name="pipeline_enrich_progress"),
+    path("pipeline/<str:pipeline_id>/progress/enrichment", views.pipeline_enrich_progress_sse,
+         name="pipeline_enrich_progress"),
     path("projects/<int:project_id>/versions/create/", views.project_version_create, name="project_version_create"),
 
     # Github hooks

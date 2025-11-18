@@ -416,7 +416,6 @@ class AISTPipeline(models.Model):
 
     tests = models.ManyToManyField(Test, related_name="aist_pipelines", blank=True)
     launch_data = models.JSONField(default=dict, blank=True)
-    logs = models.TextField(default="", blank=True)
 
     run_task_id = models.CharField(max_length=64, null=True, blank=True)
     watch_dedup_task_id = models.CharField(max_length=64, null=True, blank=True)
@@ -435,13 +434,6 @@ class AISTPipeline(models.Model):
 
     def __str__(self) -> str:
         return f"SASTPipeline[{self.id}] {self.status}"
-
-    def append_log(self, line: str) -> None:
-        txt = self.logs or ""
-        if not line.endswith("\n"):
-            line += "\n"
-        self.logs = txt + line
-        self.save(update_fields=["logs", "updated"])
 
 
 class TestDeduplicationProgress(models.Model):

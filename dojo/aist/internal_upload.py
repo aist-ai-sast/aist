@@ -19,7 +19,7 @@ from dojo.models import (
     Test,
 )
 
-from .logging_transport import _install_db_logging
+from .logging_transport import install_pipeline_logging
 from .utils import _import_sast_pipeline_package
 
 _import_sast_pipeline_package()
@@ -233,7 +233,7 @@ def upload_report_internal(
     product = get_or_create_product(product_name)
     eng_name = derive_engagement_name(analyzer_name, repo_params.branch_tag, repo_params.commit_hash, cfg.name_mode)
     engagement = ensure_engagement(product, eng_name, repo_params, cfg.engagement_status)
-    logger = _install_db_logging(pipeline_id, log_level)
+    logger = install_pipeline_logging(pipeline_id, log_level)
     logger.info("Using engagement '%s' (id=%s)", eng_name, engagement.id)
     # Import
     test_obj, findings = import_scan_via_default_importer(
@@ -268,7 +268,7 @@ def upload_results_internal(
 ) -> list[ImportResult]:
     cfg = ImportConfig()
     repo_dir = repo_path
-    logger = _install_db_logging(pipeline_id, log_level)
+    logger = install_pipeline_logging(pipeline_id, log_level)
     try:
         repo_params = read_repo_params(repo_dir)
     except Exception as exc:

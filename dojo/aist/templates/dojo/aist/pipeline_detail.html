@@ -25,33 +25,44 @@
     <hr/>
 
     {# --- Logs (collapsible) --- #}
-    <div class="card mb-3">
-        <div class="card-header d-flex align-items-center justify-content-between">
+    <div class="card-header d-flex align-items-center justify-content-between">
+        <div class="d-flex align-items-center gap-2">
             <span>Logs</span>
+            <span class="text-muted small">(showing last 1000 lines)</span>
+        </div>
+        <div class="d-flex gap-2">
             <button
                     type="button"
                     class="btn btn-sm btn-outline-secondary d-flex align-items-center"
                     id="logsToggleBtn"
-                    aria-controls="logsCollapse"
-                    aria-expanded="false"
-                    {# Bootstrap 5 attrs #}
-                    data-bs-toggle="collapse"
-                    data-bs-target="#logsCollapse"
-                    {# Bootstrap 4 attrs #}
-                    data-toggle="collapse"
-                    data-target="#logsCollapse"
-            >
+                    aria-controls="logsCollapse" aria-expanded="false">
                 <i class="fa fa-chevron-down me-1" id="logsChevron" aria-hidden="true"></i>
                 <span id="logsToggleText">Show</span>
             </button>
-        </div>
 
-        <div class="collapse" id="logsCollapse">
-            <div class="card-body p-0">
-      <pre id="logbox"
-           style="max-height: 50vh; overflow: auto; background:#101317; color:#ddd; padding:12px; border-radius:0 0 .5rem .5rem; margin:0;">{{ pipeline.logs|default:"No logs yet." }}</pre>
-            </div>
+            <a class="btn btn-sm btn-outline-primary" target="_blank"
+               href="{% url 'dojo_aist:pipeline_logs_full' pipeline.id %}">
+                <i class="fa fa-external-link me-1"></i> Full log
+            </a>
+
+            <a class="btn btn-sm btn-outline-success"
+               href="{% url 'dojo_aist:pipeline_logs_download' pipeline.id %}">
+                <i class="fa fa-download me-1"></i> Download
+            </a>
         </div>
+    </div>
+
+    <div class="collapse" id="logsCollapse">
+        <div class="card-body p-0">
+            <div class="d-flex gap-2 p-2 justify-content-end">
+                <button class="btn btn-sm btn-outline-secondary" id="copyFullLogBtn">
+                    <i class="fa fa-clipboard me-1"></i> Copy to clipboard
+                </button>
+            </div>
+            <pre id="logbox"
+                 style="max-height: 50vh; overflow: auto; background:#101317; color:#ddd; padding:12px; border-radius:0 0 .5rem .5rem; margin:0;">Loading last 1000 lines…</pre>
+        </div>
+    </div>
     </div>
 
     <script>
@@ -635,23 +646,51 @@
             if (initialStatus) runHydratorFor(initialStatus, document);
 
             // ---------- Logs SSE ----------
-            const srcLogs = new EventSource("{% url 'dojo_aist:pipeline_logs_stream' pipeline.id %}");
-            let autoscroll = true;
-            if (logbox) {
-                logbox.addEventListener("scroll", () => {
-                    autoscroll = (logbox.scrollTop + logbox.clientHeight + 5) >= logbox.scrollHeight;
-                });
+            let autoScroll = true;
+            let logOffset = 0;
+            const tailCount = 1000; // how many lines to load initially
+            const fetchIntervalMs = 1000; // polling interval
+
+            function initLog() {
+                fetch("{% url 'dojo_aist:pipeline_logs_progressive' pipeline.id %}?tail=" + tailCount)
+                    .then(resp => {
+                        logOffset = parseInt(resp.headers.get("X-Log-Size") || "0", 10);
+                        return resp.text();
+                    })
+                    .then(txt => {
+                        if (logbox) {
+                            logbox.textContent = txt || "";
+                            if (autoScroll) logbox.scrollTop = logbox.scrollHeight;
+                        }
+                    });
             }
-            srcLogs.onmessage = (evt) => {
-                if (!logbox || !evt?.data) return;
-                logbox.textContent += (logbox.textContent ? "\n" : "") + evt.data;
-                if (autoscroll) logbox.scrollTop = logbox.scrollHeight;
-            };
-            srcLogs.addEventListener("done", () => {
-                setStatusText("FINISHED");
-                runHydratorFor("FINISHED", document);
-                srcLogs.close();
+
+            function pollNewLogs() {
+                fetch("{% url 'dojo_aist:pipeline_logs_progressive' pipeline.id %}?start=" + logOffset)
+                    .then(resp => {
+                        const newSize = parseInt(resp.headers.get("X-Log-Size") || logOffset, 10);
+                        return resp.text().then(txt => ({txt, newSize}));
+                    })
+                    .then(({txt, newSize}) => {
+                        if (txt) {
+                            if (logbox && logbox.textContent.trim() === "Loading last 1000 lines…") {
+                                logbox.textContent = "";
+                            }
+                            if (logbox) {
+                                logbox.textContent += (logbox.textContent ? "\n" : "") + txt;
+                                if (autoScroll) logbox.scrollTop = logbox.scrollHeight;
+                            }
+                        }
+                        logOffset = newSize;
+                    });
+            }
+
+            logbox && logbox.addEventListener("scroll", () => {
+                autoScroll = (logbox.scrollTop + logbox.clientHeight + 5) >= logbox.scrollHeight;
             });
+
+            initLog();
+            setInterval(pollNewLogs, fetchIntervalMs);
 
             // ---------- Status SSE ----------
             const srcStatus = new EventSource("{% url 'dojo_aist:pipeline_status_stream' pipeline.id %}");
@@ -693,6 +732,34 @@
             if (window.jQuery) {
                 jQuery('#aist-ai-responses').on('shown.bs.collapse', function (ev) {
                     hydrateAllJsonBlocks(ev.target);
+                });
+            }
+
+            const logsToggleBtn = document.getElementById("logsToggleBtn");
+            const logsCollapse = document.getElementById("logsCollapse");
+            const logsToggleText = document.getElementById("logsToggleText");
+            const logsChevron = document.getElementById("logsChevron");
+
+            if (logsToggleBtn && logsCollapse) {
+                logsToggleBtn.addEventListener("click", () => {
+                    const isShown = logsCollapse.classList.contains("show");
+                    if (isShown) {
+                        logsCollapse.classList.remove("show");
+                        logsToggleBtn.setAttribute("aria-expanded", "false");
+                        if (logsToggleText) logsToggleText.textContent = "Show";
+                        if (logsChevron) {
+                            logsChevron.classList.remove("fa-chevron-up");
+                            logsChevron.classList.add("fa-chevron-down");
+                        }
+                    } else {
+                        logsCollapse.classList.add("show");
+                        logsToggleBtn.setAttribute("aria-expanded", "true");
+                        if (logsToggleText) logsToggleText.textContent = "Hide";
+                        if (logsChevron) {
+                            logsChevron.classList.remove("fa-chevron-down");
+                            logsChevron.classList.add("fa-chevron-up");
+                        }
+                    }
                 });
             }
 

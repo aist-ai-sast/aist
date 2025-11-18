@@ -4,7 +4,7 @@ from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
 
-from dojo.aist.logging_transport import _install_db_logging, get_redis
+from dojo.aist.logging_transport import get_redis, install_pipeline_logging
 from dojo.aist.models import AISTPipeline, AISTProjectVersion, AISTStatus
 from dojo.aist.pipeline_args import PipelineArguments
 from dojo.aist.utils import _import_sast_pipeline_package, finish_pipeline, get_project_build_path
@@ -19,7 +19,6 @@ _import_sast_pipeline_package()
 
 from celery.exceptions import Ignore  # noqa: E402
 from pipeline.config_utils import AnalyzersConfigHelper  # type: ignore[import-not-found]  # noqa: E402
-from pipeline.defect_dojo.repo_info import read_repo_params  # type: ignore[import-not-found]  # noqa: E402
 from pipeline.project_builder import configure_project_run_analyses  # type: ignore[import-not-found]  # noqa: E402
 
 from dojo.aist.internal_upload import upload_results_internal  # noqa: E402
@@ -70,7 +69,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
     :param params: Dictionary of parameters collected from the form.
     """
     log_level = params.get("log_level", "INFO")
-    logger = _install_db_logging(pipeline_id, log_level)
+    logger = install_pipeline_logging(pipeline_id, log_level)
     pipeline = None  # ensure defined for exception path
 
     try:
