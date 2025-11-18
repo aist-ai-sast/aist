@@ -1,6 +1,7 @@
 services:
   uwsgi:
     environment:
+      FIELD_ENCRYPTION_KEY: "4j2UH_n0npFJQYu9sa5kHbIFuWiENccaLtSGBIc_nFI"
       WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
       GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
       CLIENT_ID: "${CLIENT_ID:-}"
@@ -13,6 +14,8 @@ services:
         target: /app/docker/extra_settings
 
   celerybeat:
+    environment:
+      FIELD_ENCRYPTION_KEY: "4j2UH_n0npFJQYu9sa5kHbIFuWiENccaLtSGBIc_nFI"
     volumes:
       - type: bind
         source: ./docker/extra_settings
@@ -20,6 +23,7 @@ services:
 
   celeryworker:
     environment:
+      FIELD_ENCRYPTION_KEY: "4j2UH_n0npFJQYu9sa5kHbIFuWiENccaLtSGBIc_nFI"
       C_FORCE_ROOT: '1'
       DOCKER_HOST: unix:///var/run/docker.sock
       DOCKER_BUILDKIT: 1
@@ -33,6 +37,7 @@ services:
 
   initializer:
     environment:
+      FIELD_ENCRYPTION_KEY: "4j2UH_n0npFJQYu9sa5kHbIFuWiENccaLtSGBIc_nFI"
       WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
       GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
       CLIENT_ID: "${CLIENT_ID:-}"
