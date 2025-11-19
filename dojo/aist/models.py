@@ -211,6 +211,24 @@ class AISTStatus(models.TextChoices):
     WAITING_RESULT_FROM_AI = "WAITING_RESULT_FROM_AI", "Waiting Result From AI"
     FINISHED = "FINISHED", "Finished"
 
+class Organization(models.Model):
+    """
+    Simple organization/group entity for AIST projects.
+    One organization can have many AISTProject objects.
+    """
+
+    created = models.DateTimeField(auto_now_add=True, editable=False)
+    updated = models.DateTimeField(auto_now=True)
+
+    name = models.CharField(max_length=255, unique=True)
+    description = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
 
 class AISTProject(models.Model):
     created = models.DateTimeField(default=timezone.now, editable=False)
@@ -225,6 +243,13 @@ class AISTProject(models.Model):
         RepositoryInfo,
         on_delete=models.CASCADE,
         related_name="project",
+        null=True,
+        blank=True,
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name="projects",
         null=True,
         blank=True,
     )

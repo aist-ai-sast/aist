@@ -343,7 +343,7 @@ env = environ.FileAwareEnv(
     # Set deduplication algorithms per parser, via en env variable that contains a JSON string
     DD_DEDUPLICATION_ALGORITHM_PER_PARSER=(str, ""),
     # Dictates whether cloud banner is created or not
-    DD_CREATE_CLOUD_BANNER=(bool, True),
+    DD_CREATE_CLOUD_BANNER=(bool, False),
     # With this setting turned on, Dojo maintains an audit log of changes made to entities (Findings, Tests, Engagements, Products, ...)
     # If you run big import you may want to disable this because there's a performance hit during (re-)imports.
     DD_ENABLE_AUDITLOG=(bool, True),
@@ -2025,7 +2025,7 @@ AUDITLOG_DISABLE_ON_RAW_SAVE = False
 #  You can set extra Jira headers by suppling a dictionary in header: value format (pass as env var like "headr_name=value,another_header=anohter_value")
 ADDITIONAL_HEADERS = env("DD_ADDITIONAL_HEADERS")
 # Dictates whether cloud banner is created or not
-CREATE_CLOUD_BANNER = env("DD_CREATE_CLOUD_BANNER")
+CREATE_CLOUD_BANNER = env.bool("DD_CREATE_CLOUD_BANNER", False)
 
 # ------------------------------------------------------------------------------
 # Auditlog

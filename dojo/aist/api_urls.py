@@ -8,6 +8,7 @@ from .api import (
     PipelineStartAPI,
     ProjectVersionCreateAPI,
     ProjectVersionFileBlobAPI,
+    OrganizationCreateAPI,
 )
 from .gitlab_integration_api import ImportProjectFromGitlabAPI
 
@@ -18,6 +19,11 @@ urlpatterns = [
     path("pipelines/start", PipelineStartAPI.as_view(), name="pipeline_start"),
     path("pipelines/<str:pipeline_id>", PipelineAPI.as_view(), name="pipeline_status"),
     path("pipelines/", PipelineListAPI.as_view(), name="pipelines"),
+    path(
+        "organizations/",
+        OrganizationCreateAPI.as_view(),
+        name="organization_create",
+    ),
     path(
         "projects_version/<int:project_version_id>/files/blob/<path:subpath>",
         ProjectVersionFileBlobAPI.as_view(),

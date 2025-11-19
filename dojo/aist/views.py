@@ -24,7 +24,7 @@ from .forms import (  # type: ignore[import-not-found]
     _signature,
 )
 from .logging_transport import BACKLOG_COUNT, PUBSUB_CHANNEL_TPL, STREAM_KEY, get_pipeline_log_path, get_redis
-from .models import AISTPipeline, AISTProject, AISTStatus, TestDeduplicationProgress
+from .models import AISTPipeline, AISTProject, AISTStatus, TestDeduplicationProgress, Organization
 from .utils import _fmt_duration, _qs_without, create_pipeline_object, stop_pipeline
 
 # ---- Error messages -------------------------------------------------
@@ -665,6 +665,7 @@ def aist_project_update_view(request: HttpRequest, project_id: int) -> HttpRespo
     - supported_languages: comma-separated string, e.g. "python, c++, java"
     - compilable: "on" / missing (checkbox)
     - profile: JSON string representing an object (optional)
+    - organization: optional organization id (int) or empty for no organization
     """
     project = get_object_or_404(AISTProject, id=project_id)
 
@@ -672,6 +673,7 @@ def aist_project_update_view(request: HttpRequest, project_id: int) -> HttpRespo
     compilable = request.POST.get("compilable") == "on"
     supported_languages_raw = (request.POST.get("supported_languages") or "").strip()
     profile_raw = (request.POST.get("profile") or "").strip()
+    organization_raw = (request.POST.get("organization") or "").strip()
 
     errors: dict[str, str] = {}
 
@@ -684,11 +686,13 @@ def aist_project_update_view(request: HttpRequest, project_id: int) -> HttpRespo
         return HttpResponseBadRequest(ERR_CONFIG_NOT_LOADED)
 
     if supported_languages_raw:
-        languages = cfg.convert_languages([
-            x.strip()
-            for x in supported_languages_raw.split(",")
-            if x.strip()
-        ])
+        languages = cfg.convert_languages(
+            [
+                x.strip()
+                for x in supported_languages_raw.split(",")
+                if x.strip()
+            ]
+        )
     else:
         languages = []
 
@@ -705,7 +709,16 @@ def aist_project_update_view(request: HttpRequest, project_id: int) -> HttpRespo
 
     # For now we only allow JSON objects or empty profile for better UX.
     if profile is not None and not isinstance(profile, dict):
-        errors["profile"] = "Profile must be a JSON object (e.g. {\"paths\": {\"exclude\": []}})."
+        errors["profile"] = 'Profile must be a JSON object (e.g. {"paths": {"exclude": []}}).'
+
+    # Parse organization (optional)
+    organization = None
+    if organization_raw:
+        try:
+            org_id = int(organization_raw)
+            organization = Organization.objects.get(id=org_id)
+        except (ValueError, Organization.DoesNotExist):
+            errors["organization"] = "Selected organization does not exist."
 
     if errors:
         return JsonResponse({"ok": False, "errors": errors}, status=400)
@@ -714,7 +727,17 @@ def aist_project_update_view(request: HttpRequest, project_id: int) -> HttpRespo
     project.compilable = compilable
     project.supported_languages = languages
     project.profile = profile or {}
-    project.save(update_fields=["script_path", "compilable", "supported_languages", "profile", "updated"])
+    project.organization = organization
+    project.save(
+        update_fields=[
+            "script_path",
+            "compilable",
+            "supported_languages",
+            "profile",
+            "organization",
+            "updated",
+        ],
+    )
 
     return JsonResponse(
         {
@@ -726,25 +749,42 @@ def aist_project_update_view(request: HttpRequest, project_id: int) -> HttpRespo
                 "compilable": project.compilable,
                 "supported_languages": project.supported_languages,
                 "profile": project.profile,
+                "organization_id": project.organization_id,
+                "organization_name": getattr(project.organization, "name", None),
             },
         }
     )
+
 
 
 @login_required
 @require_http_methods(["GET"])
 def aist_project_list_view(request: HttpRequest) -> HttpResponse:
     """
-    A simple management screen for AISTProject objects.
+    Management screen for AISTProject objects, grouped by Organization.
 
-    Only fields that are safe to edit from UI are exposed:
-    - script_path
-    - supported_languages
-    - compilable
+    Notes:
+    - One Organization can have many AISTProject objects.
+    - Projects without an Organization are shown under the "Others" group.
+    - Only fields that are safe to edit from UI are exposed:
+      * script_path
+      * supported_languages
+      * compilable
+      * profile
     """
-    projects = (
+
+    # Organizations with their projects prefetched to avoid N+1 queries.
+    organizations = (
+        Organization.objects
+        .prefetch_related("projects__product")
+        .order_by("name")
+    )
+
+    # Projects that are not assigned to any organization -> "Others" section.
+    unassigned_projects = (
         AISTProject.objects
         .select_related("product")
+        .filter(organization__isnull=True)
         .order_by("product__name", "id")
     )
 
@@ -753,7 +793,9 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
         request,
         "dojo/aist/projects.html",
         {
-            "projects": projects,
+            "organizations": organizations,
+            "unassigned_projects": unassigned_projects,
         },
     )
+
 
