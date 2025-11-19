@@ -18,7 +18,7 @@
         <div class="panel-heading">
             <div class="row">
                 <div class="col-sm-6">
-                    <strong>Projects</strong>
+                    <strong>Projects by organization</strong>
                 </div>
                 <div class="col-sm-6 text-right">
                     <input id="aist-projects-filter"
@@ -34,6 +34,7 @@
                 <tr>
                     <th style="width: 40px;">ID</th>
                     <th>Product</th>
+                    <th style="width: 120px;">Pipelines</th>
                     <th>Script path</th>
                     <th>Supported languages</th>
                     <th>Profile</th>
@@ -42,6 +43,7 @@
                 </tr>
                 </thead>
                 <tbody>
+                {# Legacy flat list (kept for compatibility if `projects` is present) #}
                 {% for p in projects %}
                     <tr data-project-id="{{ p.id }}"
                         data-project-name="{{ p.product.name|default_if_none:'' }}"
@@ -49,10 +51,22 @@
                         data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
                         data-project-langs="{{ p.supported_languages|join:', ' }}"
                         data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
+                        data-project-org-id="{{ p.organization_id|default_if_none:'' }}"
+                        data-project-org-name="{{ p.organization.name|default_if_none:'' }}"
                         data-update-url="{% url 'dojo_aist:aist_project_update' p.id %}"
                         data-delete-url="{% url 'dojo_aist_api:project_detail' project_id=p.id %}">
                         <td>{{ p.id }}</td>
-                        <td>{{ p.product.name }}</td>
+                        <td>
+                            <a href="{% url 'product_open_findings' product_id=p.product.id %}">
+                                {{ p.product.name }}
+                            </a>
+                        </td>
+                        <td>
+                            <a href="{% url 'dojo_aist:pipeline_list' %}?project={{ p.id }}"
+                               class="btn btn-xs btn-default">
+                                Pipelines
+                            </a>
+                        </td>
                         <td class="script-path-cell">
                             <code>{{ p.script_path }}</code>
                         </td>
@@ -85,13 +99,170 @@
                         </td>
                     </tr>
                 {% empty %}
+                    {# When `projects` is not passed, this block is simply skipped. #}
+                {% endfor %}
+                </tbody>
+
+                <tbody>
+                {% if organizations or unassigned_projects %}
+                    {# Organizations and their projects #}
+                    {% for org in organizations %}
+                        <tr class="active">
+                            <td colspan="8">
+                                <strong>{{ org.name }}</strong>
+                                {% with org.projects.count as cnt %}
+                                    <span class="text-muted small">
+                                        ({{ cnt }} project{{ cnt|pluralize }})
+                                    </span>
+                                {% endwith %}
+                            </td>
+                        </tr>
+                        {% for p in org.projects.all %}
+                            <tr data-project-id="{{ p.id }}"
+                                data-project-name="{{ p.product.name|default_if_none:'' }}"
+                                data-project-script-path="{{ p.script_path|default_if_none:'' }}"
+                                data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
+                                data-project-langs="{{ p.supported_languages|join:', ' }}"
+                                data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
+                                data-project-org-id="{{ p.organization_id|default_if_none:'' }}"
+                                data-project-org-name="{{ org.name|default_if_none:'' }}"
+                                data-update-url="{% url 'dojo_aist:aist_project_update' p.id %}"
+                                data-delete-url="{% url 'dojo_aist_api:project_detail' project_id=p.id %}">
+                                <td>{{ p.id }}</td>
+                                <td>
+                                    <a href="{% url 'product_open_findings' product_id=p.product.id %}">
+                                        {{ p.product.name }}
+                                    </a>
+                                </td>
+                                <td>
+                                    <a href="{% url 'dojo_aist:pipeline_list' %}?project={{ p.id }}"
+                                       class="btn btn-xs btn-default">
+                                        Pipelines
+                                    </a>
+                                </td>
+                                <td class="script-path-cell">
+                                    {% if p.script_path %}
+                                        <code>{{ p.script_path }}</code>
+                                    {% else %}
+                                        <span class="text-muted">–</span>
+                                    {% endif %}
+                                </td>
+                                <td class="langs-cell">
+                                    {% if p.supported_languages %}
+                                        {{ p.supported_languages|join:", " }}
+                                    {% else %}
+                                        <span class="text-muted">–</span>
+                                    {% endif %}
+                                </td>
+                                <td class="profile-cell">
+                                    {% if p.profile %}
+                                        <code>{{ p.profile|truncatechars:80 }}</code>
+                                    {% else %}
+                                        <span class="text-muted">–</span>
+                                    {% endif %}
+                                </td>
+                                <td class="compilable-cell">
+                                    {% if p.compilable %}
+                                        <span class="label label-success">Yes</span>
+                                    {% else %}
+                                        <span class="label label-default">No</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <button type="button"
+                                            class="btn btn-xs btn-default aist-project-edit-btn">
+                                        <i class="fa fa-pencil"></i> Edit
+                                    </button>
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="8" class="text-muted small">
+                                    No projects in this organization.
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    {% endfor %}
+
+                    {# Projects without organization -> Others group #}
+                    {% if unassigned_projects %}
+                        <tr class="active">
+                            <td colspan="8">
+                                <strong>Others</strong>
+                                <span class="text-muted small">
+                                    ({{ unassigned_projects|length }} project{{ unassigned_projects|length|pluralize }})
+                                </span>
+                            </td>
+                        </tr>
+                        {% for p in unassigned_projects %}
+                            <tr data-project-id="{{ p.id }}"
+                                data-project-name="{{ p.product.name|default_if_none:'' }}"
+                                data-project-script-path="{{ p.script_path|default_if_none:'' }}"
+                                data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
+                                data-project-langs="{{ p.supported_languages|join:', ' }}"
+                                data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
+                                data-project-org-id="{{ p.organization_id|default_if_none:'' }}"
+                                data-project-org-name=""
+                                data-update-url="{% url 'dojo_aist:aist_project_update' p.id %}"
+                                data-delete-url="{% url 'dojo_aist_api:project_detail' project_id=p.id %}">
+                                <td>{{ p.id }}</td>
+                                <td>
+                                    <a href="{% url 'product_open_findings' product_id=p.product.id %}">
+                                        {{ p.product.name }}
+                                    </a>
+                                </td>
+                                <td>
+                                    <a href="{% url 'dojo_aist:pipeline_list' %}?project={{ p.id }}"
+                                       class="btn btn-xs btn-default">
+                                        Pipelines
+                                    </a>
+                                </td>
+                                <td class="script-path-cell">
+                                    {% if p.script_path %}
+                                        <code>{{ p.script_path }}</code>
+                                    {% else %}
+                                        <span class="text-muted">–</span>
+                                    {% endif %}
+                                </td>
+                                <td class="langs-cell">
+                                    {% if p.supported_languages %}
+                                        {{ p.supported_languages|join:", " }}
+                                    {% else %}
+                                        <span class="text-muted">–</span>
+                                    {% endif %}
+                                </td>
+                                <td class="profile-cell">
+                                    {% if p.profile %}
+                                        <code>{{ p.profile|truncatechars:80 }}</code>
+                                    {% else %}
+                                        <span class="text-muted">–</span>
+                                    {% endif %}
+                                </td>
+                                <td class="compilable-cell">
+                                    {% if p.compilable %}
+                                        <span class="label label-success">Yes</span>
+                                    {% else %}
+                                        <span class="label label-default">No</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <button type="button"
+                                            class="btn btn-xs btn-default aist-project-edit-btn">
+                                        <i class="fa fa-pencil"></i> Edit
+                                    </button>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    {% endif %}
+                {% else %}
                     <tr>
-                        <td colspan="7" class="text-muted text-center">
+                        <td colspan="8" class="text-muted text-center">
                             No AIST projects found.
                         </td>
                     </tr>
-                {% endfor %}
+                {% endif %}
                 </tbody>
+
             </table>
         </div>
     </div>
@@ -125,6 +296,21 @@
                             <label>Product</label>
                             <input type="text" class="form-control" id="ap-product-name"
                                    readonly>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Organization</label>
+                            <select class="form-control"
+                                    id="ap-organization"
+                                    name="organization">
+                                <option value="">No organization</option>
+                                {% for org in organizations %}
+                                    <option value="{{ org.id }}">{{ org.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <p class="help-block">
+                                Optional organization used to group projects.
+                            </p>
                         </div>
 
                         <div class="form-group">
@@ -205,6 +391,7 @@
 
             var fieldId = document.getElementById("ap-project-id");
             var fieldProduct = document.getElementById("ap-product-name");
+            var fieldOrganization = document.getElementById("ap-organization");
             var fieldScriptPath = document.getElementById("ap-script-path");
             var fieldLangs = document.getElementById("ap-supported-languages");
             var fieldCompilable = document.getElementById("ap-compilable");
@@ -245,26 +432,44 @@
                 var scriptPath = row.getAttribute("data-project-script-path") || "";
                 var langs = row.getAttribute("data-project-langs") || "";
                 var compilable = row.getAttribute("data-project-compilable") === "true";
+                var orgId = row.getAttribute("data-project-org-id") || "";
 
                 var profileRaw = row.getAttribute("data-project-profile") || "";
                 var profilePretty = profileRaw;
 
-                // Pretty-print profile JSON if possible for better readability.
+                // Try to pretty-print profile JSON, handling both new JSON
+                // and legacy Python-style representations coming from the template.
                 if (profileRaw && typeof profileRaw === "string") {
+                    var normalized = profileRaw;
+
+                    // Convert \u0027 sequences produced by escapejs back to quotes.
+                    normalized = normalized.replace(/\\u0027/g, "'");
+
+                    // If it still looks like a Python dict (only single quotes),
+                    // convert them to double quotes so JSON.parse can understand it.
+                    if (normalized.indexOf("'") !== -1 && normalized.indexOf('"') === -1) {
+                        normalized = normalized.replace(/'/g, '"');
+                    }
+
                     try {
-                        var obj = JSON.parse(profileRaw);
+                        var obj = JSON.parse(normalized);
                         profilePretty = JSON.stringify(obj, null, 2);
                     } catch (e) {
-                        // If JSON is invalid, keep the raw string so the user can fix it.
-                        profilePretty = profileRaw;
+                        // If JSON is still invalid, at least show the normalized string.
+                        profilePretty = normalized;
                     }
                 }
+
 
                 fieldId.value = id;
                 fieldProduct.value = name;
                 fieldScriptPath.value = scriptPath;
                 fieldLangs.value = langs;
                 fieldCompilable.checked = compilable;
+
+                if (fieldOrganization) {
+                    fieldOrganization.value = orgId || "";
+                }
 
                 if (fieldProfile) {
                     fieldProfile.value = profilePretty || "";
@@ -290,6 +495,14 @@
                 row.setAttribute("data-project-compilable", payload.compilable ? "true" : "false");
                 row.setAttribute("data-project-langs", (payload.supported_languages || []).join(", "));
                 row.setAttribute("data-project-profile", JSON.stringify(payload.profile || {}));
+                row.setAttribute(
+                    "data-project-org-id",
+                    payload.organization_id != null ? String(payload.organization_id) : ""
+                );
+                row.setAttribute(
+                    "data-project-org-name",
+                    payload.organization_name || ""
+                );
 
                 var scriptCell = row.querySelector(".script-path-cell");
                 if (scriptCell) {
@@ -437,8 +650,6 @@
 
                     var deleteUrl = currentRow.getAttribute("data-delete-url");
                     if (!deleteUrl) return;
-
-                    var id = currentRow.getAttribute("data-project-id") || "";
 
                     var confirmed = window.confirm(
                         "Are you sure you want to delete this project? This action cannot be undone."

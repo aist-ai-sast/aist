@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 from dojo.aist.tasks import run_sast_pipeline
 
 from .link_builder import LinkBuilder
-from .models import AISTPipeline, AISTProject, AISTProjectVersion, AISTStatus, VersionType
+from .models import AISTPipeline, AISTProject, AISTProjectVersion, AISTStatus, VersionType, Organization
 from .utils import _import_sast_pipeline_package, create_pipeline_object, get_project_build_path
 
 _import_sast_pipeline_package()
@@ -452,3 +452,31 @@ class ProjectVersionCreateAPI(APIView):
 
         out = AISTProjectVersionCreateSerializer(instance=version, context={"project": project})
         return Response(out.data, status=status.HTTP_201_CREATED)
+
+class OrganizationSerializer(serializers.ModelSerializer):
+    """Serializer for Organization model used in AIST UI."""
+
+    class Meta:
+        model = Organization
+        fields = ("id", "name", "created", "updated")
+
+
+class OrganizationCreateAPI(generics.CreateAPIView):
+    """
+    Create a new Organization that can be assigned to AISTProject instances.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = OrganizationSerializer
+    queryset = Organization.objects.all()
+
+    @extend_schema(
+        tags=["aist"],
+        summary="Create organization",
+        description="Creates a new organization that can be used to group AIST projects.",
+        request=OrganizationSerializer,
+        responses={201: OpenApiResponse(OrganizationSerializer, description="Organization created")},
+    )
+    def post(self, request, *args, **kwargs) -> Response:
+        # Use generic CreateAPIView logic for validation + object creation
+        return super().post(request, *args, **kwargs)
