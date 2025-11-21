@@ -1,6 +1,5 @@
 # --- add near other imports in api.py ---
 import requests  # std HTTP client
-from django.db import transaction
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -9,7 +8,7 @@ from rest_framework.views import APIView
 
 from dojo.models import DojoMeta, Product, Product_Type
 
-from .models import AISTProject, AISTProjectVersion, RepositoryInfo, ScmGitlabBinding, ScmType, VersionType
+from .models import AISTProject, RepositoryInfo, ScmGitlabBinding, ScmType
 from .utils import _load_analyzers_config  # same helper as GH flow uses
 
 
@@ -20,7 +19,6 @@ class ImportGitlabRequestSerializer(serializers.Serializer):
     gitlab_api_token = serializers.CharField(write_only=True, trim_whitespace=True)
     # Optional for self-hosted GitLab like https://gitlab.company.tld
     base_url = serializers.URLField(required=False, default="https://gitlab.com")
-    default_version = serializers.CharField(required=False, default="master")
 
 
 class ImportGitlabResponseSerializer(serializers.Serializer):
@@ -53,7 +51,6 @@ class ImportProjectFromGitlabAPI(APIView):
         project_id = serializer.validated_data["project_id"]
         token = serializer.validated_data["gitlab_api_token"].strip()
         base_url = serializer.validated_data.get("base_url") or "https://gitlab.com"
-        default_version = serializer.validated_data.get("default_version") or "master"
 
         # Build API urls (supports self-hosted)
         api = base_url.rstrip("/") + "/api/v4"
@@ -114,23 +111,16 @@ class ImportProjectFromGitlabAPI(APIView):
             binding.personal_access_token = token
             binding.save(update_fields=["personal_access_token"])
 
-        with transaction.atomic():
-            aist_project, _ = AISTProject.objects.get_or_create(
-                product=product,
-                defaults={
-                    "supported_languages": langs,
-                    "script_path": "input_projects/default_imported_project_no_built.sh",
-                    "compilable": False,
-                    "profile": {},
-                    "repository": repo_info,
-                },
-            )
-
-            AISTProjectVersion.objects.get_or_create(
-                project=aist_project,
-                version=default_version,
-                defaults={"version_type": VersionType.GIT_HASH},
-            )
+        aist_project, _ = AISTProject.objects.get_or_create(
+            product=product,
+            defaults={
+                "supported_languages": langs,
+                "script_path": "input_projects/default_imported_project_no_built.sh",
+                "compilable": False,
+                "profile": {},
+                "repository": repo_info,
+            },
+        )
 
         out = ImportGitlabResponseSerializer({
             "product_id": product.id,

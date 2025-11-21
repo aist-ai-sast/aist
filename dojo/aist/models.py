@@ -10,6 +10,8 @@ from contextlib import suppress
 from pathlib import Path
 from urllib.parse import quote
 
+import requests
+from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
@@ -17,6 +19,7 @@ from django.core.validators import RegexValidator
 from django.db import models, transaction
 from django.utils import timezone
 from django_github_app.models import Installation
+from django_github_app.routing import GitHubRouter
 from encrypted_model_fields.fields import EncryptedCharField
 
 from dojo.models import Finding, Product, Test
@@ -26,10 +29,12 @@ _repo_part_validator = RegexValidator(
     message="Only letters, digits, dot, underscore, hyphen and slash are allowed.",
 )
 
-# --------- Error/validation messages (TRY003/EM101) ----------
+# --------- Error/validation messages ----------
 ERR_FILEHASH_REQUIRES_SOURCE = "For FILE_HASH version type, source_archive is required."
 ERR_VERSION_ALREADY_EXISTS = "This version already exists for the selected project."
 ERR_UNSUPPORTED_ARCHIVE = "Unsupported archive format: not a ZIP or TAR.*"
+
+gh = GitHubRouter()
 
 
 class ScmType(models.TextChoices):
@@ -123,6 +128,20 @@ class ScmGithubBinding(models.Model):
         token = inst.get_access_token()
         return {"Authorization": f"token {token}"}
 
+    def get_project_info(self, scm: RepositoryInfo):
+        logger = logging.getLogger("dojo.aist")
+
+        owner = scm.repo_owner
+        name = scm.repo_name
+
+        try:
+            data = async_to_sync(gh.getitem)(f"/repos/{owner}/{name}")
+        except Exception:
+            logger.exception("Failed to fetch repo data from GitHubRouter for %s/%s", owner, name)
+            return None
+
+        return data
+
 
 class ScmGitlabBinding(models.Model):
 
@@ -162,6 +181,43 @@ class ScmGitlabBinding(models.Model):
         """Return API auth header for GitLab."""
         tok = (self.personal_access_token or "").strip()
         return {"PRIVATE-TOKEN": tok} if tok else {}
+
+    def get_project_info(self, scm: RepositoryInfo):
+        logger = logging.getLogger("dojo.aist")
+        base = self.host(scm).rstrip("/")
+        api_base = f"{base}/api/v4"
+
+        proj = quote(scm.repo_full, safe="")
+
+        url = f"{api_base}/projects/{proj}"
+
+        headers = self.get_auth_headers()
+
+        try:
+            resp = requests.get(
+                url,
+                headers=headers,
+                timeout=10,
+            )
+        except Exception:
+            logger.exception("Failed to query GitLab API for default branch of %s", scm.repo_full)
+            return None
+
+        if resp.status_code != 200:
+            logger.warning(
+                "GitLab API %s returned %s when requesting default branch for %s",
+                url,
+                resp.status_code,
+                scm.repo_full,
+            )
+            return None
+
+        try:
+            data = resp.json()
+        except ValueError:
+            logger.warning("GitLab API %s returned non-JSON response for %s", url, scm.repo_full)
+            return None
+        return data
 
 
 class PullRequest(models.Model):
