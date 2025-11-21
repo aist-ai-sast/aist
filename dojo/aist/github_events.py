@@ -80,7 +80,7 @@ async def on_install_created_or_repos_added(event, gh, **_):
             product=product,
             defaults={
                 "supported_languages": langs,
-                "script_path": "INVALID",
+                "script_path": "input_projects/default_imported_project_no_built.sh",
                 "compilable": False,
                 "profile": {},
                 "repository": repo_info,
