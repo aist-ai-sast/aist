@@ -8,9 +8,8 @@ from django.db import transaction
 from dojo.aist.link_builder import LinkBuilder
 from dojo.aist.logging_transport import get_redis, install_pipeline_logging
 from dojo.aist.models import AISTPipeline, AISTStatus
+from dojo.aist.tasks.dedup import watch_deduplication
 from dojo.models import DojoMeta, Finding, Test
-
-from .dedup import watch_deduplication
 
 
 @shared_task(bind=True)

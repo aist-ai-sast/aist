@@ -5,8 +5,6 @@ from unittest.mock import MagicMock, patch
 
 from django.test import RequestFactory, TestCase
 
-# Import targets at top-level to satisfy PLC0415
-from dojo.aist.ai_views import send_request_to_ai as _send_request_to_ai
 from dojo.aist.tasks.ai import push_request_to_ai as _push_request_to_ai
 from dojo.aist.tasks.dedup import watch_deduplication as _watch_deduplication
 from dojo.aist.tasks.enrich import (
@@ -15,6 +13,7 @@ from dojo.aist.tasks.enrich import (
 from dojo.aist.tasks.enrich import (
     make_enrich_chord as _make_enrich_chord,
 )
+from dojo.aist.views.ai import send_request_to_ai as _send_request_to_ai
 
 # ---- Messages / constants ----------------------------------------------------
 
@@ -157,10 +156,10 @@ class PushRequestToAITests(TestCase):
 
 class SendRequestToAITests(TestCase):
     def test_send_request_pushes_when_confirmed(self):
-        with patch("dojo.aist.ai_views.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
-             patch("dojo.aist.ai_views.push_request_to_ai") as mock_push, \
-             patch("dojo.aist.ai_views.AISTPipeline") as mock_pipeline_model, \
-             patch("dojo.aist.ai_views.Finding") as mock_finding:
+        with patch("dojo.aist.views.ai.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
+             patch("dojo.aist.views.ai.push_request_to_ai") as mock_push, \
+             patch("dojo.aist.views.ai.AISTPipeline") as mock_pipeline_model, \
+             patch("dojo.aist.views.ai.Finding") as mock_finding:
 
             rf = RequestFactory()
             body = b'{"pipeline_id":"pipeline-123","finding_ids":[1,2,3],"filters":{"analyzers":["X"]}}'

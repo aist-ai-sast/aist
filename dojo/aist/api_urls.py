@@ -1,22 +1,33 @@
 from django.urls import path
 
-from .api import (
+from dojo.aist.api import (
     AISTProjectDetailAPI,
     AISTProjectListAPI,
+    LaunchScheduleBulkDisableAPI,
+    LaunchScheduleDetailAPI,
+    LaunchScheduleListAPI,
+    LaunchSchedulePreviewAPI,
+    LaunchScheduleRunOnceAPI,
     OrganizationCreateAPI,
     PipelineAPI,
+    PipelineLaunchQueueClearDispatchedAPI,
+    PipelineLaunchQueueListAPI,
     PipelineListAPI,
     PipelineStartAPI,
+    ProjectLaunchConfigDetailAPI,
+    ProjectLaunchConfigListCreateAPI,
+    ProjectLaunchConfigStartAPI,
+    ProjectLaunchScheduleUpsertAPI,
     ProjectVersionCreateAPI,
     ProjectVersionFileBlobAPI,
 )
-from .gitlab_integration_api import ImportProjectFromGitlabAPI
+from dojo.aist.api.gitlab_integration import ImportProjectFromGitlabAPI
 
 app_name = "dojo_aist_api"
 urlpatterns = [
     path("projects/", AISTProjectListAPI.as_view(), name="project_list"),
     path("projects/<int:project_id>/", AISTProjectDetailAPI.as_view(), name="project_detail"),
-    path("pipelines/start", PipelineStartAPI.as_view(), name="pipeline_start"),
+    path("pipelines/start/", PipelineStartAPI.as_view(), name="pipeline_start"),
     path("pipelines/<str:pipeline_id>", PipelineAPI.as_view(), name="pipeline_status"),
     path("pipelines/", PipelineListAPI.as_view(), name="pipelines"),
     path(
@@ -34,5 +45,44 @@ urlpatterns = [
         ProjectVersionCreateAPI.as_view(),
         name="project_version_create",
     ),
-    path("import_project_from_gitlab", ImportProjectFromGitlabAPI.as_view(), name="import_project_from_gitlab"),
+    path("import_project_from_gitlab/", ImportProjectFromGitlabAPI.as_view(), name="import_project_from_gitlab"),
+    path(
+        "projects/<int:project_id>/launch-configs/",
+        ProjectLaunchConfigListCreateAPI.as_view(),
+        name="project_launch_config_list_create",
+    ),
+    path(
+        "projects/<int:project_id>/launch-configs/<int:config_id>/",
+        ProjectLaunchConfigDetailAPI.as_view(),
+        name="project_launch_config_detail",
+    ),
+    path(
+        "projects/<int:project_id>/launch-configs/<int:config_id>/start/",
+        ProjectLaunchConfigStartAPI.as_view(),
+        name="project_launch_config_start",
+    ),
+    path(
+        "projects/<int:project_id>/launch-schedule/",
+        ProjectLaunchScheduleUpsertAPI.as_view(),
+        name="project_launch_schedule_upsert",
+    ),
+    path(
+        "launch-schedules/",
+        LaunchScheduleListAPI.as_view(),
+        name="launch_schedule_list",
+    ),
+    path(
+        "launch-schedules/<int:launch_schedule_id>/",
+        LaunchScheduleDetailAPI.as_view(),
+        name="launch_schedule_detail",
+    ),
+path("launch-schedules/preview/", LaunchSchedulePreviewAPI.as_view(), name="launch_schedule_preview"),
+path("launch-schedules/bulk-disable/", LaunchScheduleBulkDisableAPI.as_view(), name="launch_schedule_bulk_disable"),
+path("launch-queue/", PipelineLaunchQueueListAPI.as_view(), name="pipeline_launch_queue_list"),
+path("launch-queue/clear-dispatched/", PipelineLaunchQueueClearDispatchedAPI.as_view(), name="pipeline_launch_queue_clear_dispatched"),
+path(
+    "launch-schedules/<int:launch_schedule_id>/run-once/",
+    LaunchScheduleRunOnceAPI.as_view(),
+    name="launch_schedule_run_once",
+),
 ]

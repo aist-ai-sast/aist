@@ -1,0 +1,174 @@
+<div class="aist-pipeline-scope" data-aist-scope="{{ scope|default:'start' }}">
+    {% if scope == "launch-config" %}
+        {# In launch-config modal, outer page already provides <form> #}
+        {{ form.selection_signature }}
+    {% else %}
+        <form method="post">
+        {% csrf_token %}
+        {{ form.selection_signature }}
+    {% endif %}
+
+        {# LaunchConfig metadata fields (present only in AISTLaunchConfigForm) #}
+        {% if form.name %}
+            <div class="mb-3 row">
+                <label class="col-sm-3 col-form-label">{{ form.name.label }}</label>
+                <div class="col-sm-9">
+                    {{ form.name }}
+                </div>
+            </div>
+
+            <div class="mb-3 row">
+                <label class="col-sm-3 col-form-label">{{ form.description.label }}</label>
+                <div class="col-sm-9">
+                    {{ form.description }}
+                </div>
+            </div>
+
+            <div class="mb-3 row">
+                <label class="col-sm-3 col-form-label">{{ form.is_default.label }}</label>
+                <div class="col-sm-9">
+                    <div class="form-check">
+                        {{ form.is_default }}
+                    </div>
+                </div>
+            </div>
+
+            <hr class="my-3"/>
+        {% endif %}
+
+
+        {% if form.project %}
+            {# Project select #}
+            <div class="mb-3 row">
+                <label class="col-sm-3 col-form-label">{{ form.project.label }}</label>
+                <div class="col-sm-9">
+                    {{ form.project }}
+                    {% if form.project.help_text %}
+                        <small class="form-text text-muted small">{{ form.project.help_text }}</small>
+                    {% endif %}
+                </div>
+            </div>
+        {% endif %}
+
+        {# Project version + create button #}
+        <div class="mb-3 row align-items-start">
+            <label class="col-sm-3 col-form-label">{{ form.project_version.label }}</label>
+            <div class="col-sm-9 d-flex gap-2">
+                <div class="flex-grow-1">
+                    {{ form.project_version }}
+                </div>
+                <button type="button"
+                        class="btn btn-outline-primary"
+                        id="btn-open-create-version"
+                        title="Create version for selected project"
+                        disabled>
+                    Create version
+                </button>
+            </div>
+        </div>
+
+        <div class="mb-3 row">
+            <label class="col-sm-3 col-form-label">{{ form.ai_mode.label }}</label>
+            <div class="col-sm-9">
+                {% for radio in form.ai_mode %}
+                    <div class="form-check">
+                        {{ radio.tag }}
+                        <label class="form-check-label"
+                               for="{{ radio.id_for_label }}">{{ radio.choice_label }}</label>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div id="ai-auto-block" class="mb-3 row" style="display:none;">
+            <label class="col-sm-3 col-form-label">Default AI filter</label>
+            <div class="col-sm-9">
+                <div id="ai-default-filter-status" class="text-muted small mb-2"></div>
+
+                <pre id="ai-default-filter-preview"
+                     class="border rounded p-2 small"
+                     style="display:none; max-height: 220px; overflow:auto;"></pre>
+
+                <button type="button" class="btn btn-outline-primary btn-sm"
+                        id="btn-create-ai-filter" style="display:none;">
+                    Create AI filter
+                </button>
+            </div>
+        </div>
+
+        {{ form.ai_filter_json }}
+        {{ form.ai_filter_scope }}
+
+        <div class="mb-3 row">
+            <label class="col-sm-3 col-form-label">{{ form.rebuild_images.label }}</label>
+            <div class="col-sm-9">
+                <div class="form-check">
+                    {{ form.rebuild_images }}
+                </div>
+            </div>
+        </div>
+
+        {# Log level #}
+        <div class="mb-3 row">
+            <label class="col-sm-3 col-form-label">{{ form.log_level.label }}</label>
+            <div class="col-sm-9">
+                {{ form.log_level }}
+            </div>
+        </div>
+
+        {# Languages as checkboxes #}
+        <div class="mb-3 row">
+            <label class="col-sm-3 col-form-label">{{ form.languages.label }}</label>
+            <div class="col-sm-9" id="languages-group">
+                <div class="row">
+                    {% for checkbox in form.languages %}
+                        <div class="col-sm-6 col-lg-4">
+                            <div class="form-check mb-2">
+                                {{ checkbox.tag }}
+                                <label class="form-check-label">{{ checkbox.choice_label }}</label>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+                <small class="form-text text-muted small mt-1">
+                    Project-required languages are preselected and disabled.
+                </small>
+            </div>
+        </div>
+
+        {# Analyzers as checkboxes #}
+        <div class="mb-3 row">
+            <label class="col-sm-3 col-form-label">{{ form.analyzers.label }}</label>
+            <div class="col-sm-9">
+                <div class="row">
+                    {% for checkbox in form.analyzers %}
+                        <div class="col-sm-6 col-lg-4">
+                            <div class="form-check mb-2">
+                                {{ checkbox.tag }}
+                                <label class="form-check-label">{{ checkbox.choice_label }}</label>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        {# Time class #}
+        <div class="mb-3 row">
+            <label class="col-sm-3 col-form-label">{{ form.time_class_level.label }}</label>
+            <div class="col-sm-9">
+                {{ form.time_class_level }}
+            </div>
+        </div>
+
+        <div class="text-end mt-3">
+            {% if form.project %}
+                <button type="submit" class="btn btn-primary" id="btn-start" disabled>Start pipeline</button>
+            {% else %}
+                <button type="submit" class="btn btn-primary" id="btn-save-launch-config">Save preset</button>
+            {% endif %}
+        </div>
+    {% if scope != "launch-config" %}
+        </form>
+    {% endif %}
+</div>

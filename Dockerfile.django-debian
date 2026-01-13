@@ -69,6 +69,18 @@ RUN \
   apt-get clean && \
   rm -rf /var/lib/apt/lists && \
   true
+ARG DOCKER_CLI_VERSION=24.0.2
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "${arch}" in \
+    amd64)  docker_arch="x86_64" ;; \
+    arm64)  docker_arch="aarch64" ;; \
+    *) echo "Unsupported architecture: ${arch}" >&2; exit 1 ;; \
+  esac; \
+  curl -fsSL "https://download.docker.com/linux/static/stable/${docker_arch}/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz; \
+  tar -xzf /tmp/docker.tgz -C /tmp; \
+  install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
+  rm -rf /tmp/docker /tmp/docker.tgz;
 RUN \
   --mount=from=build,src=/tmp/wheels,target=/tmp/wheels \
   --mount=from=build,src=/app/requirements.txt,target=/app/requirements.txt \

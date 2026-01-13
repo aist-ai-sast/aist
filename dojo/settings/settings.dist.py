@@ -1305,7 +1305,15 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(minute="*/2"),
         "kwargs": {"batch_size": 200, "max_runtime_s": 50},
     },
-
+    # AIST pipeline launch schedules and dispatcher
+    "aist-schedule-launches": {
+        "task": "dojo.aist.tasks.launch_schedule.process_launch_schedules",
+        "schedule": timedelta(minutes=1),
+    },
+    "aist-dispatch-queued": {
+        "task": "dojo.aist.tasks.pipeline_dispatcher.dispatch_queued_pipelines",
+        "schedule": timedelta(minutes=1),
+    },
 }
 
 # ------------------------------------

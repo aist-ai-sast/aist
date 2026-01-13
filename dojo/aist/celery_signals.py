@@ -5,10 +5,9 @@ from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
+from dojo.aist.models import AISTProject, AISTProjectVersion, ProcessedFinding, TestDeduplicationProgress, VersionType
 from dojo.models import Finding, Test
 from dojo.signals import finding_deduplicated
-
-from .models import AISTProject, AISTProjectVersion, ProcessedFinding, TestDeduplicationProgress, VersionType
 
 
 @receiver(post_save, sender=AISTProject, dispatch_uid="aistproject_autoversion_master")

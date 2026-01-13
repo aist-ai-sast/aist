@@ -5,7 +5,8 @@ from django.db import OperationalError, transaction
 
 from dojo.aist.logging_transport import install_pipeline_logging
 from dojo.aist.models import AISTPipeline, AISTStatus, TestDeduplicationProgress
-from dojo.aist.utils import finish_pipeline
+from dojo.aist.tasks.ai import auto_push_to_ai_if_configured
+from dojo.aist.utils.pipeline import finish_pipeline
 from dojo.models import Test
 
 
@@ -45,6 +46,9 @@ def watch_deduplication(self, pipeline_id: str, log_level) -> None:
             # TODO: set only if flag waiting for confirmation is set
             pipeline.status = AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI
             pipeline.save(update_fields=["status", "updated"])
+            ai = (pipeline.launch_data or {}).get("ai") or {}
+            if (ai.get("mode") == "AUTO_DEFAULT") and ai.get("filter_snapshot"):
+                auto_push_to_ai_if_configured.delay(pipeline.id)
             return
 
     except Exception as exc:

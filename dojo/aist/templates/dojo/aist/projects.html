@@ -509,6 +509,20 @@
                                 Project is compilable
                             </label>
                         </div>
+
+                        <hr class="my-3"/>
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div>
+                                <div class="fw-semibold">Launch presets</div>
+                                <div class="text-muted small">Create reusable pipeline launch configuration for this
+                                    project.
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-outline-primary" id="btnOpenCreateLaunchPreset">
+                                Create preset
+                            </button>
+                        </div>
+
                     </div>
                     <div class="modal-footer">
                         <button type="button"
@@ -529,9 +543,154 @@
         </div>
     </div>
 
+    <div class="modal fade" id="modalCreateLaunchPreset" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Create launch preset</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+
+                </div>
+
+                <div class="modal-body">
+                    <div class="alert alert-danger" id="launchPresetError" style="display:none;"></div>
+
+                    <div class="aist-pipeline-scope" data-aist-scope="launch-config" data-aist-project-id="">
+                        <form method="post" id="formCreateLaunchPreset">
+                            {% csrf_token %}
+                            {% include "dojo/aist/_pipeline_run_form.html" with form=launch_config_form scope="launch-config" %}
+                        </form>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+{# Global modals must NOT be nested inside other modals (Bootstrap 4 limitation) #}
+{% include "dojo/aist/_pipeline_run_modals.html" %}
     <script>
         (function () {
             "use strict";
+
+            function getCookie(name) {
+                var value = "; " + document.cookie;
+                var parts = value.split("; " + name + "=");
+                if (parts.length === 2) return parts.pop().split(";").shift();
+                return "";
+            }
+
+            var createUrlTpl = "{% url 'dojo_aist:project_launch_config_create_ui' project_id=0 %}"; // 0 will be replaced
+            var modalEl = document.getElementById("modalCreateLaunchPreset");
+            var formEl = document.getElementById("formCreateLaunchPreset");
+            var errEl = document.getElementById("launchPresetError");
+            var scopeEl = modalEl ? modalEl.querySelector(".aist-pipeline-scope") : null;
+
+            // You already have currentProjectId in your edit-modal flow; if not — set it when opening edit modal
+            var currentProjectId = null;
+
+            window.__aistSetCurrentProjectIdForPreset = function (pid) {
+                currentProjectId = pid;
+            };
+
+            var btnOpen = document.getElementById("btnOpenCreateLaunchPreset");
+            if (btnOpen && modalEl) {
+                btnOpen.addEventListener("click", function () {
+                    if (!currentProjectId) return;
+
+                    if (scopeEl) scopeEl.setAttribute("data-aist-project-id", String(currentProjectId));
+                    if (window.__AIST_REFRESH_PIPELINE_SCOPE__) {
+                        window.__AIST_REFRESH_PIPELINE_SCOPE__();
+                    }
+
+                    if (formEl) formEl.action = createUrlTpl.replace("/0/", "/" + String(currentProjectId) + "/");
+
+                    // Clear previous error
+                    if (errEl) {
+                        errEl.style.display = "none";
+                        errEl.textContent = "";
+                    }
+
+                    // Open modal in both Bootstrap 5 and Bootstrap 3/4 environments
+                    if (window.bootstrap && window.bootstrap.Modal) {
+                        var m = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+                        m.show();
+                    } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+                        window.jQuery(modalEl).modal("show");
+                    } else {
+                        // Very last resort (shouldn't happen in DefectDojo)
+                        modalEl.classList.add("in");
+                        modalEl.style.display = "block";
+                    }
+
+                    setTimeout(function () {
+                        if (window.__AIST_REFRESH_PIPELINE_SCOPE__) {
+                            window.__AIST_REFRESH_PIPELINE_SCOPE__();
+                        }
+                    }, 0);
+                });
+            }
+
+
+            if (formEl) {
+                formEl.addEventListener("submit", async function (e) {
+                    e.preventDefault();
+
+                    if (!currentProjectId) return;
+
+                    if (errEl) {
+                        errEl.classList.add("d-none");
+                        errEl.textContent = "";
+                    }
+
+                    var fd = new FormData(formEl);
+
+                    try {
+                        var resp = await fetch(formEl.action, {
+                            method: "POST",
+                            headers: {
+                                "X-CSRFToken": getCookie("csrftoken"),
+                            },
+                            body: fd,
+                        });
+
+                        var data = await resp.json();
+
+                        if (!resp.ok || !data.ok) {
+                            var msg = "Failed to create preset.";
+                            if (data && data.errors) msg = JSON.stringify(data.errors);
+                            if (data && data.non_field_errors && data.non_field_errors.length) msg = data.non_field_errors.join("\n");
+
+                            if (errEl) {
+                                errEl.textContent = msg;
+                                errEl.style.display = "block";
+
+                            }
+                            return;
+                        }
+
+                        if (window.bootstrap && window.bootstrap.Modal) {
+                            window.bootstrap.Modal.getInstance(modalEl)?.hide();
+                        } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+                            window.jQuery(modalEl).modal("hide");
+                        } else {
+                            modalEl.classList.remove("in");
+                            modalEl.style.display = "none";
+                        }
+
+                        // Optional: show a toast/alert
+                        // alert("Preset created: " + data.item.name);
+
+                    } catch (ex) {
+                        if (errEl) {
+                            errEl.textContent = String(ex);
+                            errEl.style.display = "block";
+
+                        }
+                    }
+                });
+            }
 
             var table = document.getElementById("aist-projects-table");
             var filterInput = document.getElementById("aist-projects-filter");
@@ -633,6 +792,9 @@
 
 
                 fieldId.value = id;
+                if (window.__aistSetCurrentProjectIdForPreset) {
+                    window.__aistSetCurrentProjectIdForPreset(id);
+                }
                 fieldProduct.value = name;
                 fieldScriptPath.value = scriptPath;
                 fieldLangs.value = langs;
@@ -1131,4 +1293,5 @@
             }
         })();
     </script>
+    {% include "dojo/aist/_pipeline_run_js.html" %}
 {% endblock %}

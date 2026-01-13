@@ -7,9 +7,12 @@ from celery import shared_task
 from django.conf import settings
 from django.db import transaction
 
+from dojo.aist.ai_filter import apply_ai_filter
 from dojo.aist.logging_transport import install_pipeline_logging
 from dojo.aist.models import AISTPipeline, AISTStatus
-from dojo.aist.utils import build_callback_url, finish_pipeline
+from dojo.aist.utils.pipeline import finish_pipeline
+from dojo.aist.utils.urls import build_callback_url
+from dojo.models import Finding
 
 
 def _csv(items: Iterable[Any]) -> str:
@@ -87,3 +90,49 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
         pipeline.save(update_fields=["status", "updated"])
 
         log.info("AI triage request accepted: status=%s body=%s", resp.status_code, resp.text[:500])
+
+
+@shared_task(name="dojo.aist.auto_push_to_ai_if_configured")
+def auto_push_to_ai_if_configured(pipeline_id: str):
+    logger = install_pipeline_logging(pipeline_id)
+
+    with transaction.atomic():
+        pipeline = (
+            AISTPipeline.objects
+            .select_for_update()
+            .prefetch_related("tests")
+            .get(id=pipeline_id)
+        )
+
+        if pipeline.status != AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI:
+            return
+
+        ai = (pipeline.launch_data or {}).get("ai") or {}
+        snap = ai.get("filter_snapshot")
+
+        if not snap or not ai:
+            logger.warning("AUTO_DEFAULT: Filter snapshot not configured")
+            finish_pipeline(pipeline)
+            return
+
+        qs = Finding.objects.filter(test__in=pipeline.tests.all(), active=True)
+        qs = apply_ai_filter(qs, snap)
+
+        limit = int((snap or {}).get("limit") or None)
+
+        if limit is None:
+            logger.warning("AUTO_DEFAULT: Filter limit is None")
+            finish_pipeline(pipeline)
+            return
+
+        finding_ids = list(qs.values_list("id", flat=True)[:limit])
+
+        if not finding_ids:
+            logger.warning("AUTO_DEFAULT: filter matched 0 findings")
+            finish_pipeline(pipeline)
+            return
+
+        pipeline.status = AISTStatus.PUSH_TO_AI
+        pipeline.save(update_fields=["status", "updated"])
+
+    push_request_to_ai.delay(pipeline_id, finding_ids, {"filter": snap})

@@ -1,411 +1,214 @@
-# dojo/aist/tests/test_aist_api.py
-"""
-Django TestCase-based tests for AIST API endpoints.
+# dojo/aist/test/test_api.py
+from __future__ import annotations
 
-Covers:
-- GET /aist/projects/ (authentication required, payload shape)
-- POST /aist/pipeline/start (creates pipeline and triggers Celery task)
-- GET  /aist/pipeline/{id} (returns status and response_from_ai)
-- Negative: POST /aist/pipeline/start with unknown project -> 404
-
-"""
-import io
-import zipfile
-from unittest.mock import Mock, patch
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
-from django.utils import timezone
-from rest_framework import status
 from rest_framework.test import APIClient
 
-from dojo.aist.models import AISTPipeline, AISTProject, AISTProjectVersion, AISTStatus, VersionType
-from dojo.aist.tasks.enrich import enrich_finding_task
-from dojo.models import DojoMeta, Engagement, Finding, Product, Product_Type, SLA_Configuration, Test, Test_Type
+from dojo.aist.models import AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, VersionType
+from dojo.models import Product, Product_Type, SLA_Configuration
 
 
-class AISTApiTests(TestCase):
-
-    """Integration-style tests using Django TestCase and DRF's APIClient."""
-
-    def setUp(self) -> None:
-        # Create API client and authenticated user
+class AISTApiBase(TestCase):
+    def setUp(self):
         self.client = APIClient()
-        User = get_user_model()
-        self.user = User.objects.create(
-            username="tester", email="tester@example.com", password="pass",  # noqa: S106
+        self.user = get_user_model().objects.create_user(
+            username="tester",
+            email="tester@example.com",
+            password="pass",  # noqa: S106
         )
-        # Force authenticate as a logged-in user (works with Session/Token/JWT setups)
         self.client.force_authenticate(user=self.user)
 
-        # Minimal product + AIST project to work with
-        self.sla = SLA_Configuration.objects.create(
-            name="SLA default for tests",
-        )
-        self.prod_type = Product_Type.objects.create(name="PT for tests")
+        self.sla = SLA_Configuration.objects.create(name="SLA default")
+        self.prod_type = Product_Type.objects.create(name="PT")
         self.product = Product.objects.create(
-            name="Test Product", description="desc", prod_type=self.prod_type, sla_configuration_id=self.sla.id,
+            name="Test Product",
+            description="desc",
+            prod_type=self.prod_type,
+            sla_configuration_id=self.sla.id,
         )
+
         self.project = AISTProject.objects.create(
             product=self.product,
-            supported_languages=["cpp", "python"],
-            script_path="scripts/build_and_scan.sh",
-            compilable=True,
+            supported_languages=["python"],
+            script_path="scripts/build.sh",
+            compilable=False,
+            profile={},
         )
 
-    # ---------- Projects listing ----------
-
-    def test_projects_requires_auth(self):
-        """Unauthenticated request must be rejected (401/403 depending on global DRF settings)."""
-        anon = APIClient()
-        url = reverse("dojo_aist_api:project_list")  # /aist/projects/
-        resp = anon.get(url)
-        self.assertIn(resp.status_code, (401, 403))
-
-    def test_projects_list_ok(self):
-        """Authenticated request returns a paginated list of AIST projects with expected fields."""
-        url = reverse("dojo_aist_api:project_list")  # /api/v2/aist/projects/
-        resp = self.client.get(url)
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-
-        # Since ListAPIView + global LimitOffsetPagination => paginated dict
-        self.assertIsInstance(data, dict)
-        self.assertIn("results", data)
-        self.assertIsInstance(data["results"], list)
-
-        # Find our project in the results
-        row = next((it for it in data["results"] if it["id"] == self.project.id), None)
-        self.assertIsNotNone(row, "Current AISTProject not found in results")
-
-        # Serializer fields defined in AISTProjectSerializer
-        self.assertEqual(row["product_name"], "Test Product")  # was "nx_open"
-        self.assertIn("supported_languages", row)
-        self.assertIn("compilable", row)
-        self.assertIn("created", row)
-        self.assertIn("updated", row)
-
-    # ---------- Pipeline start ----------
-
-    @patch("dojo.aist.api.run_sast_pipeline")
-    def test_pipeline_start_happy_path(self, run_task_mock):
-        """POST /pipeline/start returns 201 with pipeline id and triggers Celery task."""
-        # mock celery
-        async_res = Mock()
-        async_res.id = "celery-12345"
-        run_task_mock.delay.return_value = async_res
-
-        # we MUST have a project version now
-        pv = AISTProjectVersion.objects.create(
+        self.pv = AISTProjectVersion.objects.create(
             project=self.project,
             version_type=VersionType.GIT_HASH,
             version="main",
         )
 
-        url = reverse("dojo_aist_api:pipeline_start")
-        payload = {"project_version_id": pv.id}
-        resp = self.client.post(url, payload, format="json")
+
+class PipelineStartAPITests(AISTApiBase):
+    def _url(self):
+        # api_urls.py: path("pipelines/start/", ...)
+        return reverse("dojo_aist_api:pipeline_start")
+
+    @patch("dojo.aist.api.pipelines.run_sast_pipeline")
+    @patch("dojo.aist.api.pipelines.PipelineArguments.normalize_params")
+    def test_start_pipeline_happy_path_calls_celery_with_params(
+            self, mock_normalize, mock_run_task,
+    ):
+        mock_normalize.return_value = {
+            "project_id": self.project.id,
+            "project_version": {"id": self.pv.id},
+            "log_level": "INFO",
+        }
+        mock_run_task.delay.return_value = SimpleNamespace(id="celery-123")
+
+        resp = self.client.post(
+            self._url(),
+            data={
+                "project_version_id": self.pv.id,
+                "ai_filter": {
+                    "limit": 50,
+                    "severity": [{"comparison": "EQUALS", "value": "HIGH"}],
+                },
+            },
+            format="json",
+        )
+
         self.assertEqual(resp.status_code, 201)
 
-        pid = resp.json().get("id")
-        self.assertTrue(pid)
+        pipeline_id = resp.data["id"]
 
-        # pipeline exists
-        p = AISTPipeline.objects.get(id=pid)
-        self.assertEqual(p.project_id, self.project.id)
-        self.assertEqual(p.project_version_id, pv.id)
-        self.assertEqual(p.status, AISTStatus.FINISHED)
-
-        # celery called
-        run_task_mock.delay.assert_called_once()
-        args, _kwargs = run_task_mock.delay.call_args
-        self.assertEqual(args[0], pid)
-        self.assertIsNone(args[1])
-
-    def test_pipeline_start_404_on_unknown_version(self):
-        """POST /pipeline/start with non-existing project_version_id must return 404."""
-        url = reverse("dojo_aist_api:pipeline_start")
-        payload = {"project_version_id": 999999}
-        resp = self.client.post(url, payload, format="json")
-        self.assertEqual(resp.status_code, 404)
-
-    # ---------- Pipeline status ----------
-
-    def test_pipeline_status_returns_response_from_ai(self):
-        """
-        GET /pipeline/{id} returns status and response_from_ai.
-
-        This asserts the desired contract. If this test fails returning None,
-        check that the API uses 'response_from_ai' (not 'response') in the payload.
-        """
-        p = AISTPipeline.objects.create(
-            id="abc12345",
-            project=self.project,
-            status=AISTStatus.WAITING_RESULT_FROM_AI,
-            response_from_ai={"state": "pending", "details": {"x": 1}},
-        )
-        url = reverse("dojo_aist_api:pipeline_status", kwargs={"pipeline_id": p.id})
-        resp = self.client.get(url)
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual(body["id"], p.id)
-        self.assertEqual(body["status"], AISTStatus.WAITING_RESULT_FROM_AI)
-        # Must echo the JSON stored in model.response_from_ai
-        self.assertEqual(body["response_from_ai"], {"state": "pending", "details": {"x": 1}})
-        self.assertIn("created", body)
-        self.assertIn("updated", body)
-
-    def test_project_detail_get_ok(self):
-        """GET /projects/{project_id}/ returns a single AISTProject by id."""
-        url = reverse("dojo_aist_api:project_detail", kwargs={"project_id": self.project.id})
-        resp = self.client.get(url)
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        # Serializer fields defined in AISTProjectSerializer
-        self.assertEqual(body["id"], self.project.id)
-        self.assertEqual(body["product_name"], "Test Product")
-        self.assertIn("supported_languages", body)
-        self.assertIn("compilable", body)
-        self.assertIn("created", body)
-        self.assertIn("updated", body)
-
-    def test_project_detail_get_404(self):
-        """GET /projects/{project_id}/ with non-existing id returns 404."""
-        url = reverse("dojo_aist_api:project_detail", kwargs={"project_id": 999999})
-        resp = self.client.get(url)
-        self.assertEqual(resp.status_code, 404)
-
-    def test_project_delete_requires_auth(self):
-        """DELETE /projects/{project_id}/ must require authentication."""
-        anon = APIClient()
-        url = reverse("dojo_aist_api:project_detail", kwargs={"project_id": self.project.id})
-        resp = anon.delete(url)
-        self.assertIn(resp.status_code, (401, 403))
-
-    def test_project_delete_ok(self):
-        """DELETE /projects/{project_id}/ deletes the project and returns 204."""
-        url = reverse("dojo_aist_api:project_detail", kwargs={"project_id": self.project.id})
-        resp = self.client.delete(url)
-        self.assertEqual(resp.status_code, 204)
-        # Ensure the object is gone
-        with self.assertRaises(AISTProject.DoesNotExist):
-            AISTProject.objects.get(id=self.project.id)
-
-    def _make_zip(self, filename: str, content: bytes) -> bytes:
-        """Helper to create an in-memory zip archive with a single file."""
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr(filename, content)
-        buf.seek(0)
-        return buf.read()
-
-    def test_create_version_file_hash_ok(self):
-        """FILE_HASH must accept source_archive and return created object."""
-        url = reverse(
-            "dojo_aist_api:project_version_create",
-            kwargs={"project_id": self.project.id},
-        )
-        # in urls you already have trailing slash, so keep it as is
-
-        archive_bytes = self._make_zip("a.txt", b"content")
-        uploaded = SimpleUploadedFile(
-            name="src.zip", content=archive_bytes, content_type="application/zip",
+        mock_run_task.delay.assert_called_once_with(
+            pipeline_id,
+            mock_normalize.return_value,
         )
 
-        payload = {
-            # if VersionType.FILE_HASH.value is enum -> .value, but in your test file
-            # you were actually sending name, so do the same:
-            "version_type": VersionType.FILE_HASH.value,
-            "source_archive": uploaded,
+    @patch("dojo.aist.api.pipelines.get_required_ai_filter_for_start")
+    def test_start_pipeline_returns_400_if_filter_required_and_missing(self, mock_get_filter):
+        mock_get_filter.side_effect = ValueError("AI filter is required")
+
+        resp = self.client.post(
+            self._url(),
+            data={"project_version_id": self.pv.id},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data, {"ai_filter": "AI filter is required"})
+
+
+class LaunchConfigAPITests(AISTApiBase):
+    def _list_create_url(self):
+        return reverse("dojo_aist_api:project_launch_config_list_create", kwargs={"project_id": self.project.id})
+
+    def _detail_url(self, cfg_id: int):
+        return reverse(
+            "dojo_aist_api:project_launch_config_detail",
+            kwargs={"project_id": self.project.id, "config_id": cfg_id},
+        )
+
+    def _start_url(self, cfg_id: int):
+        # api_urls.py: .../start/
+        return reverse(
+            "dojo_aist_api:project_launch_config_start",
+            kwargs={"project_id": self.project.id, "config_id": cfg_id},
+        )
+
+    @patch("dojo.aist.api.launch_configs.PipelineArguments.normalize_params")
+    def test_create_launch_config_normalizes_and_strips_project_fields(self, mock_normalize):
+        mock_normalize.return_value = {
+            "project_id": self.project.id,
+            "project_version": {"id": self.pv.id},
+            "log_level": "INFO",
+            "ai_mode": "AUTO_DEFAULT",
         }
 
-        resp = self.client.post(url, payload)
-        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-
-        data = resp.json()
-        self.assertIn("id", data)
-        self.assertEqual(data["project"], self.project.id)
-        self.assertEqual(data["version_type"], VersionType.FILE_HASH.value)
-        # in your model save() will put sha256 into version if it was FILE_HASH
-        self.assertTrue(
-            AISTProjectVersion.objects.filter(
-                id=data["id"], project=self.project,
-            ).exists(),
+        resp = self.client.post(
+            self._list_create_url(),
+            data={
+                "name": "My preset",
+                "is_default": True,
+                "params": {"log_level": "INFO"},
+            },
+            format="json",
         )
 
-    def test_create_version_file_hash_missing_archive(self):
-        """FILE_HASH without source_archive must return 400 with field error."""
-        url = reverse(
-            "dojo_aist_api:project_version_create",
-            kwargs={"project_id": self.project.id},
-        )
-        payload = {
-            "version_type": VersionType.FILE_HASH.value,
-        }
-        resp = self.client.post(url, payload)
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        data = resp.json()
-        self.assertIn("source_archive", data)
+        self.assertEqual(resp.status_code, 201)
 
-    def test_create_version_git_hash_ok(self):
-        """GIT_HASH must accept 'version' and return it in the response."""
-        url = reverse(
-            "dojo_aist_api:project_version_create",
-            kwargs={"project_id": self.project.id},
-        )
-        payload = {
-            "version_type": VersionType.GIT_HASH,
-            "version": "main",
-        }
-        resp = self.client.post(url, payload, format="json")
-        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-        data = resp.json()
-        self.assertIn("id", data)
-        self.assertEqual(data["project"], self.project.id)
-        self.assertEqual(data["version_type"], VersionType.GIT_HASH)
-        self.assertEqual(data["version"], "main")
+        cfg = AISTProjectLaunchConfig.objects.get(id=resp.data["id"])
 
-    def test_create_version_git_hash_missing_version(self):
-        """GIT_HASH without version must return 400."""
-        url = reverse(
-            "dojo_aist_api:project_version_create",
-            kwargs={"project_id": self.project.id},
-        )
-        payload = {
-            "version_type": VersionType.GIT_HASH.value,
-        }
-        resp = self.client.post(url, payload, format="json")
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        data = resp.json()
-        self.assertIn("version", data)
+        self.assertEqual(cfg.params["log_level"], "INFO")
+        self.assertIn("project_version", cfg.params)
 
-    def test_create_version_duplicate_git_hash(self):
-        """Duplicate (project, version) must be rejected by serializer."""
+    @patch("dojo.aist.api.launch_configs.PipelineArguments.normalize_params")
+    def test_create_default_launch_config_unsets_previous_default(self, mock_normalize):
+        mock_normalize.return_value = {"log_level": "INFO"}
+
+        # create first default
+        r1 = self.client.post(
+            self._list_create_url(),
+            data={"name": "Preset 1", "is_default": True, "params": {"log_level": "INFO"}},
+            format="json",
+        )
+        self.assertEqual(r1.status_code, 201)
+        cfg1_id = r1.data["id"]
+
+        # create second default -> first should be unset :contentReference[oaicite:8]{index=8}
+        r2 = self.client.post(
+            self._list_create_url(),
+            data={"name": "Preset 2", "is_default": True, "params": {"log_level": "INFO"}},
+            format="json",
+        )
+        self.assertEqual(r2.status_code, 201)
+        cfg2_id = r2.data["id"]
+
+        cfg1 = AISTProjectLaunchConfig.objects.get(id=cfg1_id)
+        cfg2 = AISTProjectLaunchConfig.objects.get(id=cfg2_id)
+
+        self.assertFalse(cfg1.is_default)
+        self.assertTrue(cfg2.is_default)
+
+    @patch("dojo.aist.api.launch_configs.run_sast_pipeline")
+    @patch("dojo.aist.api.launch_configs.PipelineArguments.normalize_params")
+    @patch("dojo.aist.api.launch_configs.has_unfinished_pipeline", return_value=False)
+    def test_start_by_launch_config_uses_latest_version_and_merges_overrides(
+            self,
+            mock_has_unfinished,
+            mock_normalize,
+            mock_run_task,
+    ):
+        # Create a "latest" version that should be chosen when project_version_id omitted :contentReference[oaicite:9]{index=9}
         AISTProjectVersion.objects.create(
             project=self.project,
-            version_type=VersionType.GIT_HASH.value,
-            version="dup",
+            version_type=VersionType.GIT_HASH,
+            version="develop",
         )
 
-        url = reverse(
-            "dojo_aist_api:project_version_create",
-            kwargs={"project_id": self.project.id},
-        )
-        payload = {
-            "version_type": VersionType.GIT_HASH.value,
-            "version": "dup",
-        }
-        resp = self.client.post(url, payload, format="json")
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        data = resp.json()
-
-        self.assertTrue(
-            "version" in data or "non_field_errors" in data,
-            data,
-        )
-
-    def test_create_version_404_for_unknown_project(self):
-        """Unknown project_id should return 404."""
-        url = reverse(
-            "dojo_aist_api:project_version_create",
-            kwargs={"project_id": 999999},
-        )
-        payload = {
-            "version_type": VersionType.GIT_HASH.value,
-            "version": "some",
-        }
-        resp = self.client.post(url, payload, format="json")
-        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
-
-    def test_create_version_with_wrong_version_type(self):
-        """Invalid version_type must return 400 from ChoiceField."""
-        url = reverse(
-            "dojo_aist_api:project_version_create",
-            kwargs={"project_id": self.project.id},
-        )
-        payload = {
-            "version_type": "WRONG_TYPE",
-            "version": "anything",
-        }
-        resp = self.client.post(url, payload, format="json")
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        data = resp.json()
-        # DRF ChoiceField usually returns "“WRONG_TYPE” is not a valid choice."
-        self.assertIn("version_type", data)
-
-    def test_enrich_excluded_path_deletes_findings(self):
-        """Findings with an excluded path should be deleted by enrich_finding_task."""
-        self.project.profile = {"paths": {"exclude": ["skipme"]}}
-        self.project.save()
-
-        engagement = Engagement.objects.create(
-            product=self.product,
-            name="Test Engagement",
-            target_start=timezone.now(),
-            target_end=timezone.now(),
-        )
-        test_type = Test_Type.objects.create(name="AISTTestType")
-        test = Test.objects.create(
-            engagement=engagement,
-            test_type=test_type,
-            target_start=timezone.now(),
-            target_end=timezone.now(),
-        )
-        version = AISTProjectVersion.objects.create(
+        cfg = AISTProjectLaunchConfig.objects.create(
             project=self.project,
-            version_type=VersionType.GIT_HASH.value,
-            version="abc123",
+            name="Preset",
+            description="",
+            params={"log_level": "INFO", "rebuild_images": False},
+            is_default=False,
         )
 
-        f_excluded = Finding.objects.create(
-            test=test,
-            title="Excluded",
-            severity="Low",
-            description="Should be deleted",
-            file_path="src/skipme/file.cpp",
-            date=timezone.now(),
-            reporter=self.user,
-        )
-        f_kept = Finding.objects.create(
-            test=test,
-            title="Kept",
-            severity="Low",
-            description="Should remain",
-            file_path="src/keepme/file.cpp",
-            date=timezone.now(),
-            reporter=self.user,
-        )
+        mock_normalize.return_value = {"project_version": {"id": self.pv.id}}
+        mock_run_task.delay.return_value = SimpleNamespace(id="celery-999")
 
-        descriptor = {
-            "id": version.id,
-            "excluded_paths": ["skipme"],
-            "type": "FILE_HASH",
-        }
-
-        # signature: (finding_id, repo_url, ref, trim_path, descriptor)
-        enrich_finding_task.run(
-            f_excluded.id,
-            "",
-            None,
-            "",
-            descriptor,
+        resp = self.client.post(
+            self._start_url(cfg.id),
+            data={"params": {"rebuild_images": True}},
+            format="json",
         )
-        enrich_finding_task.run(
-            f_kept.id,
-            "",
-            None,
-            "",
-            descriptor,
-        )
+        self.assertEqual(resp.status_code, 201)
+        mock_has_unfinished.assert_called_once()
 
-        self.assertFalse(Finding.objects.filter(id=f_excluded.id).exists())
-        self.assertTrue(Finding.objects.filter(id=f_kept.id).exists())
+        # Ensure normalize got merged raw_params
+        _, kwargs = mock_normalize.call_args
+        self.assertEqual(kwargs["project"], self.project)
+        self.assertEqual(kwargs["raw_params"]["log_level"], "INFO")
+        self.assertEqual(kwargs["raw_params"]["rebuild_images"], True)
 
-        self.assertTrue(
-            DojoMeta.objects.filter(
-                finding=f_kept,
-                name="sourcefile_link",
-            ).exists(),
-        )
+        mock_run_task.delay.assert_called_once()

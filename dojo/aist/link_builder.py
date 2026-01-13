@@ -4,7 +4,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from django.urls import reverse
 
-from .utils import get_public_base_url
+from dojo.aist.utils.urls import get_public_base_url
 
 
 class LinkBuilder:

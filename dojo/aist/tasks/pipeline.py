@@ -5,12 +5,12 @@ from django.db import transaction
 from django.utils import timezone
 
 from dojo.aist.logging_transport import get_redis, install_pipeline_logging
-from dojo.aist.models import AISTPipeline, AISTProjectVersion, AISTStatus
+from dojo.aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionType
 from dojo.aist.pipeline_args import PipelineArguments
-from dojo.aist.utils import _import_sast_pipeline_package, finish_pipeline, get_project_build_path
+from dojo.aist.tasks.enrich import make_enrich_chord
+from dojo.aist.utils.pipeline import finish_pipeline, get_project_build_path
+from dojo.aist.utils.pipeline_imports import _import_sast_pipeline_package
 from dojo.models import Finding, Test
-
-from .enrich import make_enrich_chord
 
 # --------------------------------------------------------------------
 # Ensure external "pipeline" package is importable before importing it
@@ -90,11 +90,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
             pipeline.started = timezone.now()
             pipeline.save(update_fields=["status", "started", "updated"])
 
-            if params is None:
-                logger.info("Launch via API. Using default parameters for project.")
-                params = PipelineArguments(project=pipeline.project, project_version=pipeline.project_version.as_dict())
-            else:
-                params = PipelineArguments.from_dict(params)
+            params = PipelineArguments.from_dict(params)
 
             repo = pipeline.project.repository
 
@@ -142,6 +138,30 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         )
 
         launch_data["languages"] = languages
+        launch_data["ai"] = {
+            "mode": getattr(params, "ai_mode", "MANUAL"),
+            "filter_snapshot": getattr(params, "ai_filter_snapshot", None),
+        }
+
+        git_meta = (launch_data or {}).get("git") or {}
+        resolved_commit = (git_meta.get("resolved_commit") or "").strip()
+
+        if resolved_commit:
+            with transaction.atomic():
+                p2 = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+
+                # store per-run resolved sha (this makes runs on same branch distinguishable)
+                p2.resolved_commit = resolved_commit
+                p2.save(update_fields=["resolved_commit", "updated"])
+
+                # also update the version's last known resolved commit (optional, for visibility)
+                pv_id = p2.project_version_id
+                if pv_id:
+                    pv = AISTProjectVersion.objects.select_for_update().get(pk=pv_id)
+                    if pv.version_type == VersionType.GIT_HASH:
+                        pv.last_resolved_commit = resolved_commit
+                        pv.last_resolved_at = timezone.now()
+                        pv.save(update_fields=["last_resolved_commit", "last_resolved_at", "updated"])
 
         with transaction.atomic():
             pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
