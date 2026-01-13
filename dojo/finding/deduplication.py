@@ -688,6 +688,17 @@ def dedupe_batch_of_findings(findings, *args, **kwargs):
         else:
             logger.debug(f"deduplicating finding batch with LEGACY - {len(findings)} findings")
             _dedupe_batch_legacy(findings)
+        # Keep parity with single-finding dedupe: emit finding_deduplicated per finding.
+        from django.db import transaction  # noqa: PLC0415
+
+        from dojo.signals import finding_deduplicated  # noqa: PLC0415
+
+        for finding in findings:
+            transaction.on_commit(lambda f=finding: finding_deduplicated.send(
+                sender=type(f),
+                finding_id=f.id,
+                test=f.test,
+            ))
     else:
         deduplicationLogger.debug("dedupe: skipping dedupe because it's disabled in system settings get()")
     return None

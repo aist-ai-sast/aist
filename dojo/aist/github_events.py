@@ -6,10 +6,9 @@ from django_github_app.routing import GitHubRouter
 
 from dojo.aist.models import AISTProject, AISTProjectVersion, PullRequest, RepositoryInfo, ScmGithubBinding, ScmType
 from dojo.aist.tasks import run_sast_pipeline
-from dojo.aist.utils import create_pipeline_object, has_unfinished_pipeline
+from dojo.aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline
+from dojo.aist.utils.pipeline_imports import _load_analyzers_config
 from dojo.models import Product, Product_Type
-
-from .utils import _load_analyzers_config
 
 gh = GitHubRouter()
 logger = logging.getLogger("dojo.aist")

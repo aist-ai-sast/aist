@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
 from openpyxl import Workbook
 
-from .models import AISTPipeline
+from dojo.aist.models import AISTPipeline
 
 
 def _build_ai_export_rows(
@@ -40,11 +40,7 @@ def _build_ai_export_rows(
 
         # Project version is expected to come from AI response when available;
         # we fall back to the pipeline's project_version label.
-        project_version_label = (
-            item.get("projectVersion")
-            or getattr(pipeline.project_version, "version", None)
-            or ""
-        )
+        project_version_label = pipeline.resolved_commit or pipeline.project_version.version
 
         row = {
             "title": item.get("title") or "",

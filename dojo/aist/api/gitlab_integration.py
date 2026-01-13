@@ -7,20 +7,26 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from dojo.aist.models import AISTProject, Organization, RepositoryInfo, ScmGitlabBinding, ScmType
+from dojo.aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GH flow uses
 from dojo.models import DojoMeta, Product, Product_Type
 
-from .models import AISTProject, Organization, RepositoryInfo, ScmGitlabBinding, ScmType
-from .utils import _load_analyzers_config  # same helper as GH flow uses
+
+class OptionalIntField(serializers.IntegerField):
+    def to_internal_value(self, data):
+        if data in {None, ""}:
+            return None
+        return super().to_internal_value(data)
 
 
 class ImportGitlabRequestSerializer(serializers.Serializer):
     # GitLab numeric project id
     project_id = serializers.IntegerField(required=True)
-    # Personal/Group/Project Access Token with read_api (and read_repository if нужно клонировать)
+    # Personal/Group/Project Access Token with read_api (and read_repository if cloning is needed)
     gitlab_api_token = serializers.CharField(write_only=True, trim_whitespace=True)
     # Optional for self-hosted GitLab like https://gitlab.company.tld
     base_url = serializers.URLField(required=False, default="https://gitlab.com")
-    organization_id = serializers.IntegerField(required=False)
+    organization_id = OptionalIntField(required=False, allow_null=True)
 
 
 class ImportGitlabResponseSerializer(serializers.Serializer):
@@ -113,9 +119,9 @@ class ImportProjectFromGitlabAPI(APIView):
             binding.personal_access_token = token
             binding.save(update_fields=["personal_access_token"])
 
-        organization_id = serializer.validated_data.get("organization_id", None)
+        organization_id = serializer.validated_data.get("organization_id")
         organization = None
-        if organization_id:
+        if organization_id is not None:
             organization = get_object_or_404(Organization, pk=organization_id)
 
         aist_project, _ = AISTProject.objects.get_or_create(

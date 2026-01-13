@@ -7,11 +7,13 @@ import shutil
 import tarfile
 import zipfile
 from contextlib import suppress
+from datetime import datetime as dt
 from pathlib import Path
 from urllib.parse import quote
 
 import requests
 from asgiref.sync import async_to_sync
+from croniter import croniter
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
@@ -281,6 +283,8 @@ class Organization(models.Model):
     name = models.CharField(max_length=255, unique=True)
     description = models.TextField(blank=True, default="")
 
+    ai_default_filter = models.JSONField(null=True, blank=True, default=None)
+
     class Meta:
         ordering = ["name"]
 
@@ -311,6 +315,7 @@ class AISTProject(models.Model):
         null=True,
         blank=True,
     )
+    ai_default_filter = models.JSONField(null=True, blank=True, default=None)
 
     def __str__(self) -> str:
         return self.product.name
@@ -320,6 +325,12 @@ class AISTProject(models.Model):
         if self.profile:
             excluded_paths.extend(self.profile.get("paths", {}).get("exclude", []))
         return excluded_paths
+
+    def get_launch_schedule(self) -> LaunchSchedule | None:
+        try:
+            return self.launch_schedule
+        except LaunchSchedule.DoesNotExist:
+            return None
 
 
 class VersionType(models.TextChoices):
@@ -332,6 +343,8 @@ class AISTProjectVersion(models.Model):
         AISTProject, on_delete=models.CASCADE, related_name="versions",
     )
     version = models.CharField(max_length=64, db_index=True)
+    last_resolved_commit = models.CharField(max_length=40, blank=True, default="")
+    last_resolved_at = models.DateTimeField(null=True, blank=True)
     description = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
 
@@ -388,7 +401,7 @@ class AISTProjectVersion(models.Model):
             "id": self.pk,
             "version": self.version,
             "type": str(self.version_type),
-            "extracted_root": self.get_extracted_root(),
+            "extracted_root": str(self.get_extracted_root()),
         }
 
     def _compute_file_sha256(self) -> str:
@@ -418,6 +431,13 @@ class AISTProjectVersion(models.Model):
             return True
         return txt != (self.source_archive_sha256 or "")
 
+    def requested_ref(self) -> str:
+        # single source of truth: this is what user asked (branch/tag/sha or file hash)
+        return (self.version or "").strip()
+
+    def is_git(self) -> bool:
+        return self.version_type == VersionType.GIT_HASH
+
     def ensure_extracted(self) -> Path | None:
         """
         Ensure the uploaded archive is extracted under `get_extracted_root()`.
@@ -427,7 +447,7 @@ class AISTProjectVersion(models.Model):
         - Post-process: if extraction yields exactly one top-level directory, flatten it.
         - Writes `.extracted.ok` containing the archive SHA so we can detect changes.
         """
-        from dojo.aist.utils import (  # noqa: PLC0415
+        from dojo.aist.utils.archive import (  # noqa: PLC0415
             _flatten_single_root_directory,
             _safe_extract_tar_member,
             _safe_extract_zip_member,
@@ -495,6 +515,7 @@ class AISTPipeline(models.Model):
         db_index=True,
         null=True, blank=True,
     )
+    resolved_commit = models.CharField(max_length=40, blank=True, default="")
     status = models.CharField(max_length=64, choices=AISTStatus.choices, default=AISTStatus.FINISHED)
 
     tests = models.ManyToManyField(Test, related_name="aist_pipelines", blank=True)
@@ -620,3 +641,173 @@ class AISTAIResponse(models.Model):
 
     def __str__(self):
         return f"AIResponse[{self.pipeline_id}] @ {self.created:%Y-%m-%d %H:%M:%S}"
+
+
+def _ensure_aware(value: dt) -> dt:
+    if timezone.is_naive(value):
+        return timezone.make_aware(value, timezone.get_default_timezone())
+    return value
+
+
+class LaunchSchedule(models.Model):
+    cron_expression = models.CharField(
+        max_length=100,
+        help_text="Cron expression in standard 5-field format (e.g. '0 15 * * 1' for Mondays at 15:00).",
+    )
+    enabled = models.BooleanField(default=True)
+
+    max_concurrent_per_worker = models.PositiveIntegerField(
+        default=1,
+        help_text="Maximum number of concurrent pipeline runs per worker for this schedule.",
+    )
+
+    launch_config = models.OneToOneField(
+        "AISTProjectLaunchConfig",
+        on_delete=models.PROTECT,
+        related_name="launch_schedule",
+        help_text="Anchor launch config. Project is derived from launch_config.project.",
+    )
+
+    last_run_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp of the last time this schedule launched pipelines.",
+    )
+
+    class Meta:
+        verbose_name = "Launch Schedule"
+        verbose_name_plural = "Launch Schedules"
+
+    def __str__(self) -> str:
+        return (f"LaunchSchedule(project={self.launch_config.project_id}, "
+                f"launch_config={self.launch_config_id}, cron={self.cron_expression})")
+
+    def get_next_run_time(self, *, now=None):
+        """
+        Return the most recent scheduled tick time that is <= now (i.e. "due time").
+
+        This avoids missing a tick when the scheduler task runs slightly позднее,
+        e.g. tick at 12:55 but Celery beat triggers at 12:56.
+        """
+        now = now or timezone.now()
+        if timezone.is_naive(now):
+            now = timezone.make_aware(now, timezone.get_default_timezone())
+
+        # The last scheduled time at or before "now"
+        itr = croniter(self.cron_expression, now)
+        due_time = itr.get_prev(dt)
+
+        if timezone.is_naive(due_time):
+            due_time = timezone.make_aware(due_time, timezone.get_default_timezone())
+
+        return due_time
+
+    def get_next_scheduled_time(self, *, now=None):
+        """
+        Return the next scheduled tick strictly after now.
+
+        This is a UI/helper method and must not be used to decide "due".
+        Scheduler semantics should keep using get_next_run_time() (prev <= now).
+        """
+        now = now or timezone.now()
+        now = _ensure_aware(now)
+
+        itr = croniter(self.cron_expression, now)
+        nxt = itr.get_next(dt)
+        return _ensure_aware(nxt)
+
+    def preview_next_runs(self, *, count: int = 5, now=None) -> list[dt]:
+        """
+        Return next N scheduled ticks after now (strictly in the future).
+        Used by UI preview; backend-only logic.
+        """
+        now = now or timezone.now()
+        now = _ensure_aware(now)
+
+        try:
+            count = int(count or 0)
+        except (TypeError, ValueError):
+            count = 5
+
+        if count < 1:
+            return []
+        count = min(count, 20)
+
+        itr = croniter(self.cron_expression, now)
+        out: list[dt] = []
+        for _ in range(count):
+            nxt = itr.get_next(dt)
+            out.append(_ensure_aware(nxt))
+        return out
+
+
+class PipelineLaunchQueue(models.Model):
+
+    """
+    Queued pipeline launch request. Items are created by LaunchSchedule when a cron triggers,
+    and later dispatched by the pipeline dispatcher respecting concurrency limits.
+    """
+
+    created = models.DateTimeField(auto_now_add=True, db_index=True)
+    project = models.ForeignKey(AISTProject, on_delete=models.CASCADE)
+    schedule = models.ForeignKey(
+        LaunchSchedule,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    launch_config = models.ForeignKey(
+        "AISTProjectLaunchConfig",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="launch_queue_items",
+        help_text="Launch config used to build pipeline_args snapshot.",
+    )
+    dispatched = models.BooleanField(default=False, db_index=True)
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    pipeline = models.ForeignKey(
+        "AISTPipeline",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="launch_queue_item",
+    )
+
+    class Meta:
+        ordering = ["created"]
+
+    def __str__(self):
+        return f"LaunchQueue(project={self.project_id}, dispatched={self.dispatched})"
+
+
+class AISTProjectLaunchConfig(models.Model):
+
+    """
+    Saved launch configuration ("preset") for a specific AISTProject.
+
+    Stores PipelineArguments-like options excluding:
+      - project_id (comes from FK)
+      - project_version (chosen at run time)
+    """
+
+    project = models.ForeignKey(AISTProject, on_delete=models.CASCADE, related_name="launch_configs")
+
+    name = models.CharField(max_length=128)
+    description = models.TextField(blank=True, default="")
+
+    # PipelineArguments-equivalent options (except project_id/project_version)
+    params = models.JSONField(default=dict, blank=True)
+
+    is_default = models.BooleanField(default=False)
+
+    created = models.DateTimeField(default=timezone.now, editable=False)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["project", "name"], name="uniq_aist_launch_cfg_name_per_project"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.project_id}:{self.name}"

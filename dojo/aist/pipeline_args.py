@@ -7,8 +7,9 @@ from pathlib import Path
 
 from django.conf import settings
 
-from .models import AISTProject
-from .utils import _load_analyzers_config
+from dojo.aist.ai_filter import get_required_ai_filter_for_start, validate_and_normalize_filter
+from dojo.aist.models import AISTProject, AISTProjectVersion
+from dojo.aist.utils.pipeline_imports import _load_analyzers_config
 
 # Error messages (for TRY003/EM101/EM102)
 MSG_PROJECT_NOT_FOUND_TPL = "AISTProject with id={} not found"
@@ -24,7 +25,8 @@ class PipelineArguments:
     selected_languages: list[str] = field(default_factory=list)
     log_level: str = "INFO"
     rebuild_images: bool = False
-    ask_push_to_ai: bool = True
+    ai_mode: str = "MANUAL"  # MANUAL | AUTO_DEFAULT
+    ai_filter_snapshot: dict | None = None  # resolved effective default at launch time
     time_class_level: str = "slow"  # TODO: change to enum
     is_initialized: bool = False
     additional_environments: dict = field(default_factory=dict)
@@ -39,6 +41,117 @@ class PipelineArguments:
         self.project_version["excluded_paths"] = self.project.get_excluded_paths()
 
     @classmethod
+    def normalize_params(cls, *, project: AISTProject, raw_params: dict) -> dict:
+        """
+        Single source of truth:
+        - validates incoming params
+        - fills defaults
+        - guarantees schema compatible with PipelineArguments.from_dict()
+        - ensures project_version is present as dict (or {}), not passed separately
+        """
+        if raw_params is None:
+            raw_params = {}
+        if not isinstance(raw_params, dict):
+            msg = "params must be a JSON object (dict)"
+            raise TypeError(msg)
+
+        normalized = dict(raw_params)
+
+        # Always pin project_id here (so run_sast_pipeline can reconstruct args)
+        normalized["project_id"] = project.id
+
+        # ---- project_version ----
+        pv = normalized.get("project_version")
+        if pv is None:
+            # allow omission: means "latest project version" if exists
+            latest = (
+                AISTProjectVersion.objects
+                .filter(project=project)
+                .order_by("-created")
+                .first()
+            )
+            normalized["project_version"] = latest.as_dict() if latest else {}
+        elif isinstance(pv, int):
+            obj = AISTProjectVersion.objects.get(pk=pv, project=project)
+            normalized["project_version"] = obj.as_dict()
+        elif isinstance(pv, dict):
+            # if dict has id -> resolve to authoritative dict (prevents stale data)
+            pv_id = pv.get("id")
+            if pv_id:
+                obj = AISTProjectVersion.objects.get(pk=pv_id, project=project)
+                normalized["project_version"] = obj.as_dict()
+            else:
+                normalized["project_version"] = dict(pv)
+        else:
+            msg = "project_version must be an object (dict) or integer id or null"
+            raise ValueError(msg)
+
+        # ---- simple fields + defaults ----
+        normalized["rebuild_images"] = bool(normalized.get("rebuild_images"))
+
+        log_level = normalized.get("log_level", "INFO")
+        if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            msg = "Unsupported log_level"
+            raise ValueError(msg)
+        normalized["log_level"] = log_level
+
+        analyzers = normalized.get("analyzers", [])
+        if analyzers is None:
+            analyzers = []
+        # TODO: add proper validation of analyzers
+        if not isinstance(analyzers, list) or not all(isinstance(x, str) for x in analyzers):
+            msg = "analyzers must be list[str]"
+            raise ValueError(msg)
+        normalized["analyzers"] = analyzers
+
+        langs = normalized.get("selected_languages", [])
+        if langs is None:
+            langs = []
+        if not isinstance(langs, list) or not all(isinstance(x, str) for x in langs):
+            msg = "selected_languages must be list[str]"
+            raise ValueError(msg)
+        normalized["selected_languages"] = langs
+
+        tcl = normalized.get("time_class_level", "slow")
+        # keep current behavior; if you later convert to enum - do it here only
+        if tcl is None:
+            tcl = "slow"
+        normalized["time_class_level"] = tcl
+
+        env = normalized.get("env", {})
+        if env is None:
+            env = {}
+        if not isinstance(env, dict):
+            msg = "env must be a JSON object (dict)"
+            raise TypeError(msg)
+        normalized["env"] = env
+
+        # ---- AI mode + snapshot rules ----
+        ai_mode = normalized.get("ai_mode", "MANUAL") or "MANUAL"
+        if ai_mode not in {"MANUAL", "AUTO_DEFAULT"}:
+            msg = "Unsupported ai_mode"
+            raise ValueError(msg)
+        normalized["ai_mode"] = ai_mode
+
+        if ai_mode == "MANUAL":
+            # keep schema stable: snapshot is meaningless in MANUAL
+            normalized["ai_filter_snapshot"] = None
+            return normalized
+
+        # AUTO_DEFAULT: snapshot must be a resolved effective filter (or explicit provided snapshot)
+        snap = normalized.get("ai_filter_snapshot")
+        if snap is not None:
+            normalized["ai_filter_snapshot"] = validate_and_normalize_filter(snap)
+        else:
+            _scope, resolved = get_required_ai_filter_for_start(
+                project=project,
+                provided_filter=None,
+            )
+            normalized["ai_filter_snapshot"] = resolved
+
+        return normalized
+
+    @classmethod
     def from_dict(cls, data: dict) -> PipelineArguments:
         """
         Build PipelineArguments instance from dictionary.
@@ -50,16 +163,19 @@ class PipelineArguments:
             msg = MSG_PROJECT_NOT_FOUND_TPL.format(data["project_id"])
             raise ValueError(msg)
 
+        normalized = cls.normalize_params(project=project, raw_params=data)
+
         return cls(
             project=project,
-            project_version=data.get("project_version") or {},
-            selected_analyzers=data.get("analyzers") or [],
-            selected_languages=data.get("selected_languages") or [],
-            log_level=data.get("log_level") or "INFO",
-            rebuild_images=data.get("rebuild_images") or False,
-            ask_push_to_ai=data.get("ask_push_to_ai") if "ask_push_to_ai" in data else True,
-            time_class_level=data.get("time_class_level") or "slow",
-            additional_environments=data.get("env") or {},
+            project_version=normalized.get("project_version") or {},
+            selected_analyzers=normalized.get("analyzers") or [],
+            selected_languages=normalized.get("selected_languages") or [],
+            log_level=normalized.get("log_level") or "INFO",
+            rebuild_images=normalized.get("rebuild_images") or False,
+            ai_mode=(normalized.get("ai_mode") or "MANUAL"),
+            ai_filter_snapshot=normalized.get("ai_filter_snapshot"),
+            time_class_level=normalized.get("time_class_level") or "slow",
+            additional_environments=normalized.get("env") or {},
         )
 
     @property
