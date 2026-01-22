@@ -8,62 +8,7 @@ from django.views.decorators.http import require_http_methods
 from openpyxl import Workbook
 
 from dojo.aist.models import AISTPipeline
-
-
-def _build_ai_export_rows(
-    pipeline: AISTPipeline,
-    ai_payload: dict,
-    ignore_false_positives,
-) -> list[dict]:
-    """
-    Normalize AI payload into a flat list of findings suitable for tabular export.
-
-    The function:
-    - merges all list-like collections from payload["results"] (e.g. true_positives, uncertainly)
-    - maps nested originalFinding.* fields into flat columns
-    - optionally filters out items with falsePositive == True
-    - keeps impactScore in each row for sorting, but does not expose it as a visible column
-    """
-    results = ai_payload.get("results") or {}
-    findings_raw: list[dict] = []
-
-    if isinstance(results, dict):
-        for value in results.values():
-            if isinstance(value, list):
-                findings_raw.extend([item for item in value if isinstance(item, dict)])
-    elif isinstance(results, list):
-        findings_raw = [item for item in results if isinstance(item, dict)]
-
-    rows: list[dict] = []
-    for item in findings_raw:
-        original = item.get("originalFinding") or {}
-
-        # Project version is expected to come from AI response when available;
-        # we fall back to the pipeline's project_version label.
-        project_version_label = pipeline.resolved_commit or pipeline.project_version.version
-
-        row = {
-            "title": item.get("title") or "",
-            "project_version": project_version_label,
-            "cwe": original.get("cwe") or "",
-            "file": original.get("file") or "",
-            "line": original.get("line") or "",
-            # "description" is taken from AI explanation; adjust if your schema differs.
-            "description": item.get("reasoning") or "",
-            # "code_snippet" is taken from originalFinding.snippet when available.
-            "code_snippet": original.get("snippet") or "",
-            "false_positive": bool(item.get("falsePositive")),
-            "impactScore": item.get("impactScore") or 0,
-        }
-
-        if ignore_false_positives and row["false_positive"]:
-            continue
-
-        rows.append(row)
-
-    # Sort by impactScore descending: highest impact first.
-    rows.sort(key=lambda r: r.get("impactScore") or 0, reverse=True)
-    return rows
+from dojo.aist.utils.export import _build_ai_export_rows
 
 
 def _export_ai_results_csv(

@@ -10,7 +10,13 @@ from rest_framework.views import APIView
 
 from dojo.aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from dojo.aist.api.pipelines import PipelineResponseSerializer
-from dojo.aist.models import AISTProject, AISTProjectLaunchConfig, AISTProjectVersion
+from dojo.aist.models import (
+    AISTLaunchConfigAction,
+    AISTProject,
+    AISTProjectLaunchConfig,
+    AISTProjectVersion,
+    AISTStatus,
+)
 from dojo.aist.pipeline_args import PipelineArguments
 from dojo.aist.tasks import run_sast_pipeline
 from dojo.aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline
@@ -41,6 +47,146 @@ class LaunchConfigStartRequestSerializer(serializers.Serializer):
             msg = "params must be a JSON object"
             raise serializers.ValidationError(msg)
         return value
+
+
+class LaunchConfigActionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AISTLaunchConfigAction
+        fields = [
+            "id",
+            "launch_config",
+            "trigger_status",
+            "action_type",
+            "config",
+            "created",
+            "updated",
+        ]
+        read_only_fields = ["id", "launch_config", "created", "updated"]
+
+
+class LaunchConfigDashboardSerializer(serializers.ModelSerializer):
+    actions = LaunchConfigActionSerializer(many=True, read_only=True)
+    project_name = serializers.CharField(source="project.product.name", read_only=True)
+    product_name = serializers.CharField(source="project.product.name", read_only=True)
+    organization_id = serializers.IntegerField(source="project.organization_id", read_only=True)
+    organization_name = serializers.CharField(source="project.organization.name", read_only=True)
+
+    class Meta:
+        model = AISTProjectLaunchConfig
+        fields = [
+            "id",
+            "project",
+            "project_name",
+            "product_name",
+            "organization_id",
+            "organization_name",
+            "name",
+            "description",
+            "params",
+            "is_default",
+            "created",
+            "updated",
+            "actions",
+        ]
+        read_only_fields = fields
+
+
+class BaseActionCreateSerializer(serializers.Serializer):
+    trigger_status = serializers.ChoiceField(choices=AISTStatus.choices)
+    action_type = serializers.ChoiceField(choices=AISTLaunchConfigAction.ActionType.choices)
+    config = serializers.JSONField(required=False, default=dict)
+    secret_config = serializers.JSONField(required=False, default=dict, write_only=True)
+
+    def validate_config(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            msg = "config must be a JSON object"
+            raise serializers.ValidationError(msg)
+        return value
+
+    def validate_secret_config(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            msg = "secret_config must be a JSON object"
+            raise serializers.ValidationError(msg)
+        return value
+
+
+class SlackActionCreateSerializer(BaseActionCreateSerializer):
+    def validate(self, attrs):
+        if attrs.get("action_type") != AISTLaunchConfigAction.ActionType.PUSH_TO_SLACK:
+            raise serializers.ValidationError({"action_type": "action_type must be PUSH_TO_SLACK"})
+
+        config = attrs.get("config") or {}
+        channels = config.get("channels") or []
+        if isinstance(channels, str):
+            channels = [channels]
+        if not channels:
+            raise serializers.ValidationError({"config": {"channels": "channels is required"}})
+
+        title = config.get("title") or ""
+        description = config.get("description") or ""
+
+        attrs["config"] = {
+            "channels": channels,
+            "title": title,
+            "description": description,
+        }
+
+        secret_config = attrs.get("secret_config") or {}
+        slack_token = secret_config.get("slack_token") or ""
+        attrs["secret_config"] = {"slack_token": slack_token} if slack_token else {}
+        return attrs
+
+
+class EmailActionCreateSerializer(BaseActionCreateSerializer):
+    def validate(self, attrs):
+        if attrs.get("action_type") != AISTLaunchConfigAction.ActionType.SEND_EMAIL:
+            raise serializers.ValidationError({"action_type": "action_type must be SEND_EMAIL"})
+
+        config = attrs.get("config") or {}
+        emails = config.get("emails") or []
+        if isinstance(emails, str):
+            emails = [emails]
+        if not emails:
+            raise serializers.ValidationError({"config": {"emails": "emails is required"}})
+
+        title = config.get("title") or ""
+        description = config.get("description") or ""
+
+        attrs["config"] = {
+            "emails": emails,
+            "title": title,
+            "description": description,
+        }
+        attrs["secret_config"] = {}
+        return attrs
+
+
+class WriteLogActionCreateSerializer(BaseActionCreateSerializer):
+    def validate(self, attrs):
+        if attrs.get("action_type") != AISTLaunchConfigAction.ActionType.WRITE_LOG:
+            raise serializers.ValidationError({"action_type": "action_type must be WRITE_LOG"})
+
+        config = attrs.get("config") or {}
+        level = config.get("level") or "INFO"
+        description = config.get("description") or ""
+
+        attrs["config"] = {
+            "level": level,
+            "description": description,
+        }
+        attrs["secret_config"] = {}
+        return attrs
+
+
+ACTION_CREATE_SERIALIZERS = {
+    AISTLaunchConfigAction.ActionType.PUSH_TO_SLACK: SlackActionCreateSerializer,
+    AISTLaunchConfigAction.ActionType.SEND_EMAIL: EmailActionCreateSerializer,
+    AISTLaunchConfigAction.ActionType.WRITE_LOG: WriteLogActionCreateSerializer,
+}
 
 
 def create_launch_config_for_project(
@@ -270,6 +416,7 @@ class ProjectLaunchConfigStartAPI(APIView):
         with transaction.atomic():
             p = create_pipeline_object(project, project_version, None)
 
+        params["launch_config_id"] = cfg.id
         async_result = run_sast_pipeline.delay(p.id, params)
         p.run_task_id = async_result.id
         p.save(update_fields=["run_task_id"])
@@ -284,3 +431,105 @@ class ProjectLaunchConfigStartAPI(APIView):
             },
         )
         return Response(out.data, status=status.HTTP_201_CREATED)
+
+
+class ProjectLaunchConfigActionListCreateAPI(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["aist"],
+        summary="List actions for launch config",
+        responses={200: LaunchConfigActionSerializer(many=True)},
+    )
+    def get(self, request, project_id: int, config_id: int, *args, **kwargs):
+        cfg = get_object_or_404(AISTProjectLaunchConfig, id=config_id, project_id=project_id)
+        qs = AISTLaunchConfigAction.objects.filter(launch_config=cfg).order_by("-updated")
+        return Response(LaunchConfigActionSerializer(qs, many=True).data)
+
+    @extend_schema(
+        tags=["aist"],
+        summary="Create action for launch config",
+        request=BaseActionCreateSerializer,
+        responses={201: LaunchConfigActionSerializer},
+    )
+    def post(self, request, project_id: int, config_id: int, *args, **kwargs):
+        cfg = get_object_or_404(AISTProjectLaunchConfig, id=config_id, project_id=project_id)
+        action_type = (request.data or {}).get("action_type")
+        serializer_cls = ACTION_CREATE_SERIALIZERS.get(action_type)
+        if serializer_cls is None:
+            return Response({"action_type": "Unsupported action_type"}, status=status.HTTP_400_BAD_REQUEST)
+        s = serializer_cls(data=request.data)
+        s.is_valid(raise_exception=True)
+
+        obj = AISTLaunchConfigAction(
+            launch_config=cfg,
+            trigger_status=s.validated_data["trigger_status"],
+            action_type=s.validated_data["action_type"],
+            config=s.validated_data.get("config") or {},
+        )
+        obj.set_secret_config(s.validated_data.get("secret_config") or {})
+        obj.save()
+        return Response(LaunchConfigActionSerializer(obj).data, status=status.HTTP_201_CREATED)
+
+
+class ProjectLaunchConfigActionDetailAPI(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["aist"],
+        summary="Get action for launch config",
+        responses={200: LaunchConfigActionSerializer, 404: OpenApiResponse(description="Not found")},
+    )
+    def get(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
+        obj = get_object_or_404(
+            AISTLaunchConfigAction,
+            id=action_id,
+            launch_config_id=config_id,
+            launch_config__project_id=project_id,
+        )
+        return Response(LaunchConfigActionSerializer(obj).data)
+
+
+class LaunchConfigDashboardListAPI(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        responses={200: LaunchConfigDashboardSerializer(many=True)},
+    )
+    def get(self, request):
+        qs = (
+            AISTProjectLaunchConfig.objects.select_related("project__product", "project__organization")
+            .prefetch_related("actions")
+            .order_by("-updated")
+        )
+
+        org_id = request.query_params.get("organization_id")
+        if org_id:
+            qs = qs.filter(project__organization_id=org_id)
+
+        project_id = request.query_params.get("project_id")
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+
+        is_default = request.query_params.get("is_default")
+        if is_default in {"1", "true", "True"}:
+            qs = qs.filter(is_default=True)
+        elif is_default in {"0", "false", "False"}:
+            qs = qs.filter(is_default=False)
+
+        return Response(LaunchConfigDashboardSerializer(qs, many=True).data)
+
+    @extend_schema(
+        tags=["aist"],
+        summary="Delete action for launch config",
+        responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
+    )
+    def delete(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
+        obj = get_object_or_404(
+            AISTLaunchConfigAction,
+            id=action_id,
+            launch_config_id=config_id,
+            launch_config__project_id=project_id,
+        )
+        obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

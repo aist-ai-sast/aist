@@ -13,7 +13,7 @@ services:
         target: /app/docker/extra_settings
 
   celerybeat:
-    environment: {}
+    environment:
     volumes:
       - type: bind
         source: ./docker/extra_settings

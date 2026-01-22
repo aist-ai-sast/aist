@@ -62,8 +62,7 @@ def pipeline_logs_progressive(request, pipeline_id: str):
             data = chunk.decode("utf-8", errors="ignore")
         else:
             # by default return all file
-            with pathlib.Path(path).open("r", encoding="utf-8", errors="ignore") as f:
-                data = f.read()
+            data = pathlib.Path(path).read_text(encoding="utf-8", errors="ignore")
 
     resp = HttpResponse(data, content_type="text/plain; charset=utf-8")
     resp["X-Log-Size"] = str(size)
@@ -72,12 +71,7 @@ def pipeline_logs_progressive(request, pipeline_id: str):
 
 def get_logs_content(pipeline: AISTPipeline):
     path = get_pipeline_log_path(pipeline.id)
-    if pathlib.Path(path).exists():
-        with pathlib.Path(path).open("r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-    else:
-        content = ""
-    return content
+    return pathlib.Path(path).read_text(encoding="utf-8", errors="ignore") if pathlib.Path(path).exists() else ""
 
 
 @require_http_methods(["GET"])

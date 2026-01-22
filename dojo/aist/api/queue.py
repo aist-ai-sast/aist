@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
@@ -98,3 +99,17 @@ class PipelineLaunchQueueClearDispatchedAPI(APIView):
             .delete()
         )
         return Response({"deleted": deleted, "days": days}, status=status.HTTP_200_OK)
+
+
+class PipelineLaunchQueueDetailAPI(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["aist"],
+        summary="Delete pipeline launch queue item by id",
+        responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
+    )
+    def delete(self, request, queue_id: int, *args, **kwargs):
+        obj = get_object_or_404(PipelineLaunchQueue, id=queue_id)
+        obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

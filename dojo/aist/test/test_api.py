@@ -116,6 +116,19 @@ class LaunchConfigAPITests(AISTApiBase):
             kwargs={"project_id": self.project.id, "config_id": cfg_id},
         )
 
+    def test_delete_launch_config(self):
+        cfg = AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            name="Preset",
+            description="",
+            params={"project_version": {"id": self.pv.id}},
+            is_default=False,
+        )
+        url = self._detail_url(cfg.id)
+        resp = self.client.delete(url)
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(AISTProjectLaunchConfig.objects.filter(id=cfg.id).exists())
+
     @patch("dojo.aist.api.launch_configs.PipelineArguments.normalize_params")
     def test_create_launch_config_normalizes_and_strips_project_fields(self, mock_normalize):
         mock_normalize.return_value = {

@@ -116,6 +116,19 @@ class LaunchSchedulesAPITests(AISTApiBase):
         self.assertTrue(data["ok"])
         self.assertEqual(data["queue_item"]["schedule_id"], sched.id)
 
+    def test_delete_schedule(self):
+        cfg = self._create_config()
+        sched = LaunchSchedule.objects.create(
+            cron_expression="*/5 * * * *",
+            enabled=True,
+            max_concurrent_per_worker=1,
+            launch_config=cfg,
+        )
+        url = reverse("dojo_aist_api:launch_schedule_detail", kwargs={"launch_schedule_id": sched.id})
+        resp = self.client.delete(url)
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(LaunchSchedule.objects.filter(id=sched.id).exists())
+
     def test_upsert_rejects_invalid_cron(self):
         cfg = self._create_config()
         url = reverse("dojo_aist_api:project_launch_schedule_upsert", kwargs={"project_id": self.project.id})

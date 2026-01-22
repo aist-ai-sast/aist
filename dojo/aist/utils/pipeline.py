@@ -11,6 +11,7 @@ from django.db import transaction
 
 from dojo.aist.logging_transport import uninstall_pipeline_file_logging
 from dojo.aist.models import AISTPipeline, AISTStatus
+from dojo.aist.signals import pipeline_status_changed
 from dojo.aist.utils.pipeline_imports import cleanup_pipeline_containers
 from dojo.signals import pipeline_finished
 
@@ -36,9 +37,33 @@ def get_project_build_path(project_name, project_version):
     )
 
 
+def set_pipeline_status(
+    pipeline: AISTPipeline,
+    new_status: str,
+    *,
+    update_fields_extra: list[str] | None = None,
+) -> bool:
+    old_status = pipeline.status
+    if old_status == new_status:
+        return False
+
+    pipeline.status = new_status
+    update_fields = {"status", "updated"}
+    if update_fields_extra:
+        update_fields.update(update_fields_extra)
+    pipeline.save(update_fields=sorted(update_fields))
+
+    transaction.on_commit(lambda: pipeline_status_changed.send(
+        sender=type(pipeline),
+        pipeline_id=pipeline.id,
+        old_status=old_status,
+        new_status=new_status,
+    ))
+    return True
+
+
 def finish_pipeline(pipeline) -> None:
-    pipeline.status = AISTStatus.FINISHED
-    pipeline.save(update_fields=["status", "updated"])
+    set_pipeline_status(pipeline, AISTStatus.FINISHED)
     transaction.on_commit(lambda: pipeline_finished.send(
         sender=type(pipeline), pipeline_id=pipeline.id,
     ))

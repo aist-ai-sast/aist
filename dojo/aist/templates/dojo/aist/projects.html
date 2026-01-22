@@ -555,7 +555,7 @@
                 </div>
 
                 <div class="modal-body">
-                    <div class="alert alert-danger" id="launchPresetError" style="display:none;"></div>
+                    <div class="alert" id="launchPresetAlert" style="display:none;"></div>
 
                     <div class="aist-pipeline-scope" data-aist-scope="launch-config" data-aist-project-id="">
                         <form method="post" id="formCreateLaunchPreset">
@@ -584,8 +584,10 @@
             var createUrlTpl = "{% url 'dojo_aist:project_launch_config_create_ui' project_id=0 %}"; // 0 will be replaced
             var modalEl = document.getElementById("modalCreateLaunchPreset");
             var formEl = document.getElementById("formCreateLaunchPreset");
-            var errEl = document.getElementById("launchPresetError");
+            var errEl = document.getElementById("launchPresetAlert");
             var scopeEl = modalEl ? modalEl.querySelector(".aist-pipeline-scope") : null;
+            var presetStatusEl = modalEl ? modalEl.querySelector("#aist-preset-status") : null;
+            var presetSaveBtn = formEl ? formEl.querySelector("#btn-save-launch-config") : null;
 
             // You already have currentProjectId in your edit-modal flow; if not — set it when opening edit modal
             var currentProjectId = null;
@@ -600,8 +602,14 @@
                     if (!currentProjectId) return;
 
                     if (scopeEl) scopeEl.setAttribute("data-aist-project-id", String(currentProjectId));
+                    if (window.__AIST_SET_LAUNCH_CONFIG_ID__) {
+                        window.__AIST_SET_LAUNCH_CONFIG_ID__("");
+                    }
                     if (window.__AIST_REFRESH_PIPELINE_SCOPE__) {
                         window.__AIST_REFRESH_PIPELINE_SCOPE__();
+                    }
+                    if (presetStatusEl) {
+                        presetStatusEl.textContent = "Not saved yet.";
                     }
 
                     if (formEl) formEl.action = createUrlTpl.replace("/0/", "/" + String(currentProjectId) + "/");
@@ -641,6 +649,7 @@
 
                     if (errEl) {
                         errEl.classList.add("d-none");
+                        errEl.classList.remove("alert-danger", "alert-success");
                         errEl.textContent = "";
                     }
 
@@ -655,7 +664,23 @@
                             body: fd,
                         });
 
-                        var data = await resp.json();
+                        var data = null;
+                        var contentType = resp.headers.get("content-type") || "";
+                        if (contentType.indexOf("application/json") !== -1) {
+                            data = await resp.json().catch(function () { return null; });
+                        } else {
+                            var textResp = await resp.text();
+                            if (errEl) {
+                                errEl.textContent = textResp || "Failed to create preset.";
+                                errEl.classList.remove("d-none", "alert-success");
+                                errEl.classList.add("alert-danger");
+                                errEl.style.display = "block";
+                            }
+                            if (presetStatusEl) {
+                                presetStatusEl.textContent = "Save failed.";
+                            }
+                            return;
+                        }
 
                         if (!resp.ok || !data.ok) {
                             var msg = "Failed to create preset.";
@@ -664,19 +689,39 @@
 
                             if (errEl) {
                                 errEl.textContent = msg;
+                                errEl.classList.remove("d-none", "alert-success");
+                                errEl.classList.add("alert-danger");
                                 errEl.style.display = "block";
-
+                            }
+                            if (presetStatusEl) {
+                                presetStatusEl.textContent = "Save failed.";
                             }
                             return;
                         }
 
-                        if (window.bootstrap && window.bootstrap.Modal) {
-                            window.bootstrap.Modal.getInstance(modalEl)?.hide();
-                        } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-                            window.jQuery(modalEl).modal("hide");
-                        } else {
-                            modalEl.classList.remove("in");
-                            modalEl.style.display = "none";
+                        if (data && data.item && data.item.id && window.__AIST_SET_LAUNCH_CONFIG_ID__) {
+                            window.__AIST_SET_LAUNCH_CONFIG_ID__(data.item.id);
+                        }
+                        if (scopeEl && data && data.item && data.item.id) {
+                            scopeEl.setAttribute("data-aist-launch-config-id", String(data.item.id));
+                            var btnAction = scopeEl.querySelector("#btn-open-create-action");
+                            if (btnAction) btnAction.disabled = false;
+                            var hintEl = scopeEl.querySelector("#aist-action-hint");
+                            if (hintEl) hintEl.textContent = "Actions will be attached to this preset.";
+                        }
+                        if (presetStatusEl && data && data.item && data.item.id) {
+                            presetStatusEl.textContent = "Saved \u2713 (ID #" + data.item.id + ")";
+                        }
+                        if (presetSaveBtn) {
+                            presetSaveBtn.textContent = "Saved";
+                            presetSaveBtn.disabled = true;
+                        }
+
+                        if (errEl) {
+                            errEl.textContent = "Preset saved. You can add actions now.";
+                            errEl.classList.remove("d-none", "alert-danger");
+                            errEl.classList.add("alert-success");
+                            errEl.style.display = "block";
                         }
 
                         // Optional: show a toast/alert
@@ -685,8 +730,9 @@
                     } catch (ex) {
                         if (errEl) {
                             errEl.textContent = String(ex);
+                            errEl.classList.remove("d-none", "alert-success");
+                            errEl.classList.add("alert-danger");
                             errEl.style.display = "block";
-
                         }
                     }
                 });

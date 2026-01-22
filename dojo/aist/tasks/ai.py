@@ -10,7 +10,7 @@ from django.db import transaction
 from dojo.aist.ai_filter import apply_ai_filter
 from dojo.aist.logging_transport import install_pipeline_logging
 from dojo.aist.models import AISTPipeline, AISTStatus
-from dojo.aist.utils.pipeline import finish_pipeline
+from dojo.aist.utils.pipeline import finish_pipeline, set_pipeline_status
 from dojo.aist.utils.urls import build_callback_url
 from dojo.models import Finding
 
@@ -86,8 +86,7 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
             finish_pipeline(pipeline)
             return
 
-        pipeline.status = AISTStatus.WAITING_RESULT_FROM_AI
-        pipeline.save(update_fields=["status", "updated"])
+        set_pipeline_status(pipeline, AISTStatus.WAITING_RESULT_FROM_AI)
 
         log.info("AI triage request accepted: status=%s body=%s", resp.status_code, resp.text[:500])
 
@@ -132,7 +131,6 @@ def auto_push_to_ai_if_configured(pipeline_id: str):
             finish_pipeline(pipeline)
             return
 
-        pipeline.status = AISTStatus.PUSH_TO_AI
-        pipeline.save(update_fields=["status", "updated"])
+            set_pipeline_status(pipeline, AISTStatus.PUSH_TO_AI)
 
     push_request_to_ai.delay(pipeline_id, finding_ids, {"filter": snap})

@@ -6,5 +6,3 @@ integration for running SAST pipelines. It extends the existing
 AISTPipeline functionality with the ability to stop running pipelines,
 delete them from the UI, and stream log output to the browser in real time.
 """
-
-default_app_config = "dojo.aist.apps.AistConfig"

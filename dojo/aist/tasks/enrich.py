@@ -9,6 +9,7 @@ from dojo.aist.link_builder import LinkBuilder
 from dojo.aist.logging_transport import get_redis, install_pipeline_logging
 from dojo.aist.models import AISTPipeline, AISTStatus
 from dojo.aist.tasks.dedup import watch_deduplication
+from dojo.aist.utils.pipeline import set_pipeline_status
 from dojo.models import DojoMeta, Finding, Test
 
 
@@ -35,8 +36,7 @@ def after_upload_enrich_and_watch(results: list[int],
             tests = list(Test.objects.filter(id__in=test_ids))
             pipeline.tests.set(tests, clear=True)
 
-        pipeline.status = AISTStatus.WAITING_DEDUPLICATION_TO_FINISH
-        pipeline.save(update_fields=["status", "updated"])
+        set_pipeline_status(pipeline, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
 
     logger.info("Enrichment finished: %s findings enriched. Waiting for deduplication.", enriched)
     res = watch_deduplication.delay(pipeline_id=pipeline_id, log_level=log_level)
