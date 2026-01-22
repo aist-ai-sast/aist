@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import uuid
+
 from celery.signals import worker_process_init
 from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from dojo.aist.models import AISTProject, AISTProjectVersion, ProcessedFinding, TestDeduplicationProgress, VersionType
+from dojo.aist.actions import build_one_off_action, get_action_handler
+from dojo.aist.models import (
+    AISTLaunchConfigAction,
+    AISTPipeline,
+    AISTProject,
+    AISTProjectVersion,
+    PipelineLaunchQueue,
+    ProcessedFinding,
+    TestDeduplicationProgress,
+    VersionType,
+)
+from dojo.aist.signals import pipeline_status_changed
 from dojo.models import Finding, Test
 from dojo.signals import finding_deduplicated
 
@@ -139,3 +152,79 @@ def refresh_on_finding_delete(sender, instance, **kwargs):
         group.refresh_pending_tasks()
 
     transaction.on_commit(do_refresh)
+
+
+def _get_launch_config_id_from_pipeline(pipeline: AISTPipeline) -> int | None:
+    launch_config_id = (pipeline.launch_data or {}).get("launch_config_id")
+    if launch_config_id:
+        return int(launch_config_id)
+
+    queue_item = (
+        PipelineLaunchQueue.objects
+        .filter(pipeline_id=pipeline.id)
+        .order_by("-created")
+        .first()
+    )
+    if queue_item:
+        return queue_item.launch_config_id
+    return None
+
+
+@receiver(pipeline_status_changed)
+def on_pipeline_status_changed(sender, pipeline_id=None, old_status=None, new_status=None, **kwargs):
+    if not pipeline_id or not new_status:
+        return
+
+    pipeline = AISTPipeline.objects.filter(id=pipeline_id).first()
+    if not pipeline:
+        return
+
+    launch_config_id = _get_launch_config_id_from_pipeline(pipeline)
+    if launch_config_id:
+        actions = AISTLaunchConfigAction.objects.filter(
+            launch_config_id=launch_config_id,
+            trigger_status=new_status,
+        )
+        for action in actions:
+            handler = get_action_handler(action)
+            if not handler:
+                continue
+            handler.run(pipeline=pipeline, new_status=new_status)
+
+    # One-off actions stored on pipeline.launch_data
+    with transaction.atomic():
+        locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
+        if not locked:
+            return
+
+        launch_data = locked.launch_data or {}
+        one_off_actions = launch_data.get("one_off_actions") or []
+        done_ids = set(launch_data.get("one_off_actions_done") or [])
+        ran_any = False
+
+        for action_payload in one_off_actions:
+            if not isinstance(action_payload, dict):
+                continue
+            if action_payload.get("trigger_status") != new_status:
+                continue
+            action_id = action_payload.get("id")
+            if not action_id:
+                action_id = uuid.uuid4().hex
+                action_payload["id"] = action_id
+            if action_id in done_ids:
+                continue
+
+            action_obj = build_one_off_action(action_payload)
+            if not action_obj:
+                continue
+            handler = get_action_handler(action_obj)
+            if not handler:
+                continue
+            handler.run(pipeline=locked, new_status=new_status)
+            done_ids.add(action_id)
+            ran_any = True
+
+        if ran_any:
+            launch_data["one_off_actions_done"] = list(done_ids)
+            locked.launch_data = launch_data
+            locked.save(update_fields=["launch_data"])

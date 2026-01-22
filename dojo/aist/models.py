@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import logging
 import shutil
 import tarfile
@@ -811,3 +812,46 @@ class AISTProjectLaunchConfig(models.Model):
 
     def __str__(self) -> str:
         return f"{self.project_id}:{self.name}"
+
+
+class AISTLaunchConfigAction(models.Model):
+    class ActionType(models.TextChoices):
+        PUSH_TO_SLACK = "PUSH_TO_SLACK", "push_to_slack"
+        SEND_EMAIL = "SEND_EMAIL", "send_email"
+        WRITE_LOG = "WRITE_LOG", "write_log"
+
+    launch_config = models.ForeignKey(
+        AISTProjectLaunchConfig,
+        on_delete=models.CASCADE,
+        related_name="actions",
+    )
+    trigger_status = models.CharField(max_length=64, choices=AISTStatus.choices)
+    action_type = models.CharField(max_length=32, choices=ActionType.choices)
+    config = models.JSONField(default=dict, blank=True)
+    secret_config = EncryptedCharField(max_length=4096, blank=True, default="")
+
+    created = models.DateTimeField(default=timezone.now, editable=False)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["launch_config", "trigger_status", "action_type"],
+                name="uniq_aist_launch_cfg_action",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Action({self.launch_config_id}:{self.action_type}@{self.trigger_status})"
+
+    def get_secret_config(self) -> dict:
+        if not self.secret_config:
+            return {}
+        try:
+            return json.loads(self.secret_config)
+        except (TypeError, ValueError):
+            return {}
+
+    def set_secret_config(self, value: dict | None) -> None:
+        data = value or {}
+        self.secret_config = json.dumps(data, separators=(",", ":"))

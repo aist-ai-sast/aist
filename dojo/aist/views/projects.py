@@ -14,7 +14,7 @@ from dojo.aist.forms import (
     _load_analyzers_config,
     _signature,
 )
-from dojo.aist.models import AISTProject, Organization
+from dojo.aist.models import AISTLaunchConfigAction, AISTProject, AISTStatus, Organization
 from dojo.aist.views._common import ERR_CONFIG_NOT_LOADED, ERR_PROJECT_NOT_FOUND
 from dojo.utils import add_breadcrumb
 
@@ -232,5 +232,7 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
             "organizations": organizations,
             "unassigned_projects": unassigned_projects,
             "launch_config_form": AISTLaunchConfigForm(),
+            "aist_status_choices": AISTStatus.choices,
+            "aist_action_types": AISTLaunchConfigAction.ActionType.choices,
         },
     )

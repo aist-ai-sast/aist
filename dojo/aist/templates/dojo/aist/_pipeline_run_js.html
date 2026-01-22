@@ -87,6 +87,8 @@
 
             if (!form) return;
 
+            var scopeKind = scopeRoot.getAttribute("data-aist-scope") || "start";
+
             function qsNameEnds(root, selector, suffix) {
                 // selector пример: 'select', 'input[type="checkbox"]', 'input[type="radio"]'
                 return root.querySelector(selector + '[name$="' + suffix + '"]');
@@ -103,10 +105,331 @@
                 return (scopeRoot.getAttribute("data-aist-project-id") || "");
             }
 
+            function getFixedLaunchConfigId() {
+                return (scopeRoot.getAttribute("data-aist-launch-config-id") || "");
+            }
+
             function getProjectId() {
                 // Prefer explicit selector (Start UI), otherwise fixed project from edit modal (LaunchConfig UI)
                 if (selProject) return String(getSelectValue(selProject) || "");
                 return String(getFixedProjectId() || "");
+            }
+
+            var actionModal = document.getElementById("modalCreateLaunchAction");
+            var actionError = document.getElementById("launchActionError");
+            var actionTrigger = document.getElementById("action-trigger-status");
+            var actionType = document.getElementById("action-type");
+            var actionTitle = document.getElementById("action-title");
+            var actionDescription = document.getElementById("action-description");
+            var actionSlackFields = document.getElementById("action-slack-fields");
+            var actionSlackChannels = document.getElementById("action-slack-channels");
+            var actionSlackToken = document.getElementById("action-slack-token");
+            var actionEmailFields = document.getElementById("action-email-fields");
+            var actionEmails = document.getElementById("action-emails");
+            var actionLogFields = document.getElementById("action-log-fields");
+            var actionLogLevel = document.getElementById("action-log-level");
+            var btnOpenAction = document.getElementById("btn-open-create-action");
+            var btnSaveAction = document.getElementById("btn-save-launch-action");
+            var actionHint = document.getElementById("aist-action-hint");
+            var oneOffActionsInput = document.getElementById("aist-one-off-actions");
+            var oneOffActionsList = document.getElementById("aist-one-off-actions-list");
+            var oneOffActions = [];
+            var launchActionsList = document.getElementById("aist-actions-list");
+            var launchActionsEmpty = document.getElementById("aist-actions-empty");
+            var launchActions = [];
+            var actionParentModal = scopeRoot.closest ? scopeRoot.closest(".modal") : null;
+            var actionParentScrollContainer = null;
+            var actionParentScrollTop = 0;
+
+            if (actionParentModal) {
+                if (actionParentModal.querySelector(".modal-dialog-scrollable")) {
+                    actionParentScrollContainer = actionParentModal.querySelector(".modal-body") || actionParentModal;
+                } else {
+                    actionParentScrollContainer = actionParentModal;
+                }
+            }
+
+            function captureActionParentScroll() {
+                if (actionParentScrollContainer) {
+                    actionParentScrollTop = actionParentScrollContainer.scrollTop || 0;
+                }
+            }
+
+            function restoreActionParentScroll() {
+                if (!actionParentScrollContainer) return;
+                actionParentScrollContainer.style.overflowY = "auto";
+                actionParentScrollContainer.scrollTop = actionParentScrollTop || 0;
+            }
+            var actionHint = document.getElementById("aist-action-hint");
+
+            function normalizeList(raw) {
+                if (!raw) return [];
+                return String(raw)
+                    .split(",")
+                    .map(function (v) { return v.trim(); })
+                    .filter(function (v) { return !!v; });
+            }
+
+            function updateActionButtonState() {
+                if (!btnOpenAction) return;
+                if (scopeKind === "start") {
+                    btnOpenAction.disabled = !getProjectId();
+                    if (actionHint) {
+                        actionHint.textContent = getProjectId()
+                            ? "Actions will run once for this pipeline."
+                            : "Select a project to add actions.";
+                    }
+                    return;
+                }
+                var cfgId = getFixedLaunchConfigId();
+                btnOpenAction.disabled = !cfgId;
+                if (actionHint) {
+                    actionHint.textContent = cfgId
+                        ? "Actions will be attached to this preset."
+                        : "Save preset to enable actions.";
+                }
+                if (launchActionsEmpty) {
+                    launchActionsEmpty.textContent = cfgId
+                        ? "No actions yet."
+                        : "No actions yet. Save preset to enable.";
+                }
+            }
+
+            function persistOneOffActions() {
+                if (!oneOffActionsInput) return;
+                oneOffActionsInput.value = JSON.stringify(oneOffActions || []);
+            }
+
+            function renderOneOffActions() {
+                if (!oneOffActionsList) return;
+                if (!oneOffActions || oneOffActions.length === 0) {
+                    oneOffActionsList.innerHTML = "";
+                    return;
+                }
+                var html = '<div class="small text-muted mb-1">One-off actions for this run</div>';
+                html += '<div class="list-group">';
+                oneOffActions.forEach(function (a) {
+                    var label = (a.trigger_status || "") + " → " + (a.action_type || "");
+                    var detail = "";
+                    if (a.action_type === "PUSH_TO_SLACK") {
+                        detail = (a.config && a.config.channels) ? ("Channels: " + a.config.channels.join(", ")) : "";
+                    } else if (a.action_type === "SEND_EMAIL") {
+                        detail = (a.config && a.config.emails) ? ("Emails: " + a.config.emails.join(", ")) : "";
+                    } else if (a.action_type === "WRITE_LOG") {
+                        detail = (a.config && a.config.level) ? ("Level: " + a.config.level) : "";
+                    }
+                    html += '<div class="list-group-item d-flex align-items-center justify-content-between">';
+                    html += '<div>';
+                    html += '<div class="fw-semibold">' + label + '</div>';
+                    if (detail) html += '<div class="text-muted small">' + detail + '</div>';
+                    html += '</div>';
+                    html += '<button type="button" class="btn btn-sm btn-outline-danger aist-remove-action" data-id="' + a.id + '">Remove</button>';
+                    html += '</div>';
+                });
+                html += "</div>";
+                oneOffActionsList.innerHTML = html;
+
+                var removeBtns = oneOffActionsList.querySelectorAll(".aist-remove-action");
+                for (var i = 0; i < removeBtns.length; i++) {
+                    removeBtns[i].addEventListener("click", function (ev) {
+                        var id = ev.currentTarget.getAttribute("data-id");
+                        oneOffActions = (oneOffActions || []).filter(function (x) {
+                            return String(x.id) !== String(id);
+                        });
+                        persistOneOffActions();
+                        renderOneOffActions();
+                    });
+                }
+            }
+
+            function renderLaunchConfigActions() {
+                if (!launchActionsList) return;
+                if (!launchActions || launchActions.length === 0) {
+                    launchActionsList.innerHTML = "";
+                    if (launchActionsEmpty) launchActionsEmpty.style.display = "block";
+                    return;
+                }
+                if (launchActionsEmpty) launchActionsEmpty.style.display = "none";
+                var html = '<div class="list-group">';
+                launchActions.forEach(function (a) {
+                    var label = (a.trigger_status || "") + " → " + (a.action_type || "");
+                    var detail = "";
+                    if (a.action_type === "PUSH_TO_SLACK") {
+                        detail = (a.config && a.config.channels) ? ("Channels: " + a.config.channels.join(", ")) : "";
+                    } else if (a.action_type === "SEND_EMAIL") {
+                        detail = (a.config && a.config.emails) ? ("Emails: " + a.config.emails.join(", ")) : "";
+                    } else if (a.action_type === "WRITE_LOG") {
+                        detail = (a.config && a.config.level) ? ("Level: " + a.config.level) : "";
+                    }
+                    html += '<div class="list-group-item">';
+                    html += '<div class="fw-semibold">' + label + '</div>';
+                    if (detail) html += '<div class="text-muted small">' + detail + '</div>';
+                    html += '</div>';
+                });
+                html += "</div>";
+                launchActionsList.innerHTML = html;
+            }
+
+            function showActionFields(kind) {
+                if (actionSlackFields) actionSlackFields.style.display = (kind === "PUSH_TO_SLACK") ? "block" : "none";
+                if (actionEmailFields) actionEmailFields.style.display = (kind === "SEND_EMAIL") ? "block" : "none";
+                if (actionLogFields) actionLogFields.style.display = (kind === "WRITE_LOG") ? "block" : "none";
+            }
+
+            function openActionModal() {
+                if (!actionModal) return;
+                if (scopeKind !== "start") {
+                    var cfgId = getFixedLaunchConfigId();
+                    if (!cfgId) return;
+                }
+
+                captureActionParentScroll();
+                if (actionError) {
+                    actionError.style.display = "none";
+                    actionError.textContent = "";
+                }
+                if (actionType) showActionFields(actionType.value);
+
+                if (window.bootstrap && window.bootstrap.Modal) {
+                    window.bootstrap.Modal.getOrCreateInstance(actionModal).show();
+                } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+                    window.jQuery(actionModal).modal("show");
+                } else {
+                    actionModal.classList.add("in");
+                    actionModal.style.display = "block";
+                }
+            }
+
+            function closeActionModal() {
+                if (!actionModal) return;
+                if (window.bootstrap && window.bootstrap.Modal) {
+                    window.bootstrap.Modal.getInstance(actionModal)?.hide();
+                } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+                    window.jQuery(actionModal).modal("hide");
+                } else {
+                    actionModal.classList.remove("in");
+                    actionModal.style.display = "none";
+                }
+            }
+
+            if (window.jQuery && actionModal) {
+                var $ = window.jQuery;
+                $(actionModal).off("hidden.bs.modal.aistActionRestore").on("hidden.bs.modal.aistActionRestore", function () {
+                    if (!actionParentModal) return;
+                    document.body.classList.add("modal-open");
+                    if (!$(".modal-backdrop").length) {
+                        $("<div class='modal-backdrop fade show'></div>").appendTo(document.body);
+                    }
+                    try {
+                        $(actionParentModal).modal("handleUpdate");
+                    } catch (e) {
+                    }
+                    restoreActionParentScroll();
+                });
+            }
+
+            function buildActionUrl(projectId, configId) {
+                return actionUrlTpl.replace("/0/launch-configs/0/", "/" + String(projectId) + "/launch-configs/" + String(configId) + "/");
+            }
+
+            if (actionType) {
+                actionType.addEventListener("change", function () {
+                    showActionFields(actionType.value);
+                });
+            }
+
+            if (btnOpenAction) {
+                btnOpenAction.addEventListener("click", function () {
+                    openActionModal();
+                });
+            }
+
+            if (btnSaveAction) {
+                btnSaveAction.addEventListener("click", async function () {
+                    var projectId = getProjectId();
+                    var configId = getFixedLaunchConfigId();
+                    if (!projectId) return;
+                    if (scopeKind !== "start" && !configId) return;
+
+                    var payload = {
+                        trigger_status: actionTrigger ? actionTrigger.value : "",
+                        action_type: actionType ? actionType.value : "",
+                        config: {},
+                        secret_config: {},
+                    };
+
+                    var title = actionTitle ? actionTitle.value.trim() : "";
+                    var description = actionDescription ? actionDescription.value.trim() : "";
+
+                    if (payload.action_type === "PUSH_TO_SLACK") {
+                        payload.config.channels = normalizeList(actionSlackChannels ? actionSlackChannels.value : "");
+                        payload.config.title = title;
+                        payload.config.description = description;
+                        var token = actionSlackToken ? actionSlackToken.value.trim() : "";
+                        if (token) payload.secret_config.slack_token = token;
+                    } else if (payload.action_type === "SEND_EMAIL") {
+                        payload.config.emails = normalizeList(actionEmails ? actionEmails.value : "");
+                        payload.config.title = title;
+                        payload.config.description = description;
+                    } else if (payload.action_type === "WRITE_LOG") {
+                        payload.config.level = actionLogLevel ? actionLogLevel.value : "INFO";
+                        payload.config.description = description;
+                    }
+
+                    if (payload.action_type === "PUSH_TO_SLACK" && (!payload.config.channels || payload.config.channels.length === 0)) {
+                        if (actionError) {
+                            actionError.textContent = "Slack channels are required.";
+                            actionError.style.display = "block";
+                        }
+                        return;
+                    }
+                    if (payload.action_type === "SEND_EMAIL" && (!payload.config.emails || payload.config.emails.length === 0)) {
+                        if (actionError) {
+                            actionError.textContent = "Emails are required.";
+                            actionError.style.display = "block";
+                        }
+                        return;
+                    }
+
+                    if (scopeKind === "start") {
+                        payload.id = payload.id || (String(Date.now()) + "-" + Math.floor(Math.random() * 10000));
+                        oneOffActions.push(payload);
+                        persistOneOffActions();
+                        renderOneOffActions();
+                        closeActionModal();
+                        return;
+                    }
+
+                    try {
+                        var resp = await fetch(buildActionUrl(projectId, configId), {
+                            method: "POST",
+                            credentials: "same-origin",
+                            headers: Object.assign({"Content-Type": "application/json"}, {
+                                "X-CSRFToken": getCSRFToken(form),
+                            }),
+                            body: JSON.stringify(payload),
+                        });
+                        var data = await resp.json().catch(function () { return {}; });
+                        if (!resp.ok) {
+                            var msg = data && (data.detail || data.error) ? (data.detail || data.error) : "Failed to save action.";
+                            if (actionError) {
+                                actionError.textContent = msg;
+                                actionError.style.display = "block";
+                            }
+                            return;
+                        }
+                        if (data && data.id) {
+                            launchActions.push(data);
+                            renderLaunchConfigActions();
+                        }
+                        closeActionModal();
+                    } catch (ex) {
+                        if (actionError) {
+                            actionError.textContent = String(ex);
+                            actionError.style.display = "block";
+                        }
+                    }
+                });
             }
 
             var selTime = qsNameEnds(form, 'select', 'time_class_level');
@@ -118,6 +441,7 @@
             var metaUrlTemplate = "{% url 'dojo_aist:project_meta' pk=0 %}";
             var defaultsUrl = "{% url 'dojo_aist:default_analyzers' %}";
             var createUrlTpl = "{% url 'dojo_aist:project_version_create' project_id=0 %}";
+            var actionUrlTpl = "{% url 'dojo_aist_api:project_launch_config_action_list_create' project_id=0 config_id=0 %}";
 
 
             function getSelectValue(el) {
@@ -347,12 +671,14 @@
                 fetchProjectMeta(pid, function () {
                     collectAndRefreshAnalyzers();
                 });
+                updateActionButtonState();
             }
 
             // Allow projects.html to trigger reload after it sets data-aist-project-id
             window.__AIST_REFRESH_PIPELINE_SCOPE__ = function () {
                 onProjectChanged();
                 updateCreateButtonState();
+                updateActionButtonState();
 
                 // Ensure AI block visibility is synced with current mode in this scope
                 try {
@@ -362,6 +688,12 @@
                     }
                 } catch (e) {
                 }
+            };
+
+            window.__AIST_SET_LAUNCH_CONFIG_ID__ = function (cfgId) {
+                if (!scopeRoot) return;
+                scopeRoot.setAttribute("data-aist-launch-config-id", String(cfgId || ""));
+                updateActionButtonState();
             };
 
 
@@ -395,6 +727,9 @@
                 setLanguages([]);
                 rebuildProjectVersionSelect([], "");
             }
+            updateActionButtonState();
+            renderOneOffActions();
+            renderLaunchConfigActions();
 
             var parentModal = scopeRoot.closest ? scopeRoot.closest(".modal") : null;
             // create-version modal is rendered globally (outside any parent modal), so always search in document

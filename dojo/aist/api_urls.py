@@ -3,6 +3,7 @@ from django.urls import path
 from dojo.aist.api import (
     AISTProjectDetailAPI,
     AISTProjectListAPI,
+    LaunchConfigDashboardListAPI,
     LaunchScheduleBulkDisableAPI,
     LaunchScheduleDetailAPI,
     LaunchScheduleListAPI,
@@ -11,9 +12,12 @@ from dojo.aist.api import (
     OrganizationCreateAPI,
     PipelineAPI,
     PipelineLaunchQueueClearDispatchedAPI,
+    PipelineLaunchQueueDetailAPI,
     PipelineLaunchQueueListAPI,
     PipelineListAPI,
     PipelineStartAPI,
+    ProjectLaunchConfigActionDetailAPI,
+    ProjectLaunchConfigActionListCreateAPI,
     ProjectLaunchConfigDetailAPI,
     ProjectLaunchConfigListCreateAPI,
     ProjectLaunchConfigStartAPI,
@@ -57,9 +61,24 @@ urlpatterns = [
         name="project_launch_config_detail",
     ),
     path(
+        "projects/<int:project_id>/launch-configs/<int:config_id>/actions/",
+        ProjectLaunchConfigActionListCreateAPI.as_view(),
+        name="project_launch_config_action_list_create",
+    ),
+    path(
+        "projects/<int:project_id>/launch-configs/<int:config_id>/actions/<int:action_id>/",
+        ProjectLaunchConfigActionDetailAPI.as_view(),
+        name="project_launch_config_action_detail",
+    ),
+    path(
         "projects/<int:project_id>/launch-configs/<int:config_id>/start/",
         ProjectLaunchConfigStartAPI.as_view(),
         name="project_launch_config_start",
+    ),
+    path(
+        "launch-configs/",
+        LaunchConfigDashboardListAPI.as_view(),
+        name="launch_config_dashboard_list",
     ),
     path(
         "projects/<int:project_id>/launch-schedule/",
@@ -80,6 +99,7 @@ path("launch-schedules/preview/", LaunchSchedulePreviewAPI.as_view(), name="laun
 path("launch-schedules/bulk-disable/", LaunchScheduleBulkDisableAPI.as_view(), name="launch_schedule_bulk_disable"),
 path("launch-queue/", PipelineLaunchQueueListAPI.as_view(), name="pipeline_launch_queue_list"),
 path("launch-queue/clear-dispatched/", PipelineLaunchQueueClearDispatchedAPI.as_view(), name="pipeline_launch_queue_clear_dispatched"),
+path("launch-queue/<int:queue_id>/", PipelineLaunchQueueDetailAPI.as_view(), name="pipeline_launch_queue_detail"),
 path(
     "launch-schedules/<int:launch_schedule_id>/run-once/",
     LaunchScheduleRunOnceAPI.as_view(),

@@ -4,12 +4,14 @@ from operator import attrgetter
 
 import hyperlink
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Prefetch
 from django.db.models.query_utils import Q
 
 from dojo.celery import app
 from dojo.decorators import dojo_async_task, dojo_model_from_id, dojo_model_to_id
 from dojo.models import Finding, System_Settings
+from dojo.signals import finding_deduplicated
 
 logger = logging.getLogger(__name__)
 deduplicationLogger = logging.getLogger("dojo.specific-loggers.deduplication")
@@ -96,10 +98,8 @@ def do_dedupe_finding(new_finding, *args, **kwargs):
         else:
             deduplicationLogger.debug("no configuration per parser found; using legacy algorithm")
             deduplicate_legacy(new_finding)
-        from django.db import transaction
-        from dojo.signals import finding_deduplicated
         transaction.on_commit(lambda: finding_deduplicated.send(
-            sender=type(new_finding), finding_id=new_finding.id, test=new_finding.test
+            sender=type(new_finding), finding_id=new_finding.id, test=new_finding.test,
         ))
     else:
         deduplicationLogger.debug("dedupe: skipping dedupe because it's disabled in system settings get()")

@@ -33,13 +33,26 @@ def launching_dashboard(request: HttpRequest) -> HttpResponse:
         "api_preview_url": reverse("dojo_aist_api:launch_schedule_preview"),
         "api_queue_url": reverse("dojo_aist_api:pipeline_launch_queue_list"),
         "api_queue_clear_url": reverse("dojo_aist_api:pipeline_launch_queue_clear_dispatched"),
+        "api_queue_delete_template": reverse(
+            "dojo_aist_api:pipeline_launch_queue_detail",
+            kwargs={"queue_id": 0},
+        ).replace("/0/", "/{queue_id}/"),
         "api_bulk_disable_url": reverse("dojo_aist_api:launch_schedule_bulk_disable"),
         "api_project_launch_configs_template": reverse(
             "dojo_aist_api:project_launch_config_list_create",
             kwargs={"project_id": 0},
         ).replace("/0/", "/{project_id}/"),
+        "api_launch_configs_dashboard_url": reverse("dojo_aist_api:launch_config_dashboard_list"),
+        "api_launch_config_delete_template": reverse(
+            "dojo_aist_api:project_launch_config_detail",
+            kwargs={"project_id": 0, "config_id": 0},
+        ).replace("/0/launch-configs/0/", "/{project_id}/launch-configs/{config_id}/"),
         "api_schedule_run_once_template": reverse(
             "dojo_aist_api:launch_schedule_run_once",
+            kwargs={"launch_schedule_id": 0},
+        ).replace("/0/", "/{launch_schedule_id}/"),
+        "api_schedule_delete_template": reverse(
+            "dojo_aist_api:launch_schedule_detail",
             kwargs={"launch_schedule_id": 0},
         ).replace("/0/", "/{launch_schedule_id}/"),
         "ui_pipeline_detail_template": reverse(

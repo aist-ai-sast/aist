@@ -103,6 +103,7 @@ def dispatch_queued_pipelines():
             )
             continue
 
+        params["launch_config_id"] = item.launch_config_id
         pipeline = create_pipeline_object(project, project_version, None)
         async_result = run_sast_pipeline.delay(pipeline.id, params)
         logger.info(

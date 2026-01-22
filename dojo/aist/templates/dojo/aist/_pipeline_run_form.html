@@ -8,6 +8,12 @@
         {{ form.selection_signature }}
     {% endif %}
 
+        {% if form.non_field_errors %}
+            <div class="alert alert-danger">
+                {{ form.non_field_errors }}
+            </div>
+        {% endif %}
+
         {# LaunchConfig metadata fields (present only in AISTLaunchConfigForm) #}
         {% if form.name %}
             <div class="mb-3 row">
@@ -161,13 +167,39 @@
             </div>
         </div>
 
-        <div class="text-end mt-3">
-            {% if form.project %}
-                <button type="submit" class="btn btn-primary" id="btn-start" disabled>Start pipeline</button>
-            {% else %}
-                <button type="submit" class="btn btn-primary" id="btn-save-launch-config">Save preset</button>
-            {% endif %}
+        <div class="mb-3 row">
+            <label class="col-sm-3 col-form-label">Actions</label>
+            <div class="col-sm-9">
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <button type="button" class="btn btn-outline-secondary" id="btn-open-create-action" disabled>
+                        Add action
+                    </button>
+                    {% if form.project %}
+                        <small class="text-muted" id="aist-action-hint">Actions will run once for this pipeline.</small>
+                    {% else %}
+                        <small class="text-muted" id="aist-action-hint">Save preset to enable actions.</small>
+                    {% endif %}
+                </div>
+                {% if scope == "start" %}
+                    <input type="hidden" name="one_off_actions" id="aist-one-off-actions" value="[]">
+                    <div id="aist-one-off-actions-list" class="mt-2"></div>
+                {% else %}
+                    <div id="aist-preset-status" class="text-muted small mt-2">Not saved yet.</div>
+                    <div id="aist-actions-empty" class="text-muted small mt-2">No actions yet. Save preset to enable.</div>
+                    <div id="aist-actions-list" class="mt-2"></div>
+                {% endif %}
+            </div>
         </div>
+
+        {% if form.project %}
+            <div class="text-end mt-3">
+                <button type="submit" class="btn btn-primary" id="btn-start" disabled>Start pipeline</button>
+            </div>
+        {% else %}
+            <div class="text-end mt-3">
+                <button type="submit" class="btn btn-primary" id="btn-save-launch-config">Save preset</button>
+            </div>
+        {% endif %}
     {% if scope != "launch-config" %}
         </form>
     {% endif %}

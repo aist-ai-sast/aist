@@ -30,7 +30,7 @@
                     </button>
                 </div>
 
-                <div class="modal-body">
+                <div class="modal-body aist-action-modal-body">
                     <div class="mb-2">
                         <label class="form-label">Save filter to</label>
                         <select id="ai-filter-scope" class="form-select">
@@ -108,6 +108,94 @@
             </div>
         </div>
     </div>
+<div class="modal fade" id="modalCreateLaunchAction" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Add launch action</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+
+                <div class="modal-body">
+                    <div class="alert alert-danger" id="launchActionError" style="display:none;"></div>
+
+                    <div class="aist-action-row">
+                        <label class="form-label">Trigger status</label>
+                        <select class="form-control" id="action-trigger-status">
+                            {% for value, label in aist_status_choices %}
+                                <option value="{{ value }}">{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="aist-action-spacer" aria-hidden="true"></div>
+
+                    <div class="aist-action-row">
+                        <label class="form-label">Action type</label>
+                        <select class="form-control" id="action-type">
+                            {% for value, label in aist_action_types %}
+                                <option value="{{ value }}">{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="aist-action-spacer" aria-hidden="true"></div>
+
+                    <div id="action-common-fields">
+                        <div class="aist-action-row">
+                            <label class="form-label">Title</label>
+                            <input type="text" class="form-control" id="action-title">
+                        </div>
+                        <div class="aist-action-spacer" aria-hidden="true"></div>
+                        <div class="aist-action-row">
+                            <label class="form-label">Description (optional)</label>
+                            <textarea class="form-control" id="action-description" rows="3"></textarea>
+                        </div>
+                        <div class="aist-action-spacer" aria-hidden="true"></div>
+                    </div>
+
+                    <div id="action-slack-fields" style="display:none;">
+                        <div class="aist-action-row">
+                            <label class="form-label">Slack channels (comma-separated)</label>
+                            <input type="text" class="form-control" id="action-slack-channels" placeholder="#aist-alerts, #secops">
+                        </div>
+                        <div class="aist-action-spacer" aria-hidden="true"></div>
+                        <div class="aist-action-row">
+                            <label class="form-label">Slack token</label>
+                            <input type="password" class="form-control" id="action-slack-token" autocomplete="off">
+                        </div>
+                        <div class="aist-action-spacer" aria-hidden="true"></div>
+                    </div>
+
+                    <div id="action-email-fields" style="display:none;">
+                        <div class="aist-action-row">
+                            <label class="form-label">Emails (comma-separated)</label>
+                            <input type="text" class="form-control" id="action-emails" placeholder="secops@example.com, lead@example.com">
+                        </div>
+                        <div class="aist-action-spacer" aria-hidden="true"></div>
+                    </div>
+
+                    <div id="action-log-fields" style="display:none;">
+                        <div class="aist-action-row">
+                            <label class="form-label">Log level</label>
+                            <select class="form-control" id="action-log-level">
+                                <option value="INFO">INFO</option>
+                                <option value="WARNING">WARNING</option>
+                                <option value="ERROR">ERROR</option>
+                                <option value="DEBUG">DEBUG</option>
+                            </select>
+                        </div>
+                        <div class="aist-action-spacer" aria-hidden="true"></div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="btn-save-launch-action">Save action</button>
+                </div>
+            </div>
+        </div>
+    </div>
 <style>
                             #ai-cmpr-badges .badge {
                                 margin: 2px 6px 2px 0;
@@ -136,6 +224,34 @@
                                 align-items: center;
                                 justify-content: space-between;
                                 padding: 10px 15px;
+                            }
+
+                            .aist-action-modal-body .form-label {
+                                margin-bottom: 6px;
+                            }
+
+                            .aist-action-modal-body .form-control {
+                                margin-bottom: 2px;
+                            }
+
+                            .aist-action-modal-body .aist-action-row {
+                                display: block !important;
+                                padding-bottom: 12px !important;
+                            }
+
+                            .aist-action-modal-body .aist-action-row + .aist-action-row {
+                                margin-top: 12px !important;
+                            }
+
+                            .aist-action-modal-body select.form-control,
+                            .aist-action-modal-body input.form-control,
+                            .aist-action-modal-body textarea.form-control {
+                                margin-bottom: 0 !important;
+                            }
+
+                            .aist-action-spacer {
+                                display: block;
+                                height: 12px;
                             }
 
                             #modalCreateVersion .modal-title {

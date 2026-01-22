@@ -46,7 +46,7 @@ RUN \
     tiff \
     bind-tools \
     xmlsec \
-    docker-cli=5:24.0.2* \
+    docker-cli \
     docker-cli-buildx \
     git \
     util-linux \

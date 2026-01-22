@@ -8,7 +8,7 @@ from dojo.aist.logging_transport import get_redis, install_pipeline_logging
 from dojo.aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionType
 from dojo.aist.pipeline_args import PipelineArguments
 from dojo.aist.tasks.enrich import make_enrich_chord
-from dojo.aist.utils.pipeline import finish_pipeline, get_project_build_path
+from dojo.aist.utils.pipeline import finish_pipeline, get_project_build_path, set_pipeline_status
 from dojo.aist.utils.pipeline_imports import _import_sast_pipeline_package
 from dojo.models import Finding, Test
 
@@ -39,8 +39,7 @@ def postprocess_findings(
 ):
     with transaction.atomic():
         pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-        pipeline.status = AISTStatus.FINDING_POSTPROCESSING
-        pipeline.save(update_fields=["status", "updated"])
+        set_pipeline_status(pipeline, AISTStatus.FINDING_POSTPROCESSING)
 
     redis = get_redis()
     redis.hset(f"aist:progress:{pipeline_id}:enrich", mapping={"total": len(finding_ids), "done": 0})
@@ -69,6 +68,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
     :param params: Dictionary of parameters collected from the form.
     """
     log_level = params.get("log_level", "INFO")
+    launch_config_id = params.get("launch_config_id")
     logger = install_pipeline_logging(pipeline_id, log_level)
     pipeline = None  # ensure defined for exception path
 
@@ -86,9 +86,8 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
                 logger.info("Pipeline already in progress; skipping duplicate start.")
                 return
 
-            pipeline.status = AISTStatus.SAST_LAUNCHED
             pipeline.started = timezone.now()
-            pipeline.save(update_fields=["status", "started", "updated"])
+            set_pipeline_status(pipeline, AISTStatus.SAST_LAUNCHED, update_fields_extra=["started"])
 
             params = PipelineArguments.from_dict(params)
 
@@ -142,6 +141,8 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
             "mode": getattr(params, "ai_mode", "MANUAL"),
             "filter_snapshot": getattr(params, "ai_filter_snapshot", None),
         }
+        if launch_config_id:
+            launch_data["launch_config_id"] = launch_config_id
 
         git_meta = (launch_data or {}).get("git") or {}
         resolved_commit = (git_meta.get("resolved_commit") or "").strip()
@@ -166,8 +167,11 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         with transaction.atomic():
             pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
             pipeline.launch_data = launch_data
-            pipeline.status = AISTStatus.UPLOADING_RESULTS
-            pipeline.save(update_fields=["launch_data", "status", "updated"])
+            set_pipeline_status(
+                pipeline,
+                AISTStatus.UPLOADING_RESULTS,
+                update_fields_extra=["launch_data"],
+            )
         logger.info("Upload step starting")
 
         repo_path = launch_data.get("project_path", project_build_path)

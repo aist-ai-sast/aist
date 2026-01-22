@@ -18,7 +18,7 @@ from dojo.aist.ai_filter import FINDING_FILTER_FIELD_MAP, SUPPORTED_COMPARISONS,
 from dojo.aist.logging_transport import install_pipeline_logging
 from dojo.aist.models import AISTAIResponse, AISTPipeline, AISTProject, AISTStatus
 from dojo.aist.tasks import push_request_to_ai
-from dojo.aist.utils.pipeline import finish_pipeline
+from dojo.aist.utils.pipeline import finish_pipeline, set_pipeline_status
 from dojo.models import Finding, Test
 
 
@@ -208,8 +208,7 @@ def send_request_to_ai(request, pipeline_id: str):
                 logger.error("Attempt to push to AI before receiving confirmation")
                 return JsonResponse({"error": "Attempt to push to AI before receiving confirmation"}, status=400)
 
-            pipeline.status = AISTStatus.PUSH_TO_AI
-            pipeline.save(update_fields=["status", "updated"])
+            set_pipeline_status(pipeline, AISTStatus.PUSH_TO_AI)
 
         push_request_to_ai.delay(pipeline_id, ids_int, filters)
     except Exception as exc:

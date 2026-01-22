@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import uuid
+
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
@@ -8,11 +11,13 @@ from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
+from dojo.aist.api.launch_configs import ACTION_CREATE_SERIALIZERS
 from dojo.aist.forms import AISTPipelineRunForm
-from dojo.aist.models import AISTPipeline, AISTProject, AISTStatus
+from dojo.aist.models import AISTLaunchConfigAction, AISTPipeline, AISTProject, AISTStatus
 from dojo.aist.tasks import run_sast_pipeline
+from dojo.aist.utils.action_config import encrypt_action_secret_config
 from dojo.aist.utils.http import _fmt_duration, _qs_without
-from dojo.aist.utils.pipeline import create_pipeline_object, stop_pipeline
+from dojo.aist.utils.pipeline import create_pipeline_object, set_pipeline_status, stop_pipeline
 from dojo.aist.views._common import ERR_PIPELINE_NOT_FOUND
 from dojo.utils import add_breadcrumb
 
@@ -28,8 +33,7 @@ def pipeline_set_status(request, pipeline_id: str):
                 .select_for_update()
                 .get(id=pipeline_id)
             )
-            pipeline.status = AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI
-            pipeline.save(update_fields=["status", "updated"])
+            set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
     return redirect("dojo_aist:pipeline_detail", pipeline_id=pipeline_id)
 
 
@@ -76,10 +80,64 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
     history_qs_str = _qs_without(request, "page")
     add_breadcrumb(title="Start pipeline", top_level=True, request=request)
 
+    def render_start(form):
+        return render(
+            request,
+            "dojo/aist/start.html",
+            {
+                "form": form,
+                "history_page": page_obj,  # for pagination
+                "history_items": history_items,
+                "history_qs": history_qs_str,
+                "selected_project": project_id or "",
+                "search_query": q,
+                "page_sizes": [10, 20, 50, 100],
+                "aist_status_choices": AISTStatus.choices,
+                "aist_action_types": AISTLaunchConfigAction.ActionType.choices,
+            },
+        )
+
     if request.method == "POST":
         form = AISTPipelineRunForm(request.POST)
         if form.is_valid():
             params = form.get_params()
+
+            raw_actions = request.POST.get("one_off_actions") or "[]"
+            try:
+                actions_payload = json.loads(raw_actions)
+            except json.JSONDecodeError:
+                form.add_error(None, "Invalid actions payload.")
+                return render_start(form)
+
+            if not isinstance(actions_payload, list):
+                form.add_error(None, "Actions payload must be a list.")
+                return render_start(form)
+
+            one_off_actions = []
+            for item in actions_payload:
+                if not isinstance(item, dict):
+                    form.add_error(None, "Invalid action payload.")
+                    return render_start(form)
+                action_type = item.get("action_type")
+                serializer_cls = ACTION_CREATE_SERIALIZERS.get(action_type)
+                if not serializer_cls:
+                    form.add_error(None, f"Unknown action type: {action_type}")
+                    return render_start(form)
+
+                serializer = serializer_cls(data=item)
+                if not serializer.is_valid():
+                    form.add_error(None, serializer.errors)
+                    return render_start(form)
+
+                data = serializer.validated_data
+                action_id = item.get("id") or uuid.uuid4().hex
+                one_off_actions.append({
+                    "id": action_id,
+                    "trigger_status": data["trigger_status"],
+                    "action_type": data["action_type"],
+                    "config": data.get("config") or {},
+                    "secret_config": encrypt_action_secret_config(data.get("secret_config") or {}),
+                })
 
             with transaction.atomic():
                 p = create_pipeline_object(
@@ -88,6 +146,12 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                     or form.cleaned_data["project"].versions.order_by("-created").first(),
                     None,
                 )
+                if one_off_actions:
+                    launch_data = p.launch_data or {}
+                    launch_data["one_off_actions"] = one_off_actions
+                    launch_data["one_off_actions_done"] = []
+                    p.launch_data = launch_data
+                    p.save(update_fields=["launch_data"])
             # Launch the Celery task and record its id on the pipeline.
             async_result = run_sast_pipeline.delay(p.id, params)
             p.run_task_id = async_result.id
@@ -95,19 +159,7 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
             return redirect("dojo_aist:pipeline_detail", pipeline_id=p.id)
     else:
         form = AISTPipelineRunForm()
-    return render(
-        request,
-        "dojo/aist/start.html",
-        {
-            "form": form,
-            "history_page": page_obj,  # for pagination
-            "history_items": history_items,
-            "history_qs": history_qs_str,
-            "selected_project": project_id or "",
-            "search_query": q,
-            "page_sizes": [10, 20, 50, 100],
-        },
-    )
+    return render_start(form)
 
 
 def pipeline_list(request):
