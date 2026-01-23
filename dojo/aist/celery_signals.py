@@ -6,6 +6,7 @@ from celery.signals import worker_process_init
 from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
+from django.utils import timezone
 
 from dojo.aist.actions import build_one_off_action, get_action_handler
 from dojo.aist.models import (
@@ -170,6 +171,58 @@ def _get_launch_config_id_from_pipeline(pipeline: AISTPipeline) -> int | None:
     return None
 
 
+def _update_action_run(
+    pipeline_id: str,
+    *,
+    key: str,
+    action_type: str,
+    trigger_status: str,
+    source: str,
+    status: str,
+    error: str | None = None,
+) -> None:
+    with transaction.atomic():
+        locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
+        if not locked:
+            return
+        launch_data = locked.launch_data or {}
+        runs = launch_data.get("action_runs") or []
+        updated_at = timezone.now().isoformat()
+
+        payload = {
+            "key": key,
+            "action_type": action_type,
+            "trigger_status": trigger_status,
+            "source": source,
+            "status": status,
+            "error": error or "",
+            "updated_at": updated_at,
+        }
+
+        existing = next((r for r in runs if r.get("key") == key), None)
+        if existing:
+            existing.update(payload)
+        else:
+            runs.append(payload)
+
+        launch_data["action_runs"] = runs
+        locked.launch_data = launch_data
+        locked.save(update_fields=["launch_data", "updated"])
+
+
+def _mark_one_off_done(pipeline_id: str, action_id: str) -> None:
+    with transaction.atomic():
+        locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
+        if not locked:
+            return
+        launch_data = locked.launch_data or {}
+        done_ids = set(launch_data.get("one_off_actions_done") or [])
+        done_ids.add(action_id)
+        launch_data["one_off_actions_done"] = list(done_ids)
+        locked.launch_data = launch_data
+        locked.save(update_fields=["launch_data"])
+
+
 @receiver(pipeline_status_changed)
 def on_pipeline_status_changed(sender, pipeline_id=None, old_status=None, new_status=None, **kwargs):
     if not pipeline_id or not new_status:
@@ -186,45 +239,123 @@ def on_pipeline_status_changed(sender, pipeline_id=None, old_status=None, new_st
             trigger_status=new_status,
         )
         for action in actions:
+            key = f"lc:{action.id}:{new_status}"
+            _update_action_run(
+                pipeline_id=pipeline_id,
+                key=key,
+                action_type=action.action_type,
+                trigger_status=new_status,
+                source="launch_config",
+                status="pending",
+            )
             handler = get_action_handler(action)
             if not handler:
+                _update_action_run(
+                    pipeline_id=pipeline_id,
+                    key=key,
+                    action_type=action.action_type,
+                    trigger_status=new_status,
+                    source="launch_config",
+                    status="failed",
+                    error="Handler not found",
+                )
                 continue
-            handler.run(pipeline=pipeline, new_status=new_status)
+            try:
+                handler.run(pipeline=pipeline, new_status=new_status)
+                _update_action_run(
+                    pipeline_id=pipeline_id,
+                    key=key,
+                    action_type=action.action_type,
+                    trigger_status=new_status,
+                    source="launch_config",
+                    status="performed",
+                )
+            except Exception as exc:
+                _update_action_run(
+                    pipeline_id=pipeline_id,
+                    key=key,
+                    action_type=action.action_type,
+                    trigger_status=new_status,
+                    source="launch_config",
+                    status="failed",
+                    error=str(exc),
+                )
 
     # One-off actions stored on pipeline.launch_data
-    with transaction.atomic():
-        locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
-        if not locked:
-            return
+    locked = AISTPipeline.objects.filter(id=pipeline_id).first()
+    if not locked:
+        return
 
-        launch_data = locked.launch_data or {}
-        one_off_actions = launch_data.get("one_off_actions") or []
-        done_ids = set(launch_data.get("one_off_actions_done") or [])
-        ran_any = False
+    launch_data = locked.launch_data or {}
+    one_off_actions = launch_data.get("one_off_actions") or []
+    done_ids = set(launch_data.get("one_off_actions_done") or [])
 
-        for action_payload in one_off_actions:
-            if not isinstance(action_payload, dict):
-                continue
-            if action_payload.get("trigger_status") != new_status:
-                continue
-            action_id = action_payload.get("id")
-            if not action_id:
-                action_id = uuid.uuid4().hex
-                action_payload["id"] = action_id
-            if action_id in done_ids:
-                continue
+    for action_payload in one_off_actions:
+        if not isinstance(action_payload, dict):
+            continue
+        if action_payload.get("trigger_status") != new_status:
+            continue
+        action_id = action_payload.get("id")
+        if not action_id:
+            action_id = uuid.uuid4().hex
+            action_payload["id"] = action_id
+        if action_id in done_ids:
+            continue
 
-            action_obj = build_one_off_action(action_payload)
-            if not action_obj:
-                continue
-            handler = get_action_handler(action_obj)
-            if not handler:
-                continue
+        key = f"one_off:{action_id}:{new_status}"
+        action_obj = build_one_off_action(action_payload)
+        if not action_obj:
+            _update_action_run(
+                pipeline_id=pipeline_id,
+                key=key,
+                action_type=action_payload.get("action_type") or "",
+                trigger_status=new_status,
+                source="one_off",
+                status="failed",
+                error="Invalid action payload",
+            )
+            _mark_one_off_done(pipeline_id, action_id)
+            continue
+
+        _update_action_run(
+            pipeline_id=pipeline_id,
+            key=key,
+            action_type=action_obj.action_type,
+            trigger_status=new_status,
+            source="one_off",
+            status="pending",
+        )
+        handler = get_action_handler(action_obj)
+        if not handler:
+            _update_action_run(
+                pipeline_id=pipeline_id,
+                key=key,
+                action_type=action_obj.action_type,
+                trigger_status=new_status,
+                source="one_off",
+                status="failed",
+                error="Handler not found",
+            )
+            _mark_one_off_done(pipeline_id, action_id)
+            continue
+        try:
             handler.run(pipeline=locked, new_status=new_status)
-            done_ids.add(action_id)
-            ran_any = True
-
-        if ran_any:
-            launch_data["one_off_actions_done"] = list(done_ids)
-            locked.launch_data = launch_data
-            locked.save(update_fields=["launch_data"])
+            _update_action_run(
+                pipeline_id=pipeline_id,
+                key=key,
+                action_type=action_obj.action_type,
+                trigger_status=new_status,
+                source="one_off",
+                status="performed",
+            )
+        except Exception as exc:
+            _update_action_run(
+                pipeline_id=pipeline_id,
+                key=key,
+                action_type=action_obj.action_type,
+                trigger_status=new_status,
+                source="one_off",
+                status="failed",
+                error=str(exc),
+            )
+        _mark_one_off_done(pipeline_id, action_id)
