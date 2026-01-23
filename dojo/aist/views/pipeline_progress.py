@@ -23,6 +23,8 @@ def pipeline_status_stream(request, pipeline_id: str):
 
     def event_stream():
         last_status = None
+        last_updated = None
+        done_at = None
         heartbeat_every = 3  # seconds
         last_heartbeat = 0.0
 
@@ -46,6 +48,7 @@ def pipeline_status_stream(request, pipeline_id: str):
 
                 if obj.status != last_status:
                     last_status = obj.status
+                    last_updated = obj.updated
                     # Proper SSE block: event, data, blank line
                     yield f"event: status\ndata: {last_status}\n\n"
 
@@ -53,14 +56,20 @@ def pipeline_status_stream(request, pipeline_id: str):
                         getattr(AISTStatus, "FINISHED", "FINISHED"),
                         getattr(AISTStatus, "FAILED", "FAILED"),
                     }:  # PLR6201
-                        yield "event: done\ndata: finished\n\n"
-                        break
+                        done_at = time.time() + 6
+                elif last_status is not None and obj.updated != last_updated:
+                    last_updated = obj.updated
+                    yield f"event: status\ndata: {last_status}\n\n"
 
                 # Heartbeat so proxies (e.g., Nginx) don't close the connection
                 now_ts = time.time()
                 if now_ts - last_heartbeat >= heartbeat_every:
                     last_heartbeat = now_ts
                     yield f": heartbeat {int(now_ts)}\n\n"
+
+                if done_at and now_ts >= done_at:
+                    yield "event: done\ndata: finished\n\n"
+                    break
 
                 time.sleep(1)
 

@@ -121,6 +121,7 @@
             var actionType = document.getElementById("action-type");
             var actionTitle = document.getElementById("action-title");
             var actionDescription = document.getElementById("action-description");
+            var actionIncludeAiCsv = document.getElementById("action-include-ai-csv");
             var actionSlackFields = document.getElementById("action-slack-fields");
             var actionSlackChannels = document.getElementById("action-slack-channels");
             var actionSlackToken = document.getElementById("action-slack-token");
@@ -218,6 +219,9 @@
                     } else if (a.action_type === "WRITE_LOG") {
                         detail = (a.config && a.config.level) ? ("Level: " + a.config.level) : "";
                     }
+                    if (a.config && a.config.include_ai_csv) {
+                        detail = detail ? (detail + " · AI CSV") : "AI CSV";
+                    }
                     html += '<div class="list-group-item d-flex align-items-center justify-content-between">';
                     html += '<div>';
                     html += '<div class="fw-semibold">' + label + '</div>';
@@ -260,6 +264,9 @@
                         detail = (a.config && a.config.emails) ? ("Emails: " + a.config.emails.join(", ")) : "";
                     } else if (a.action_type === "WRITE_LOG") {
                         detail = (a.config && a.config.level) ? ("Level: " + a.config.level) : "";
+                    }
+                    if (a.config && a.config.include_ai_csv) {
+                        detail = detail ? (detail + " · AI CSV") : "AI CSV";
                     }
                     html += '<div class="list-group-item">';
                     html += '<div class="fw-semibold">' + label + '</div>';
@@ -360,20 +367,24 @@
 
                     var title = actionTitle ? actionTitle.value.trim() : "";
                     var description = actionDescription ? actionDescription.value.trim() : "";
+                    var includeAiCsv = actionIncludeAiCsv ? !!actionIncludeAiCsv.checked : false;
 
                     if (payload.action_type === "PUSH_TO_SLACK") {
                         payload.config.channels = normalizeList(actionSlackChannels ? actionSlackChannels.value : "");
                         payload.config.title = title;
                         payload.config.description = description;
+                        payload.config.include_ai_csv = includeAiCsv;
                         var token = actionSlackToken ? actionSlackToken.value.trim() : "";
                         if (token) payload.secret_config.slack_token = token;
                     } else if (payload.action_type === "SEND_EMAIL") {
                         payload.config.emails = normalizeList(actionEmails ? actionEmails.value : "");
                         payload.config.title = title;
                         payload.config.description = description;
+                        payload.config.include_ai_csv = includeAiCsv;
                     } else if (payload.action_type === "WRITE_LOG") {
                         payload.config.level = actionLogLevel ? actionLogLevel.value : "INFO";
                         payload.config.description = description;
+                        payload.config.include_ai_csv = includeAiCsv;
                     }
 
                     if (payload.action_type === "PUSH_TO_SLACK" && (!payload.config.channels || payload.config.channels.length === 0)) {

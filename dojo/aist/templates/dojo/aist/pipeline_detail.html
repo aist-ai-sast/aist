@@ -695,13 +695,7 @@
             // ---------- Status SSE ----------
             const srcStatus = new EventSource("{% url 'dojo_aist:pipeline_status_stream' pipeline.id %}");
 
-            srcStatus.onmessage = (evt) => {
-                if (evt?.data) setStatusText(evt.data);
-            };
-
-            srcStatus.addEventListener("status", (evt) => {
-                if (evt?.data) setStatusText(evt.data);
-
+            function refreshStatusPartial() {
                 fetch(window.location.href, {headers: {"X-Partial": "status"}})
                     .then(r => r.text())
                     .then(html => {
@@ -713,16 +707,28 @@
                         container.innerHTML = newContainer.innerHTML;
 
                         const ds = newContainer.getAttribute("data-status");
-                        const s = (ds || evt?.data || st?.textContent || "").trim();
+                        const s = (ds || st?.textContent || "").trim();
                         if (s) runHydratorFor(s, container);
                     })
                     .catch(console.warn);
+            }
+
+            srcStatus.onmessage = (evt) => {
+                if (evt?.data) setStatusText(evt.data);
+            };
+
+            srcStatus.addEventListener("status", (evt) => {
+                if (evt?.data) setStatusText(evt.data);
+                refreshStatusPartial();
             });
 
             srcStatus.addEventListener("done", (evt) => {
                 const s = (evt?.data || "FINISHED");
                 setStatusText(s);
                 runHydratorFor(s, document);
+                refreshStatusPartial();
+                setTimeout(refreshStatusPartial, 1500);
+                setTimeout(refreshStatusPartial, 4000);
                 srcStatus.close();
             });
 

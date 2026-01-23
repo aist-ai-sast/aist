@@ -150,13 +150,28 @@
                         <div class="aist-action-row">
                             <label class="form-label">Description (optional)</label>
                             <textarea class="form-control" id="action-description" rows="3"></textarea>
+                            <div class="text-muted small mt-1">
+                                If you set a description, it will replace the auto-generated AI report summary in Slack/email.
+                            </div>
+                        </div>
+                        <div class="aist-action-spacer" aria-hidden="true"></div>
+                        <div class="aist-action-row">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="action-include-ai-csv">
+                                <label class="form-check-label" for="action-include-ai-csv">
+                                    Add AI result CSV
+                                </label>
+                            </div>
+                            <div class="text-muted small mt-1">
+                                If AI response isn’t ready at the selected status, the action will be marked failed.
+                            </div>
                         </div>
                         <div class="aist-action-spacer" aria-hidden="true"></div>
                     </div>
 
                     <div id="action-slack-fields" style="display:none;">
                         <div class="aist-action-row">
-                            <label class="form-label">Slack channels (comma-separated)</label>
+                            <label class="form-label">Slack channels or ID (comma-separated)</label>
                             <input type="text" class="form-control" id="action-slack-channels" placeholder="#aist-alerts, #secops">
                         </div>
                         <div class="aist-action-spacer" aria-hidden="true"></div>

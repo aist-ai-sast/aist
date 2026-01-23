@@ -82,6 +82,52 @@
 
         <hr class="my-3">
 
+        {# --- Actions status --- #}
+        {% with action_runs=pipeline.launch_data.action_runs %}
+            {% if action_runs %}
+                <div class="aist-section mb-3">
+                    <div class="font-weight-bold mb-2">
+                        <i class="fa fa-bolt mr-1"></i> Actions status
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered mb-0">
+                            <thead>
+                            <tr>
+                                <th>Source</th>
+                                <th>Type</th>
+                                <th>Trigger</th>
+                                <th>Status</th>
+                                <th>Updated</th>
+                                <th>Error</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            {% for a in action_runs %}
+                                <tr>
+                                    <td>{{ a.source|default:"-" }}</td>
+                                    <td>{{ a.action_type|default:"-" }}</td>
+                                    <td>{{ a.trigger_status|default:"-" }}</td>
+                                    <td>
+                                        {% if a.status == "performed" %}
+                                            <span class="badge badge-success">performed</span>
+                                        {% elif a.status == "failed" %}
+                                            <span class="badge badge-danger">failed</span>
+                                        {% else %}
+                                            <span class="badge badge-warning">pending</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ a.updated_at|default:"-" }}</td>
+                                    <td class="text-muted small">{{ a.error }}</td>
+                                </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <hr class="my-3">
+            {% endif %}
+        {% endwith %}
+
         {# --- AI responses history --- #}
         <div class="aist-section mb-3">
             <div class="font-weight-bold mb-2">

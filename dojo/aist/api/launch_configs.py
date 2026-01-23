@@ -128,11 +128,13 @@ class SlackActionCreateSerializer(BaseActionCreateSerializer):
 
         title = config.get("title") or ""
         description = config.get("description") or ""
+        include_ai_csv = bool(config.get("include_ai_csv"))
 
         attrs["config"] = {
             "channels": channels,
             "title": title,
             "description": description,
+            "include_ai_csv": include_ai_csv,
         }
 
         secret_config = attrs.get("secret_config") or {}
@@ -155,11 +157,13 @@ class EmailActionCreateSerializer(BaseActionCreateSerializer):
 
         title = config.get("title") or ""
         description = config.get("description") or ""
+        include_ai_csv = bool(config.get("include_ai_csv"))
 
         attrs["config"] = {
             "emails": emails,
             "title": title,
             "description": description,
+            "include_ai_csv": include_ai_csv,
         }
         attrs["secret_config"] = {}
         return attrs
@@ -173,10 +177,12 @@ class WriteLogActionCreateSerializer(BaseActionCreateSerializer):
         config = attrs.get("config") or {}
         level = config.get("level") or "INFO"
         description = config.get("description") or ""
+        include_ai_csv = bool(config.get("include_ai_csv"))
 
         attrs["config"] = {
             "level": level,
             "description": description,
+            "include_ai_csv": include_ai_csv,
         }
         attrs["secret_config"] = {}
         return attrs
