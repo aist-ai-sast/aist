@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework.settings import api_settings
 from rest_framework.views import APIView
 
-from dojo.aist.ai_filter import get_required_ai_filter_for_start
+from dojo.aist.ai_filter import validate_and_normalize_filter
 from dojo.aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from dojo.aist.models import AISTPipeline, AISTProjectVersion, AISTStatus
 from dojo.aist.pipeline_args import PipelineArguments
@@ -78,15 +78,15 @@ class PipelineStartAPI(APIView):
         if has_unfinished_pipeline(project_version):
             return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
-        # AI filter: use default if exists, otherwise require explicit ai_filter
+        if not provided_ai_filter:
+            return Response(
+                {"ai_filter": "ai_filter is required for AUTO_DEFAULT"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
-            _scope, normalized_filter = get_required_ai_filter_for_start(
-                project=project,
-                provided_filter=provided_ai_filter,
-            )
-        except ValueError as e:
-
+            normalized_filter = validate_and_normalize_filter(provided_ai_filter)
+        except Exception as e:
             return Response(
                 {"ai_filter": str(e)},
                 status=status.HTTP_400_BAD_REQUEST,

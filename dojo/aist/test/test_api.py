@@ -85,10 +85,7 @@ class PipelineStartAPITests(AISTApiBase):
             mock_normalize.return_value,
         )
 
-    @patch("dojo.aist.api.pipelines.get_required_ai_filter_for_start")
-    def test_start_pipeline_returns_400_if_filter_required_and_missing(self, mock_get_filter):
-        mock_get_filter.side_effect = ValueError("AI filter is required")
-
+    def test_start_pipeline_returns_400_if_filter_required_and_missing(self):
         resp = self.client.post(
             self._url(),
             data={"project_version_id": self.pv.id},
@@ -96,7 +93,7 @@ class PipelineStartAPITests(AISTApiBase):
         )
 
         self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.data, {"ai_filter": "AI filter is required"})
+        self.assertEqual(resp.data, {"ai_filter": "ai_filter is required for AUTO_DEFAULT"})
 
 
 class LaunchConfigAPITests(AISTApiBase):
@@ -128,6 +125,31 @@ class LaunchConfigAPITests(AISTApiBase):
         resp = self.client.delete(url)
         self.assertEqual(resp.status_code, 204)
         self.assertFalse(AISTProjectLaunchConfig.objects.filter(id=cfg.id).exists())
+
+    @patch("dojo.aist.api.launch_configs.PipelineArguments.normalize_params")
+    def test_update_launch_config_params(self, mock_normalize):
+        cfg = AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            name="Preset",
+            description="",
+            params={"project_version": {"id": self.pv.id}},
+            is_default=False,
+        )
+        mock_normalize.return_value = {
+            "project_version": {"id": self.pv.id},
+            "ai_mode": "AUTO_DEFAULT",
+        }
+
+        resp = self.client.patch(
+            self._detail_url(cfg.id),
+            data={"params": {"ai_mode": "AUTO_DEFAULT"}},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        cfg.refresh_from_db()
+        self.assertEqual(cfg.params, mock_normalize.return_value)
+        mock_normalize.assert_called_once_with(project=self.project, raw_params={"ai_mode": "AUTO_DEFAULT"})
 
     @patch("dojo.aist.api.launch_configs.PipelineArguments.normalize_params")
     def test_create_launch_config_normalizes_and_strips_project_fields(self, mock_normalize):

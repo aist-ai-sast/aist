@@ -233,12 +233,9 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
         self.assertEqual(out["ai_mode"], "AUTO_DEFAULT")
         self.assertEqual(out["ai_filter_snapshot"]["severity"][0]["comparison"], "EQUALS")
 
-    @patch("dojo.aist.pipeline_args.get_required_ai_filter_for_start")
-    def test_normalize_params_auto_default_resolves_default_if_missing(self, mock_get):
-        mock_get.return_value = ("PROJECT", {"limit": 10, "severity": [{"comparison": "EQUALS", "value": "HIGH"}]})
-        out = PipelineArguments.normalize_params(
-            project=self.project,
-            raw_params={"ai_mode": "AUTO_DEFAULT"},
-        )
-        self.assertEqual(out["ai_filter_snapshot"]["limit"], 10)
-        mock_get.assert_called_once()
+    def test_normalize_params_auto_default_requires_snapshot(self):
+        with self.assertRaises(ValueError):
+            PipelineArguments.normalize_params(
+                project=self.project,
+                raw_params={"ai_mode": "AUTO_DEFAULT"},
+            )

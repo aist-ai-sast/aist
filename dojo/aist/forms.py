@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from django import forms
 
-from dojo.aist.ai_filter import get_required_ai_filter_for_start
+from dojo.aist.ai_filter import validate_and_normalize_filter
 from dojo.aist.models import AISTProject, AISTProjectVersion, VersionType
 from dojo.aist.pipeline_args import PipelineArguments
 from dojo.aist.utils.pipeline import has_unfinished_pipeline
@@ -75,7 +77,7 @@ class _AISTPipelineArgsBaseForm(forms.Form):
 
     AI_MODE_CHOICES = (
         ("MANUAL", "Manual selection of findings for AI"),
-        ("AUTO_DEFAULT", "Send findings to AI automatically with default filter"),
+        ("AUTO_DEFAULT", "Send findings to AI automatically with configured filter"),
     )
     ai_mode = forms.ChoiceField(
         label="AI triage",
@@ -84,7 +86,41 @@ class _AISTPipelineArgsBaseForm(forms.Form):
         initial="MANUAL",
         required=True,
     )
-    ai_filter_json = forms.CharField(required=False, widget=forms.HiddenInput)
+    ai_filter_json = forms.CharField(
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                "rows": 8,
+                "style": "font-family: Menlo, Monaco, Consolas, 'Courier New', monospace; font-size: 12px;",
+            },
+        ),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        ai_mode = cleaned.get("ai_mode") or "MANUAL"
+        raw_json = (cleaned.get("ai_filter_json") or "").strip()
+
+        cleaned["ai_filter_snapshot"] = None
+        if ai_mode != "AUTO_DEFAULT":
+            return cleaned
+
+        if not raw_json:
+            self.add_error("ai_filter_json", "AI filter is required for AUTO_DEFAULT.")
+            return cleaned
+
+        try:
+            parsed = json.loads(raw_json)
+        except Exception as exc:
+            self.add_error("ai_filter_json", f"AI filter JSON is invalid: {exc}")
+            return cleaned
+
+        try:
+            cleaned["ai_filter_snapshot"] = validate_and_normalize_filter(parsed)
+        except Exception as exc:
+            self.add_error("ai_filter_json", f"AI filter is invalid: {exc}")
+
+        return cleaned
 
     def __init__(self, *args, **kwargs):
         # Optional: project passed explicitly (for UI where project is fixed and not a form field)
@@ -184,7 +220,7 @@ class _AISTPipelineArgsBaseForm(forms.Form):
             # Keep existing UI behavior: time_class_level ignored when analyzers explicitly selected :contentReference[oaicite:4]{index=4}
             "time_class_level": None,
             "ai_mode": self.cleaned_data.get("ai_mode") or "MANUAL",
-            # run-form will set ai_filter_snapshot in clean(); launch-config keeps None and lets API SSOT decide
+            # ai_filter_snapshot is parsed/validated in clean() for AUTO_DEFAULT
             "ai_filter_snapshot": self.cleaned_data.get("ai_filter_snapshot"),
             "project_version": (pv.as_dict() if pv else None),
         }
@@ -198,9 +234,6 @@ class AISTPipelineRunForm(_AISTPipelineArgsBaseForm):
         help_text="Choose a pre-configured SAST project",
         required=True,
     )
-
-    # keep run-specific computed value
-    ai_filter_snapshot = None  # injected into cleaned_data in clean()
 
     def clean(self):
         cleaned = super().clean()
@@ -220,18 +253,6 @@ class AISTPipelineRunForm(_AISTPipelineArgsBaseForm):
                 "There is already a running pipeline for this project version.",
             )
             return cleaned
-
-        ai_mode = cleaned.get("ai_mode") or "MANUAL"
-        cleaned["ai_filter_snapshot"] = None
-
-        if ai_mode == "AUTO_DEFAULT":
-            try:
-                _, default_filter = get_required_ai_filter_for_start(project=project, provided_filter=None)
-            except Exception as e:
-                self.add_error(None, f"AI filter is invalid: {e}")
-                return cleaned
-
-            cleaned["ai_filter_snapshot"] = default_filter
 
         return cleaned
 

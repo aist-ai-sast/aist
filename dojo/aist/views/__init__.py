@@ -1,10 +1,8 @@
 from dojo.aist.views.ai import (
     ai_filter_reference,
     delete_ai_response,
-    get_effective_ai_default_filter,
     pipeline_callback,
     product_analyzers_json,
-    save_ai_default_filter,
     search_findings_json,
     send_request_to_ai,
 )
@@ -50,7 +48,6 @@ __all__ = [
     "delete_ai_response",
     "delete_pipeline_view",
     "export_ai_results",
-    "get_effective_ai_default_filter",
     "gitlab_projects_list",
     "launching_dashboard",
     "pipeline_callback",
@@ -67,7 +64,6 @@ __all__ = [
     "project_launch_config_create_ui",
     "project_meta",
     "project_version_create",
-    "save_ai_default_filter",
     "search_findings_json",
     "send_request_to_ai",
     "start_pipeline",

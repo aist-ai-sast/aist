@@ -5,7 +5,7 @@ from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import Case, IntegerField, Q, Value, When
 from django.http import HttpResponseBadRequest, JsonResponse
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.text import slugify
 from django.views.decorators.http import require_GET, require_POST
 from rest_framework import status
@@ -14,9 +14,9 @@ from rest_framework.decorators import api_view, authentication_classes, permissi
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from dojo.aist.ai_filter import FINDING_FILTER_FIELD_MAP, SUPPORTED_COMPARISONS, validate_and_normalize_filter
+from dojo.aist.ai_filter import get_ai_filter_reference
 from dojo.aist.logging_transport import install_pipeline_logging
-from dojo.aist.models import AISTAIResponse, AISTPipeline, AISTProject, AISTStatus
+from dojo.aist.models import AISTAIResponse, AISTPipeline, AISTStatus
 from dojo.aist.tasks import push_request_to_ai
 from dojo.aist.utils.pipeline import finish_pipeline, set_pipeline_status
 from dojo.models import Finding, Test
@@ -254,66 +254,6 @@ def pipeline_callback(request, pipeline_id: str):
     return Response({"ok": True})
 
 
-def _resolve_effective_default_filter(project: AISTProject):
-    proj_filter = getattr(project, "ai_default_filter", None)
-    if proj_filter:
-        return ("PROJECT", proj_filter)
-    org = getattr(project, "organization", None)
-    org_filter = getattr(org, "ai_default_filter", None) if org else None
-    if org_filter:
-        return ("ORG", org_filter)
-    return (None, None)
-
-
-@login_required
-@require_GET
-def get_effective_ai_default_filter(request, project_id: str):
-    try:
-        proj = AISTProject.objects.select_related("organization").get(id=project_id)
-    except AISTProject.DoesNotExist:
-        return JsonResponse({"ok": False, "error": "Project not found"}, status=404)
-
-    scope, flt = _resolve_effective_default_filter(proj)
-    return JsonResponse({"ok": True, "scope": scope, "filter": flt})
-
-
-@login_required
-@require_POST
-def save_ai_default_filter(request, project_id: str):
-    try:
-        proj = AISTProject.objects.select_related("organization").get(id=project_id)
-    except AISTProject.DoesNotExist:
-        return JsonResponse({"ok": False, "error": "Project not found"}, status=404)
-
-    try:
-        data = json.loads(request.body.decode("utf-8") or "{}")
-    except Exception:
-        return JsonResponse({"ok": False, "error": "Invalid JSON"}, status=400)
-
-    scope = (data.get("scope") or "").upper()
-    try:
-        flt = validate_and_normalize_filter(data.get("filter"))
-    except Exception as e:
-        return JsonResponse({"ok": False, "error": str(e)}, status=400)
-
-    if scope not in {"PROJECT", "ORG"}:
-        return JsonResponse({"ok": False, "error": "Invalid scope"}, status=400)
-    if not isinstance(flt, dict) or not flt:
-        return JsonResponse({"ok": False, "error": "Filter must be a non-empty JSON object"}, status=400)
-
-    if scope == "PROJECT":
-        proj.ai_default_filter = flt
-        proj.save(update_fields=["ai_default_filter", "updated"])
-    else:
-        org = proj.organization
-        if not org:
-            return JsonResponse({"ok": False, "error": "Project has no organization"}, status=400)
-        org.ai_default_filter = flt
-        org.save(update_fields=["ai_default_filter", "updated"])
-
-    return JsonResponse({"ok": True})
-
-
 @require_GET
 @login_required
 def ai_filter_reference(request):
@@ -322,33 +262,17 @@ def ai_filter_reference(request):
     - supported comparisons (global)
     - supported fields (whitelist + field specs)
     """
-    comparisons = sorted(SUPPORTED_COMPARISONS)
+    data = get_ai_filter_reference()
+    data["fields"] = sorted(data.get("fields") or [], key=itemgetter("name"))
+    return JsonResponse(data)
 
-    fields = []
-    for name, spec in FINDING_FILTER_FIELD_MAP.items():
-        allowed = set(SUPPORTED_COMPARISONS)
 
-        # Remove ops that are disallowed by field spec flags
-        if not getattr(spec, "allow_contains", True):
-            allowed.discard("CONTAINS")
-            allowed.discard("NOT_CONTAINS")
-
-        if not getattr(spec, "allow_regex", True):
-            allowed.discard("REGEX")
-            allowed.discard("NOT_REGEX")
-
-        fields.append({
-            "name": name,
-            "type": getattr(spec, "type", "unknown"),
-            "allow_regex": bool(getattr(spec, "allow_regex", True)),
-            "allow_contains": bool(getattr(spec, "allow_contains", True)),
-            "allowed_comparisons": sorted(allowed),
-        })
-
-    fields.sort(key=itemgetter("name"))
-
-    return JsonResponse({
-        "ok": True,
-        "comparisons": comparisons,
-        "fields": fields,
-    })
+@require_GET
+@login_required
+def ai_filter_help(request):
+    data = get_ai_filter_reference()
+    data["fields"] = sorted(data.get("fields") or [], key=itemgetter("name"))
+    context = {
+        "ai_filter_reference": data,
+    }
+    return render(request, "dojo/aist/ai_filter_help.html", context)

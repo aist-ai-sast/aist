@@ -36,6 +36,20 @@ class LaunchConfigCreateRequestSerializer(serializers.Serializer):
     params = serializers.JSONField(required=True)
 
 
+class LaunchConfigUpdateRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AISTProjectLaunchConfig
+        fields = ["name", "description", "is_default", "params"]
+
+    def validate_params(self, value):
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            msg = "params must be a JSON object"
+            raise serializers.ValidationError(msg)
+        return value
+
+
 class LaunchConfigStartRequestSerializer(serializers.Serializer):
 
     """All runtime options must live in `params` (PipelineArguments-like dict)."""
@@ -62,6 +76,29 @@ class LaunchConfigActionSerializer(serializers.ModelSerializer):
             "updated",
         ]
         read_only_fields = ["id", "launch_config", "created", "updated"]
+
+
+class LaunchConfigActionUpdateSerializer(serializers.Serializer):
+    trigger_status = serializers.ChoiceField(choices=AISTStatus.choices, required=False)
+    action_type = serializers.ChoiceField(choices=AISTLaunchConfigAction.ActionType.choices, required=False)
+    config = serializers.JSONField(required=False)
+    secret_config = serializers.JSONField(required=False, write_only=True)
+
+    def validate_config(self, value):
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            msg = "config must be a JSON object"
+            raise serializers.ValidationError(msg)
+        return value
+
+    def validate_secret_config(self, value):
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            msg = "secret_config must be a JSON object"
+            raise serializers.ValidationError(msg)
+        return value
 
 
 class LaunchConfigDashboardSerializer(serializers.ModelSerializer):
@@ -325,6 +362,39 @@ class ProjectLaunchConfigDetailAPI(APIView):
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    @extend_schema(
+        tags=["aist"],
+        summary="Update launch config",
+        request=LaunchConfigUpdateRequestSerializer,
+        responses={200: LaunchConfigSerializer, 404: OpenApiResponse(description="Not found")},
+    )
+    def patch(self, request, project_id: int, config_id: int, *args, **kwargs):
+        obj = get_object_or_404(AISTProjectLaunchConfig, id=config_id, project_id=project_id)
+        s = LaunchConfigUpdateRequestSerializer(data=request.data, partial=True)
+        s.is_valid(raise_exception=True)
+        data = s.validated_data
+
+        with transaction.atomic():
+            if data.get("is_default"):
+                AISTProjectLaunchConfig.objects.filter(project=obj.project, is_default=True).exclude(id=obj.id).update(
+                    is_default=False,
+                )
+                obj.is_default = True
+            elif "is_default" in data:
+                obj.is_default = False
+
+            if "name" in data:
+                obj.name = data["name"]
+            if "description" in data:
+                obj.description = data["description"] or ""
+            if "params" in data:
+                normalized = PipelineArguments.normalize_params(project=obj.project, raw_params=data["params"])
+                obj.params = normalized
+
+            obj.save()
+
+        return Response(LaunchConfigSerializer(obj).data)
+
 
 class ProjectLaunchConfigStartAPI(APIView):
     permission_classes = [IsAuthenticated]
@@ -494,6 +564,61 @@ class ProjectLaunchConfigActionDetailAPI(APIView):
             launch_config__project_id=project_id,
         )
         return Response(LaunchConfigActionSerializer(obj).data)
+
+    @extend_schema(
+        tags=["aist"],
+        summary="Update action for launch config",
+        request=LaunchConfigActionUpdateSerializer,
+        responses={200: LaunchConfigActionSerializer, 404: OpenApiResponse(description="Not found")},
+    )
+    def patch(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
+        obj = get_object_or_404(
+            AISTLaunchConfigAction,
+            id=action_id,
+            launch_config_id=config_id,
+            launch_config__project_id=project_id,
+        )
+        s = LaunchConfigActionUpdateSerializer(data=request.data, partial=True)
+        s.is_valid(raise_exception=True)
+        data = s.validated_data
+
+        action_type = data.get("action_type") or obj.action_type
+        serializer_cls = ACTION_CREATE_SERIALIZERS.get(action_type)
+        if serializer_cls is None:
+            return Response({"action_type": "Unsupported action_type"}, status=status.HTTP_400_BAD_REQUEST)
+
+        payload = {
+            "trigger_status": data.get("trigger_status", obj.trigger_status),
+            "action_type": action_type,
+            "config": data.get("config", obj.config),
+            "secret_config": data.get("secret_config", {}) if "secret_config" in data else {},
+        }
+        validator = serializer_cls(data=payload)
+        validator.is_valid(raise_exception=True)
+
+        obj.trigger_status = validator.validated_data["trigger_status"]
+        obj.action_type = validator.validated_data["action_type"]
+        obj.config = validator.validated_data.get("config") or {}
+        if "secret_config" in data:
+            obj.set_secret_config(validator.validated_data.get("secret_config") or {})
+        obj.save()
+
+        return Response(LaunchConfigActionSerializer(obj).data)
+
+    @extend_schema(
+        tags=["aist"],
+        summary="Delete action for launch config",
+        responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
+    )
+    def delete(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
+        obj = get_object_or_404(
+            AISTLaunchConfigAction,
+            id=action_id,
+            launch_config_id=config_id,
+            launch_config__project_id=project_id,
+        )
+        obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class LaunchConfigDashboardListAPI(APIView):

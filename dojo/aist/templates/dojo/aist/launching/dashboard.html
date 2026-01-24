@@ -364,6 +364,66 @@
             </div>
         </div>
     </div>
+    <div class="modal fade" id="modal-edit-launch-config" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                    <h4 class="modal-title">{% trans "Edit launch config (JSON)" %}</h4>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-danger" id="lc-edit-error" style="display:none;"></div>
+                    <p class="text-muted small">
+                        {% trans "Edit JSON object with name, description, is_default, and params." %}
+                    </p>
+                    <textarea id="lc-edit-json"
+                              class="form-control"
+                              rows="14"
+                              spellcheck="false"></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">
+                        {% trans "Cancel" %}
+                    </button>
+                    <button type="button" class="btn btn-primary" id="btn-save-launch-config-json">
+                        {% trans "Save" %}
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal fade" id="modal-edit-launch-config-action" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                    <h4 class="modal-title">{% trans "Edit launch config action (JSON)" %}</h4>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-danger" id="lc-action-edit-error" style="display:none;"></div>
+                    <p class="text-muted small">
+                        {% trans "Edit JSON object with trigger_status, action_type, config, and optional secret_config." %}
+                    </p>
+                    <textarea id="lc-action-edit-json"
+                              class="form-control"
+                              rows="14"
+                              spellcheck="false"></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">
+                        {% trans "Cancel" %}
+                    </button>
+                    <button type="button" class="btn btn-primary" id="btn-save-launch-config-action-json">
+                        {% trans "Save" %}
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 {% endblock %}
 
 {% block postscript %}
@@ -546,6 +606,7 @@
             var URL_BULK_DISABLE = "{{ api_bulk_disable_url }}";
             var URL_PROJECT_LAUNCH_CONFIGS_TPL = "{{ api_project_launch_configs_template }}";
             var URL_LAUNCH_CONFIGS_DASHBOARD = "{{ api_launch_configs_dashboard_url }}";
+            var URL_LAUNCH_CONFIG_ACTION_DETAIL_TPL = "{{ api_launch_config_action_detail_template }}";
             var URL_LAUNCH_CONFIG_DELETE_TPL = "{{ api_launch_config_delete_template }}";
             var URL_SCHEDULE_RUN_ONCE_TPL = "{{ api_schedule_run_once_template }}";
             var URL_PIPELINE_DETAIL_TPL = "{{ ui_pipeline_detail_template }}";
@@ -1201,6 +1262,19 @@
             // LAUNCH CONFIGS TABLE
             // ---------------------------
             var launchConfigsById = {};
+            var editLaunchConfigModal = $("#modal-edit-launch-config");
+            var editLaunchConfigJson = $("#lc-edit-json");
+            var editLaunchConfigError = $("#lc-edit-error");
+            var btnSaveLaunchConfigJson = $("#btn-save-launch-config-json");
+            var editingLaunchConfigId = null;
+            var editingLaunchProjectId = null;
+            var editLaunchActionModal = $("#modal-edit-launch-config-action");
+            var editLaunchActionJson = $("#lc-action-edit-json");
+            var editLaunchActionError = $("#lc-action-edit-error");
+            var btnSaveLaunchActionJson = $("#btn-save-launch-config-action-json");
+            var editingActionId = null;
+            var editingActionConfigId = null;
+            var editingActionProjectId = null;
             var collapsedLaunchConfigGroups = {};
             var expandedLaunchConfigIds = {};
             var launchConfigsTable = $("#tbl-launch-configs").DataTable({
@@ -1267,13 +1341,23 @@
                     actionsHtml = '<div class="text-muted small">No actions</div>';
                 } else {
                     actionsHtml += '<table class="table table-condensed table-bordered" style="margin-bottom:0;">';
-                    actionsHtml += '<thead><tr><th>Trigger</th><th>Type</th><th>Config</th></tr></thead><tbody>';
+                    actionsHtml += '<thead><tr><th>Trigger</th><th>Type</th><th>Config</th><th>Actions</th></tr></thead><tbody>';
                     actions.forEach(function (a) {
                         var cfg = escapeHtml(JSON.stringify(a.config || {}, null, 2));
+                        var actionButtons =
+                            '<div class="btn-group btn-group-xs" role="group">' +
+                            '<button class="btn btn-default act-lc-action-edit" ' +
+                            'data-project-id="' + item.project + '" data-config-id="' + item.id + '" data-action-id="' +
+                            a.id + '">Edit</button>' +
+                            '<button class="btn btn-danger act-lc-action-delete" ' +
+                            'data-project-id="' + item.project + '" data-config-id="' + item.id + '" data-action-id="' +
+                            a.id + '">Delete</button>' +
+                            '</div>';
                         actionsHtml += "<tr>" +
                             "<td>" + escapeHtml(a.trigger_status || "") + "</td>" +
                             "<td>" + escapeHtml(prettyActionType(a.action_type || "")) + "</td>" +
                             "<td><pre class=\"small\">" + cfg + "</pre></td>" +
+                            "<td>" + actionButtons + "</td>" +
                             "</tr>";
                     });
                     actionsHtml += "</tbody></table>";
@@ -1291,6 +1375,45 @@
                     "</div>" +
                     "</div>"
                 );
+            }
+
+            function openLaunchConfigEditor(cfg, projectId) {
+                if (!cfg) return;
+                var payload = {
+                    name: cfg.name || "",
+                    description: cfg.description || "",
+                    is_default: !!cfg.is_default,
+                    params: cfg.params || {},
+                };
+                editLaunchConfigJson.val(JSON.stringify(payload, null, 2));
+                editLaunchConfigError.hide().text("");
+                editingLaunchConfigId = cfg.id;
+                editingLaunchProjectId = projectId;
+                editLaunchConfigModal.modal("show");
+            }
+
+            function findLaunchConfigAction(configId, actionId) {
+                var cfg = launchConfigsById[String(configId)];
+                if (!cfg || !cfg.actions) return null;
+                for (var i = 0; i < cfg.actions.length; i++) {
+                    if (String(cfg.actions[i].id) === String(actionId)) return cfg.actions[i];
+                }
+                return null;
+            }
+
+            function openLaunchConfigActionEditor(action, projectId, configId) {
+                if (!action) return;
+                var payload = {
+                    trigger_status: action.trigger_status,
+                    action_type: action.action_type,
+                    config: action.config || {},
+                };
+                editLaunchActionJson.val(JSON.stringify(payload, null, 2));
+                editLaunchActionError.hide().text("");
+                editingActionId = action.id;
+                editingActionConfigId = configId;
+                editingActionProjectId = projectId;
+                editLaunchActionModal.modal("show");
             }
 
             function loadLaunchConfigs() {
@@ -1330,7 +1453,11 @@
                             var cfgLabel = cfg.name || ("#" + cfg.id);
                             var defLabel = cfg.is_default ? '<span class="label label-success">Default</span>' : "";
                             var actionsSummary = formatActionSummary(cfg.actions || []);
-                            var manage = '<button class="btn btn-xs btn-danger act-lc-delete" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '">Delete</button>';
+                            var manage = '' +
+                                '<div class="btn-group btn-group-xs" role="group">' +
+                                '<button class="btn btn-xs btn-default act-lc-edit" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '">Edit JSON</button>' +
+                                '<button class="btn btn-xs btn-danger act-lc-delete" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '">Delete</button>' +
+                                '</div>';
 
                             launchConfigsTable.row.add([
                                 '<span class="details-control" data-id="' + cfg.id + '">+</span>',
@@ -1416,6 +1543,49 @@
                 launchConfigsTable.draw(false);
             });
 
+            $("#tbl-launch-configs tbody").on("click", "button.act-lc-edit", function () {
+                var configId = $(this).data("id");
+                var projectId = $(this).data("project-id");
+                if (!configId || !projectId) return;
+                var cfg = launchConfigsById[String(configId)];
+                openLaunchConfigEditor(cfg, projectId);
+            });
+
+            $("#tbl-launch-configs tbody").on("click", "button.act-lc-action-edit", function () {
+                var actionId = $(this).data("action-id");
+                var configId = $(this).data("config-id");
+                var projectId = $(this).data("project-id");
+                if (!actionId || !configId || !projectId) return;
+                var action = findLaunchConfigAction(configId, actionId);
+                openLaunchConfigActionEditor(action, projectId, configId);
+            });
+
+            $("#tbl-launch-configs tbody").on("click", "button.act-lc-action-delete", function () {
+                var actionId = $(this).data("action-id");
+                var configId = $(this).data("config-id");
+                var projectId = $(this).data("project-id");
+                if (!actionId || !configId || !projectId) return;
+                if (!confirm("Delete this action?")) return;
+                var url = URL_LAUNCH_CONFIG_ACTION_DETAIL_TPL
+                    .replace("{project_id}", String(projectId))
+                    .replace("{config_id}", String(configId))
+                    .replace("{action_id}", String(actionId));
+                fetch(url, {
+                    method: "DELETE",
+                    credentials: "same-origin",
+                    headers: Object.assign({"Content-Type": "application/json"}, csrfHeaders()),
+                }).then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) {
+                        throw new Error(t || "Delete failed");
+                    });
+                }).then(function () {
+                    loadLaunchConfigs();
+                    showToast("Action deleted.", "success");
+                }).catch(function (err) {
+                    showToast("Delete failed: " + err, "danger");
+                });
+            });
+
             $("#tbl-launch-configs tbody").on("click", "button.act-lc-delete", function () {
                 var configId = $(this).data("id");
                 var projectId = $(this).data("project-id");
@@ -1440,6 +1610,79 @@
                     showToast("Launch config deleted.", "success");
                 }).catch(function (err) {
                     showToast("Delete failed: " + err, "danger");
+                });
+            });
+
+            btnSaveLaunchConfigJson.on("click", function () {
+                if (!editingLaunchConfigId || !editingLaunchProjectId) return;
+                var raw = editLaunchConfigJson.val();
+                var payload = null;
+                try {
+                    payload = JSON.parse(raw);
+                } catch (e) {
+                    editLaunchConfigError.text("Invalid JSON: " + e.message).show();
+                    return;
+                }
+                if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+                    editLaunchConfigError.text("JSON must be an object.").show();
+                    return;
+                }
+                var url = URL_LAUNCH_CONFIG_DELETE_TPL
+                    .replace("{project_id}", String(editingLaunchProjectId))
+                    .replace("{config_id}", String(editingLaunchConfigId));
+                fetch(url, {
+                    method: "PATCH",
+                    credentials: "same-origin",
+                    headers: Object.assign({"Content-Type": "application/json"}, csrfHeaders()),
+                    body: JSON.stringify(payload),
+                }).then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) {
+                        throw new Error(t || "Update failed");
+                    });
+                    return r.json();
+                }).then(function () {
+                    editLaunchConfigModal.modal("hide");
+                    loadLaunchConfigs();
+                    showToast("Launch config updated.", "success");
+                }).catch(function (err) {
+                    editLaunchConfigError.text("Update failed: " + err).show();
+                });
+            });
+
+            btnSaveLaunchActionJson.on("click", function () {
+                if (!editingActionId || !editingActionConfigId || !editingActionProjectId) return;
+                var raw = editLaunchActionJson.val();
+                var payload = null;
+                try {
+                    payload = JSON.parse(raw);
+                } catch (e) {
+                    editLaunchActionError.text("Invalid JSON: " + e.message).show();
+                    return;
+                }
+                if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+                    editLaunchActionError.text("JSON must be an object.").show();
+                    return;
+                }
+                var url = URL_LAUNCH_CONFIG_ACTION_DETAIL_TPL
+                    .replace("{project_id}", String(editingActionProjectId))
+                    .replace("{config_id}", String(editingActionConfigId))
+                    .replace("{action_id}", String(editingActionId));
+                fetch(url, {
+                    method: "PATCH",
+                    credentials: "same-origin",
+                    headers: Object.assign({"Content-Type": "application/json"}, csrfHeaders()),
+                    body: JSON.stringify(payload),
+                }).then(function (r) {
+                    if (!r.ok) return r.text().then(function (t) {
+                        throw new Error(t || "Update failed");
+                    });
+                    return r.json();
+                }).then(function () {
+                    editLaunchActionModal.modal("hide");
+                    loadLaunchConfigs();
+                    showToast("Action updated.", "success");
+                }).catch(function (err) {
+                    editLaunchActionError.text("Update failed: " + err).show();
                 });
             });
 
