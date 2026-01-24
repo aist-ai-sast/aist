@@ -64,12 +64,8 @@ urlpatterns = [
         name="gitlab_projects_list",
     ),
 
-    path("ai/default-filter/effective/<str:project_id>/", ai.get_effective_ai_default_filter,
-         name="ai_default_filter_effective",
-         ),
-    path("ai/default-filter/save/<str:project_id>/", ai.save_ai_default_filter, name="ai_default_filter_save"),
-
     path("ai/filter/reference/", ai.ai_filter_reference, name="ai_filter_reference"),
+    path("ai/filter/help/", ai.ai_filter_help, name="ai_filter_help"),
     path("launching/", dashboards.launching_dashboard, name="launching_dashboard"),
     path(
         "projects/<int:project_id>/launch-configs/create/",

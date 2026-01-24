@@ -47,6 +47,13 @@ def launching_dashboard(request: HttpRequest) -> HttpResponse:
             "dojo_aist_api:project_launch_config_detail",
             kwargs={"project_id": 0, "config_id": 0},
         ).replace("/0/launch-configs/0/", "/{project_id}/launch-configs/{config_id}/"),
+        "api_launch_config_action_detail_template": reverse(
+            "dojo_aist_api:project_launch_config_action_detail",
+            kwargs={"project_id": 0, "config_id": 0, "action_id": 0},
+        ).replace(
+            "/0/launch-configs/0/actions/0/",
+            "/{project_id}/launch-configs/{config_id}/actions/{action_id}/",
+        ),
         "api_schedule_run_once_template": reverse(
             "dojo_aist_api:launch_schedule_run_once",
             kwargs={"launch_schedule_id": 0},

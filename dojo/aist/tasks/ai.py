@@ -83,7 +83,7 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
             resp = requests.post(webhook_url, data=body_bytes, headers=headers, timeout=webhook_timeout)
             resp.raise_for_status()
         except requests.RequestException as exc:
-            log.exception("AI triage POST failed with exception %s", exc)
+            log.error("AI triage POST exception: %s", exc)
             finish_pipeline(pipeline)
             return
 

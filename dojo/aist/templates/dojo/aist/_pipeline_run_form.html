@@ -86,24 +86,88 @@
             </div>
         </div>
 
-        <div id="ai-auto-block" class="mb-3 row" style="display:none;">
-            <label class="col-sm-3 col-form-label">Default AI filter</label>
+        <style>
+            .aist-ai-filter-block { display: none; }
+            .aist-pipeline-scope:has(input[name$="ai_mode"][value="AUTO_DEFAULT"]:checked) .aist-ai-filter-block {
+                display: flex;
+            }
+            .aist-pipeline-scope:has(input[name$="ai_mode"][value="AUTO_DEFAULT"]:checked) .aist-ai-filter-reference {
+                display: block;
+            }
+        </style>
+
+        <div class="mb-3 row aist-ai-filter-block"
+             {% if form.ai_mode.value != "AUTO_DEFAULT" %}style="display:none;"{% endif %}>
+            <label class="col-sm-3 col-form-label">AI filter (JSON)</label>
             <div class="col-sm-9">
-                <div id="ai-default-filter-status" class="text-muted small mb-2"></div>
+                {{ form.ai_filter_json }}
+                {% if form.ai_filter_json.errors %}
+                    <div class="text-danger small mt-1">
+                        {% for err in form.ai_filter_json.errors %}
+                            <div>{{ err }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+                <p class="form-text text-muted small mt-1">
+                    Used only when AI mode is AUTO_DEFAULT. Example:
+                    <code>{"limit": 50, "severity": [{"comparison": "EQUALS", "value": "High"}]}</code>
+                    <a class="ms-2" href="{% url "dojo_aist:ai_filter_help" %}" target="_blank" rel="noopener">
+                        Help
+                    </a>
+                </p>
+                <details class="mt-2 aist-ai-filter-reference"
+                         {% if form.ai_mode.value != "AUTO_DEFAULT" %}style="display:none;"{% endif %}>
+                    <summary class="text-muted small">AI filter reference</summary>
+                    <div class="mt-2">
+                        {% if ai_filter_reference %}
+                            <div class="small text-muted mb-1">Comparisons</div>
+                            <div class="d-flex flex-wrap gap-1 mb-2">
+                                {% for cmp in ai_filter_reference.comparisons %}
+                                    <span class="badge bg-secondary">{{ cmp }}</span>
+                                {% endfor %}
+                            </div>
 
-                <pre id="ai-default-filter-preview"
-                     class="border rounded p-2 small"
-                     style="display:none; max-height: 220px; overflow:auto;"></pre>
-
-                <button type="button" class="btn btn-outline-primary btn-sm"
-                        id="btn-create-ai-filter" style="display:none;">
-                    Create AI filter
-                </button>
+                            <div class="small text-muted mb-1">Fields</div>
+                            <div class="table-responsive">
+                                <table class="table table-sm align-middle mb-0">
+                                    <thead>
+                                    <tr class="text-muted small">
+                                        <th style="width: 22%">Field</th>
+                                        <th style="width: 12%">Type</th>
+                                        <th style="width: 46%">Allowed comparisons</th>
+                                        <th style="width: 20%">Notes</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    {% for f in ai_filter_reference.fields %}
+                                        <tr>
+                                            <td class="font-monospace">{{ f.name }}</td>
+                                            <td>{{ f.type }}</td>
+                                            <td class="small">
+                                                {% if f.allowed_comparisons %}
+                                                    {{ f.allowed_comparisons|join:", " }}
+                                                {% else %}
+                                                    <span class="text-muted">—</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="text-muted small">
+                                                {% if not f.allow_regex %}No REGEX{% endif %}
+                                                {% if not f.allow_contains %}
+                                                    {% if not f.allow_regex %} · {% endif %}No CONTAINS
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        {% else %}
+                            <div class="text-muted small">Reference unavailable.</div>
+                        {% endif %}
+                    </div>
+                </details>
             </div>
         </div>
-
-        {{ form.ai_filter_json }}
-        {{ form.ai_filter_scope }}
 
         <div class="mb-3 row">
             <label class="col-sm-3 col-form-label">{{ form.rebuild_images.label }}</label>

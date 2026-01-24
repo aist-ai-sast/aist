@@ -7,7 +7,7 @@ from unittest.mock import patch
 from django.urls import reverse
 from django.utils import timezone
 
-from dojo.aist.models import AISTAIResponse, AISTPipeline, AISTStatus, Organization
+from dojo.aist.models import AISTAIResponse, AISTPipeline, AISTStatus
 from dojo.aist.test.test_api import AISTApiBase
 from dojo.models import Engagement, Finding, Test, Test_Type
 
@@ -151,33 +151,6 @@ class AISTAIViewsTests(AISTApiBase):
         )
         self.assertEqual(resp.status_code, 400)
 
-    def test_save_and_get_default_filter_project(self):
-        url = reverse("dojo_aist:ai_default_filter_save", kwargs={"project_id": self.project.id})
-        payload = {
-            "scope": "PROJECT",
-            "filter": {"limit": 50, "severity": [{"comparison": "EQUALS", "value": "HIGH"}]},
-        }
-        resp = self.client.post(url, data=json.dumps(payload), content_type="application/json")
-        self.assertEqual(resp.status_code, 200)
-
-        get_url = reverse("dojo_aist:ai_default_filter_effective", kwargs={"project_id": self.project.id})
-        resp2 = self.client.get(get_url)
-        self.assertEqual(resp2.status_code, 200)
-        self.assertEqual(self._json(resp2)["scope"], "PROJECT")
-
-    def test_get_default_filter_from_org(self):
-        org = Organization.objects.create(name="Org")
-        org.ai_default_filter = {"limit": 50, "severity": [{"comparison": "EQUALS", "value": "HIGH"}]}
-        org.save(update_fields=["ai_default_filter", "updated"])
-
-        self.project.organization = org
-        self.project.save(update_fields=["organization", "updated"])
-
-        get_url = reverse("dojo_aist:ai_default_filter_effective", kwargs={"project_id": self.project.id})
-        resp = self.client.get(get_url)
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(self._json(resp)["scope"], "ORG")
-
     def test_ai_filter_reference(self):
         url = reverse("dojo_aist:ai_filter_reference")
         resp = self.client.get(url)
@@ -185,7 +158,16 @@ class AISTAIViewsTests(AISTApiBase):
         data = self._json(resp)
         self.assertTrue(data["ok"])
         self.assertIn("EQUALS", data["comparisons"])
+        self.assertTrue(data["keywords"])
         self.assertTrue(data["fields"])
+
+    def test_ai_filter_help_page(self):
+        url = reverse("dojo_aist:ai_filter_help")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode("utf-8")
+        self.assertIn("AI Filter Help", body)
+        self.assertIn("limit", body)
 
     def test_export_ai_results_requires_ai_response(self):
         pipeline = AISTPipeline.objects.create(

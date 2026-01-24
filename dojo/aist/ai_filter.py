@@ -27,6 +27,49 @@ SUPPORTED_COMPARISONS = {
     "EXISTS",
 }
 
+COMPARISON_DESCRIPTIONS = {
+    "EQUALS": "Exact match.",
+    "NOT_EQUALS": "Does not match.",
+    "IN": "Value is in the provided list.",
+    "NOT_IN": "Value is not in the provided list.",
+    "CONTAINS": "Substring match (case-sensitive).",
+    "NOT_CONTAINS": "Does not contain substring (case-sensitive).",
+    "PREFIX": "Starts with (case-sensitive).",
+    "REGEX": "Regular expression match.",
+    "GT": "Greater than.",
+    "GTE": "Greater than or equal to.",
+    "LT": "Less than.",
+    "LTE": "Less than or equal to.",
+    "EXISTS": "Field is present (or absent when value is false).",
+}
+
+FILTER_KEYWORD_REFERENCE = [
+    {
+        "key": "limit",
+        "type": "int",
+        "required": True,
+        "description": "Maximum number of findings to include in the AI batch (1..MAX).",
+    },
+    {
+        "key": "<field>",
+        "type": "list[condition]",
+        "required": False,
+        "description": "Field name with a list of conditions. Field names must be from the allowed fields list.",
+    },
+    {
+        "key": "comparison",
+        "type": "str",
+        "required": True,
+        "description": "Operator for a condition. Case-insensitive; normalized to uppercase.",
+    },
+    {
+        "key": "value",
+        "type": "any",
+        "required": True,
+        "description": "Value for comparison. IN/NOT_IN require a list.",
+    },
+]
+
 
 @dataclass(frozen=True)
 class FieldSpec:
@@ -330,3 +373,35 @@ def get_required_ai_filter_for_start(*, project, provided_filter):
 
     normalized = validate_and_normalize_filter(eff)
     return (scope or "UNKNOWN", normalized)
+
+
+def get_ai_filter_reference() -> dict[str, Any]:
+    comparisons = sorted(SUPPORTED_COMPARISONS)
+    fields = []
+    for name, spec in FINDING_FILTER_FIELD_MAP.items():
+        allowed = set(SUPPORTED_COMPARISONS)
+        if not getattr(spec, "allow_contains", True):
+            allowed.discard("CONTAINS")
+            allowed.discard("NOT_CONTAINS")
+        if not getattr(spec, "allow_regex", True):
+            allowed.discard("REGEX")
+            allowed.discard("NOT_REGEX")
+        fields.append(
+            {
+                "name": name,
+                "type": spec.type,
+                "allowed_comparisons": sorted(allowed),
+                "allow_regex": spec.allow_regex,
+                "allow_contains": spec.allow_contains,
+            },
+        )
+    comparison_details = [
+        {"comparison": c, "description": COMPARISON_DESCRIPTIONS.get(c, "")} for c in comparisons
+    ]
+    return {
+        "ok": True,
+        "comparisons": comparisons,
+        "comparison_details": comparison_details,
+        "fields": fields,
+        "keywords": FILTER_KEYWORD_REFERENCE,
+    }

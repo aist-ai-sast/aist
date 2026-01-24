@@ -11,6 +11,7 @@ from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
+from dojo.aist.ai_filter import get_ai_filter_reference
 from dojo.aist.api.launch_configs import ACTION_CREATE_SERIALIZERS
 from dojo.aist.forms import AISTPipelineRunForm
 from dojo.aist.models import AISTLaunchConfigAction, AISTPipeline, AISTProject, AISTStatus
@@ -94,6 +95,7 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                 "page_sizes": [10, 20, 50, 100],
                 "aist_status_choices": AISTStatus.choices,
                 "aist_action_types": AISTLaunchConfigAction.ActionType.choices,
+                "ai_filter_reference": get_ai_filter_reference(),
             },
         )
 

@@ -99,6 +99,9 @@
             }
 
             var selProject = qsNameEnds(form, 'select', 'project');
+            var aiFilterBlock = scopeRoot.querySelector(".aist-ai-filter-block");
+            var aiFilterReference = scopeRoot.querySelector(".aist-ai-filter-reference");
+            var aiModeRadios = qsaNameEnds(form, 'input[type="radio"]', 'ai_mode');
 
             function getFixedProjectId() {
                 // do NOT cache: projects.html sets this attribute right before opening the modal
@@ -113,6 +116,21 @@
                 // Prefer explicit selector (Start UI), otherwise fixed project from edit modal (LaunchConfig UI)
                 if (selProject) return String(getSelectValue(selProject) || "");
                 return String(getFixedProjectId() || "");
+            }
+
+            function updateAiFilterVisibility() {
+                if (!aiFilterBlock) return;
+                var autoSelected = false;
+                for (var i = 0; i < aiModeRadios.length; i++) {
+                    if (aiModeRadios[i].checked && aiModeRadios[i].value === "AUTO_DEFAULT") {
+                        autoSelected = true;
+                        break;
+                    }
+                }
+                aiFilterBlock.style.display = autoSelected ? "flex" : "none";
+                if (aiFilterReference) {
+                    aiFilterReference.style.display = autoSelected ? "block" : "none";
+                }
             }
 
             var actionModal = document.getElementById("modalCreateLaunchAction");
@@ -1137,411 +1155,12 @@
                 updateCreateButtonState();
             }
 
-            // ---- AI filter UI (MUST NOT break Start pipeline flow) ----
-            try {
-                var aiModeRadios = scopeRoot.querySelectorAll('input[type="radio"][name$="ai_mode"]');
-                var aiAutoBlock = scopeRoot.querySelector("#ai-auto-block");
-                var aiStatusEl = scopeRoot.querySelector("#ai-default-filter-status");
-                var aiPreviewEl = scopeRoot.querySelector("#ai-default-filter-preview");
-                var aiBtnCreate = scopeRoot.querySelector("#btn-create-ai-filter");
-
-                var modalContainer = document;
-
-                var aiModalEl = modalContainer.querySelector("#modalAiFilter")
-
-                // --- Return parent modal + restore scroll after AI Filter modal closes ---
-                if (window.jQuery && aiModalEl && parentModal) {
-                    var $ = window.jQuery;
-
-                    $(aiModalEl).off("hidden.bs.modal.aistReturnParentAI").on("hidden.bs.modal.aistReturnParentAI", function () {
-                        $(parentModal).one("shown.bs.modal.aistReturnParentAIShown", function () {
-                            document.body.classList.add("modal-open");
-
-                            if (!$(".modal-backdrop").length) {
-                                $("<div class='modal-backdrop fade show'></div>").appendTo(document.body);
-                            }
-
-                            try {
-                                $(parentModal).modal("handleUpdate");
-                            } catch (e) {
-                            }
-
-                            restoreParentScroll();
-                        });
-
-                        $(parentModal).modal("show");
-                    });
+            if (aiModeRadios.length) {
+                for (var i = 0; i < aiModeRadios.length; i++) {
+                    aiModeRadios[i].addEventListener("change", updateAiFilterVisibility);
                 }
-
-                var aiEditor = modalContainer.querySelector("#ai-filter-editor");
-                var aiScopeSel = modalContainer.querySelector("#ai-filter-scope");
-                var aiErrEl = modalContainer.querySelector("#ai-filter-error");
-                var aiBtnSave = modalContainer.querySelector("#btn-save-ai-filter");
-
-                var aiHiddenJson = scopeRoot.querySelector("#id_ai_filter_json");
-                var aiHiddenScope = scopeRoot.querySelector("#id_ai_filter_scope");
-
-                var aiBtnInsertTpl = modalContainer.querySelector("#btn-insert-ai-template");
-                var aiCmpBadges = modalContainer.querySelector("#ai-cmpr-badges");
-                var aiFieldsTbody = modalContainer.querySelector("#ai-fields-tbody");
-
-                var aiRefCache = null;
-
-                var aiCmpStatus = modalContainer.querySelector("#ai-cmpr-status");
-                var aiFieldsStatus = modalContainer.querySelector("#ai-fields-status");
-
-                var btnTabCmp = modalContainer.querySelector("#ai-ref-tab-cmpr");
-                var btnTabFields = modalContainer.querySelector("#ai-ref-tab-fields");
-                var paneCmp = modalContainer.querySelector("#ai-ref-cmpr-pane");
-                var paneFields = modalContainer.querySelector("#ai-ref-fields-pane");
-
-                function setActiveTab(which) {
-                    if (!btnTabCmp || !btnTabFields || !paneCmp || !paneFields) return;
-                    var isCmp = (which === "cmp");
-                    btnTabCmp.classList.toggle("active", isCmp);
-                    btnTabFields.classList.toggle("active", !isCmp);
-                    paneCmp.style.display = isCmp ? "" : "none";
-                    paneFields.style.display = isCmp ? "none" : "";
-                }
-
-                if (btnTabCmp) btnTabCmp.addEventListener("click", function () {
-                    setActiveTab("cmp");
-                });
-                if (btnTabFields) btnTabFields.addEventListener("click", function () {
-                    setActiveTab("fields");
-                });
-
-
-                function renderComparisons(list) {
-                    if (!aiCmpBadges) return;
-                    aiCmpBadges.innerHTML = "";
-                    for (var i = 0; i < list.length; i++) {
-                        var b = document.createElement("span");
-                        b.className = "badge bg-secondary";
-                        b.textContent = list[i];
-                        aiCmpBadges.appendChild(b);
-                    }
-                }
-
-                function renderFields(fields) {
-                    if (!aiFieldsTbody) return;
-                    aiFieldsTbody.innerHTML = "";
-
-                    function joinOps(spec) {
-                        // backend will provide allowed_comparisons per field; fallback for safety
-                        if (spec.allowed_comparisons && spec.allowed_comparisons.length) {
-                            return spec.allowed_comparisons.join(", ");
-                        }
-                        return "See comparisons tab";
-                    }
-
-                    function notes(spec) {
-                        var out = [];
-                        if (spec.allow_regex === false) out.push("No REGEX");
-                        if (spec.allow_contains === false) out.push("No CONTAINS");
-                        return out.length ? out.join(" · ") : "";
-                    }
-
-                    for (var i = 0; i < fields.length; i++) {
-                        var f = fields[i];
-                        var tr = document.createElement("tr");
-
-                        var td1 = document.createElement("td");
-                        td1.className = "font-monospace";
-                        td1.textContent = f.name;
-
-                        var td2 = document.createElement("td");
-                        td2.textContent = f.type;
-
-                        var td3 = document.createElement("td");
-                        td3.className = "small";
-                        td3.textContent = joinOps(f);
-
-                        var td4 = document.createElement("td");
-                        td4.className = "text-muted small";
-                        td4.textContent = notes(f);
-
-                        tr.appendChild(td1);
-                        tr.appendChild(td2);
-                        tr.appendChild(td3);
-                        tr.appendChild(td4);
-                        aiFieldsTbody.appendChild(tr);
-                    }
-                }
-
-                function fetchAiReference() {
-                    if (aiRefCache) return Promise.resolve(aiRefCache);
-
-                    // New endpoint to add in ai_views.py:
-                    // GET dojo_aist:ai_filter_reference
-                    var url = "{% url 'dojo_aist:ai_filter_reference' %}";
-                    return fetch(url, {credentials: "same-origin", headers: {"X-Requested-With": "XMLHttpRequest"}})
-                        .then(function (r) {
-                            return r.json().then(function (j) {
-                                return {ok: r.ok, data: j};
-                            });
-                        })
-                        .then(function (res) {
-                            if (!res.ok || !res.data || !res.data.ok) throw new Error("reference fetch failed");
-                            aiRefCache = res.data;
-                            return aiRefCache;
-                        });
-                }
-
-                function ensureReferenceLoaded() {
-                    if (aiCmpStatus) aiCmpStatus.textContent = "Loading reference…";
-                    if (aiFieldsStatus) aiFieldsStatus.textContent = "Loading reference…";
-
-                    return fetchAiReference()
-                        .then(function (ref) {
-                            renderComparisons(ref.comparisons || []);
-                            renderFields(ref.fields || []);
-                            if (aiCmpStatus) aiCmpStatus.textContent = "Loaded.";
-                            if (aiFieldsStatus) aiFieldsStatus.textContent = "Loaded.";
-                        })
-                        .catch(function (e) {
-                            if (aiCmpStatus) aiCmpStatus.textContent = "Reference unavailable (check endpoint / permissions).";
-                            if (aiFieldsStatus) aiFieldsStatus.textContent = "Reference unavailable (check endpoint / permissions).";
-                            if (aiCmpBadges) aiCmpBadges.innerHTML = "";
-                            if (aiFieldsTbody) aiFieldsTbody.innerHTML = "";
-                        });
-                }
-
-
-                function aiGetMode() {
-                    var checked = scopeRoot.querySelector('input[type="radio"][name$="ai_mode"]:checked');
-                    return checked ? checked.value : "MANUAL";
-                }
-
-                function aiShowModal(el) {
-                    // BS5
-                    if (window.bootstrap && window.bootstrap.Modal) {
-                        var m = bootstrap.Modal.getOrCreateInstance(el);
-                        m.show();
-                        return;
-                    }
-                    // BS4
-                    if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-                        window.jQuery(el).modal("show");
-                        return;
-                    }
-                    console.error("No Bootstrap modal API found (neither BS5 nor BS4).");
-                }
-
-                function aiHideModal(el) {
-                    // BS5
-                    if (window.bootstrap && window.bootstrap.Modal) {
-                        var inst = bootstrap.Modal.getInstance(el);
-                        if (inst) inst.hide();
-                        return;
-                    }
-                    // BS4
-                    if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-                        window.jQuery(el).modal("hide");
-                        return;
-                    }
-                }
-
-                function aiOpenModal() {
-                    if (!aiEditor) return;
-                    if (aiErrEl) {
-                        aiErrEl.style.display = "none";
-                        aiErrEl.textContent = "";
-                    }
-
-                    aiEditor.value =
-                        '{\n' +
-                        '  "limit": 50,\n' +
-                        '  "severity": [\n' +
-                        '    {"comparison": "EQUALS", "value": "High"},\n' +
-                        '    {"comparison": "EQUALS", "value": "Critical"}\n' +
-                        '  ]\n' +
-                        '}\n';
-
-                    if (aiModalEl) {
-                        setActiveTab("cmp");
-                        ensureReferenceLoaded();
-
-                        captureParentScroll();
-
-                        if (window.jQuery && parentModal && isParentModalOpen()) {
-                            window.jQuery(parentModal).one("hidden.bs.modal.aistSwitchAi", function () {
-                                aiShowModal(aiModalEl);
-                            });
-                            window.jQuery(parentModal).modal("hide");
-                        } else {
-                            aiShowModal(aiModalEl);
-                        }
-                    }
-
-                }
-
-                function aiToggleAutoUI() {
-                    if (!aiAutoBlock) return;
-                    var isAuto = (aiGetMode() === "AUTO_DEFAULT");
-                    aiAutoBlock.style.display = isAuto ? "" : "none";
-                    if (isAuto) aiLoadEffectiveFilter();
-                }
-
-                function aiLoadEffectiveFilter() {
-                    var projectId = getProjectId();
-                    if (aiPreviewEl) aiPreviewEl.style.display = "none";
-                    if (aiBtnCreate) aiBtnCreate.style.display = "none";
-
-                    if (!aiStatusEl) return;
-
-                    if (!projectId) {
-                        aiStatusEl.textContent = "Select a project to see default AI filter.";
-                        return;
-                    }
-
-                    var urlTpl = "{% url 'dojo_aist:ai_default_filter_effective' 0 %}";
-                    var url = urlTpl.replace("/0/", "/" + String(projectId) + "/");
-
-                    fetch(url, {headers: {"X-Requested-With": "XMLHttpRequest"}, credentials: "same-origin"})
-                        .then(function (r) {
-                            return r.json().then(function (j) {
-                                return {ok: r.ok, data: j};
-                            });
-                        })
-                        .catch(function () {
-                            return {ok: false, data: null};
-                        })
-                        .then(function (res) {
-                            if (!res.ok || !res.data || !res.data.ok) {
-                                aiStatusEl.textContent = "Failed to load default AI filter.";
-                                if (aiBtnCreate) aiBtnCreate.style.display = "";
-                                return;
-                            }
-
-                            if (!res.data.filter) {
-                                aiStatusEl.textContent = "No default AI filter exists for this project/organization.";
-                                if (aiBtnCreate) aiBtnCreate.style.display = "";
-                                return;
-                            }
-
-                            aiStatusEl.textContent = (res.data.scope === "PROJECT")
-                                ? "Using project default filter."
-                                : "Using organization default filter (project has none).";
-
-                            if (aiPreviewEl) {
-                                aiPreviewEl.textContent = JSON.stringify(res.data.filter, null, 2);
-                                aiPreviewEl.style.display = "";
-                            }
-                        });
-                }
-
-                function insertTemplate() {
-                    if (!aiEditor) return;
-                    // minimal safe template: user will edit fields/comparisons
-                    aiEditor.value =
-                        '{\n' +
-                        '  "limit": 50,\n' +
-                        '  "severity": [\n' +
-                        '    {"comparison": "EQUALS", "value": "HIGH"}\n' +
-                        '  ]\n' +
-                        '}\n';
-                }
-
-                if (aiBtnInsertTpl) aiBtnInsertTpl.addEventListener("click", insertTemplate);
-
-
-                function aiSaveFilter() {
-                    var projectId = getProjectId();
-                    if (!projectId) {
-                        if (aiErrEl) {
-                            aiErrEl.textContent = "Select a project first.";
-                            aiErrEl.style.display = "";
-                        }
-                        return;
-                    }
-
-                    var parsed;
-                    try {
-                        parsed = JSON.parse(aiEditor ? (aiEditor.value || "{}") : "{}");
-                    } catch (e) {
-                        if (aiErrEl) {
-                            aiErrEl.textContent = "Invalid JSON: " + e.message;
-                            aiErrEl.style.display = "";
-                        }
-                        return;
-                    }
-                    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-                        if (aiErrEl) {
-                            aiErrEl.textContent = "Filter must be a JSON object.";
-                            aiErrEl.style.display = "";
-                        }
-                        return;
-                    }
-
-                    var payload = {scope: aiScopeSel ? aiScopeSel.value : "PROJECT", filter: parsed};
-                    var urlTpl = "{% url 'dojo_aist:ai_default_filter_save' 0 %}";
-                    var url = urlTpl.replace("/0/", "/" + String(projectId) + "/");
-
-
-                    var csrf = getCSRFToken(form);
-                    if (!csrf) {
-                        if (aiErrEl) {
-                            aiErrEl.textContent = "CSRF token not found. Reload page and try again.";
-                            aiErrEl.style.display = "";
-                        }
-                        return;
-                    }
-
-                    fetch(url, {
-                        method: "POST",
-                        credentials: "same-origin",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "X-CSRFToken": csrf,
-                            "X-Requested-With": "XMLHttpRequest"
-                        },
-                        body: JSON.stringify(payload)
-                    })
-                        .then(function (r) {
-                            return r.json().then(function (j) {
-                                return {ok: r.ok, data: j};
-                            });
-                        })
-                        .catch(function () {
-                            return {ok: false, data: {ok: false, error: "Request failed"}};
-                        })
-                        .then(function (res) {
-                            if (!res.ok || !res.data || !res.data.ok) {
-                                if (aiErrEl) {
-                                    aiErrEl.textContent = (res.data && res.data.error) ? res.data.error : "Failed to save.";
-                                    aiErrEl.style.display = "";
-                                }
-                                return;
-                            }
-
-                            if (aiHiddenJson) aiHiddenJson.value = JSON.stringify(parsed);
-                            if (aiHiddenScope) aiHiddenScope.value = aiScopeSel ? aiScopeSel.value : "PROJECT";
-
-                            if (aiModalEl) aiHideModal(aiModalEl);
-                            aiLoadEffectiveFilter();
-                        });
-                }
-
-                // attach events without forEach (safer)
-                if (aiModeRadios && aiModeRadios.length) {
-                    for (var i = 0; i < aiModeRadios.length; i++) {
-                        aiModeRadios[i].addEventListener("change", aiToggleAutoUI);
-                    }
-                }
-                if (selProject) {
-                    selProject.addEventListener("change", function () {
-                        if (aiGetMode() === "AUTO_DEFAULT") aiLoadEffectiveFilter();
-                    });
-                }
-                if (aiBtnCreate) aiBtnCreate.addEventListener("click", aiOpenModal);
-                if (aiBtnSave) aiBtnSave.addEventListener("click", aiSaveFilter);
-
-                aiToggleAutoUI();
-            } catch (e) {
-                console.error("AI filter UI init failed; Start pipeline must still work.", e);
+                updateAiFilterVisibility();
             }
-// ---- end AI block ----
 
         }
 

@@ -8,6 +8,7 @@ from django.shortcuts import get_object_or_404, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_POST
 
+from dojo.aist.ai_filter import get_ai_filter_reference
 from dojo.aist.forms import (
     AISTLaunchConfigForm,
     AISTProjectVersionForm,
@@ -234,5 +235,6 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
             "launch_config_form": AISTLaunchConfigForm(),
             "aist_status_choices": AISTStatus.choices,
             "aist_action_types": AISTLaunchConfigAction.ActionType.choices,
+            "ai_filter_reference": get_ai_filter_reference(),
         },
     )

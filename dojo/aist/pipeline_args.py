@@ -7,7 +7,7 @@ from pathlib import Path
 
 from django.conf import settings
 
-from dojo.aist.ai_filter import get_required_ai_filter_for_start, validate_and_normalize_filter
+from dojo.aist.ai_filter import validate_and_normalize_filter
 from dojo.aist.models import AISTProject, AISTProjectVersion
 from dojo.aist.utils.pipeline_imports import _load_analyzers_config
 
@@ -138,16 +138,12 @@ class PipelineArguments:
             normalized["ai_filter_snapshot"] = None
             return normalized
 
-        # AUTO_DEFAULT: snapshot must be a resolved effective filter (or explicit provided snapshot)
+        # AUTO_DEFAULT: snapshot must be explicitly provided (no project/org defaults).
         snap = normalized.get("ai_filter_snapshot")
-        if snap is not None:
-            normalized["ai_filter_snapshot"] = validate_and_normalize_filter(snap)
-        else:
-            _scope, resolved = get_required_ai_filter_for_start(
-                project=project,
-                provided_filter=None,
-            )
-            normalized["ai_filter_snapshot"] = resolved
+        if snap is None:
+            msg = "ai_filter_snapshot is required for AUTO_DEFAULT"
+            raise ValueError(msg)
+        normalized["ai_filter_snapshot"] = validate_and_normalize_filter(snap)
 
         return normalized
 
