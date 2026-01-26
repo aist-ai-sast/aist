@@ -852,12 +852,7 @@ class AISTLaunchConfigAction(models.Model):
     updated = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["launch_config", "trigger_status", "action_type"],
-                name="uniq_aist_launch_cfg_action",
-            ),
-        ]
+        constraints = []
 
     def __str__(self) -> str:
         return f"Action({self.launch_config_id}:{self.action_type}@{self.trigger_status})"
