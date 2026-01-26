@@ -169,6 +169,19 @@ class AISTAIViewsTests(AISTApiBase):
         self.assertIn("AI Filter Help", body)
         self.assertIn("limit", body)
 
+    def test_launching_dashboard_context_includes_action_modal_data(self):
+        url = reverse("dojo_aist:launching_dashboard")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("aist_status_choices", resp.context)
+        self.assertTrue(resp.context["aist_status_choices"])
+        self.assertIn("aist_action_types", resp.context)
+        self.assertTrue(resp.context["aist_action_types"])
+        self.assertIn("api_launch_config_action_create_template", resp.context)
+        template = resp.context["api_launch_config_action_create_template"]
+        self.assertIn("{project_id}", template)
+        self.assertIn("{config_id}", template)
+
     def test_export_ai_results_requires_ai_response(self):
         pipeline = AISTPipeline.objects.create(
             id="pipe-export-1",

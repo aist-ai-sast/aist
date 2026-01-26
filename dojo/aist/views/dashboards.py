@@ -6,7 +6,7 @@ from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
-from dojo.aist.models import AISTProject, Organization
+from dojo.aist.models import AISTLaunchConfigAction, AISTProject, AISTStatus, Organization
 from dojo.utils import add_breadcrumb
 
 
@@ -54,6 +54,13 @@ def launching_dashboard(request: HttpRequest) -> HttpResponse:
             "/0/launch-configs/0/actions/0/",
             "/{project_id}/launch-configs/{config_id}/actions/{action_id}/",
         ),
+        "api_launch_config_action_create_template": reverse(
+            "dojo_aist_api:project_launch_config_action_list_create",
+            kwargs={"project_id": 0, "config_id": 0},
+        ).replace(
+            "/0/launch-configs/0/actions/",
+            "/{project_id}/launch-configs/{config_id}/actions/",
+        ),
         "api_schedule_run_once_template": reverse(
             "dojo_aist_api:launch_schedule_run_once",
             kwargs={"launch_schedule_id": 0},
@@ -66,5 +73,7 @@ def launching_dashboard(request: HttpRequest) -> HttpResponse:
             "dojo_aist:pipeline_detail",
             kwargs={"pipeline_id": 0},
         ).replace("/0/", "/{pipeline_id}/"),
+        "aist_status_choices": AISTStatus.choices,
+        "aist_action_types": AISTLaunchConfigAction.ActionType.choices,
     }
     return render(request, "dojo/aist/launching/dashboard.html", ctx)

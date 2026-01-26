@@ -135,6 +135,30 @@ class LaunchConfigActionsAPITests(AISTApiBase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["config"]["level"], "WARNING")
 
+    def test_duplicate_actions_allowed(self):
+        cfg = self._config()
+        first = self.client.post(
+            self._actions_url(cfg.id),
+            data={
+                "trigger_status": AISTStatus.FINISHED,
+                "action_type": "WRITE_LOG",
+                "config": {"level": "INFO"},
+            },
+            format="json",
+        )
+        self.assertEqual(first.status_code, 201)
+
+        second = self.client.post(
+            self._actions_url(cfg.id),
+            data={
+                "trigger_status": AISTStatus.FINISHED,
+                "action_type": "WRITE_LOG",
+                "config": {"level": "INFO"},
+            },
+            format="json",
+        )
+        self.assertEqual(second.status_code, 201)
+
     def test_delete_action(self):
         cfg = self._config()
         create_resp = self.client.post(
