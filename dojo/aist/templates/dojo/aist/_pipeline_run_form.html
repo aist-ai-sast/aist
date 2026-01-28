@@ -108,6 +108,7 @@
                         {% endfor %}
                     </div>
                 {% endif %}
+                <div class="small mt-1" id="aist-ai-filter-validation"></div>
                 <p class="form-text text-muted small mt-1">
                     Used only when AI mode is AUTO_DEFAULT. Example:
                     <code>{"limit": 50, "severity": [{"comparison": "EQUALS", "value": "High"}]}</code>
@@ -168,6 +169,104 @@
                 </details>
             </div>
         </div>
+
+        <script>
+            (function () {
+                var textarea = document.getElementById("id_ai_filter_json");
+                var validation = document.getElementById("aist-ai-filter-validation");
+                var aiModeInputs = document.querySelectorAll('input[name$="ai_mode"]');
+                if (!textarea || !validation || !aiModeInputs.length) {
+                    return;
+                }
+
+                var debounceTimer = null;
+
+                function getCookie(name) {
+                    var value = "; " + document.cookie;
+                    var parts = value.split("; " + name + "=");
+                    if (parts.length === 2) {
+                        return parts.pop().split(";").shift();
+                    }
+                    return "";
+                }
+
+                function getCsrfToken() {
+                    var fromCookie = getCookie("csrftoken");
+                    if (fromCookie) {
+                        return fromCookie;
+                    }
+                    var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
+                    return input ? input.value : "";
+                }
+
+                function isAutoDefault() {
+                    var checked = document.querySelector('input[name$="ai_mode"]:checked');
+                    return checked && checked.value === "AUTO_DEFAULT";
+                }
+
+                function setStatus(ok, message) {
+                    if (!message) {
+                        validation.textContent = "";
+                        validation.className = "small mt-1";
+                        return;
+                    }
+                    validation.textContent = message;
+                    validation.className = ok ? "small mt-1 text-success" : "small mt-1 text-danger";
+                }
+
+                function validateFilter() {
+                    if (!isAutoDefault()) {
+                        setStatus(true, "");
+                        return;
+                    }
+
+                    var raw = (textarea.value || "").trim();
+                    if (!raw) {
+                        setStatus(true, "");
+                        return;
+                    }
+
+                    fetch("{% url 'dojo_aist:ai_filter_validate' %}", {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRFToken": getCsrfToken(),
+                        },
+                        body: JSON.stringify({raw: raw}),
+                    }).then(function (resp) {
+                        var contentType = resp.headers.get("content-type") || "";
+                        if (contentType.indexOf("application/json") !== -1) {
+                            return resp.json().then(function (data) {
+                                return {ok: resp.ok, status: resp.status, data: data};
+                            });
+                        }
+                        return {ok: resp.ok, status: resp.status, data: null};
+                    }).then(function (result) {
+                        if (result.ok && result.data && result.data.ok) {
+                            setStatus(true, "Filter is valid.");
+                        } else {
+                            var msg = (result.data && result.data.error) || ("AI filter is invalid. HTTP " + result.status);
+                            setStatus(false, msg);
+                        }
+                    }).catch(function () {
+                        setStatus(false, "Unable to validate AI filter right now.");
+                    });
+                }
+
+                function debouncedValidate() {
+                    if (debounceTimer) {
+                        clearTimeout(debounceTimer);
+                    }
+                    debounceTimer = setTimeout(validateFilter, 400);
+                }
+
+                textarea.addEventListener("input", debouncedValidate);
+                aiModeInputs.forEach(function (input) {
+                    input.addEventListener("change", debouncedValidate);
+                });
+            })();
+        </script>
 
         <div class="mb-3 row">
             <label class="col-sm-3 col-form-label">{{ form.rebuild_images.label }}</label>

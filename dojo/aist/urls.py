@@ -66,6 +66,7 @@ urlpatterns = [
 
     path("ai/filter/reference/", ai.ai_filter_reference, name="ai_filter_reference"),
     path("ai/filter/help/", ai.ai_filter_help, name="ai_filter_help"),
+    path("ai/filter/validate/", ai.ai_filter_validate, name="ai_filter_validate"),
     path("launching/", dashboards.launching_dashboard, name="launching_dashboard"),
     path(
         "projects/<int:project_id>/launch-configs/create/",

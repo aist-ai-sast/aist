@@ -12,7 +12,7 @@ from datetime import datetime as dt
 from pathlib import Path
 from urllib.parse import quote
 
-import requests
+import gitlab
 from asgiref.sync import async_to_sync
 from croniter import croniter
 from django.conf import settings
@@ -188,39 +188,24 @@ class ScmGitlabBinding(models.Model):
     def get_project_info(self, scm: RepositoryInfo):
         logger = logging.getLogger("dojo.aist")
         base = self.host(scm).rstrip("/")
-        api_base = f"{base}/api/v4"
-
-        proj = quote(scm.repo_full, safe="")
-
-        url = f"{api_base}/projects/{proj}"
-
-        headers = self.get_auth_headers()
+        token = (self.personal_access_token or "").strip()
 
         try:
-            resp = requests.get(
-                url,
-                headers=headers,
-                timeout=10,
+            gl = gitlab.Gitlab(base, private_token=token or None)
+            project = gl.projects.get(scm.repo_full)
+        except gitlab.exceptions.GitlabGetError as exc:
+            logger.warning(
+                "GitLab API %s returned %s when requesting default branch for %s",
+                base,
+                exc.response_code,
+                scm.repo_full,
             )
+            return None
         except Exception:
             logger.exception("Failed to query GitLab API for default branch of %s", scm.repo_full)
             return None
 
-        if resp.status_code != 200:
-            logger.warning(
-                "GitLab API %s returned %s when requesting default branch for %s",
-                url,
-                resp.status_code,
-                scm.repo_full,
-            )
-            return None
-
-        try:
-            data = resp.json()
-        except ValueError:
-            logger.warning("GitLab API %s returned non-JSON response for %s", url, scm.repo_full)
-            return None
-        return data
+        return project.attributes
 
 
 class PullRequest(models.Model):
