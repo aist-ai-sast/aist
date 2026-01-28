@@ -1,5 +1,5 @@
 # --- add near other imports in api.py ---
-import requests  # std HTTP client
+import gitlab
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
@@ -64,32 +64,33 @@ class ImportProjectFromGitlabAPI(APIView):
         token = serializer.validated_data["gitlab_api_token"].strip()
         base_url = serializer.validated_data.get("base_url") or "https://gitlab.com"
 
-        # Build API urls (supports self-hosted)
-        api = base_url.rstrip("/") + "/api/v4"
-        headers = {"PRIVATE-TOKEN": token}
+        gl = gitlab.Gitlab(base_url, private_token=token)
 
-        # 1) Fetch project metadata
-        proj = requests.get(f"{api}/projects/{project_id}", headers=headers, timeout=20)
-        if proj.status_code == 404:
-            return Response({"detail": "GitLab project not found"}, status=status.HTTP_404_NOT_FOUND)
-        proj.raise_for_status()
-        proj = proj.json()
+        try:
+            proj = gl.projects.get(project_id)
+        except gitlab.exceptions.GitlabGetError as exc:
+            if exc.response_code == 404:
+                return Response({"detail": "GitLab project not found"}, status=status.HTTP_404_NOT_FOUND)
+            msg = f"GitLab API error: {exc}"
+            return Response({"detail": msg}, status=status.HTTP_502_BAD_GATEWAY)
 
         # path_with_namespace like "group/subgroup/name"
-        path_with_ns = proj.get("path_with_namespace") or ""
+        path_with_ns = getattr(proj, "path_with_namespace", None) or ""
         if "/" not in path_with_ns:
             return Response({"detail": "Unexpected path_with_namespace"}, status=status.HTTP_400_BAD_REQUEST)
 
         owner_ns, repo_name = path_with_ns.rsplit("/", 1)
-        description = proj.get("description") or "Empty description. Admin, fix me"
-        web_url = (proj.get("web_url") or base_url).rstrip("/")
+        description = getattr(proj, "description", None) or "Empty description. Admin, fix me"
+        web_url = (getattr(proj, "web_url", None) or base_url).rstrip("/")
         # base host like https://gitlab.com or self-hosted origin
         inferred_base = web_url.split("/" + path_with_ns)[0]
 
         # 2) Fetch languages (dict {lang: percent})
-        langs_resp = requests.get(f"{api}/projects/{project_id}/languages", headers=headers, timeout=20)
-        langs_resp.raise_for_status()
-        langs_raw = langs_resp.json() or {}
+        try:
+            langs_raw = proj.languages() or {}
+        except gitlab.exceptions.GitlabGetError as exc:
+            msg = f"GitLab API error: {exc}"
+            return Response({"detail": msg}, status=status.HTTP_502_BAD_GATEWAY)
 
         cfg = _load_analyzers_config()
         if not cfg:

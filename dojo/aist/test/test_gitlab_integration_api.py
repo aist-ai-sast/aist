@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import Mock, patch
 
+import gitlab
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -31,37 +32,21 @@ class GitlabIntegrationAPITests(TestCase):
     def _token_url(self, project_id: int):
         return reverse("dojo_aist_api:project_gitlab_token_update", kwargs={"project_id": project_id})
 
-    @staticmethod
-    def _resp(status_code, payload=None):
-        resp = Mock()
-        resp.status_code = status_code
-        resp.json.return_value = payload or {}
-
-        def _raise_for_status():
-            if status_code >= 400:
-                msg = "http error"
-                raise Exception(msg)
-
-        resp.raise_for_status = Mock(side_effect=_raise_for_status)
-        return resp
-
     @patch("dojo.aist.api.gitlab_integration._load_analyzers_config")
-    @patch("dojo.aist.api.gitlab_integration.requests.get")
-    def test_import_gitlab_project_happy_path(self, mock_get, mock_cfg):
+    @patch("dojo.aist.api.gitlab_integration.gitlab.Gitlab")
+    def test_import_gitlab_project_happy_path(self, mock_gitlab, mock_cfg):
         org = Organization.objects.create(name="Org")
 
         mock_cfg.return_value = Mock(convert_languages=Mock(return_value=["python"]))
 
-        project_payload = {
-            "path_with_namespace": "group/my-repo",
-            "description": "desc",
-            "web_url": "https://gitlab.example.com/group/my-repo",
-        }
         langs_payload = {"Python": 80.0, "Go": 20.0}
-        mock_get.side_effect = [
-            self._resp(200, project_payload),
-            self._resp(200, langs_payload),
-        ]
+        mock_project = Mock(
+            path_with_namespace="group/my-repo",
+            description="desc",
+            web_url="https://gitlab.example.com/group/my-repo",
+        )
+        mock_project.languages.return_value = langs_payload
+        mock_gitlab.return_value.projects.get.return_value = mock_project
 
         resp = self.client.post(
             self._url(),
@@ -85,9 +70,13 @@ class GitlabIntegrationAPITests(TestCase):
         binding = ScmGitlabBinding.objects.get(scm=repo)
         self.assertEqual(binding.personal_access_token, "token")
 
-    @patch("dojo.aist.api.gitlab_integration.requests.get")
-    def test_import_gitlab_project_returns_404(self, mock_get):
-        mock_get.return_value = self._resp(404, {})
+    @patch("dojo.aist.api.gitlab_integration.gitlab.Gitlab")
+    def test_import_gitlab_project_returns_404(self, mock_gitlab):
+        mock_gitlab.return_value.projects.get.side_effect = gitlab.exceptions.GitlabGetError(
+            error_message="Not Found",
+            response_code=404,
+            response_body="",
+        )
 
         resp = self.client.post(
             self._url(),
@@ -102,20 +91,18 @@ class GitlabIntegrationAPITests(TestCase):
         self.assertEqual(resp.status_code, 404)
 
     @patch("dojo.aist.api.gitlab_integration._load_analyzers_config")
-    @patch("dojo.aist.api.gitlab_integration.requests.get")
-    def test_import_gitlab_project_allows_empty_organization(self, mock_get, mock_cfg):
+    @patch("dojo.aist.api.gitlab_integration.gitlab.Gitlab")
+    def test_import_gitlab_project_allows_empty_organization(self, mock_gitlab, mock_cfg):
         mock_cfg.return_value = Mock(convert_languages=Mock(return_value=["python"]))
 
-        project_payload = {
-            "path_with_namespace": "group/my-repo",
-            "description": "desc",
-            "web_url": "https://gitlab.example.com/group/my-repo",
-        }
         langs_payload = {"Python": 80.0, "Go": 20.0}
-        mock_get.side_effect = [
-            self._resp(200, project_payload),
-            self._resp(200, langs_payload),
-        ]
+        mock_project = Mock(
+            path_with_namespace="group/my-repo",
+            description="desc",
+            web_url="https://gitlab.example.com/group/my-repo",
+        )
+        mock_project.languages.return_value = langs_payload
+        mock_gitlab.return_value.projects.get.return_value = mock_project
 
         resp = self.client.post(
             self._url(),

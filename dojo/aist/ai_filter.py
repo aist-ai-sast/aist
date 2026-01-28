@@ -5,11 +5,14 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from django.db.models import Q, QuerySet
+from django.db.models import Case, IntegerField, Q, QuerySet, Value, When
 from django.utils.dateparse import parse_date, parse_datetime
 
 DEFAULT_AI_FILTER_LIMIT = 10
 MAX_AI_FILTER_LIMIT = 100
+
+ORDER_BY_DIRECTIONS = {"ASC", "DESC"}
+DEFAULT_ORDER_BY = [{"field": "severity", "direction": "DESC"}]
 
 SUPPORTED_COMPARISONS = {
     "EQUALS",
@@ -49,6 +52,12 @@ FILTER_KEYWORD_REFERENCE = [
         "type": "int",
         "required": True,
         "description": "Maximum number of findings to include in the AI batch (1..MAX).",
+    },
+    {
+        "key": "order_by",
+        "type": "list[order]",
+        "required": False,
+        "description": "Ordering for results. Defaults to severity (Critical first).",
     },
     {
         "key": "<field>",
@@ -92,6 +101,23 @@ FINDING_FILTER_FIELD_MAP = {
     "mitigated": FieldSpec("mitigated", "bool", allow_regex=False, allow_contains=False),
     "date": FieldSpec("date", "datetime", allow_regex=False, allow_contains=False),
 }
+
+
+def _severity_rank_case() -> Case:
+    """
+    Rank severities for ordering.
+    Critical(5) > High(4) > Medium(3) > Low(2) > Info(1) > other(0)
+    """
+    return Case(
+        When(severity__iexact="Critical", then=Value(5)),
+        When(severity__iexact="High", then=Value(4)),
+        When(severity__iexact="Medium", then=Value(3)),
+        When(severity__iexact="Low", then=Value(2)),
+        When(severity__iexact="Informational", then=Value(1)),
+        When(severity__iexact="Info", then=Value(1)),
+        default=Value(0),
+        output_field=IntegerField(),
+    )
 
 
 def _coerce_value(tp: str, v: Any) -> Any:
@@ -248,6 +274,37 @@ def _normalize_limit(raw: Any) -> int:
     return n
 
 
+def _normalize_order_by(raw: Any, field_map: dict[str, FieldSpec]) -> list[dict[str, str]] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not raw:
+        msg = "order_by must be a non-empty list"
+        raise ValueError(msg)
+
+    normalized: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            msg = "order_by entries must be objects"
+            raise TypeError(msg)
+        field = (item.get("field") or "").strip()
+        if not field:
+            msg = "order_by field is required"
+            raise ValueError(msg)
+        if field not in field_map:
+            msg = f"Unsupported order_by field: {field}"
+            raise ValueError(msg)
+
+        direction = (item.get("direction") or "").strip().upper()
+        if not direction:
+            direction = "DESC" if field == "severity" else "ASC"
+        if direction not in ORDER_BY_DIRECTIONS:
+            msg = "order_by direction must be ASC or DESC"
+            raise ValueError(msg)
+
+        normalized.append({"field": field, "direction": direction})
+    return normalized
+
+
 def validate_and_normalize_filter(filter_spec: Any, field_map=None) -> dict[str, Any]:
     """
     AWS-like format:
@@ -274,11 +331,16 @@ def validate_and_normalize_filter(filter_spec: Any, field_map=None) -> dict[str,
         raise TypeError(msg)
 
     limit = _normalize_limit(filter_spec.get("limit"))
+    order_by = _normalize_order_by(filter_spec.get("order_by"), field_map)
 
     normalized: dict[str, Any] = {"limit": limit}
+    if order_by:
+        normalized["order_by"] = order_by
 
     for key, conditions in filter_spec.items():
         if key == "limit":
+            continue
+        if key == "order_by":
             continue
 
         if key not in field_map:
@@ -308,7 +370,8 @@ def validate_and_normalize_filter(filter_spec: Any, field_map=None) -> dict[str,
 
         normalized[key] = out
 
-    if len(normalized.keys()) == 1:
+    has_conditions = any(k not in {"limit", "order_by"} for k in normalized)
+    if not has_conditions:
         msg = "Filter must contain at least one field condition besides 'limit'"
         raise ValueError(msg)
 
@@ -327,7 +390,7 @@ def apply_ai_filter(qs: QuerySet, filter_spec: dict[str, Any], field_map=None) -
 
     combined = Q()
     for field_key, conditions in normalized.items():
-        if field_key == "limit":
+        if field_key in {"limit", "order_by"}:
             continue
 
         spec = field_map[field_key]
@@ -337,7 +400,28 @@ def apply_ai_filter(qs: QuerySet, filter_spec: dict[str, Any], field_map=None) -
 
         combined &= field_q
 
-    return qs.filter(combined)
+    qs = qs.filter(combined)
+
+    order_by = normalized.get("order_by") or DEFAULT_ORDER_BY
+    order_expressions: list[str] = []
+    severity_rank_added = False
+    for order in order_by:
+        field = order["field"]
+        direction = order["direction"]
+        if field == "severity":
+            if not severity_rank_added:
+                qs = qs.annotate(sev_rank=_severity_rank_case())
+                severity_rank_added = True
+            expr = "-sev_rank" if direction == "DESC" else "sev_rank"
+        else:
+            path = field_map[field].django_path
+            expr = f"-{path}" if direction == "DESC" else path
+        order_expressions.append(expr)
+
+    if order_expressions:
+        qs = qs.order_by(*order_expressions)
+
+    return qs
 
 
 def resolve_effective_default_ai_filter(project):

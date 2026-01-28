@@ -169,6 +169,45 @@ class AISTAIViewsTests(AISTApiBase):
         self.assertIn("AI Filter Help", body)
         self.assertIn("limit", body)
 
+    def test_ai_filter_validate_ok(self):
+        url = reverse("dojo_aist:ai_filter_validate")
+        resp = self.client.post(
+            url,
+            data=json.dumps({"raw": '{"limit": 10, "severity": [{"comparison": "EXISTS", "value": true}]}' }),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = self._json(resp)
+        self.assertTrue(data["ok"])
+        self.assertIn("normalized", data)
+
+    def test_ai_filter_validate_rejects_bad_json(self):
+        url = reverse("dojo_aist:ai_filter_validate")
+        resp = self.client.post(
+            url,
+            data=json.dumps({"raw": '{"limit": 10, "severity": ['}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_ai_filter_validate_accepts_filter_object(self):
+        url = reverse("dojo_aist:ai_filter_validate")
+        resp = self.client.post(
+            url,
+            data=json.dumps(
+                {
+                    "filter": {
+                        "limit": 10,
+                        "severity": [{"comparison": "EXISTS", "value": True}],
+                    },
+                },
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = self._json(resp)
+        self.assertTrue(data["ok"])
+
     def test_launching_dashboard_context_includes_action_modal_data(self):
         url = reverse("dojo_aist:launching_dashboard")
         resp = self.client.get(url)

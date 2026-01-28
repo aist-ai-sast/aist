@@ -12,9 +12,48 @@
             <h4 class="mt-3">Structure</h4>
             <pre class="small bg-light p-2 border rounded mb-3"><code>{
   "limit": 50,
+  "order_by": [
+    {"field": "severity", "direction": "DESC"}
+  ],
   "severity": [
     {"comparison": "EQUALS", "value": "High"}
   ]
+}</code></pre>
+
+            <h4 class="mt-3">Examples</h4>
+            <div class="small text-muted mb-2">Basic severity filter</div>
+            <pre class="small bg-light p-2 border rounded mb-3"><code>{
+  "limit": 25,
+  "severity": [
+    {"comparison": "IN", "value": ["Critical", "High"]}
+  ]
+}</code></pre>
+
+            <div class="small text-muted mb-2">Combine fields (AND between fields)</div>
+            <pre class="small bg-light p-2 border rounded mb-3"><code>{
+  "limit": 50,
+  "severity": [{"comparison": "EQUALS", "value": "High"}],
+  "cwe": [{"comparison": "IN", "value": [79, 89]}],
+  "verified": [{"comparison": "EQUALS", "value": true}]
+}</code></pre>
+
+            <div class="small text-muted mb-2">Date range</div>
+            <pre class="small bg-light p-2 border rounded mb-3"><code>{
+  "limit": 100,
+  "date": [
+    {"comparison": "GTE", "value": "2025-01-01"},
+    {"comparison": "LTE", "value": "2025-12-31"}
+  ]
+}</code></pre>
+
+            <div class="small text-muted mb-2">Sorting</div>
+            <pre class="small bg-light p-2 border rounded mb-3"><code>{
+  "limit": 50,
+  "order_by": [
+    {"field": "severity", "direction": "DESC"},
+    {"field": "date", "direction": "DESC"}
+  ],
+  "severity": [{"comparison": "EXISTS", "value": true}]
 }</code></pre>
 
             <h4 class="mt-3">Keywords</h4>

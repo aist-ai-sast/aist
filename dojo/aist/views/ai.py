@@ -14,7 +14,7 @@ from rest_framework.decorators import api_view, authentication_classes, permissi
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from dojo.aist.ai_filter import get_ai_filter_reference
+from dojo.aist.ai_filter import get_ai_filter_reference, validate_and_normalize_filter
 from dojo.aist.logging_transport import install_pipeline_logging
 from dojo.aist.models import AISTAIResponse, AISTPipeline, AISTStatus
 from dojo.aist.tasks import push_request_to_ai
@@ -276,3 +276,27 @@ def ai_filter_help(request):
         "ai_filter_reference": data,
     }
     return render(request, "dojo/aist/ai_filter_help.html", context)
+
+
+@require_POST
+@login_required
+def ai_filter_validate(request):
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except Exception as exc:
+        return JsonResponse({"ok": False, "error": f"Invalid JSON body: {exc}"}, status=400)
+
+    if "raw" in payload:
+        try:
+            filter_spec = json.loads(payload.get("raw") or "")
+        except Exception as exc:
+            return JsonResponse({"ok": False, "error": f"AI filter JSON is invalid: {exc}"}, status=400)
+    else:
+        filter_spec = payload.get("filter")
+
+    try:
+        normalized = validate_and_normalize_filter(filter_spec)
+    except Exception as exc:
+        return JsonResponse({"ok": False, "error": f"AI filter is invalid: {exc}"}, status=400)
+
+    return JsonResponse({"ok": True, "normalized": normalized})

@@ -195,6 +195,27 @@ class AIFilterValidationTests(TestCase):
         f = validate_and_normalize_filter({"limit": 10, "verified": [{"comparison": "EQUALS", "value": "true"}]})
         self.assertEqual(f["verified"][0]["value"], "true")
 
+    def test_validate_filter_allows_order_by(self):
+        f = validate_and_normalize_filter(
+            {
+                "limit": 10,
+                "severity": [{"comparison": "EXISTS", "value": True}],
+                "order_by": [{"field": "date", "direction": "DESC"}],
+            },
+        )
+        self.assertEqual(f["order_by"][0]["field"], "date")
+        self.assertEqual(f["order_by"][0]["direction"], "DESC")
+
+    def test_validate_filter_order_by_default_direction(self):
+        f = validate_and_normalize_filter(
+            {
+                "limit": 10,
+                "severity": [{"comparison": "EXISTS", "value": True}],
+                "order_by": [{"field": "severity"}],
+            },
+        )
+        self.assertEqual(f["order_by"][0]["direction"], "DESC")
+
 
 class PipelineArgsAIFilterIntegrationTests(TestCase):
     def setUp(self):
