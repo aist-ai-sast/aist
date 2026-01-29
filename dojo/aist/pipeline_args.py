@@ -41,6 +41,12 @@ class PipelineArguments:
         self.project_version["excluded_paths"] = self.project.get_excluded_paths()
 
     @classmethod
+    def normalize_project_name(cls, project: AISTProject) -> str:
+        if not project.product.name:
+            return ""
+        return project.product.name.replace(" ", "_").replace("/", "_").lower()
+
+    @classmethod
     def normalize_params(cls, *, project: AISTProject, raw_params: dict) -> dict:
         """
         Single source of truth:
@@ -124,6 +130,10 @@ class PipelineArguments:
         if not isinstance(env, dict):
             msg = "env must be a JSON object (dict)"
             raise TypeError(msg)
+
+        if project.repository:
+            env["REPO_URL"] = project.repository.clone_url
+        env["PROJECT_NAME"] = PipelineArguments.normalize_project_name(project)
         normalized["env"] = env
 
         # ---- AI mode + snapshot rules ----

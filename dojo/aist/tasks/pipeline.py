@@ -91,8 +91,6 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
 
             params = PipelineArguments.from_dict(params)
 
-            repo = pipeline.project.repository
-
         logger.info(f"Project version: {params.project_version}")
         if params.project_version and "id" in params.project_version:
             project_version = AISTProjectVersion.objects.get(pk=params.project_version["id"])
@@ -108,10 +106,6 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         time_class_level = params.time_class_level
         script_path = params.script_path
         dockerfile_path = params.dockerfile_path
-
-        # if there is scm related to this project, get clone url from object
-        if repo:
-            params.additional_environments = {"REPO_URL": repo.clone_url}
 
         project_build_path = get_project_build_path(project_name or "project",
                                                     params.project_version.get("version", "default"))
