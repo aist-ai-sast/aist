@@ -173,7 +173,7 @@ class AISTAIViewsTests(AISTApiBase):
         url = reverse("dojo_aist:ai_filter_validate")
         resp = self.client.post(
             url,
-            data=json.dumps({"raw": '{"limit": 10, "severity": [{"comparison": "EXISTS", "value": true}]}' }),
+            data=json.dumps({"raw": '{"limit": 10, "severity": [{"comparison": "EXISTS", "value": true}]}'}),
             content_type="application/json",
         )
         self.assertEqual(resp.status_code, 200)
