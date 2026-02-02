@@ -128,6 +128,259 @@
             {% endif %}
         {% endwith %}
 
+        {# --- Findings --- #}
+        <div class="aist-section mb-3" id="aist-findings">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="font-weight-bold mb-0">
+                    <i class="fa fa-bug mr-1"></i> Findings
+                </div>
+                <div class="small text-muted">
+                    {% if findings_total %}
+                        Showing <strong>{{ findings_showing_total }}</strong>
+                        {% if findings_filtered_total != findings_total %}
+                            of <strong>{{ findings_filtered_total }}</strong> filtered from <strong>{{ findings_total }}</strong>
+                        {% else %}
+                            of <strong>{{ findings_total }}</strong>
+                        {% endif %}
+                        {% if findings_limit %}
+                            <span class="text-muted">(AI limit {{ findings_limit }})</span>
+                        {% endif %}
+                    {% else %}
+                        No findings captured.
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if findings_total %}
+                {% if findings_ai_filter_error %}
+                    <div class="alert alert-warning py-2 small mb-2">
+                        <i class="fa fa-exclamation-triangle me-1" aria-hidden="true"></i>
+                        AI filter could not be applied: {{ findings_ai_filter_error }}
+                    </div>
+                {% endif %}
+
+                <div class="d-flex align-items-center gap-2 mb-2 flex-nowrap"
+                     style="display:flex; align-items:center; gap:.5rem; flex-wrap:nowrap; white-space:nowrap;">
+                    <form method="get" class="d-flex align-items-center gap-2 flex-nowrap"
+                          style="display:flex; align-items:center; gap:.5rem; flex-wrap:nowrap; margin:0;">
+                        <input type="hidden" name="findings_page" value="1">
+                        <input type="hidden" name="findings_sort" value="{{ findings_sort }}">
+                        <input type="hidden" name="findings_dir" value="{{ findings_dir }}">
+                        {% if findings_apply_ai_filter %}
+                            <input type="hidden" name="apply_ai_filter" value="1">
+                        {% endif %}
+
+                        <select class="form-select form-select-sm" name="findings_page_size">
+                            {% for size in findings_page_sizes %}
+                                <option value="{{ size }}" {% if size == findings_page_size %}selected{% endif %}>
+                                    {{ size }} / page
+                                </option>
+                            {% endfor %}
+                        </select>
+
+                        <button class="btn btn-sm btn-outline-primary" type="submit">
+                            Apply
+                        </button>
+                    </form>
+
+                    {% if findings_ai_filter_available %}
+                        <div class="d-flex align-items-center gap-2 flex-nowrap ms-auto"
+                             style="display:flex; align-items:center; gap:.5rem; flex-wrap:nowrap; white-space:nowrap; margin-left:auto;">
+                            <span class="small text-muted text-nowrap">AI filter:</span>
+                            {% if findings_apply_ai_filter %}
+                                <span class="badge badge-success text-nowrap">applied</span>
+                            {% else %}
+                                <span class="badge badge-secondary text-nowrap">available</span>
+                            {% endif %}
+                            {% if findings_ai_filter_summary %}
+                                <span class="small text-muted text-nowrap">{{ findings_ai_filter_summary }}</span>
+                            {% endif %}
+                            {% if not findings_apply_ai_filter %}
+                                <form method="get" class="d-inline-flex"
+                                      style="display:inline-flex; margin:0;"
+                                      action="?{{ findings_qs_no_page }}{% if findings_qs_no_page %}&{% endif %}apply_ai_filter=1">
+                                    <button class="btn btn-sm btn-outline-success" type="submit">
+                                        Apply AI filter
+                                    </button>
+                                </form>
+                            {% else %}
+                                <form method="get" class="d-inline-flex" style="display:inline-flex; margin:0;"
+                                      action="?{{ findings_qs_no_ai }}">
+                                    <button class="btn btn-sm btn-outline-danger" type="submit">
+                                        Clear AI filter
+                                    </button>
+                                </form>
+                            {% endif %}
+                            <button class="btn btn-sm btn-outline-secondary text-nowrap"
+                                    type="button"
+                                    data-bs-toggle="collapse" data-toggle="collapse"
+                                    data-bs-target="#aist-ai-filter-details" data-target="#aist-ai-filter-details"
+                                    aria-expanded="false" aria-controls="aist-ai-filter-details">
+                                View filter JSON
+                            </button>
+                        </div>
+                    {% endif %}
+                </div>
+
+                {% if findings_ai_filter_available %}
+                    <div id="aist-ai-filter-details" class="collapse mb-2">
+                        <pre class="aist-json-pre mb-0">{{ findings_ai_filter_snapshot|to_pretty_json }}</pre>
+                    </div>
+                {% endif %}
+
+                <div class="table-responsive aist-findings-table">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                        <thead class="table-light">
+                        <tr>
+                            <th style="width: 120px;">
+                                <a class="text-decoration-none"
+                                   href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort=severity&findings_dir={% if findings_sort == 'severity' and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
+                                    Severity
+                                    {% if findings_sort == "severity" %}
+                                        <i class="fa fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
+                                    {% endif %}
+                                </a>
+                            </th>
+                            <th>
+                                <a class="text-decoration-none"
+                                   href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort=title&findings_dir={% if findings_sort == 'title' and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
+                                    Finding
+                                    {% if findings_sort == "title" %}
+                                        <i class="fa fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
+                                    {% endif %}
+                                </a>
+                            </th>
+                            <th>
+                                <a class="text-decoration-none"
+                                   href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort=file&findings_dir={% if findings_sort == 'file' and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
+                                    Location
+                                    {% if findings_sort == "file" %}
+                                        <i class="fa fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
+                                    {% endif %}
+                                </a>
+                            </th>
+                            <th style="width: 90px;">
+                                <a class="text-decoration-none"
+                                   href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort=cwe&findings_dir={% if findings_sort == 'cwe' and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
+                                    CWE
+                                    {% if findings_sort == "cwe" %}
+                                        <i class="fa fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
+                                    {% endif %}
+                                </a>
+                            </th>
+                            <th style="width: 140px;">
+                                <a class="text-decoration-none"
+                                   href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort=analyzer&findings_dir={% if findings_sort == 'analyzer' and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
+                                    Analyzer
+                                    {% if findings_sort == "analyzer" %}
+                                        <i class="fa fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
+                                    {% endif %}
+                                </a>
+                            </th>
+                            <th style="width: 110px;">Actions</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for f in findings_rows %}
+                            <tr>
+                                <td>
+                                    <span class="badge badge-{{ f.severity_class }}">{{ f.severity }}</span>
+                                    {% if f.is_false_positive %}
+                                        <span class="badge badge-light text-muted">FP</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <a href="{% url 'view_finding' f.id %}" class="fw-semibold">
+                                        {{ f.title }}
+                                    </a>
+                                    <div class="small text-muted">
+                                        #{{ f.id }} · {{ f.date|date:"Y-m-d" }}
+                                    </div>
+                                </td>
+                                <td class="text-muted small">{{ f.file_label }}</td>
+                                <td>{{ f.cwe|default:"-" }}</td>
+                                <td class="text-muted small">{{ f.test_type }}</td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-secondary"
+                                            type="button"
+                                            data-bs-toggle="collapse" data-toggle="collapse"
+                                            data-bs-target="#finding-details-{{ f.id }}" data-target="#finding-details-{{ f.id }}"
+                                            aria-expanded="false" aria-controls="finding-details-{{ f.id }}">
+                                        Details
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td colspan="6" class="p-0">
+                                    <div id="finding-details-{{ f.id }}" class="collapse">
+                                        <div class="p-3 bg-light rounded">
+                                        <div class="small text-muted mb-1">Description</div>
+                                        <div class="small">{{ f.description|default:"-"|linebreaksbr }}</div>
+                                        {% if f.mitigation %}
+                                            <div class="small text-muted mt-2">Mitigation</div>
+                                            <div class="small">{{ f.mitigation|linebreaksbr }}</div>
+                                        {% endif %}
+                                    </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="6" class="text-muted">No findings match the current filters.</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                {% if findings_page and findings_page.paginator.num_pages > 1 %}
+                    <div class="d-flex align-items-center justify-content-between mt-2">
+                        <small class="text-muted">
+                            Page {{ findings_page.number }} of {{ findings_page.paginator.num_pages }}
+                        </small>
+                        <nav aria-label="Findings pagination">
+                            <ul class="pagination pagination-sm mb-0">
+                                <li class="page-item {% if not findings_page.has_previous %}disabled{% endif %}">
+                                    {% if findings_page.has_previous %}
+                                        <a class="page-link"
+                                           href="?{{ findings_qs_no_page }}{% if findings_qs_no_page %}&{% endif %}findings_page={{ findings_page.previous_page_number }}">
+                                            Prev
+                                        </a>
+                                    {% else %}
+                                        <span class="page-link">Prev</span>
+                                    {% endif %}
+                                </li>
+                                {% for num in findings_page_numbers %}
+                                    <li class="page-item {% if num == findings_page.number %}active{% endif %}">
+                                        {% if num == findings_page.number %}
+                                            <span class="page-link">{{ num }}</span>
+                                        {% else %}
+                                            <a class="page-link"
+                                               href="?{{ findings_qs_no_page }}{% if findings_qs_no_page %}&{% endif %}findings_page={{ num }}">
+                                                {{ num }}
+                                            </a>
+                                        {% endif %}
+                                    </li>
+                                {% endfor %}
+                                <li class="page-item {% if not findings_page.has_next %}disabled{% endif %}">
+                                    {% if findings_page.has_next %}
+                                        <a class="page-link"
+                                           href="?{{ findings_qs_no_page }}{% if findings_qs_no_page %}&{% endif %}findings_page={{ findings_page.next_page_number }}">
+                                            Next
+                                        </a>
+                                    {% else %}
+                                        <span class="page-link">Next</span>
+                                    {% endif %}
+                                </li>
+                            </ul>
+                        </nav>
+                    </div>
+                {% endif %}
+            {% endif %}
+        </div>
+
+        <hr class="my-3">
+
         {# --- AI responses history --- #}
         <div class="aist-section mb-3">
             <div class="font-weight-bold mb-2">
