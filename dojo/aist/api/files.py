@@ -15,7 +15,9 @@ from rest_framework.permissions import IsAuthenticated
 
 from dojo.aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from dojo.aist.link_builder import LinkBuilder
-from dojo.aist.models import AISTProjectVersion, VersionType
+from dojo.aist.models import VersionType
+from dojo.aist.queries import get_authorized_aist_project_versions
+from dojo.authorization.roles_permissions import Permissions
 from dojo.aist.utils.pipeline import get_project_build_path
 
 # ----------------------------
@@ -105,7 +107,10 @@ class ProjectVersionFileBlobAPI(generics.GenericAPIView):
         return resp
 
     def get(self, request, project_version_id: int, subpath: str, *args, **kwargs):
-        project_version = get_object_or_404(AISTProjectVersion, pk=project_version_id)
+        project_version = get_object_or_404(
+            get_authorized_aist_project_versions(Permissions.Product_View, user=request.user),
+            pk=project_version_id,
+        )
 
         # --- Case 1: Local FILE_HASH (from extracted archive) ---
         if project_version.version_type == VersionType.FILE_HASH:

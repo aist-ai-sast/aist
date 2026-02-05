@@ -10,6 +10,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from dojo.aist.models import PipelineLaunchQueue
+from dojo.aist.queries import get_authorized_aist_queue_items
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
 
 
 class PipelineLaunchQueueListAPI(APIView):
@@ -36,7 +39,7 @@ class PipelineLaunchQueueListAPI(APIView):
         limit = max(1, min(limit, 2000))
 
         qs = (
-            PipelineLaunchQueue.objects
+            get_authorized_aist_queue_items(Permissions.Product_View, user=request.user)
             .select_related("project__product", "schedule", "launch_config", "pipeline")
             .order_by("-created")
         )
@@ -90,7 +93,7 @@ class PipelineLaunchQueueClearDispatchedAPI(APIView):
         cutoff = timezone.now() - timezone.timedelta(days=days)
 
         deleted, _ = (
-            PipelineLaunchQueue.objects
+            get_authorized_aist_queue_items(Permissions.Product_Edit, user=request.user)
             .filter(dispatched=True)
             .filter(
                 Q(dispatched_at__lt=cutoff)
@@ -110,6 +113,10 @@ class PipelineLaunchQueueDetailAPI(APIView):
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
     def delete(self, request, queue_id: int, *args, **kwargs):
-        obj = get_object_or_404(PipelineLaunchQueue, id=queue_id)
+        obj = get_object_or_404(
+            get_authorized_aist_queue_items(Permissions.Product_Edit, user=request.user),
+            id=queue_id,
+        )
+        user_has_permission_or_403(request.user, obj.project.product, Permissions.Product_Edit)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

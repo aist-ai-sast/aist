@@ -14,6 +14,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from dojo.aist.models import AISTProject, AISTProjectLaunchConfig, LaunchSchedule, PipelineLaunchQueue
+from dojo.aist.queries import (
+    get_authorized_aist_launch_schedules,
+    get_authorized_aist_projects,
+)
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
 
 
 class LaunchScheduleSerializer(serializers.ModelSerializer):
@@ -240,7 +246,11 @@ class ProjectLaunchScheduleUpsertAPI(APIView):
         responses={201: OpenApiResponse(description="Schedule created or updated")},
     )
     def post(self, request, project_id: int, *args, **kwargs):
-        project = get_object_or_404(AISTProject, id=project_id)
+        project = get_object_or_404(
+            get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
+            id=project_id,
+        )
+        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
 
         s = LaunchScheduleUpsertSerializer(data=request.data, context={"project": project})
         s.is_valid(raise_exception=True)
@@ -302,12 +312,12 @@ class LaunchScheduleListAPI(APIView):
         responses={200: OpenApiResponse(description="Paginated list")},
     )
     def get(self, request, *args, **kwargs):
-        qs = LaunchSchedule.objects.select_related(
+        qs = get_authorized_aist_launch_schedules(Permissions.Product_View, user=request.user).select_related(
             "launch_config",
             "launch_config__project",
             "launch_config__project__organization",
             "launch_config__project__product",
-        ).all()
+        )
 
         # ---- filters ----
         project_id = request.query_params.get("project_id")
@@ -401,7 +411,8 @@ class LaunchScheduleDetailAPI(APIView):
     )
     def get(self, request, launch_schedule_id: int, *args, **kwargs):
         obj = get_object_or_404(
-            LaunchSchedule.objects.select_related(
+            get_authorized_aist_launch_schedules(Permissions.Product_View, user=request.user)
+            .select_related(
                 "launch_config",
                 "launch_config__project",
                 "launch_config__project__organization",
@@ -417,7 +428,11 @@ class LaunchScheduleDetailAPI(APIView):
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
     def delete(self, request, launch_schedule_id: int, *args, **kwargs):
-        obj = get_object_or_404(LaunchSchedule, id=launch_schedule_id)
+        obj = get_object_or_404(
+            get_authorized_aist_launch_schedules(Permissions.Product_Edit, user=request.user),
+            id=launch_schedule_id,
+        )
+        user_has_permission_or_403(request.user, obj.launch_config.project.product, Permissions.Product_Edit)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -427,7 +442,8 @@ class LaunchScheduleDetailAPI(APIView):
         Currently used by UI to toggle 'enabled' without resending the full schedule payload.
         """
         obj = get_object_or_404(
-            LaunchSchedule.objects.select_related(
+            get_authorized_aist_launch_schedules(Permissions.Product_Edit, user=request.user)
+            .select_related(
                 "launch_config",
                 "launch_config__project",
                 "launch_config__project__product",
@@ -435,6 +451,7 @@ class LaunchScheduleDetailAPI(APIView):
             ),
             id=launch_schedule_id,
         )
+        user_has_permission_or_403(request.user, obj.launch_config.project.product, Permissions.Product_Edit)
 
         # Only allow whitelisted fields to be patched
         allowed_fields = {"enabled"}
@@ -530,7 +547,7 @@ class LaunchScheduleBulkDisableAPI(APIView):
         org_id = s.validated_data.get("organization_id")
         project_id = s.validated_data.get("project_id")
 
-        qs = LaunchSchedule.objects.all()
+        qs = get_authorized_aist_launch_schedules(Permissions.Product_Edit, user=request.user)
         if org_id:
             qs = qs.filter(launch_config__project__organization_id=org_id)
         if project_id:
@@ -557,13 +574,15 @@ class LaunchScheduleRunOnceAPI(APIView):
     )
     def post(self, request, launch_schedule_id: int, *args, **kwargs):
         obj = get_object_or_404(
-            LaunchSchedule.objects.select_related(
+            get_authorized_aist_launch_schedules(Permissions.Product_Edit, user=request.user)
+            .select_related(
                 "launch_config",
                 "launch_config__project",
                 "launch_config__project__product",
             ),
             id=launch_schedule_id,
         )
+        user_has_permission_or_403(request.user, obj.launch_config.project.product, Permissions.Product_Edit)
 
         # Use launch_config snapshot. Project is derived from launch_config.project :contentReference[oaicite:6]{index=6}
         project = obj.launch_config.project
