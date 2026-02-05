@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e  # needed to handle "exit" correctly
+export DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-aist_site.settings}
 
 . /secret-file-loader.sh
 . /reach_database.sh
@@ -40,7 +41,7 @@ exec uwsgi \
   --enable-threads \
   --processes "${DD_UWSGI_NUM_OF_PROCESSES:-4}" \
   --threads "${DD_UWSGI_NUM_OF_THREADS:-4}" \
-  --wsgi dojo.wsgi:application \
+  --wsgi aist_site.wsgi:application \
   --buffer-size="${DD_UWSGI_BUFFER_SIZE:-8192}" \
   --http 0.0.0.0:8081 --http-to "${DD_UWSGI_ENDPOINT}" \
   --logformat "${DD_UWSGI_LOGFORMAT:-$DD_UWSGI_LOGFORMAT_DEFAULT}" \

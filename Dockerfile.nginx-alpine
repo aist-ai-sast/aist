@@ -28,6 +28,8 @@ RUN \
     rm -rf /var/cache/apk/* && \
   true
 COPY requirements.txt requirements-dev.txt ./
+COPY vendor/defectdojo/requirements.txt ./vendor/defectdojo/requirements.txt
+COPY vendor/defectdojo/requirements-dev.txt ./vendor/defectdojo/requirements-dev.txt
 # CPUCOUNT=1 is needed, otherwise the wheel for uwsgi won't always be build succesfully
 # https://github.com/unbit/uwsgi/issues/1318#issuecomment-542238096
 RUN CPUCOUNT=1 pip3 wheel --wheel-dir=/tmp/wheels -r ./requirements.txt
@@ -55,12 +57,14 @@ RUN pip3 install \
 	-r ./requirements-dev.txt
 
 # generate static files
-COPY components/ ./components/
+COPY vendor/defectdojo/components/ ./components/
 RUN \
   cd components && \
   yarn
 COPY manage.py ./
-COPY dojo/ ./dojo/
+COPY aist/ ./aist/
+COPY aist_site/ ./aist_site/
+COPY vendor/defectdojo/dojo/ ./dojo/
 COPY sast-combinator/sast-pipeline/ /app/sast-combinator/sast-pipeline/
 ENV AIST_PIPELINE_CODE_PATH=/app/sast-combinator/sast-pipeline
 # always collect static for debug toolbar as we can't make it dependant on env variables or build arguments without breaking docker layer caching
@@ -73,7 +77,7 @@ FROM nginx:1.29.3-alpine3.22@sha256:b3c656d55d7ad751196f21b7fd2e8d4da9cb430e32f6
 ARG uid=1001
 ARG appuser=defectdojo
 COPY --from=collectstatic /app/static/ /usr/share/nginx/html/static/
-COPY wsgi_params nginx/nginx.conf nginx/nginx_TLS.conf /etc/nginx/
+COPY vendor/defectdojo/wsgi_params vendor/defectdojo/nginx/nginx.conf vendor/defectdojo/nginx/nginx_TLS.conf /etc/nginx/
 COPY docker/entrypoint-nginx.sh /
 RUN \
   apk add --no-cache openssl && \

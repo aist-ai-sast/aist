@@ -27,7 +27,7 @@ exclude = [
     "node_modules",
     "venv",
     #  Not for the dojo specific stuff
-    "dojo/db_migrations"
+    "vendor/defectdojo/dojo/db_migrations"
 ]
 
 [lint]
@@ -115,7 +115,7 @@ preview = true
     "S105",  # hardcoded passwords in tests are fine
     "S108",  # tmp paths mentioned in tests are fine
 ]
-"dojo/filters.py" = [
+"vendor/defectdojo/dojo/filters.py" = [
     "A003",  # ruff upgrade to 0.13.3
 ]
 "scripts/update_performance_test_counts.py" = [

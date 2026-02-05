@@ -28,8 +28,8 @@ jobs:
 
       - name: Load docker images
         run: |-
-             docker pull defectdojo/defectdojo-django:${{ env.release_version }}-alpine
-             docker pull defectdojo/defectdojo-nginx:${{ env.release_version }}-alpine
+             docker pull aist/aist-django:${{ env.release_version }}-alpine
+             docker pull aist/aist-nginx:${{ env.release_version }}-alpine
              docker images
 
       - name: Start Dojo

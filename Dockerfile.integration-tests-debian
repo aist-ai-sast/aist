@@ -78,7 +78,7 @@ COPY docker/wait-for-it.sh \
   docker/entrypoint-integration-tests.sh \
   /
 
-COPY tests/ ./tests/
+COPY vendor/defectdojo/tests/ ./tests/
 
 COPY sast-combinator/sast-pipeline/ /app/sast-combinator/sast-pipeline
 ENV AIST_PIPELINE_CODE_PATH=/app/sast-combinator/sast-pipeline

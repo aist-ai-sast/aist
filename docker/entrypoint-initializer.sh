@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e  # needed to handle "exit" correctly
+export DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-aist_site.settings}
 
 . /secret-file-loader.sh
 . /reach_database.sh

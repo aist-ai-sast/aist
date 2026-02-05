@@ -26,6 +26,7 @@ RUN \
   rm -rf /var/lib/apt/lists && \
   true
 COPY requirements.txt ./
+COPY vendor/defectdojo/requirements.txt ./vendor/defectdojo/requirements.txt
 # CPUCOUNT=1 is needed, otherwise the wheel for uwsgi won't always be build succesfully
 # https://github.com/unbit/uwsgi/issues/1318#issuecomment-542238096
 RUN export PYCURL_SSL_LIBRARY=openssl && \
@@ -84,6 +85,7 @@ RUN set -eux; \
 RUN \
   --mount=from=build,src=/tmp/wheels,target=/tmp/wheels \
   --mount=from=build,src=/app/requirements.txt,target=/app/requirements.txt \
+  --mount=from=build,src=/app/vendor/defectdojo/requirements.txt,target=/app/vendor/defectdojo/requirements.txt \
   pip3 install \
 	--no-cache-dir \
 	--no-index \
@@ -102,7 +104,9 @@ COPY \
   docker/certs/* \
   /
 COPY wsgi.py manage.py ./
-COPY dojo/ ./dojo/
+COPY aist/ ./aist/
+COPY aist_site/ ./aist_site/
+COPY vendor/defectdojo/dojo/ ./dojo/
 
 COPY sast-combinator/sast-pipeline/ /app/sast-combinator/sast-pipeline
 ENV AIST_PIPELINE_CODE_PATH=/app/sast-combinator/sast-pipeline

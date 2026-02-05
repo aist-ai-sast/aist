@@ -1,0 +1,113 @@
+{% extends 'base.html' %}
+{% load i18n %}
+{% block content %}
+    <div class="container mt-3 pb-5">
+        <div class="row g-4">
+
+            <!-- Left panel: Start form -->
+            <div class="col-12 col-lg-8">
+                <h3 class="mb-3">Run SAST Pipeline</h3>
+                <div class="card shadow-sm mb-5">
+                    <div class="card-body pb-4">
+                        {% include "aist/_pipeline_run_form.html" with scope="start" %}
+                        {% include "aist/_pipeline_run_modals.html" %}
+                    </div>
+                </div>
+
+                {# hard spacer to guarantee bottom gap across themes #}
+                <div class="mb-5"></div>
+                <div style="height:48px"></div>
+            </div>
+
+            <!-- Right column: launch history -->
+            <div class="col-12 col-lg-4">
+                <div class="card shadow-sm sticky-lg-top" style="top: 76px;">
+                    <div class="card-header d-flex align-items-center justify-content-between py-2 mb-2"
+                         style="margin-bottom:.5rem!important">
+                        <span class="fw-semibold">Recent pipelines</span>
+                        <span class="badge bg-secondary">{{ history_page.paginator.count }}</span>
+                    </div>
+
+                    <!-- Filter/search (GET) -->
+                    <form method="get" class="mt-2 px-3 pb-0">
+                        <div class="mb-2">
+                            <label class="form-label small mb-1">Project</label>
+                            <select class="form-select form-select-sm" name="project" onchange="this.form.submit()">
+                                <option value="">All projects</option>
+                                {% for p in form.fields.project.queryset %}
+                                    <option value="{{ p.id }}"
+                                            {% if selected_project|stringformat:"s" == p.id|stringformat:"s" %}selected{% endif %}>
+                                        {{ p.product.name }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label small mb-1">Search</label>
+                            <div class="input-group input-group-sm">
+                                <input type="text" class="form-control" name="q" value="{{ search_query }}"
+                                       placeholder="ID or product name">
+                                <button class="btn btn-outline-secondary btn-sm" type="submit">Apply</button>
+                                <a class="btn btn-outline-light btn-sm border"
+                                   href="{% url 'aist:start_pipeline' %}">Reset</a>
+                            </div>
+                        </div>
+                        <input type="hidden" name="page_size" value="8">
+                    </form>
+
+                    {% if history_items %}
+                        <div class="list-group list-group-flush mt-2">
+                            {% for run in history_items %}
+                                <a href="{% url 'aist:pipeline_detail' pipeline_id=run.id %}"
+                                   class="list-group-item list-group-item-action">
+                                    <div class="d-flex justify-content-between">
+                                        <div class="me-2">
+                                            <div class="fw-semibold text-truncate"
+                                                 title="{{ run.project_name }}">{{ run.project_name }}</div>
+                                            <div class="text-muted small">#{{ run.id }}
+                                                · {{ run.updated|date:"Y-m-d H:i" }}</div>
+                                        </div>
+                                        <div class="text-end">
+                                            <span class="badge bg-success">{{ run.status }}</span>
+                                            {% if run.duration %}
+                                                <div class="small mt-1">⏱ {{ run.duration }}</div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </a>
+                            {% endfor %}
+                        </div>
+
+                        <div class="card-footer d-flex align-items-center justify-content-between">
+                            <div class="btn-group">
+                                {% if history_page.has_previous %}
+                                    <a class="btn btn-sm btn-outline-secondary"
+                                       href="?{{ history_qs }}&page={{ history_page.previous_page_number }}">‹ Prev</a>
+                                {% else %}
+                                    <button class="btn btn-sm btn-outline-secondary" disabled>‹ Prev</button>
+                                {% endif %}
+                                {% if history_page.has_next %}
+                                    <a class="btn btn-sm btn-outline-secondary"
+                                       href="?{{ history_qs }}&page={{ history_page.next_page_number }}">Next ›</a>
+                                {% else %}
+                                    <button class="btn btn-sm btn-outline-secondary" disabled>Next ›</button>
+                                {% endif %}
+                            </div>
+                            <div class="small text-muted">Page {{ history_page.number }}
+                                / {{ history_page.paginator.num_pages }}</div>
+                            <a class="btn btn-sm btn-outline-primary"
+                               href="{% url 'aist:pipeline_list' %}?{{ history_qs }}">View all</a>
+                        </div>
+                    {% else %}
+                        <div class="card-body text-muted">No finished runs yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+
+
+        </div>
+    </div>
+
+    {% include "aist/_pipeline_run_js.html" %}
+
+{% endblock %}

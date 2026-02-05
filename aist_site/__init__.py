@@ -1,0 +1,1 @@
+"""AIST product settings package."""
