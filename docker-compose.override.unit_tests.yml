@@ -7,6 +7,7 @@ services:
     entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '-t', '30', '--', '/app/docker/entrypoint-unit-tests-devDocker.sh']
     volumes:
       - '.:/app:z'
+      - './vendor/defectdojo/dojo:/app/dojo:z'
       - "defectdojo_media_unit_tests:${DD_MEDIA_ROOT:-/app/media}"
     depends_on: !override
       postgres:

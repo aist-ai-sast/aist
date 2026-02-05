@@ -8,6 +8,7 @@ services:
     entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '-t', '30', '--', '/entrypoint-uwsgi-dev.sh']
     volumes:
       - '.:/app:z'
+      - './vendor/defectdojo/dojo:/app/dojo:z'
     environment:
       PYTHONWARNINGS: error  # We are strict about Warnings during development
       DD_DEBUG: 'True'
@@ -19,6 +20,7 @@ services:
     entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '-t', '30', '--', '/entrypoint-celery-worker-dev.sh']
     volumes:
       - '.:/app:z'
+      - './vendor/defectdojo/dojo:/app/dojo:z'
     environment:
       PYTHONWARNINGS: error  # We are strict about Warnings during development
       DD_DEBUG: 'True'
@@ -26,12 +28,14 @@ services:
   celerybeat:
     volumes:
       - '.:/app:z'
+      - './vendor/defectdojo/dojo:/app/dojo:z'
     environment:
       PYTHONWARNINGS: error  # We are strict about Warnings during development
       DD_DEBUG: 'True'
   initializer:
     volumes:
       - '.:/app:z'
+      - './vendor/defectdojo/dojo:/app/dojo:z'
     environment:
       PYTHONWARNINGS: error  # We are strict about Warnings during development
       DD_DEBUG: 'True'
@@ -39,7 +43,7 @@ services:
       DD_ADMIN_PASSWORD: "${DD_ADMIN_PASSWORD:-admin}"
   nginx:
     volumes:
-      - './dojo/static/dojo:/usr/share/nginx/html/static/dojo'
+      - './vendor/defectdojo/dojo/static/dojo:/usr/share/nginx/html/static/dojo'
   postgres:
     ports:
       - target: ${DD_DATABASE_PORT:-5432}

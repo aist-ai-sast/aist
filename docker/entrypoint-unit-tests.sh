@@ -4,6 +4,7 @@
 # - Exit container after running tests to allow exit code to propagate as test result
 # set -x
 set -e
+export DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-aist_site.settings}
 # set -v
 
 . /secret-file-loader.sh

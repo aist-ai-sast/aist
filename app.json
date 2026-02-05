@@ -1,5 +1,5 @@
 {
-    "name": "Application Name",
-    "repository": "https://github.com/DefectDojo/django-DefectDojo",
-    "image": "appsecpipeline/django-defectdojo"
+    "name": "AIST",
+    "repository": "https://github.com/aist-ai-sast/aist-defect-dojo",
+    "image": "aist/aist-django"
 }

@@ -42,7 +42,7 @@ python3 manage.py spectacular --fail-on-warn > /dev/null
 python3 manage.py makemigrations --no-input --check --dry-run --verbosity 3
 python3 manage.py migrate
 
-python3 manage.py test dojo.aist.test -v 3 --keepdb --no-input
+python3 manage.py test aist.test -v 3 --keepdb --no-input
 '
 
 if [[ ${1:-} == "--logs" ]]; then

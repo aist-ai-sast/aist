@@ -4,13 +4,14 @@ services:
     build:
       context: ./
       dockerfile: ${INTEGRATION_TESTS_DOCKERFILE:-Dockerfile.integration-tests-debian}
-    image: "defectdojo/defectdojo-integration-tests:${INTEGRATION_TESTS_VERSION:-latest}"
+    image: "aist/aist-integration-tests:${INTEGRATION_TESTS_VERSION:-latest}"
     depends_on:
       - nginx
       - uwsgi
     entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '-t', '30', '--', '/app/docker/entrypoint-integration-tests.sh']
     volumes:
       - '.:/app:z'
+      - './vendor/defectdojo/dojo:/app/dojo:z'
       - "defectdojo_media_integration_tests:${DD_MEDIA_ROOT:-/app/media}"
     environment:
       PYTHONWARNINGS: error  # We are strict about Warnings during testing
@@ -28,6 +29,7 @@ services:
     entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '-t', '30', '--', '/entrypoint-uwsgi-dev.sh']
     volumes:
       - '.:/app:z'
+      - './vendor/defectdojo/dojo:/app/dojo:z'
       - defectdojo_media_integration_tests:${DD_MEDIA_ROOT:-/app/media}
     environment:
       PYTHONWARNINGS: error  # We are strict about Warnings during testing

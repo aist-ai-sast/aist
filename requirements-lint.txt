@@ -1,1 +1,1 @@
-ruff==0.14.11
+-r vendor/defectdojo/requirements-lint.txt
