@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
 from django.utils import timezone
 
-from dojo.aist.models import ProcessedFinding, TestDeduplicationProgress
+from dojo.aist.models import AISTTestMeta, ProcessedFinding, TestDeduplicationProgress
 from dojo.models import Engagement, Finding, Product, Product_Type, SLA_Configuration, Test, Test_Type
 
 
@@ -38,6 +38,7 @@ class ConcurrentDeduplicationTest(TransactionTestCase):
         )
         # Deduplication progress should exist
         self.progress = TestDeduplicationProgress.objects.get(test=self.test)
+        self.meta = AISTTestMeta.objects.get(test=self.test)
 
     def test_deleted_processed_do_not_fake_complete(self):
         findings = [
@@ -55,5 +56,7 @@ class ConcurrentDeduplicationTest(TransactionTestCase):
         # left 40 finding without Processed finding
         self.progress.refresh_pending_tasks()
         self.progress.refresh_from_db()
+        self.meta.refresh_from_db()
         self.assertEqual(self.progress.pending_tasks, 40)
         self.assertFalse(self.progress.deduplication_complete)
+        self.assertFalse(self.meta.deduplication_complete)

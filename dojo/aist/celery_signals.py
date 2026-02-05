@@ -14,6 +14,7 @@ from dojo.aist.models import (
     AISTPipeline,
     AISTProject,
     AISTProjectVersion,
+    AISTTestMeta,
     PipelineLaunchQueue,
     ProcessedFinding,
     TestDeduplicationProgress,
@@ -105,6 +106,7 @@ def create_dedup_group_on_test_save(sender, instance, created, **kwargs):
     """
 
     def do_refresh():
+        AISTTestMeta.objects.get_or_create(test=instance)
         group, group_created = TestDeduplicationProgress.objects.get_or_create(test=instance)
         if group_created:
             now = timezone.now()

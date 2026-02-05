@@ -11,6 +11,7 @@ from dojo.aist.logging_transport import install_pipeline_logging
 from dojo.aist.models import (
     AISTPipeline,
     AISTStatus,
+    AISTTestMeta,
     ProcessedFinding,
     TestDeduplicationProgress,
 )
@@ -120,6 +121,10 @@ def watch_deduplication(self, pipeline_id: str, log_level) -> None:
                 ],
                 ignore_conflicts=True,
             )
+        AISTTestMeta.objects.bulk_create(
+            [AISTTestMeta(test_id=tid) for tid in test_ids],
+            ignore_conflicts=True,
+        )
 
     # Poll until all deduplication flags are true.
     # The watcher does not "do work" itself: it only triggers reconcile when progress stalls.
@@ -131,7 +136,10 @@ def watch_deduplication(self, pipeline_id: str, log_level) -> None:
             if pipeline.status == AISTStatus.FINISHED:
                 return
             # Query for tests still undergoing deduplication
-            remaining = pipeline.tests.filter(deduplication_complete=False).count()
+            remaining = AISTTestMeta.objects.filter(
+                test_id__in=test_ids,
+                deduplication_complete=False,
+            ).count()
             if remaining > 0:
                 now = timezone.now()
                 deadlines = _dedup_deadlines(now)
@@ -236,16 +244,17 @@ def reconcile_deduplication(
     deadlines = _dedup_deadlines(now)
 
     # Fetch candidate Tests; optionally restrict to specific test_ids.
-    tests_qs = Test.objects.filter(deduplication_complete=False)
+    metas_qs = AISTTestMeta.objects.filter(deduplication_complete=False)
     if test_ids:
-        tests_qs = tests_qs.filter(id__in=test_ids)
-    tests = (
-        tests_qs
-        .select_related("dedupe_progress")
-        .order_by("updated" if hasattr(Test, "updated") else "id")[:batch_size]
+        metas_qs = metas_qs.filter(test_id__in=test_ids)
+    metas = (
+        metas_qs
+        .select_related("test", "test__dedupe_progress")
+        .order_by("test__updated" if hasattr(Test, "updated") else "test__id")[:batch_size]
     )
 
-    for test in tests:
+    for meta in metas:
+        test = meta.test
         if time.time() - start > max_runtime_s:
             break
 

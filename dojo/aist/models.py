@@ -526,6 +526,22 @@ class AISTPipeline(models.Model):
         return f"SASTPipeline[{self.id}] {self.status}"
 
 
+class AISTTestMeta(models.Model):
+    test = models.OneToOneField(
+        Test,
+        on_delete=models.CASCADE,
+        related_name="aist_meta",
+    )
+    deduplication_complete = models.BooleanField(default=False)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["deduplication_complete"])]
+
+    def __str__(self) -> str:
+        return f"AISTTestMeta(test={self.test_id}, dedup_complete={self.deduplication_complete})"
+
+
 class TestDeduplicationProgress(models.Model):
 
     """Deduplication progress on one Test."""
@@ -553,6 +569,10 @@ class TestDeduplicationProgress(models.Model):
             self.deduplication_complete = True
             self.completed_at = timezone.now()
             self.save(update_fields=["deduplication_complete", "completed_at"])
+            AISTTestMeta.objects.update_or_create(
+                test_id=self.test_id,
+                defaults={"deduplication_complete": True},
+            )
 
     def refresh_pending_tasks(self) -> None:
         with transaction.atomic():
@@ -603,8 +623,9 @@ class TestDeduplicationProgress(models.Model):
 
             if fields_to_update:
                 group.save(update_fields=fields_to_update)
-            Test.objects.filter(id=group.test_id).update(
-                deduplication_complete=is_complete,
+            AISTTestMeta.objects.update_or_create(
+                test_id=group.test_id,
+                defaults={"deduplication_complete": is_complete},
             )
 
 

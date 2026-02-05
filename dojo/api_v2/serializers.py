@@ -1442,8 +1442,6 @@ class TestSerializer(serializers.ModelSerializer):
     finding_groups = FindingGroupSerializer(
         source="finding_group_set", many=True, read_only=True,
     )
-    deduplication_complete = serializers.BooleanField(read_only=True)
-
     class Meta:
         model = Test
         exclude = ("inherited_tags",)
