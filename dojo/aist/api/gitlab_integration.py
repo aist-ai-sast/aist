@@ -9,6 +9,11 @@ from rest_framework.views import APIView
 
 from dojo.aist.models import AISTProject, Organization, RepositoryInfo, ScmGitlabBinding, ScmType
 from dojo.aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GH flow uses
+from dojo.authorization.authorization import (
+    user_has_global_permission_or_403,
+    user_has_permission_or_403,
+)
+from dojo.authorization.roles_permissions import Permissions
 from dojo.models import DojoMeta, Product, Product_Type
 
 
@@ -98,11 +103,16 @@ class ImportProjectFromGitlabAPI(APIView):
         langs = cfg.convert_languages(langs_raw)
 
         # 3) Create Product Type and Product
-        product_type, _ = Product_Type.objects.get_or_create(name="Gitlab Imported")
+        product_type, created_product_type = Product_Type.objects.get_or_create(name="Gitlab Imported")
+        if created_product_type:
+            user_has_global_permission_or_403(request.user, Permissions.Product_Type_Add)
+        user_has_permission_or_403(request.user, product_type, Permissions.Product_Type_Add_Product)
         product, _created = Product.objects.get_or_create(
             name=path_with_ns,
             defaults={"prod_type": product_type, "description": description},
         )
+        if not _created:
+            user_has_permission_or_403(request.user, product, Permissions.Product_Edit)
 
         DojoMeta.objects.update_or_create(
             product=product,

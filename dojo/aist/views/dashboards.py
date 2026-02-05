@@ -6,7 +6,9 @@ from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
-from dojo.aist.models import AISTLaunchConfigAction, AISTProject, AISTStatus, Organization
+from dojo.aist.models import AISTLaunchConfigAction, AISTStatus
+from dojo.aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
+from dojo.authorization.roles_permissions import Permissions
 from dojo.utils import add_breadcrumb
 
 
@@ -16,8 +18,12 @@ def launching_dashboard(request: HttpRequest) -> HttpResponse:
     """Launch Scheduling UI (read-only page; all actions go through DRF API)."""
     add_breadcrumb(title="Launch Scheduling", top_level=True, request=request)
 
-    organizations = Organization.objects.order_by("name")
-    projects = AISTProject.objects.select_related("product", "organization").order_by("product__name", "id")
+    organizations = get_authorized_aist_organizations(Permissions.Product_View, user=request.user).order_by("name")
+    projects = (
+        get_authorized_aist_projects(Permissions.Product_View, user=request.user)
+        .select_related("product", "organization")
+        .order_by("product__name", "id")
+    )
 
     ctx = {
         "organizations": organizations,

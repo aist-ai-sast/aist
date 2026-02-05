@@ -7,7 +7,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from dojo.aist.models import AISTProject, AISTProjectVersion, VersionType
+from dojo.aist.models import AISTProjectVersion, VersionType
+from dojo.aist.queries import get_authorized_aist_projects
+from dojo.authorization.roles_permissions import Permissions
 
 
 class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
@@ -90,7 +92,10 @@ class ProjectVersionCreateAPI(APIView):
         },
     )
     def post(self, request, project_id):
-        project = get_object_or_404(AISTProject, pk=project_id)
+        project = get_object_or_404(
+            get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
+            pk=project_id,
+        )
 
         serializer = AISTProjectVersionCreateSerializer(
             data=request.data,

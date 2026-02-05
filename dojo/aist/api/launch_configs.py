@@ -17,6 +17,13 @@ from dojo.aist.models import (
     AISTProjectVersion,
     AISTStatus,
 )
+from dojo.aist.queries import (
+    get_authorized_aist_launch_config_actions,
+    get_authorized_aist_launch_configs,
+    get_authorized_aist_projects,
+)
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
 from dojo.aist.pipeline_args import PipelineArguments
 from dojo.aist.tasks import run_sast_pipeline
 from dojo.aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline
@@ -268,7 +275,10 @@ class ProjectLaunchConfigListCreateAPI(APIView):
         responses={200: LaunchConfigSerializer(many=True)},
     )
     def get(self, request, project_id: int, *args, **kwargs):
-        project = get_object_or_404(AISTProject, id=project_id)
+        project = get_object_or_404(
+            get_authorized_aist_projects(Permissions.Product_View, user=request.user),
+            id=project_id,
+        )
         qs = AISTProjectLaunchConfig.objects.filter(project=project).order_by("-updated")
         return Response(LaunchConfigSerializer(qs, many=True).data)
 
@@ -324,7 +334,11 @@ class ProjectLaunchConfigListCreateAPI(APIView):
         ],
     )
     def post(self, request, project_id: int, *args, **kwargs):
-        project = get_object_or_404(AISTProject, id=project_id)
+        project = get_object_or_404(
+            get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
+            id=project_id,
+        )
+        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
 
         s = LaunchConfigCreateRequestSerializer(data=request.data)
         s.is_valid(raise_exception=True)
@@ -349,7 +363,11 @@ class ProjectLaunchConfigDetailAPI(APIView):
         responses={200: LaunchConfigSerializer, 404: OpenApiResponse(description="Not found")},
     )
     def get(self, request, project_id: int, config_id: int, *args, **kwargs):
-        obj = get_object_or_404(AISTProjectLaunchConfig, id=config_id, project_id=project_id)
+        obj = get_object_or_404(
+            get_authorized_aist_launch_configs(Permissions.Product_View, user=request.user),
+            id=config_id,
+            project_id=project_id,
+        )
         return Response(LaunchConfigSerializer(obj).data)
 
     @extend_schema(
@@ -358,7 +376,12 @@ class ProjectLaunchConfigDetailAPI(APIView):
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
     def delete(self, request, project_id: int, config_id: int, *args, **kwargs):
-        obj = get_object_or_404(AISTProjectLaunchConfig, id=config_id, project_id=project_id)
+        obj = get_object_or_404(
+            get_authorized_aist_launch_configs(Permissions.Product_Edit, user=request.user),
+            id=config_id,
+            project_id=project_id,
+        )
+        user_has_permission_or_403(request.user, obj.project.product, Permissions.Product_Edit)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -369,7 +392,12 @@ class ProjectLaunchConfigDetailAPI(APIView):
         responses={200: LaunchConfigSerializer, 404: OpenApiResponse(description="Not found")},
     )
     def patch(self, request, project_id: int, config_id: int, *args, **kwargs):
-        obj = get_object_or_404(AISTProjectLaunchConfig, id=config_id, project_id=project_id)
+        obj = get_object_or_404(
+            get_authorized_aist_launch_configs(Permissions.Product_Edit, user=request.user),
+            id=config_id,
+            project_id=project_id,
+        )
+        user_has_permission_or_403(request.user, obj.project.product, Permissions.Product_Edit)
         s = LaunchConfigUpdateRequestSerializer(data=request.data, partial=True)
         s.is_valid(raise_exception=True)
         data = s.validated_data
@@ -460,8 +488,16 @@ class ProjectLaunchConfigStartAPI(APIView):
         ],
     )
     def post(self, request, project_id: int, config_id: int, *args, **kwargs):
-        project = get_object_or_404(AISTProject, id=project_id)
-        cfg = get_object_or_404(AISTProjectLaunchConfig, id=config_id, project=project)
+        project = get_object_or_404(
+            get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
+            id=project_id,
+        )
+        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+        cfg = get_object_or_404(
+            get_authorized_aist_launch_configs(Permissions.Product_Edit, user=request.user),
+            id=config_id,
+            project=project,
+        )
 
         s = LaunchConfigStartRequestSerializer(data=request.data or {})
         s.is_valid(raise_exception=True)
@@ -484,7 +520,11 @@ class ProjectLaunchConfigStartAPI(APIView):
         if not pv_id:
             return Response({"project_version": "No versions found for project"}, status=status.HTTP_400_BAD_REQUEST)
 
-        project_version = get_object_or_404(AISTProjectVersion, pk=pv_id, project=project)
+        project_version = get_object_or_404(
+            AISTProjectVersion,
+            pk=pv_id,
+            project=project,
+        )
 
         if has_unfinished_pipeline(project_version):
             return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
@@ -518,7 +558,11 @@ class ProjectLaunchConfigActionListCreateAPI(APIView):
         responses={200: LaunchConfigActionSerializer(many=True)},
     )
     def get(self, request, project_id: int, config_id: int, *args, **kwargs):
-        cfg = get_object_or_404(AISTProjectLaunchConfig, id=config_id, project_id=project_id)
+        cfg = get_object_or_404(
+            get_authorized_aist_launch_configs(Permissions.Product_View, user=request.user),
+            id=config_id,
+            project_id=project_id,
+        )
         qs = AISTLaunchConfigAction.objects.filter(launch_config=cfg).order_by("-updated")
         return Response(LaunchConfigActionSerializer(qs, many=True).data)
 
@@ -529,7 +573,12 @@ class ProjectLaunchConfigActionListCreateAPI(APIView):
         responses={201: LaunchConfigActionSerializer},
     )
     def post(self, request, project_id: int, config_id: int, *args, **kwargs):
-        cfg = get_object_or_404(AISTProjectLaunchConfig, id=config_id, project_id=project_id)
+        cfg = get_object_or_404(
+            get_authorized_aist_launch_configs(Permissions.Product_Edit, user=request.user),
+            id=config_id,
+            project_id=project_id,
+        )
+        user_has_permission_or_403(request.user, cfg.project.product, Permissions.Product_Edit)
         action_type = (request.data or {}).get("action_type")
         serializer_cls = ACTION_CREATE_SERIALIZERS.get(action_type)
         if serializer_cls is None:
@@ -558,7 +607,7 @@ class ProjectLaunchConfigActionDetailAPI(APIView):
     )
     def get(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
         obj = get_object_or_404(
-            AISTLaunchConfigAction,
+            get_authorized_aist_launch_config_actions(Permissions.Product_View, user=request.user),
             id=action_id,
             launch_config_id=config_id,
             launch_config__project_id=project_id,
@@ -573,11 +622,12 @@ class ProjectLaunchConfigActionDetailAPI(APIView):
     )
     def patch(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
         obj = get_object_or_404(
-            AISTLaunchConfigAction,
+            get_authorized_aist_launch_config_actions(Permissions.Product_Edit, user=request.user),
             id=action_id,
             launch_config_id=config_id,
             launch_config__project_id=project_id,
         )
+        user_has_permission_or_403(request.user, obj.launch_config.project.product, Permissions.Product_Edit)
         s = LaunchConfigActionUpdateSerializer(data=request.data, partial=True)
         s.is_valid(raise_exception=True)
         data = s.validated_data
@@ -612,11 +662,12 @@ class ProjectLaunchConfigActionDetailAPI(APIView):
     )
     def delete(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
         obj = get_object_or_404(
-            AISTLaunchConfigAction,
+            get_authorized_aist_launch_config_actions(Permissions.Product_Edit, user=request.user),
             id=action_id,
             launch_config_id=config_id,
             launch_config__project_id=project_id,
         )
+        user_has_permission_or_403(request.user, obj.launch_config.project.product, Permissions.Product_Edit)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -629,7 +680,8 @@ class LaunchConfigDashboardListAPI(APIView):
     )
     def get(self, request):
         qs = (
-            AISTProjectLaunchConfig.objects.select_related("project__product", "project__organization")
+            get_authorized_aist_launch_configs(Permissions.Product_View, user=request.user)
+            .select_related("project__product", "project__organization")
             .prefetch_related("actions")
             .order_by("-updated")
         )
@@ -657,10 +709,11 @@ class LaunchConfigDashboardListAPI(APIView):
     )
     def delete(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
         obj = get_object_or_404(
-            AISTLaunchConfigAction,
+            get_authorized_aist_launch_config_actions(Permissions.Product_Edit, user=request.user),
             id=action_id,
             launch_config_id=config_id,
             launch_config__project_id=project_id,
         )
+        user_has_permission_or_403(request.user, obj.launch_config.project.product, Permissions.Product_Edit)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

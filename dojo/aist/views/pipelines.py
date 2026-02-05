@@ -14,12 +14,15 @@ from django.views.decorators.http import require_http_methods
 from dojo.aist.ai_filter import apply_ai_filter, get_ai_filter_reference
 from dojo.aist.api.launch_configs import ACTION_CREATE_SERIALIZERS
 from dojo.aist.forms import AISTPipelineRunForm
-from dojo.aist.models import AISTLaunchConfigAction, AISTPipeline, AISTProject, AISTStatus
+from dojo.aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus
+from dojo.aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects
 from dojo.aist.tasks import run_sast_pipeline
 from dojo.aist.utils.action_config import encrypt_action_secret_config
 from dojo.aist.utils.http import _fmt_duration, _qs_without
 from dojo.aist.utils.pipeline import create_pipeline_object, set_pipeline_status, stop_pipeline
 from dojo.aist.views._common import ERR_PIPELINE_NOT_FOUND
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from dojo.utils import add_breadcrumb
 
@@ -248,21 +251,23 @@ def _build_findings_context(request: HttpRequest, pipeline: AISTPipeline) -> dic
     }
 
 
+@login_required
 def pipeline_set_status(request, pipeline_id: str):
-    if not AISTPipeline.objects.filter(id=pipeline_id).exists():
+    if not get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user).filter(id=pipeline_id).exists():
         raise Http404(ERR_PIPELINE_NOT_FOUND)
 
-    if request.method == "POST":
-        with transaction.atomic():
-            pipeline = (
-                AISTPipeline.objects
-                .select_for_update()
-                .get(id=pipeline_id)
-            )
-            set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
+    with transaction.atomic():
+        pipeline = (
+            get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user)
+            .select_for_update()
+            .get(id=pipeline_id)
+        )
+        user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
+        set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
     return redirect("dojo_aist:pipeline_detail", pipeline_id=pipeline_id)
 
 
+@login_required
 def start_pipeline(request: HttpRequest) -> HttpResponse:
     """
     Launch a new SAST pipeline or redirect to the active one.
@@ -277,7 +282,7 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
     q = (request.GET.get("q") or "").strip()
 
     history_qs = (
-        AISTPipeline.objects
+        get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
         .filter(status=AISTStatus.FINISHED)
         .select_related("project__product")
     )
@@ -326,6 +331,10 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
 
     if request.method == "POST":
         form = AISTPipelineRunForm(request.POST)
+        form.fields["project"].queryset = get_authorized_aist_projects(
+            Permissions.Product_Edit,
+            user=request.user,
+        ).order_by("product__name")
         if form.is_valid():
             params = form.get_params()
 
@@ -367,6 +376,11 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                 })
 
             with transaction.atomic():
+                user_has_permission_or_403(
+                    request.user,
+                    form.cleaned_data["project"].product,
+                    Permissions.Product_Edit,
+                )
                 p = create_pipeline_object(
                     form.cleaned_data["project"],
                     form.cleaned_data.get("project_version")
@@ -386,9 +400,14 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
             return redirect("dojo_aist:pipeline_detail", pipeline_id=p.id)
     else:
         form = AISTPipelineRunForm()
+        form.fields["project"].queryset = get_authorized_aist_projects(
+            Permissions.Product_Edit,
+            user=request.user,
+        ).order_by("product__name")
     return render_start(form)
 
 
+@login_required
 def pipeline_list(request):
     project_id = request.GET.get("project")
     q = (request.GET.get("q") or "").strip()
@@ -397,7 +416,7 @@ def pipeline_list(request):
     per_page = int(request.GET.get("page_size") or 20)
 
     qs = (
-        AISTPipeline.objects
+        get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
         .select_related("project__product", "project_version")
         .order_by("-updated")
     )
@@ -430,7 +449,11 @@ def pipeline_list(request):
 
     qs_str = _qs_without(request, "page")
 
-    projects = AISTProject.objects.select_related("product").order_by("product__name")
+    projects = (
+        get_authorized_aist_projects(Permissions.Product_View, user=request.user)
+        .select_related("product")
+        .order_by("product__name")
+    )
     add_breadcrumb(title="Pipeline History", top_level=True, request=request)
     return render(
         request,
@@ -447,9 +470,13 @@ def pipeline_list(request):
     )
 
 
+@login_required
 def pipeline_detail(request, pipeline_id: str):
     """Display the status and logs for a pipeline. Adds actions (Stop/Delete) and connects SSE client to stream logs."""
-    pipeline = get_object_or_404(AISTPipeline, id=pipeline_id)
+    pipeline = get_object_or_404(
+        get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
+        id=pipeline_id,
+    )
     findings_context = _build_findings_context(request, pipeline)
     if request.headers.get("X-Partial") == "status":
         return render(
@@ -466,7 +493,11 @@ def pipeline_detail(request, pipeline_id: str):
 @require_http_methods(["POST"])
 def stop_pipeline_view(request, pipeline_id: str):
     """POST-only endpoint to stop a running pipeline (Celery revoke). Sets FINISHED regardless of current state to keep UI consistent."""
-    pipeline = get_object_or_404(AISTPipeline, id=pipeline_id)
+    pipeline = get_object_or_404(
+        get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
+        id=pipeline_id,
+    )
+    user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
     stop_pipeline(pipeline)
     return redirect("dojo_aist:pipeline_detail", pipeline_id=pipeline.id)
 
@@ -475,7 +506,11 @@ def stop_pipeline_view(request, pipeline_id: str):
 @require_http_methods(["GET", "POST"])
 def delete_pipeline_view(request, pipeline_id: str):
     """Delete a pipeline after confirmation (POST). GET returns a confirm view."""
-    pipeline = get_object_or_404(AISTPipeline, id=pipeline_id)
+    pipeline = get_object_or_404(
+        get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
+        id=pipeline_id,
+    )
+    user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
     if request.method == "POST":
         pipeline.delete()
         return redirect("dojo_aist:pipeline_list")

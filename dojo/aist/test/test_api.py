@@ -9,8 +9,9 @@ from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from dojo.aist.models import AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, VersionType
-from dojo.models import Product, Product_Type, SLA_Configuration
+from dojo.aist.models import AISTPipeline, AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, AISTStatus, VersionType
+from dojo.authorization.roles_permissions import Roles
+from dojo.models import Product, Product_Member, Product_Type, Role, SLA_Configuration
 
 
 class AISTApiBase(TestCase):
@@ -25,11 +26,20 @@ class AISTApiBase(TestCase):
 
         self.sla = SLA_Configuration.objects.create(name="SLA default")
         self.prod_type = Product_Type.objects.create(name="PT")
+        self.role_maintainer, _ = Role.objects.get_or_create(
+            id=Roles.Maintainer,
+            defaults={"name": "Maintainer"},
+        )
         self.product = Product.objects.create(
             name="Test Product",
             description="desc",
             prod_type=self.prod_type,
             sla_configuration_id=self.sla.id,
+        )
+        Product_Member.objects.create(
+            product=self.product,
+            user=self.user,
+            role=self.role_maintainer,
         )
 
         self.project = AISTProject.objects.create(
@@ -44,6 +54,25 @@ class AISTApiBase(TestCase):
             project=self.project,
             version_type=VersionType.GIT_HASH,
             version="main",
+        )
+
+        self.other_product = Product.objects.create(
+            name="Other Product",
+            description="desc",
+            prod_type=self.prod_type,
+            sla_configuration_id=self.sla.id,
+        )
+        self.other_project = AISTProject.objects.create(
+            product=self.other_product,
+            supported_languages=["python"],
+            script_path="scripts/build.sh",
+            compilable=False,
+            profile={},
+        )
+        self.other_pv = AISTProjectVersion.objects.create(
+            project=self.other_project,
+            version_type=VersionType.GIT_HASH,
+            version="other",
         )
 
 
@@ -95,6 +124,90 @@ class PipelineStartAPITests(AISTApiBase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.data, {"ai_filter": "ai_filter is required for AUTO_DEFAULT"})
 
+
+class AISTAuthorizationTests(AISTApiBase):
+    def test_project_list_filters_to_authorized_products(self):
+        resp = self.client.get(reverse("dojo_aist_api:project_list"))
+        self.assertEqual(resp.status_code, 200)
+        rows = resp.data.get("results", resp.data)
+        ids = {row["id"] for row in rows}
+        self.assertIn(self.project.id, ids)
+        self.assertNotIn(self.other_project.id, ids)
+
+    def test_project_detail_denies_other_product(self):
+        resp = self.client.get(
+            reverse("dojo_aist_api:project_detail", kwargs={"project_id": self.other_project.id}),
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_pipeline_list_filters_to_authorized_products(self):
+        own = AISTPipeline.objects.create(
+            id="pipe-own",
+            project=self.project,
+            status=AISTStatus.FINISHED,
+        )
+        AISTPipeline.objects.create(
+            id="pipe-other",
+            project=self.other_project,
+            status=AISTStatus.FINISHED,
+        )
+
+        resp = self.client.get(reverse("dojo_aist_api:pipelines"))
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", [])
+        ids = {row["id"] for row in results}
+        self.assertIn(own.id, ids)
+        self.assertNotIn("pipe-other", ids)
+
+    def test_pipeline_detail_denies_other_product(self):
+        AISTPipeline.objects.create(
+            id="pipe-other",
+            project=self.other_project,
+            status=AISTStatus.FINISHED,
+        )
+        resp = self.client.get(reverse("dojo_aist_api:pipeline_status", kwargs={"pipeline_id": "pipe-other"}))
+        self.assertEqual(resp.status_code, 404)
+
+
+class AISTUIApiTests(AISTApiBase):
+    def test_project_update_api(self):
+        url = reverse("dojo_aist_api:project_update", kwargs={"project_id": self.project.id})
+        resp = self.client.post(
+            url,
+            data={
+                "script_path": "scripts/new.sh",
+                "supported_languages": "python, go",
+                "profile": "{\"paths\": {\"exclude\": [\"vendor/\"]}}",
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.script_path, "scripts/new.sh")
+
+    def test_pipeline_stop_api(self):
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-stop-1",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.SAST_LAUNCHED,
+            run_task_id="celery-1",
+        )
+        url = reverse("dojo_aist_api:pipeline_stop", kwargs={"pipeline_id": pipeline.id})
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 200)
+        pipeline.refresh_from_db()
+        self.assertEqual(pipeline.status, AISTStatus.FINISHED)
+
+    def test_send_request_to_ai_api_requires_waiting_status(self):
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-ai-1",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINISHED,
+        )
+        url = reverse("dojo_aist_api:pipeline_send_request", kwargs={"pipeline_id": pipeline.id})
+        resp = self.client.post(url, data={"finding_ids": []}, format="json")
+        self.assertEqual(resp.status_code, 400)
 
 class LaunchConfigAPITests(AISTApiBase):
     def _list_create_url(self):

@@ -15,11 +15,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from dojo.aist.ai_filter import get_ai_filter_reference, validate_and_normalize_filter
+from dojo.aist.api.ai import delete_ai_response_for_pipeline, send_request_to_ai_for_pipeline
 from dojo.aist.logging_transport import install_pipeline_logging
 from dojo.aist.models import AISTAIResponse, AISTPipeline, AISTStatus
-from dojo.aist.tasks import push_request_to_ai
-from dojo.aist.utils.pipeline import finish_pipeline, set_pipeline_status
+from dojo.aist.queries import get_authorized_aist_pipelines
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
+from dojo.aist.utils.pipeline import finish_pipeline
 from dojo.models import Finding, Test
+from dojo.product.queries import get_authorized_products
 
 
 def _severity_rank_case():
@@ -47,6 +51,10 @@ def product_analyzers_json(request, product_id: int):
     This is grounded in DefectDojo's models via Finding -> Test -> Test_Type.
     """
     # Limit to analyzers that actually have findings for this product.
+    product_qs = get_authorized_products(Permissions.Product_View, user=request.user).filter(id=product_id)
+    if not product_qs.exists():
+        return HttpResponseBadRequest("product not found")
+
     names_qs = (Finding.objects
                 .filter(test__engagement__product_id=product_id)
                 .select_related("test__test_type")
@@ -85,6 +93,10 @@ def search_findings_json(request):
         product_id = int(product)
     except ValueError:
         return HttpResponseBadRequest("product must be int")
+
+    product_qs = get_authorized_products(Permissions.Product_View, user=request.user).filter(id=product_id)
+    if not product_qs.exists():
+        return HttpResponseBadRequest("product not found")
 
     qs = (Finding.objects
           .filter(test__engagement__product_id=product_id, active=True)
@@ -172,58 +184,25 @@ def send_request_to_ai(request, pipeline_id: str):
     Then delegate to your internal sender (if you already had one).
     """
     try:
-        pipeline = AISTPipeline.objects.select_related("project__product").get(id=pipeline_id)
+        pipeline = get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user).select_related(
+            "project__product",
+        ).get(id=pipeline_id)
     except AISTPipeline.DoesNotExist:
         return HttpResponseBadRequest("Unknown pipeline")
+    user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
 
-    try:
-        data = json.loads(request.body.decode("utf-8") or "{}")
-    except Exception:
-        data = {}
-
-    ids = data.get("finding_ids") or []
-    if not isinstance(ids, list) or not all(str(x).isdigit() for x in ids):
-        return HttpResponseBadRequest("finding_ids must be a list of integers")
-
-    ids_int = [int(x) for x in ids]
-    product = pipeline.project.product
-
-    allowed_qs = Finding.objects.filter(id__in=ids_int, test__engagement__product=product).select_related("test__test_type")
-    found_ids = list(allowed_qs.values_list("id", flat=True))
-
-    filters = data.get("filters") or {}
-
-    if not found_ids:
-        return HttpResponseBadRequest("No valid findings for this pipeline/product")
-
-    try:
-        logger = install_pipeline_logging(pipeline_id)
-        with transaction.atomic():
-            pipeline = (
-                AISTPipeline.objects
-                .select_for_update()
-                .get(id=pipeline_id)
-            )
-            if pipeline.status != AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI:
-                logger.error("Attempt to push to AI before receiving confirmation")
-                return JsonResponse({"error": "Attempt to push to AI before receiving confirmation"}, status=400)
-
-            set_pipeline_status(pipeline, AISTStatus.PUSH_TO_AI)
-
-        push_request_to_ai.delay(pipeline_id, ids_int, filters)
-    except Exception as exc:
-        # Return partial error but keep HTTP 200 if you prefer UI to proceed.
-        return JsonResponse({"ok": False, "error": str(exc)}, status=500)
-
-    return JsonResponse({"ok": True, "count": len(found_ids)})
+    return send_request_to_ai_for_pipeline(request, pipeline)
 
 
 @login_required
 @require_POST
 def delete_ai_response(request, pipeline_id: str, response_id: int):
-    pipeline = get_object_or_404(AISTPipeline, id=pipeline_id)
-    resp = get_object_or_404(pipeline.ai_responses, id=response_id)
-    resp.delete()
+    pipeline = get_object_or_404(
+        get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
+        id=pipeline_id,
+    )
+    user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
+    delete_ai_response_for_pipeline(pipeline, response_id)
     return redirect("dojo_aist:pipeline_detail", pipeline_id=pipeline.id)
 
 

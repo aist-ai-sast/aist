@@ -72,6 +72,11 @@ class AISTAIViewsTests(AISTApiBase):
         self.assertIn("semgrep", keys)
         self.assertIn("trivy", keys)
 
+    def test_product_analyzers_json_denies_other_product(self):
+        url = reverse("dojo_aist:product_analyzers_json", kwargs={"product_id": self.other_product.id})
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 400)
+
     def test_search_findings_json_filters(self):
         f1 = Finding.objects.create(
             test=self.test_semgrep,
