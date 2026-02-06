@@ -6,13 +6,13 @@ import requests
 from celery import shared_task
 from django.conf import settings
 from django.db import transaction
+from dojo.models import Finding
 
 from aist.ai_filter import apply_ai_filter
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTPipeline, AISTStatus
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 from aist.utils.urls import build_callback_url
-from dojo.models import Finding
 
 
 def _csv(items: Iterable[Any]) -> str:

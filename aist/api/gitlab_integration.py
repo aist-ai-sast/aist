@@ -1,6 +1,12 @@
 # --- add near other imports in api.py ---
 import gitlab
 from django.shortcuts import get_object_or_404
+from dojo.authorization.authorization import (
+    user_has_global_permission_or_403,
+    user_has_permission_or_403,
+)
+from dojo.authorization.roles_permissions import Permissions
+from dojo.models import DojoMeta, Product, Product_Type
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -9,12 +15,6 @@ from rest_framework.views import APIView
 
 from aist.models import AISTProject, Organization, RepositoryInfo, ScmGitlabBinding, ScmType
 from aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GH flow uses
-from dojo.authorization.authorization import (
-    user_has_global_permission_or_403,
-    user_has_permission_or_403,
-)
-from dojo.authorization.roles_permissions import Permissions
-from dojo.models import DojoMeta, Product, Product_Type
 
 
 class OptionalIntField(serializers.IntegerField):

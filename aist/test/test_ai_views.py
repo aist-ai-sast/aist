@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 from django.urls import reverse
 from django.utils import timezone
+from dojo.models import Engagement, Finding, Test, Test_Type
 
 from aist.models import AISTAIResponse, AISTPipeline, AISTStatus
 from aist.test.test_api import AISTApiBase
-from dojo.models import Engagement, Finding, Test, Test_Type
 
 
 class AISTAIViewsTests(AISTApiBase):

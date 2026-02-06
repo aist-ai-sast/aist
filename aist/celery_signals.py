@@ -7,6 +7,7 @@ from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from django.utils import timezone
+from dojo.models import Finding, Test
 
 from aist.actions import build_one_off_action, get_action_handler
 from aist.models import (
@@ -21,7 +22,6 @@ from aist.models import (
     VersionType,
 )
 from aist.signals import finding_deduplicated, pipeline_status_changed
-from dojo.models import Finding, Test
 
 
 @receiver(post_save, sender=AISTProject, dispatch_uid="aistproject_autoversion_master")

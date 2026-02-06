@@ -5,6 +5,9 @@ import json
 from django.db import transaction
 from django.http import HttpRequest, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
+from dojo.models import Finding
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers
 from rest_framework.permissions import IsAuthenticated
@@ -16,9 +19,6 @@ from aist.models import AISTPipeline, AISTStatus
 from aist.queries import get_authorized_aist_pipelines
 from aist.tasks import push_request_to_ai
 from aist.utils.pipeline import set_pipeline_status
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
-from dojo.models import Finding
 
 
 def send_request_to_ai_for_pipeline(request: HttpRequest, pipeline: AISTPipeline) -> JsonResponse:

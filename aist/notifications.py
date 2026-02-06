@@ -4,7 +4,6 @@ import logging
 
 import requests
 from django.conf import settings
-
 from dojo.notifications.helper import SlackNotificationManger
 
 logger = logging.getLogger("aist")

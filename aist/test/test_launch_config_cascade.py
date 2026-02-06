@@ -1,7 +1,7 @@
 from django.test import TestCase
+from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.models import AISTProject, AISTProjectLaunchConfig, LaunchSchedule, PipelineLaunchQueue
-from dojo.models import Product, Product_Type, SLA_Configuration
 
 
 class LaunchConfigCascadeTests(TestCase):

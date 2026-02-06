@@ -7,10 +7,10 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
+from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.celery_signals import on_pipeline_status_changed
 from aist.models import AISTPipeline, AISTProject, AISTProjectVersion, AISTStatus, VersionType
-from dojo.models import Product, Product_Type, SLA_Configuration
 
 
 class DummyConfig:

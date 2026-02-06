@@ -6,8 +6,8 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('aist', '0002_aisttestmeta'),
-        ('aist', '0007_remove_aistlaunchconfigaction_unique_constraint'),
+        ("aist", "0002_aisttestmeta"),
+        ("aist", "0007_remove_aistlaunchconfigaction_unique_constraint"),
     ]
 
     operations = [

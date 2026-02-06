@@ -59,7 +59,7 @@ RUN \
     dnsutils \
     xmlsec1 \
     git \
-    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
+    docker-ce docker-ce-cli containerd.io docker-compose-plugin \
     uuid-runtime \
     libpq-dev \
     # only required for the dbshell (used by the initializer job)
@@ -71,6 +71,7 @@ RUN \
   rm -rf /var/lib/apt/lists && \
   true
 ARG DOCKER_CLI_VERSION=24.0.2
+ARG DOCKER_BUILDX_VERSION=0.11.0
 RUN set -eux; \
   arch="$(dpkg --print-architecture)"; \
   case "${arch}" in \
@@ -82,6 +83,17 @@ RUN set -eux; \
   tar -xzf /tmp/docker.tgz -C /tmp; \
   install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
   rm -rf /tmp/docker /tmp/docker.tgz;
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "${arch}" in \
+    amd64)  buildx_arch="amd64" ;; \
+    arm64)  buildx_arch="arm64" ;; \
+    *) echo "Unsupported architecture: ${arch}" >&2; exit 1 ;; \
+  esac; \
+  install -d -m 0755 /usr/local/libexec/docker/cli-plugins; \
+  curl -fsSL "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.linux-${buildx_arch}" \
+    -o /usr/local/libexec/docker/cli-plugins/docker-buildx; \
+  chmod +x /usr/local/libexec/docker/cli-plugins/docker-buildx;
 RUN \
   --mount=from=build,src=/tmp/wheels,target=/tmp/wheels \
   --mount=from=build,src=/app/requirements.txt,target=/app/requirements.txt \

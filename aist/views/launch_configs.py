@@ -4,13 +4,12 @@ from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_POST
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
 
 from aist.api import LaunchConfigSerializer, create_launch_config_for_project
 from aist.forms import AISTLaunchConfigForm
-from aist.models import AISTProject
 from aist.queries import get_authorized_aist_projects
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
 
 
 @login_required

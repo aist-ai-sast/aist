@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.shortcuts import get_object_or_404
+from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -9,7 +10,6 @@ from rest_framework.views import APIView
 
 from aist.models import AISTProjectVersion, VersionType
 from aist.queries import get_authorized_aist_projects
-from dojo.authorization.roles_permissions import Permissions
 
 
 class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):

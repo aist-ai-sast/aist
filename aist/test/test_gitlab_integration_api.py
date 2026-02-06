@@ -6,10 +6,10 @@ import gitlab
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from dojo.models import Product, Product_Type, SLA_Configuration
 from rest_framework.test import APIClient
 
 from aist.models import AISTProject, Organization, RepositoryInfo, ScmGitlabBinding, ScmType
-from dojo.models import Product, Product_Type, SLA_Configuration
 
 
 class GitlabIntegrationAPITests(TestCase):

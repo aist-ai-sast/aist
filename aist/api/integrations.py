@@ -6,8 +6,8 @@ import gitlab
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 
 def gitlab_projects_list_payload(gitlab_url: str, gitlab_token: str) -> tuple[dict, int]:

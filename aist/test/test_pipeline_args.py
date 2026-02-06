@@ -11,11 +11,11 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.ai_filter import validate_and_normalize_filter
 from aist.models import AISTProject
 from aist.pipeline_args import PipelineArguments
-from dojo.models import Product, Product_Type, SLA_Configuration
 
 
 class DummyCfg:

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from django.urls import reverse
 from django.utils import timezone
+from dojo.models import Engagement, Finding, Test, Test_Type
 
 from aist.models import AISTPipeline, AISTStatus
 from aist.test.test_api import AISTApiBase
-from dojo.models import Engagement, Finding, Test, Test_Type
 
 
 class AISTPipelineDetailFindingsTests(AISTApiBase):

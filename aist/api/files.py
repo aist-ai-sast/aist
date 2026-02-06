@@ -7,6 +7,7 @@ import requests
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseServerError
 from django.shortcuts import get_object_or_404
 from django.utils.encoding import iri_to_uri
+from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from pipeline.defect_dojo.repo_info import read_repo_params  # type: ignore[import-not-found]
@@ -17,7 +18,6 @@ from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.link_builder import LinkBuilder
 from aist.models import VersionType
 from aist.queries import get_authorized_aist_project_versions
-from dojo.authorization.roles_permissions import Permissions
 from aist.utils.pipeline import get_project_build_path
 
 # ----------------------------

@@ -4,12 +4,13 @@ import json
 import logging
 import uuid
 
+from dojo.notifications.helper import EmailNotificationManger
+
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTLaunchConfigAction, AISTPipeline
 from aist.notifications import AISTSlackNotificationManager
 from aist.utils.action_config import decrypt_action_secret_config
 from aist.utils.export import build_ai_export_csv_text
-from dojo.notifications.helper import EmailNotificationManger
 
 logger = logging.getLogger("aist")
 

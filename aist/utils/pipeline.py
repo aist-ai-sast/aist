@@ -11,9 +11,8 @@ from django.db import transaction
 
 from aist.logging_transport import uninstall_pipeline_file_logging
 from aist.models import AISTPipeline, AISTStatus
-from aist.signals import pipeline_status_changed
+from aist.signals import pipeline_finished, pipeline_status_changed
 from aist.utils.pipeline_imports import cleanup_pipeline_containers
-from aist.signals import pipeline_finished
 
 _logger = logging.getLogger(__name__)
 BUILD_DIR_WARNING = "AIST_PROJECTS_BUILD_DIR is not set"

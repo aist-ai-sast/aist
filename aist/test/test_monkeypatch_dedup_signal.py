@@ -1,9 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
 from django.utils import timezone
-
-from aist.monkeypatch import install_deduplication_monkeypatch
-from aist.models import ProcessedFinding
+from dojo.finding.deduplication import do_dedupe_finding
 from dojo.models import (
     Engagement,
     Finding,
@@ -14,7 +12,9 @@ from dojo.models import (
     Test,
     Test_Type,
 )
-from dojo.finding.deduplication import do_dedupe_finding
+
+from aist.models import ProcessedFinding
+from aist.monkeypatch import install_deduplication_monkeypatch
 
 
 class MonkeypatchDedupSignalTest(TransactionTestCase):

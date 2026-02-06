@@ -7,11 +7,11 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from dojo.authorization.roles_permissions import Roles
+from dojo.models import Product, Product_Member, Product_Type, Role, SLA_Configuration
 from rest_framework.test import APIClient
 
 from aist.models import AISTPipeline, AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, AISTStatus, VersionType
-from dojo.authorization.roles_permissions import Roles
-from dojo.models import Product, Product_Member, Product_Type, Role, SLA_Configuration
 
 
 class AISTApiBase(TestCase):
@@ -177,7 +177,7 @@ class AISTUIApiTests(AISTApiBase):
             data={
                 "script_path": "scripts/new.sh",
                 "supported_languages": "python, go",
-                "profile": "{\"paths\": {\"exclude\": [\"vendor/\"]}}",
+                "profile": '{"paths": {"exclude": ["vendor/"]}}',
             },
         )
         self.assertEqual(resp.status_code, 200)
@@ -208,6 +208,7 @@ class AISTUIApiTests(AISTApiBase):
         url = reverse("aist_api:pipeline_send_request", kwargs={"pipeline_id": pipeline.id})
         resp = self.client.post(url, data={"finding_ids": []}, format="json")
         self.assertEqual(resp.status_code, 400)
+
 
 class LaunchConfigAPITests(AISTApiBase):
     def _list_create_url(self):

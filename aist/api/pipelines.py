@@ -11,6 +11,8 @@ from django.db import close_old_connections, transaction
 from django.db.models import Count
 from django.http import HttpResponse, HttpResponseBadRequest, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from openpyxl import Workbook
 from rest_framework import generics, serializers, status
@@ -22,11 +24,9 @@ from rest_framework.views import APIView
 from aist.ai_filter import validate_and_normalize_filter
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.logging_transport import BACKLOG_COUNT, PUBSUB_CHANNEL_TPL, STREAM_KEY, get_pipeline_log_path, get_redis
-from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, TestDeduplicationProgress
-from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_project_versions
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
+from aist.models import AISTPipeline, AISTStatus, TestDeduplicationProgress
 from aist.pipeline_args import PipelineArguments
+from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_project_versions
 from aist.tasks import run_sast_pipeline
 from aist.utils.export import _build_ai_export_rows
 from aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline, stop_pipeline
@@ -675,7 +675,6 @@ class PipelineLogsFullAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(responses={200: OpenApiResponse(description="Full log")})
-
     def get(self, request, pipeline_id: str):
         pipeline = get_object_or_404(
             get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
@@ -688,7 +687,6 @@ class PipelineLogsDownloadAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(responses={200: OpenApiResponse(description="Log download")})
-
     def get(self, request, pipeline_id: str):
         pipeline = get_object_or_404(
             get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
@@ -701,7 +699,6 @@ class PipelineLogsStreamAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(responses={200: OpenApiResponse(description="SSE stream")})
-
     def get(self, request, pipeline_id: str):
         pipeline = get_object_or_404(
             get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
@@ -714,7 +711,6 @@ class PipelineLogsStreamRedisAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(responses={200: OpenApiResponse(description="SSE stream (redis)")})
-
     def get(self, request, pipeline_id: str):
         pipeline = get_authorized_aist_pipelines(Permissions.Product_View, user=request.user).only("id").filter(
             id=pipeline_id,
@@ -728,7 +724,6 @@ class PipelineStatusStreamAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(responses={200: OpenApiResponse(description="Status SSE stream")})
-
     def get(self, request, pipeline_id: str):
         if not get_authorized_aist_pipelines(Permissions.Product_View, user=request.user).filter(id=pipeline_id).exists():
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -739,7 +734,6 @@ class PipelineDeduplicationProgressAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(responses={200: OpenApiResponse(description="Deduplication progress")})
-
     def get(self, request, pipeline_id: str):
         pipeline = get_object_or_404(
             get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
@@ -752,7 +746,6 @@ class PipelineEnrichProgressAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(responses={200: OpenApiResponse(description="Enrichment SSE stream")})
-
     def get(self, request, pipeline_id: str):
         if not get_authorized_aist_pipelines(Permissions.Product_View, user=request.user).filter(id=pipeline_id).exists():
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)

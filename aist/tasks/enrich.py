@@ -4,13 +4,13 @@ from typing import Any
 
 from celery import chain, chord, shared_task
 from django.db import transaction
+from dojo.models import DojoMeta, Finding, Test
 
 from aist.link_builder import LinkBuilder
 from aist.logging_transport import get_redis, install_pipeline_logging
 from aist.models import AISTPipeline, AISTStatus
 from aist.tasks.dedup import watch_deduplication
 from aist.utils.pipeline import set_pipeline_status
-from dojo.models import DojoMeta, Finding, Test
 
 
 @shared_task(bind=True)
