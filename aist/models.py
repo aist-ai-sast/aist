@@ -23,9 +23,8 @@ from django.db import models, transaction
 from django.utils import timezone
 from django_github_app.models import Installation
 from django_github_app.routing import GitHubRouter
-from encrypted_model_fields.fields import EncryptedCharField
-
 from dojo.models import Finding, Product, Test
+from encrypted_model_fields.fields import EncryptedCharField
 
 _repo_part_validator = RegexValidator(
     regex=r"^[A-Za-z0-9._/\-]+$",

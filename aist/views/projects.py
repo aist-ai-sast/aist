@@ -6,16 +6,16 @@ from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBadReque
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_POST
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
+from dojo.utils import add_breadcrumb
 
 from aist.ai_filter import get_ai_filter_reference
 from aist.api.projects import default_analyzers_payload, project_meta_payload, update_project_from_payload
 from aist.forms import AISTLaunchConfigForm, AISTProjectVersionForm
 from aist.models import AISTLaunchConfigAction, AISTProject, AISTStatus
 from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
 from aist.views._common import ERR_PROJECT_NOT_FOUND
-from dojo.utils import add_breadcrumb
 
 
 @login_required

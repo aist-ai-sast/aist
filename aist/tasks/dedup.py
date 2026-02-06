@@ -6,6 +6,8 @@ from django.conf import settings
 from django.db import OperationalError, transaction
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
+from dojo.finding.deduplication import do_dedupe_batch_task
+from dojo.models import Finding, Test
 
 from aist.logging_transport import install_pipeline_logging
 from aist.models import (
@@ -17,8 +19,6 @@ from aist.models import (
 )
 from aist.tasks.ai import auto_push_to_ai_if_configured
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
-from dojo.finding.deduplication import do_dedupe_batch_task
-from dojo.models import Finding, Test
 
 DEDUP_POLL_SLEEP_S = getattr(settings, "AIST_DEDUP_POLL_SLEEP_S", 3)
 DEDUP_STALE_TIMEOUT_S = getattr(settings, "AIST_DEDUP_STALE_TIMEOUT_S", 600)

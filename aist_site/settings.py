@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -13,7 +12,7 @@ VENDOR_BASE_DIR = PRODUCT_BASE_DIR / "vendor" / "defectdojo"
 if str(VENDOR_BASE_DIR) not in sys.path:
     sys.path.insert(0, str(VENDOR_BASE_DIR))
 
-from dojo.settings.settings import *  # noqa: F403, F401
+from dojo.settings.settings import *  # noqa: F403,E402
 
 # Core Django wiring for the product.
 ROOT_URLCONF = "aist_site.urls"
@@ -21,10 +20,7 @@ WSGI_APPLICATION = "aist_site.wsgi.application"
 ASGI_APPLICATION = "aist_site.asgi.application"
 
 # Register AIST app.
-extra_apps = []
-for app in ("django_github_app", "aist.apps.AistConfig"):
-    if app not in INSTALLED_APPS:  # noqa: F405
-        extra_apps.append(app)
+extra_apps = [app for app in ("django_github_app", "aist.apps.AistConfig") if app not in INSTALLED_APPS]  # noqa: F405
 if extra_apps:
     INSTALLED_APPS = [*extra_apps, *INSTALLED_APPS]  # noqa: F405
 
@@ -37,10 +33,10 @@ AIST_PIPELINE_CODE_PATH = env(  # noqa: F405
 AIST_PROJECTS_BUILD_DIR = env("AIST_PROJECTS_BUILD_DIR", default="/tmp/aist/projects")  # noqa: F405,S108
 
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="https://157.90.113.55:8443/")  # noqa: F405
-AIST_AI_TRIAGE_WEBHOOK_URL = env(
+AIST_AI_TRIAGE_WEBHOOK_URL = env(  # noqa: F405
     "AIST_AI_TRIAGE_WEBHOOK_URL",
     default="https://flaming.app.n8n.cloud/webhook/triage-sast",
-)  # noqa: F405
+)
 AIST_AI_TRIAGE_SECRET = ""
 
 REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] += ("rest_framework.permissions.IsAuthenticated",)  # noqa: F405

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 
 from django.shortcuts import get_object_or_404
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -11,8 +13,6 @@ from rest_framework.views import APIView
 
 from aist.models import AISTProject, Organization
 from aist.queries import get_authorized_aist_projects
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 
@@ -136,7 +136,7 @@ def default_analyzers_payload(*, project: AISTProject | None, project_id: str | 
 
 def update_project_from_payload(*, project: AISTProject, payload: dict):
     script_path = (payload.get("script_path") or "").strip()
-    compilable = payload.get("compilable") in {"on", True, "true", "1", 1}
+    compilable = payload.get("compilable") in {"on", True, "true", "1"}
     supported_languages_raw = payload.get("supported_languages")
     profile_raw = payload.get("profile")
     organization_raw = payload.get("organization")

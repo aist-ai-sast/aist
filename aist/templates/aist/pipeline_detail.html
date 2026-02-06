@@ -291,8 +291,11 @@
 
                 const url = "{% url 'aist:deduplication_progress' pipeline.id %}";
                 const poll = () => {
-                    fetch(url)
-                        .then(r => r.json())
+                    fetch(url, {credentials: "same-origin", cache: "no-store"})
+                        .then(r => {
+                            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                            return r.json();
+                        })
                         .then(data => {
                             renderOverall(data.overall || {}, root);
                             renderRows(data.tests || [], root);
@@ -642,7 +645,7 @@
             }
 
 
-            const initialStatus = (st?.textContent || "").trim();
+            const initialStatus = (container?.getAttribute("data-status") || st?.textContent || "").trim();
             if (initialStatus) runHydratorFor(initialStatus, document);
 
             // ---------- Logs SSE ----------
@@ -694,6 +697,20 @@
 
             // ---------- Status SSE ----------
             const srcStatus = new EventSource("{% url 'aist:pipeline_status_stream' pipeline.id %}");
+            let statusPollTimer = null;
+            const statusPollIntervalMs = 5000;
+
+            function startStatusPolling() {
+                if (statusPollTimer) return;
+                refreshStatusPartial();
+                statusPollTimer = setInterval(refreshStatusPartial, statusPollIntervalMs);
+            }
+
+            function stopStatusPolling() {
+                if (!statusPollTimer) return;
+                clearInterval(statusPollTimer);
+                statusPollTimer = null;
+            }
 
             function refreshStatusPartial() {
                 fetch(window.location.href, {headers: {"X-Partial": "status"}})
@@ -719,6 +736,7 @@
 
             srcStatus.addEventListener("status", (evt) => {
                 if (evt?.data) setStatusText(evt.data);
+                stopStatusPolling();
                 refreshStatusPartial();
             });
 
@@ -729,8 +747,14 @@
                 refreshStatusPartial();
                 setTimeout(refreshStatusPartial, 1500);
                 setTimeout(refreshStatusPartial, 4000);
+                stopStatusPolling();
                 srcStatus.close();
             });
+
+            srcStatus.onerror = () => {
+                console.warn("pipeline status SSE error; falling back to polling");
+                startStatusPolling();
+            };
 
             document.getElementById('aist-ai-responses')?.addEventListener('shown.bs.collapse', function (ev) {
                 hydrateAllJsonBlocks(ev.target);

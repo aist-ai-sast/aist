@@ -5,11 +5,11 @@ from django.http import HttpRequest, HttpResponse  # noqa: TC002
 from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
+from dojo.authorization.roles_permissions import Permissions
+from dojo.utils import add_breadcrumb
 
 from aist.models import AISTLaunchConfigAction, AISTStatus
 from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
-from dojo.authorization.roles_permissions import Permissions
-from dojo.utils import add_breadcrumb
 
 
 @login_required

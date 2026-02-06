@@ -6,6 +6,7 @@ from django.views.decorators.http import require_POST
 
 from aist.api.integrations import gitlab_projects_list_payload
 
+
 @login_required
 @require_POST
 def gitlab_projects_list(request: HttpRequest) -> JsonResponse:

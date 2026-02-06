@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from django.test import TestCase, override_settings
+from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.actions import EmailAction, SlackAction, WriteLogAction
 from aist.models import (
@@ -16,7 +17,6 @@ from aist.models import (
     AISTStatus,
     VersionType,
 )
-from dojo.models import Product, Product_Type, SLA_Configuration
 
 
 @override_settings(DB_KEY="test-secret")

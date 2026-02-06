@@ -35,6 +35,7 @@ RUN export PYCURL_SSL_LIBRARY=openssl && \
 
 FROM base AS release
 WORKDIR /app
+ARG DOCKER_BUILDX_VERSION=0.11.0
 ARG uid=1001
 ARG gid=1337
 ARG appuser=defectdojo
@@ -48,7 +49,6 @@ RUN \
     bind-tools \
     xmlsec \
     docker-cli \
-    docker-cli-buildx \
     git \
     util-linux \
     postgresql16-client \
@@ -59,6 +59,17 @@ RUN \
     && \
     rm -rf /var/cache/apk/* && \
   true
+RUN set -eux; \
+  arch="$(apk --print-arch)"; \
+  case "${arch}" in \
+    x86_64)  buildx_arch="amd64" ;; \
+    aarch64) buildx_arch="arm64" ;; \
+    *) echo "Unsupported architecture: ${arch}" >&2; exit 1 ;; \
+  esac; \
+  install -d -m 0755 /usr/local/libexec/docker/cli-plugins; \
+  curl -fsSL "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.linux-${buildx_arch}" \
+    -o /usr/local/libexec/docker/cli-plugins/docker-buildx; \
+  chmod +x /usr/local/libexec/docker/cli-plugins/docker-buildx;
 RUN \
   --mount=from=build,src=/tmp/wheels,target=/tmp/wheels \
   --mount=from=build,src=/app/requirements.txt,target=/app/requirements.txt \

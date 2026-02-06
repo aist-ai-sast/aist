@@ -1,5 +1,5 @@
 {# aist/_pipeline_status_container.html #}
-<div id="pipeline-status-container">
+<div id="pipeline-status-container" data-status="{{ pipeline.status }}">
     {% if pipeline.status == "WAITING_DEDUPLICATION_TO_FINISH" %}
         {% include "aist/_status_waiting_dedup.html" %}
     {% elif pipeline.status == "FINDING_POSTPROCESSING" %}

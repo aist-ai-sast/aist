@@ -3,6 +3,7 @@ from __future__ import annotations
 from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
+from dojo.models import Finding, Test
 
 from aist.logging_transport import get_redis, install_pipeline_logging
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionType
@@ -10,7 +11,6 @@ from aist.pipeline_args import PipelineArguments
 from aist.tasks.enrich import make_enrich_chord
 from aist.utils.pipeline import finish_pipeline, get_project_build_path, set_pipeline_status
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
-from dojo.models import Finding, Test
 
 # --------------------------------------------------------------------
 # Ensure external "pipeline" package is importable before importing it

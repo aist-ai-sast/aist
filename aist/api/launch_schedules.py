@@ -6,6 +6,8 @@ from croniter import croniter
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_field
 from rest_framework import serializers, status
@@ -18,8 +20,6 @@ from aist.queries import (
     get_authorized_aist_launch_schedules,
     get_authorized_aist_projects,
 )
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
 
 
 class LaunchScheduleSerializer(serializers.ModelSerializer):

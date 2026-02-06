@@ -5,15 +5,14 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from dojo.authorization.roles_permissions import Permissions
 
 from aist.api.pipelines import (
     deduplication_progress_payload,
     pipeline_enrich_progress_response,
     pipeline_status_stream_response,
 )
-from aist.models import AISTPipeline
 from aist.queries import get_authorized_aist_pipelines
-from dojo.authorization.roles_permissions import Permissions
 from aist.views._common import ERR_PIPELINE_NOT_FOUND
 
 

@@ -1,5 +1,4 @@
 from django.urls import include, path, re_path
-
 from dojo.utils import get_system_setting
 
 urlpatterns = [

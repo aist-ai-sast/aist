@@ -10,6 +10,10 @@ from django.db.models import Case, IntegerField, Q, Value, When
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
+from dojo.authorization.authorization import user_has_permission_or_403
+from dojo.authorization.roles_permissions import Permissions
+from dojo.models import Finding
+from dojo.utils import add_breadcrumb
 
 from aist.ai_filter import apply_ai_filter, get_ai_filter_reference
 from aist.api.launch_configs import ACTION_CREATE_SERIALIZERS
@@ -21,10 +25,6 @@ from aist.utils.action_config import encrypt_action_secret_config
 from aist.utils.http import _fmt_duration, _qs_without
 from aist.utils.pipeline import create_pipeline_object, set_pipeline_status, stop_pipeline
 from aist.views._common import ERR_PIPELINE_NOT_FOUND
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
-from dojo.models import Finding
-from dojo.utils import add_breadcrumb
 
 FINDINGS_PAGE_SIZES = [25, 50, 100, 200]
 FINDINGS_SEVERITY_BADGES = {

@@ -8,9 +8,6 @@ from typing import Any
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-
-from aist.logging_transport import install_pipeline_logging
-from aist.utils.pipeline_imports import _import_sast_pipeline_package
 from dojo.importers.default_importer import DefaultImporter
 from dojo.models import (
     Development_Environment,
@@ -20,6 +17,9 @@ from dojo.models import (
     Product_Type,
     Test,
 )
+
+from aist.logging_transport import install_pipeline_logging
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
 
 _import_sast_pipeline_package()
 

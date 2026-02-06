@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from crum import get_current_user
+from dojo.product.queries import get_authorized_products
 
 from aist.models import (
     AISTLaunchConfigAction,
@@ -12,7 +13,6 @@ from aist.models import (
     Organization,
     PipelineLaunchQueue,
 )
-from dojo.product.queries import get_authorized_products
 
 
 def _resolve_user(user):

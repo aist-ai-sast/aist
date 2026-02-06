@@ -2,9 +2,9 @@
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
 from django.utils import timezone
+from dojo.models import Engagement, Finding, Product, Product_Type, SLA_Configuration, Test, Test_Type
 
 from aist.models import AISTTestMeta, ProcessedFinding, TestDeduplicationProgress
-from dojo.models import Engagement, Finding, Product, Product_Type, SLA_Configuration, Test, Test_Type
 
 
 class ConcurrentDeduplicationTest(TransactionTestCase):
