@@ -107,11 +107,11 @@ class ImportProjectFromGitlabAPI(APIView):
         if created_product_type:
             user_has_global_permission_or_403(request.user, Permissions.Product_Type_Add)
         user_has_permission_or_403(request.user, product_type, Permissions.Product_Type_Add_Product)
-        product, _created = Product.objects.get_or_create(
+        product, created_product = Product.objects.get_or_create(
             name=path_with_ns,
             defaults={"prod_type": product_type, "description": description},
         )
-        if not _created:
+        if not created_product:
             user_has_permission_or_403(request.user, product, Permissions.Product_Edit)
 
         DojoMeta.objects.update_or_create(
@@ -128,7 +128,7 @@ class ImportProjectFromGitlabAPI(APIView):
             defaults={"base_url": inferred_base},
         )
 
-        binding, _created = ScmGitlabBinding.objects.get_or_create(scm=repo_info)
+        binding, _ = ScmGitlabBinding.objects.get_or_create(scm=repo_info)
 
         if token and binding.personal_access_token != token:
             binding.personal_access_token = token
