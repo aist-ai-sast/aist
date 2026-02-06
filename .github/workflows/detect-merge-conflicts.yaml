@@ -7,7 +7,6 @@ on:
       - master
       - bugfix
       - release/*
-      - aist
 
   pull_request_target:
     types: [synchronize]

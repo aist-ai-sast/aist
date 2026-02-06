@@ -160,7 +160,7 @@ def update_project_from_payload(*, project: AISTProject, payload: dict):
         languages = []
 
     profile: dict | list | None
-    if profile_raw in (None, ""):
+    if profile_raw in {None, ""}:
         profile = {}
     elif isinstance(profile_raw, dict):
         profile = profile_raw
@@ -175,7 +175,7 @@ def update_project_from_payload(*, project: AISTProject, payload: dict):
         errors["profile"] = 'Profile must be a JSON object (e.g. {"paths": {"exclude": []}}).'
 
     organization = None
-    if organization_raw not in (None, ""):
+    if organization_raw not in {None, ""}:
         try:
             org_id = int(organization_raw)
             organization = Organization.objects.get(id=org_id)

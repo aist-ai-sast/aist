@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.db import transaction
+from dojo.models import Finding
 
 from aist.signals import finding_deduplicated
 
+try:
+    from dojo.finding import deduplication as dedupe_mod
+except Exception:  # pragma: no cover - defensive import guard
+    dedupe_mod = None
+
 logger = logging.getLogger(__name__)
 _patch_lock = threading.Lock()
-_patched = False
+_patched = threading.Event()
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _emit_for_finding(finding) -> None:  # type: ignore[no-untyped-def]
@@ -42,12 +50,6 @@ def _wrap_dedupe_single(func: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _emit_for_finding_ids(finding_ids) -> None:  # type: ignore[no-untyped-def]
-    try:
-        from dojo.models import Finding  # noqa: PLC0415
-    except Exception:
-        logger.exception("Failed to import Finding for batch dedupe signal emission")
-        return
-
     for finding in Finding.objects.filter(id__in=list(finding_ids)).select_related("test"):
         _emit_for_finding(finding)
 
@@ -75,15 +77,12 @@ def _wrap_dedupe_batch(func: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def install_deduplication_monkeypatch() -> None:
-    global _patched
     with _patch_lock:
-        if _patched:
+        if _patched.is_set():
             return
 
-        try:
-            from dojo.finding import deduplication as dedupe_mod
-        except Exception:
-            logger.exception("Failed to import dojo.finding.deduplication for monkeypatch")
+        if dedupe_mod is None:
+            logger.error("Failed to import dojo.finding.deduplication for monkeypatch")
             return
 
         single = getattr(dedupe_mod, "do_dedupe_finding_task_internal", None)
@@ -104,4 +103,4 @@ def install_deduplication_monkeypatch() -> None:
         else:
             dedupe_mod.do_dedupe_batch_task = _wrap_dedupe_batch(batch)
 
-        _patched = True
+        _patched.set()

@@ -27,7 +27,8 @@ exclude = [
     "node_modules",
     "venv",
     #  Not for the dojo specific stuff
-    "vendor/defectdojo/dojo/db_migrations"
+    "vendor/defectdojo/dojo/db_migrations",
+    "sast-combinator"
 ]
 
 [lint]
