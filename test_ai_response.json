@@ -1,0 +1,147 @@
+{
+    "job_id": "109961a5-cc51-11f0-a655-2605b6bb7e8d",
+    "status": "completed",
+    "results":
+    {
+        "uncertainly":
+        [],
+        "true_positives":
+        [
+            {
+                "title": "Path Traversal in Tar Archive Extraction",
+                "epssScore": 0.68,
+                "reasoning": "The code uses tarfile.extractall() without path validation, allowing malicious tar archives to write files outside the intended directory. This is a well-known vulnerability where attacker-controlled archives can overwrite system files. The function accepts external archive_path without sanitization, making exploitation straightforward.",
+                "references":
+                [
+                    "https://cwe.mitre.org/data/definitions/22.html",
+                    "https://owasp.org/www-community/attacks/Path_Traversal"
+                ],
+                "impactScore": 80,
+                "closestModel": "deepseek",
+                "falsePositive": false,
+                "missingContext":
+                [
+                    "Source of archive_path parameter",
+                    "Caller validation of archive_path",
+                    "Project deployment environment"
+                ],
+                "originalFinding":
+                {
+                    "cwe": 22,
+                    "file": "scripts/public_installation_script.py",
+                    "line": 4,
+                    "tool": "semgrep-89ab4b91",
+                    "ruleId": "trailofbits.python.tarfile-extractall-traversal.tarfile-extractall-traversal",
+                    "message": "**Result message:** Possible path traversal through `tarfile.open($PATH).extractall()` if the source tar is controlled by an attacker",
+                    "snippet": "with tarfile.open(archive_path, \"r:gz\") as tf:\n            tf.extractall(extract_path)",
+                    "ruleLevel": "error",
+                    "function_lines":
+                    [
+                        68,
+                        76
+                    ]
+                },
+                "uncertaintyLevel": 0.2,
+                "uncertaintySpread": 0,
+                "exploitCodeMaturity": "High",
+                "exploitabilityScore": 83
+            },
+            {
+                "title": "Arbitrary File Write via Tar Extraction",
+                "epssScore": 0.68,
+                "reasoning": "The extractall() method is called without path safety checks, enabling tar slip attacks where malicious archives extract files to arbitrary locations. The vulnerability exists because the function doesn't validate that extracted files remain within extract_path boundaries. This is a common attack vector with mature exploit techniques.",
+                "references":
+                [
+                    "https://cwe.mitre.org/data/definitions/22.html",
+                    "https://owasp.org/www-community/attacks/Path_Traversal"
+                ],
+                "impactScore": 80,
+                "closestModel": "deepseek",
+                "falsePositive": false,
+                "missingContext":
+                [
+                    "Input validation for archive_path",
+                    "Security controls around archive sources",
+                    "File system permissions context"
+                ],
+                "originalFinding":
+                {
+                    "cwe": 22,
+                    "file": "scripts/public_installation_script.py",
+                    "line": 5,
+                    "tool": "codeql_python-89ab4b91",
+                    "ruleId": "py/tarslip",
+                    "message": "**Result message:** This file extraction depends on a [potentially untrusted source](1).\n**Rule name:** py/tarslip\n**Rule short description:** Arbitrary file write during tarfile extraction\n**Rule full description:** Extracting files from a malicious tar archive without validating that the destination file path is within the destination directory can cause files outside the destination directory to be overwritten.\n**Code flow:**\n1. scripts/public_installation_script.py:L71:C14\n\tControlFlowNode for Attribute()\n2. scripts/public_installation_script.py:L71:C52\n\tControlFlowNode for tf\n3. scripts/public_installation_script.py:L72:C13\n\tControlFlowNode for tf",
+                    "snippet": "with tarfile.open(archive_path, \"r:gz\") as tf:\n            tf.extractall(extract_path)",
+                    "ruleLevel": "error",
+                    "function_lines":
+                    [
+                        68,
+                        76
+                    ]
+                },
+                "uncertaintyLevel": 0.2,
+                "uncertaintySpread": 0,
+                "exploitCodeMaturity": "High",
+                "exploitabilityScore": 83
+            },
+            {
+                "title": "Path Traversal in File Download",
+                "epssScore": 0.54,
+                "reasoning": "The download_file function writes to a user-controlled filename without path validation, potentially allowing arbitrary file writes. The filename parameter is directly used in open() without sanitization, enabling directory traversal if the caller provides malicious input. This could overwrite critical system files or configuration data.",
+                "references":
+                [
+                    "https://cwe.mitre.org/data/definitions/22.html",
+                    "https://owasp.org/www-community/attacks/Path_Traversal"
+                ],
+                "impactScore": 76,
+                "closestModel": "deepseek",
+                "falsePositive": false,
+                "missingContext":
+                [
+                    "Caller validation of filename parameter",
+                    "Intended download directory restrictions",
+                    "User input sources for filename"
+                ],
+                "originalFinding":
+                {
+                    "cwe": 22,
+                    "file": "scripts/public_installation_script.py",
+                    "line": 15,
+                    "tool": "bearer-89ab4b91",
+                    "ruleId": "python_lang_path_traversal",
+                    "message": "## Description\n\nUsing unsanitized dynamic input to determine file paths can allow attackers to gain access to files and folders outside of the intended scope. This vulnerability occurs when input provided by users is directly used to access the filesystem without proper validation or sanitization.\n\n## Remediations\n\n- **Do not** directly use external input to construct file paths. This can lead to unauthorized file access.\n- **Do** use a safelist to define accessible paths or directories. Only allow user input to influence file paths within these predefined, safe boundaries.\n- **Do** use absolute path checks to confirm that the constructed path is within the expected directory\n    ```python\n    BASE_DIRECTORY = '/path/to/safe/directory'\n    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, dynamic_input))\n\n    if my_path.startswith(BASE_DIRECTORY):\n      open(my_path)\n   ```\n\n## References\n\n- [OWASP Path Traversal](https://owasp.org/www-community/attacks/Path_Traversal)\n\n Detected code snippet: \n    with open(filename, \"wb\") as f:",
+                    "snippet": "with open(filename, \"wb\") as f:\n        for data in response.iter_content(block_size):\n            wrote += len(data)\n            f.write(data)\n\n            # Progress calculation\n            percentage = min(int((wrote / total_size) * 100), 100)\n            bar_length = 50\n            filled_length = int(bar_length * percentage / 100)\n            bar = \"=\" * filled_length + \"-\" * (bar_length - filled_length)\n            sys.stdout.write(f\"\\r[{bar}] {percentage}%\")\n            sys.stdout.flush()",
+                    "ruleLevel": "error",
+                    "function_lines":
+                    [
+                        38,
+                        65
+                    ]
+                },
+                "uncertaintyLevel": 0.33,
+                "uncertaintySpread": 0.1,
+                "exploitCodeMaturity": "Proof-of-Concept",
+                "exploitabilityScore": 73
+            }
+        ],
+        "false_positives":
+        []
+    },
+    "progress": 100,
+    "warnings":
+    [
+        {
+            "error":
+            {
+                "code": "ERR_BAD_REQUEST",
+                "name": "AxiosError",
+                "stack": "AxiosError: Request failed with status code 400\n    at settle (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/axios@1.8.3/node_modules/axios/lib/core/settle.js:19:12)\n    at RedirectableRequest.handleResponse (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/axios@1.8.3/node_modules/axios/lib/adapters/http.js:547:9)\n    at RedirectableRequest.emit (node:events:530:35)\n    at RedirectableRequest._processResponse (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/follow-redirects@1.15.9/node_modules/follow-redirects/index.js:409:10)\n    at ClientRequest.RedirectableRequest._onNativeResponse (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/follow-redirects@1.15.9/node_modules/follow-redirects/index.js:102:12)\n    at Object.onceWrapper (node:events:633:26)\n    at ClientRequest.emit (node:events:518:28)\n    at HTTPParser.parserOnIncomingClient [as onIncoming] (node:_http_client:716:27)\n    at HTTPParser.parserOnHeadersComplete (node:_http_common:117:17)\n    at TLSSocket.socketOnData (node:_http_client:558:22)\n    at TLSSocket.emit (node:events:518:28)\n    at addChunk (node:internal/streams/readable:561:12)\n    at readableAddChunkPushByteMode (node:internal/streams/readable:512:3)\n    at TLSSocket.Readable.push (node:internal/streams/readable:392:5)\n    at TLSWrap.onStreamRead (node:internal/stream_base_commons:189:23)\n    at TLSWrap.callbackTrampoline (node:internal/async_hooks:130:17)\n    at Axios.request (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/axios@1.8.3/node_modules/axios/lib/core/Axios.js:45:41)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at invokeAxios (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/n8n-core@file+packages+core_@opentelemetry+api@1.9.0_@opentelemetry+sdk-trace-base@1.30_0c275070fd0434c00ffd62213b2bcae4/node_modules/n8n-core/src/execution-engine/node-execution-context/utils/request-helper-functions.ts:313:10)\n    at proxyRequestToAxios (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/n8n-core@file+packages+core_@opentelemetry+api@1.9.0_@opentelemetry+sdk-trace-base@1.30_0c275070fd0434c00ffd62213b2bcae4/node_modules/n8n-core/src/execution-engine/node-execution-context/utils/request-helper-functions.ts:695:20)\n    at Object.request (/usr/local/lib/node_modules/n8n/node_modules/.pnpm/n8n-core@file+packages+core_@opentelemetry+api@1.9.0_@opentelemetry+sdk-trace-base@1.30_0c275070fd0434c00ffd62213b2bcae4/node_modules/n8n-core/src/execution-engine/node-execution-context/utils/request-helper-functions.ts:1740:4)",
+                "status": 400,
+                "message": "400 - \"{\\\"type\\\":\\\"error\\\",\\\"error\\\":{\\\"type\\\":\\\"invalid_request_error\\\",\\\"message\\\":\\\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\\\"},\\\"request_id\\\":\\\"req_011CVaF5T9etAAKkz8mVSpQu\\\"}\""
+            }
+        }
+    ],
+    "started_at": "2025-11-28 12:54:59.329212",
+    "finished_at": "2025-11-28 12:55:58.672462"
+}

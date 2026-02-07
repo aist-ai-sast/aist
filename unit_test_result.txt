@@ -1,0 +1,57 @@
+Attaching to django-defectdojo-uwsgi-1
+django-defectdojo-uwsgi-1  | Waiting for database to be reachable 
+django-defectdojo-uwsgi-1  | Simple database test was successful
+django-defectdojo-uwsgi-1  | No changes detected
+django-defectdojo-uwsgi-1  | Operations to perform:
+django-defectdojo-uwsgi-1  |   Apply all migrations: admin, aist, auditlog, auth, authtoken, contenttypes, django_celery_results, django_github_app, dojo, pghistory, sessions, sites, social_django, watson
+django-defectdojo-uwsgi-1  | Running migrations:
+django-defectdojo-uwsgi-1  |   No migrations to apply.
+django-defectdojo-uwsgi-1  | Unit Tests
+django-defectdojo-uwsgi-1  | ------------------------------------------------------------
+django-defectdojo-uwsgi-1  | Excluding test tag(s): non-parallel, transactional.
+django-defectdojo-uwsgi-1  | Found 3160 test(s).
+django-defectdojo-uwsgi-1  | Operations to perform:
+django-defectdojo-uwsgi-1  |   Synchronize unmigrated apps: dbbackup, django_filters, drf_spectacular, drf_spectacular_sidecar, fontawesomefree, humanize, imagekit, messages, multiselectfield, pgtrigger, polymorphic, rest_framework, staticfiles, tagulous
+django-defectdojo-uwsgi-1  |   Apply all migrations: admin, aist, auditlog, auth, authtoken, contenttypes, django_celery_results, django_github_app, dojo, pghistory, sessions, sites, social_django, watson
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application auth
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application contenttypes
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application sessions
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application sites
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application polymorphic
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application admin
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application dojo
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application watson
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application imagekit
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application authtoken
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application django_celery_results
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application social_django
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application tagulous
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application auditlog
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application pgtrigger
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application pghistory
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application aist
+django-defectdojo-uwsgi-1  | Running pre-migrate handlers for application django_github_app
+django-defectdojo-uwsgi-1  | Synchronizing apps without migrations:
+django-defectdojo-uwsgi-1  |   Creating tables...
+django-defectdojo-uwsgi-1  |     Running deferred SQL...
+django-defectdojo-uwsgi-1  | Running migrations:
+django-defectdojo-uwsgi-1  |   No migrations to apply.
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application auth
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application contenttypes
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application sessions
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application sites
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application polymorphic
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application admin
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application dojo
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application watson
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application imagekit
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application authtoken
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application django_celery_results
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application social_django
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application tagulous
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application auditlog
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application pgtrigger
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application pghistory
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application aist
+django-defectdojo-uwsgi-1  | Running post-migrate handlers for application django_github_app
+django-defectdojo-uwsgi-1  | System check identified no issues (0 silenced).

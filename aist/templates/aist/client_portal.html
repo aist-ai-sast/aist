@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>AIST Client UI</title>
+        <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+        <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico" />
+        <link rel="stylesheet" href="/assets/app.css" />
+    </head>
+    <body class="bg-slate-950 text-slate-100">
+        <div id="root"></div>
+        <script>
+            window.__AIST_ROUTES__ = {{ routes_json|safe }};
+            window.__AIST_CSRF__ = "{{ csrf_token }}";
+        </script>
+        <script type="module" src="/assets/app.js"></script>
+    </body>
+</html>

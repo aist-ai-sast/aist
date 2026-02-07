@@ -73,6 +73,4 @@ urlpatterns = [
         launch_configs.project_launch_config_create_ui,
         name="project_launch_config_create_ui",
     ),
-
-
 ]

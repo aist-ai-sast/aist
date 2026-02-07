@@ -18,10 +18,20 @@ from aist.utils.pipeline_imports import _load_analyzers_config
 
 class AISTProjectSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source="product.name", read_only=True)
+    product_id = serializers.IntegerField(source="product.id", read_only=True)
 
     class Meta:
         model = AISTProject
-        fields = ["id", "product_name", "supported_languages", "compilable", "created", "updated", "repository"]
+        fields = [
+            "id",
+            "product_id",
+            "product_name",
+            "supported_languages",
+            "compilable",
+            "created",
+            "updated",
+            "repository",
+        ]
 
 
 class DefaultAnalyzersRequestSerializer(serializers.Serializer):

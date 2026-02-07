@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from django.test import SimpleTestCase
+
+
+class ClientUIStaticTests(SimpleTestCase):
+    def test_client_ui_placeholder_exists(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        index = base_dir / "client-ui" / "index.html"
+        self.assertTrue(index.exists())
+        self.assertIn("AIST Client UI", index.read_text(encoding="utf-8"))
+
+    def test_client_ui_detail_page_exists(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        detail = base_dir / "client-ui" / "src" / "pages" / "FindingDetailPage.tsx"
+        self.assertTrue(detail.exists())
+        self.assertIn("Finding Detail", detail.read_text(encoding="utf-8"))
+
+    def test_client_ui_api_queries_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        routes = base_dir / "client-ui" / "src" / "lib" / "routes.ts"
+        self.assertTrue(routes.exists())
+        content = routes.read_text(encoding="utf-8")
+        self.assertIn("__AIST_ROUTES__", content)
+
+    def test_client_ui_monaco_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        code_snippet = base_dir / "client-ui" / "src" / "components" / "CodeSnippet.tsx"
+        self.assertTrue(code_snippet.exists())
+        content = code_snippet.read_text(encoding="utf-8")
+        self.assertIn("@monaco-editor/react", content)
+        self.assertIn("Expand", content)
+
+    def test_client_ui_auth_hook_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        app_file = base_dir / "client-ui" / "src" / "App.tsx"
+        self.assertTrue(app_file.exists())
+        content = app_file.read_text(encoding="utf-8")
+        self.assertIn("RequireAuth", content)
+        self.assertIn("LoginPage", content)
+
+    def test_client_ui_auth_proxy_paths(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        auth_file = base_dir / "client-ui" / "src" / "lib" / "auth.ts"
+        self.assertTrue(auth_file.exists())
+        content = auth_file.read_text(encoding="utf-8")
+        self.assertIn("login_url", content)
+
+    def test_client_ui_template_routes(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        template = base_dir / "aist" / "templates" / "aist" / "client_portal.html"
+        self.assertTrue(template.exists())
+        content = template.read_text(encoding="utf-8")
+        self.assertIn("__AIST_ROUTES__", content)

@@ -19,6 +19,16 @@ ROOT_URLCONF = "aist_site.urls"
 WSGI_APPLICATION = "aist_site.wsgi.application"
 ASGI_APPLICATION = "aist_site.asgi.application"
 
+# Guard DefectDojo UI from non-superusers while keeping API access intact.
+if "aist_site.middleware.AistAdminGuardMiddleware" not in MIDDLEWARE:  # noqa: F405
+    middleware = list(MIDDLEWARE)  # noqa: F405
+    try:
+        auth_index = middleware.index("django.contrib.auth.middleware.AuthenticationMiddleware")
+    except ValueError:
+        auth_index = len(middleware) - 1
+    middleware.insert(auth_index + 1, "aist_site.middleware.AistAdminGuardMiddleware")
+    MIDDLEWARE = middleware  # noqa: F405
+
 # Register AIST app.
 extra_apps = [app for app in ("django_github_app", "aist.apps.AistConfig") if app not in INSTALLED_APPS]  # noqa: F405
 if extra_apps:
@@ -29,6 +39,10 @@ AIST_PIPELINE_CODE_PATH = env(  # noqa: F405
     "AIST_PIPELINE_CODE_PATH",
     default=str(PRODUCT_BASE_DIR / "sast-combinator" / "sast-pipeline"),
 )
+
+# Ensure admin auth redirects stay within the protected prefix.
+LOGIN_URL = "/aist-admin/login/"
+LOGIN_REDIRECT_URL = "/aist-admin/"
 
 AIST_PROJECTS_BUILD_DIR = env("AIST_PROJECTS_BUILD_DIR", default="/tmp/aist/projects")  # noqa: F405,S108
 
@@ -56,7 +70,11 @@ FIELD_ENCRYPTION_KEY = env(  # noqa: F405
     default="8fXhDgOkQXCi2TjuPcomS0swNpj6ynTVuT3H2QrwZlk=",
 )
 
-LOGIN_EXEMPT_URLS += (r"^aist/pipelines/[^/]+/callback/?$", r"^aist/github_hook/")  # noqa: F405
+LOGIN_EXEMPT_URLS += (  # noqa: F405
+    r"^aist/pipelines/[^/]+/callback/?$",
+    r"^aist/github_hook/",
+    r"^(?!aist-admin/|api/|projects_version/|aist/).*$",
+)
 
 CELERY_TASK_IGNORE_RESULT = False
 
