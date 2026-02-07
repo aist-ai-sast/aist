@@ -133,6 +133,9 @@ class AISTAuthorizationTests(AISTApiBase):
         ids = {row["id"] for row in rows}
         self.assertIn(self.project.id, ids)
         self.assertNotIn(self.other_project.id, ids)
+        row = next((item for item in rows if item["id"] == self.project.id), None)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["product_id"], self.product.id)
 
     def test_project_detail_denies_other_product(self):
         resp = self.client.get(

@@ -1,0 +1,56 @@
+export type RiskState = "risk_accepted" | "under_review" | "mitigated";
+export type Severity = "Critical" | "High" | "Medium" | "Low" | "Info";
+export type AIVerdict = "true_positive" | "false_positive" | "uncertain";
+
+export type FindingFilters = {
+  productId?: number;
+  severity?: Severity;
+  status?: "enabled" | "disabled";
+  riskStates?: RiskState[];
+  aiVerdict?: AIVerdict;
+  limit?: number;
+  offset?: number;
+  ordering?: string;
+};
+
+export type Finding = {
+  id: number;
+  title: string;
+  severity: Severity;
+  active: boolean;
+  product: string;
+  productId?: number;
+  date?: string;
+  filePath: string;
+  line: number;
+  tool: string;
+  aiVerdict?: AIVerdict;
+  snippetPreview?: string;
+  riskStates?: RiskState[];
+  projectVersionId?: number;
+};
+
+export type AIResponse = {
+  reasoning: string;
+  epssScore?: number;
+  impactScore?: number;
+  exploitabilityScore?: number;
+  references?: string[];
+};
+
+export type Note = {
+  id: number;
+  entry: string;
+  author?: {
+    username?: string;
+    first_name?: string;
+    last_name?: string;
+  };
+  date?: string;
+};
+
+export type Project = {
+  id: number;
+  productId: number;
+  name: string;
+};

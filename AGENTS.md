@@ -8,3 +8,4 @@
 - Find the CI plan in the .github/workflows folder.
 - Add or update tests for the code you change, even if nobody asked.
 - Dev environment ARM MacOs. Prod environment Ubuntu amd64
+- Change of files from vendor is prohibited

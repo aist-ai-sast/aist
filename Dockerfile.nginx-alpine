@@ -61,6 +61,11 @@ COPY vendor/defectdojo/components/ ./components/
 RUN \
   cd components && \
   yarn
+COPY client-ui/ ./client-ui/
+RUN \
+  cd client-ui && \
+  npm install --no-package-lock && \
+  npm run build
 COPY manage.py ./
 COPY aist/ ./aist/
 COPY aist_site/ ./aist_site/
@@ -77,6 +82,7 @@ FROM nginx:1.29.3-alpine3.22@sha256:b3c656d55d7ad751196f21b7fd2e8d4da9cb430e32f6
 ARG uid=1001
 ARG appuser=defectdojo
 COPY --from=collectstatic /app/static/ /usr/share/nginx/html/static/
+COPY --from=collectstatic /app/client-ui/dist/ /usr/share/nginx/html/client/dist/
 COPY vendor/defectdojo/wsgi_params vendor/defectdojo/nginx/nginx.conf vendor/defectdojo/nginx/nginx_TLS.conf /etc/nginx/
 COPY docker/entrypoint-nginx.sh /
 RUN \

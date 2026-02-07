@@ -1,0 +1,17 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui;
+    background: radial-gradient(circle at top right, #15274a 0%, #0d1321 35%, #0b0f1b 100%);
+  }
+}
+
+.monaco-highlight-line {
+  background: rgba(77, 212, 255, 0.18);
+  border-left: 2px solid #4dd4ff;
+}
