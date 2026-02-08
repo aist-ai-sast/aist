@@ -41,6 +41,7 @@ from aist.api.pipelines import (
     PipelineStartRequestSerializer,
 )
 from aist.api.findings import AISTFindingListAPI
+from aist.api.product_summaries import AISTProductSummaryAPI
 from aist.api.project_versions import AISTProjectVersionCreateSerializer, ProjectVersionCreateAPI
 from aist.api.projects import AISTProjectDetailAPI, AISTProjectListAPI, AISTProjectSerializer
 from aist.api.queue import (
@@ -83,6 +84,7 @@ __all__ = [
     "PipelineStartAPI",
     "PipelineStartRequestSerializer",
     "AISTFindingListAPI",
+    "AISTProductSummaryAPI",
     "ProjectGitlabTokenUpdateAPI",
     "ProjectLaunchConfigActionDetailAPI",
     "ProjectLaunchConfigActionListCreateAPI",

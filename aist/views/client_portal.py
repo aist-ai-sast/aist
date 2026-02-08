@@ -28,6 +28,7 @@ def _build_routes() -> dict[str, Any]:
         "test_detail_url": _replace_int_placeholder(reverse("test-detail", args=[0]), "id"),
         "engagement_detail_url": _replace_int_placeholder(reverse("engagement-detail", args=[0]), "id"),
         "projects_list_url": reverse("aist_api:project_list"),
+        "product_summary_url": reverse("aist_api:product_summary"),
         "project_meta_url": _replace_int_placeholder(
             reverse("aist_api:project_meta", kwargs={"project_id": 0}),
             "project_id",

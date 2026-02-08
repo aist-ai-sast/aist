@@ -9,6 +9,7 @@ import { logoutSession, useAuthStatus } from "./lib/auth";
 import LoginPage from "./pages/LoginPage";
 import { useToast } from "./components/ToastProvider";
 import { getRoute } from "./lib/routes";
+import ProductsPage from "./pages/ProductsPage";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const auth = useAuthStatus();
@@ -60,12 +61,7 @@ export default function App() {
                 <Route path="/finding/:id" element={<FindingDetailPage />} />
                 <Route
                   path="/products"
-                  element={
-                    <PlaceholderPage
-                      title="Products"
-                      description="Product cards, access management, and health metrics will be available here."
-                    />
-                  }
+                  element={<ProductsPage />}
                 />
                 <Route
                   path="/pipelines"

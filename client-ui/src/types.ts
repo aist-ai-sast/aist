@@ -61,3 +61,25 @@ export type Project = {
   productId: number;
   name: string;
 };
+
+export type ProductSummary = {
+  projectId: number;
+  productId: number;
+  name: string;
+  tags: string[];
+  status: "active" | "inactive";
+  findingsTotal: number;
+  findingsActive: number;
+  severity: Record<Severity, number>;
+  risk: {
+    riskAccepted: number;
+    underReview: number;
+    mitigated: number;
+  };
+  lastPipeline?: {
+    id?: string | null;
+    status?: string | null;
+    updated?: string | null;
+  };
+  lastSync?: string | null;
+};

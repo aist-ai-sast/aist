@@ -15,6 +15,7 @@ const actionMap: Record<PermissionAction, (perms: ReturnType<typeof usePermissio
   comment: (perms) => perms.canComment,
   enable: (perms) => perms.canEnable,
   export: (perms) => perms.canExport,
+  manage_access: (perms) => perms.canManageAccess,
 };
 
 export default function PermissionGate({
