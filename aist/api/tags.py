@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from django.core.cache import cache
+from dojo.authorization.roles_permissions import Permissions
+from dojo.finding.queries import get_authorized_findings
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
-from dojo.authorization.roles_permissions import Permissions
-from dojo.finding.queries import get_authorized_findings
 
 
 class AvailableFindingTagsAPI(APIView):

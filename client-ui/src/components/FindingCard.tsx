@@ -71,7 +71,7 @@ export default function FindingCard({ finding, projectId, projectVersionId, onSe
       <div className="mt-4 flex gap-2">
         <PermissionGate action="enable" productId={finding.productId}>
           <button
-            className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white"
+            className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white inline-flex items-center gap-2"
             onClick={(event) => {
               event.stopPropagation();
               updateStatus.mutate(
@@ -91,17 +91,29 @@ export default function FindingCard({ finding, projectId, projectVersionId, onSe
               );
             }}
           >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M6 5h2v14H6V5Zm10 0h2v14h-2V5Z"
+              />
+            </svg>
             {finding.active ? "Disable" : "Enable"}
           </button>
         </PermissionGate>
         <PermissionGate action="comment" productId={finding.productId}>
           <button
-            className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white"
+            className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white inline-flex items-center gap-2"
             onClick={(event) => {
               event.stopPropagation();
               onSelect(finding);
             }}
           >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v9h16V6H4Z"
+              />
+            </svg>
             Comment
           </button>
         </PermissionGate>

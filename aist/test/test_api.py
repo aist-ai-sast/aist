@@ -9,7 +9,17 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Engagement, Finding, Product, Product_Member, Product_Type, Role, SLA_Configuration, Test, Test_Type
+from dojo.models import (
+    Engagement,
+    Finding,
+    Product,
+    Product_Member,
+    Product_Type,
+    Role,
+    SLA_Configuration,
+    Test,
+    Test_Type,
+)
 from rest_framework.test import APIClient
 
 from aist.models import AISTPipeline, AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, AISTStatus, VersionType
@@ -250,6 +260,35 @@ class AISTFindingTagsTests(AISTApiBase):
         self.assertIn(self.finding.id, ids)
         self.assertIn(self.other_finding.id, ids)
 
+    def test_finding_list_filters_by_pipeline(self):
+        other_test = Test.objects.create(
+            engagement=self.engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=self.test_type,
+        )
+        other_finding = Finding.objects.create(
+            test=other_test,
+            title="Finding C",
+            severity="Medium",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-filter",
+            project=self.project,
+            status=AISTStatus.FINISHED,
+        )
+        pipeline.tests.add(self.test)
+
+        url = reverse("aist_api:finding_list")
+        resp = self.client.get(url, data={"pipeline_id": pipeline.id})
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", [])
+        ids = {row["id"] for row in results}
+        self.assertIn(self.finding.id, ids)
+        self.assertNotIn(other_finding.id, ids)
+
 
 class AISTProductSummaryTests(AISTApiBase):
     def setUp(self):
@@ -300,6 +339,60 @@ class AISTProductSummaryTests(AISTApiBase):
         self.assertEqual(row["findings_active"], 1)
         self.assertEqual(row["severity"]["Critical"], 1)
         self.assertEqual(row["severity"]["Low"], 1)
+
+
+class AISTPipelineSummaryTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.user)
+        self.engagement = Engagement.objects.create(
+            name="Engage",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        self.test_type = Test_Type.objects.create(name="Semgrep")
+        self.test = Test.objects.create(
+            engagement=self.engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=self.test_type,
+            branch_tag="main",
+            commit_hash="abc123",
+        )
+        self.pipeline = AISTPipeline.objects.create(
+            id="pipe-sum",
+            project=self.project,
+            status=AISTStatus.FINISHED,
+            launch_data={"action_runs": [{"action_type": "export", "status": "performed"}]},
+        )
+        self.pipeline.tests.add(self.test)
+        Finding.objects.create(
+            test=self.test,
+            title="High Finding",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+
+    def test_pipeline_summary(self):
+        resp = self.client.get(reverse("aist_api:pipeline_summary"))
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", [])
+        row = next((item for item in results if item["id"] == self.pipeline.id), None)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], AISTStatus.FINISHED)
+        self.assertEqual(row["branch"], "main")
+        self.assertEqual(row["commit"], "abc123")
+        self.assertEqual(row["findings"], 1)
+
+    def test_pipeline_filter_findings(self):
+        url = reverse("aist_api:finding_list")
+        resp = self.client.get(url, data={"pipeline_id": self.pipeline.id})
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", [])
+        self.assertEqual(len(results), 1)
+
 
 class AISTUIApiTests(AISTApiBase):
     def test_project_update_api(self):

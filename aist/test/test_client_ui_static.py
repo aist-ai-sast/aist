@@ -64,6 +64,13 @@ class ClientUIStaticTests(SimpleTestCase):
         products = base_dir / "client-ui" / "src" / "pages" / "ProductsPage.tsx"
         self.assertTrue(products.exists())
 
+    def test_client_ui_pipelines_page_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        pipelines = base_dir / "client-ui" / "src" / "pages" / "PipelinesPage.tsx"
+        self.assertTrue(pipelines.exists())
+        panel = base_dir / "client-ui" / "src" / "components" / "PipelineFilterPanel.tsx"
+        self.assertTrue(panel.exists())
+
     def test_client_ui_auth_hook_present(self):
         base_dir = Path(__file__).resolve().parents[2]
         app_file = base_dir / "client-ui" / "src" / "App.tsx"

@@ -79,7 +79,7 @@ export default function FindingDetailPage() {
         <div className="flex gap-2">
           <PermissionGate action="enable" productId={resolvedProductId}>
             <button
-              className="rounded-xl border border-night-500 bg-night-700 px-4 py-2 text-xs text-white"
+              className="rounded-xl border border-night-500 bg-night-700 px-4 py-2 text-xs text-white inline-flex items-center gap-2"
               onClick={() =>
                 updateStatus.mutate(
                   { id: finding.id, active: !finding.active },
@@ -98,12 +98,18 @@ export default function FindingDetailPage() {
                 )
               }
             >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M6 5h2v14H6V5Zm10 0h2v14h-2V5Z"
+                />
+              </svg>
               {finding.active ? "Disable" : "Enable"}
             </button>
           </PermissionGate>
           <PermissionGate action="comment" productId={resolvedProductId}>
             <button
-              className="rounded-xl border border-night-500 bg-night-700 px-4 py-2 text-xs text-white"
+              className="rounded-xl border border-night-500 bg-night-700 px-4 py-2 text-xs text-white inline-flex items-center gap-2"
               onClick={() => {
                 if (note.trim()) {
                   addNote.mutate(
@@ -122,11 +128,17 @@ export default function FindingDetailPage() {
                 }
               }}
             >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v9h16V6H4Z"
+                />
+              </svg>
               Comment
             </button>
           </PermissionGate>
           <button
-            className="rounded-xl bg-brand-500 px-4 py-2 text-xs font-semibold text-night-900 disabled:opacity-50"
+            className="rounded-xl bg-brand-500 px-4 py-2 text-xs font-semibold text-night-900 disabled:opacity-50 inline-flex items-center gap-2"
             onClick={() => {
               if (!pipelinesQuery.data?.[0]?.id) {
                 toast.push("No pipeline available for export.", "error");
@@ -147,6 +159,12 @@ export default function FindingDetailPage() {
             }}
             disabled={!pipelinesQuery.data?.[0]?.id}
           >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M12 3l4 4h-3v6h-2V7H8l4-4Zm-7 12h14v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-4Zm3 2v2h8v-2H8Z"
+              />
+            </svg>
             Export
           </button>
         </div>

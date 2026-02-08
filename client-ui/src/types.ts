@@ -4,6 +4,7 @@ export type AIVerdict = "true_positive" | "false_positive" | "uncertain";
 
 export type FindingFilters = {
   productId?: number;
+  pipelineId?: string;
   severity?: Severity;
   status?: "enabled" | "disabled";
   riskStates?: RiskState[];
@@ -82,4 +83,24 @@ export type ProductSummary = {
     updated?: string | null;
   };
   lastSync?: string | null;
+};
+
+export type PipelineSummary = {
+  id: string;
+  status: string;
+  projectId: number;
+  productId: number;
+  productName: string;
+  started?: string | null;
+  created?: string | null;
+  updated?: string | null;
+  branch?: string | null;
+  commit?: string | null;
+  findings: number;
+  actions: Array<{
+    source?: string | null;
+    type?: string | null;
+    status?: string | null;
+    updated?: string | null;
+  }>;
 };

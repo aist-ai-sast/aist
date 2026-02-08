@@ -34,6 +34,7 @@ def _build_routes() -> dict[str, Any]:
             "project_id",
         ),
         "pipelines_list_url": reverse("aist_api:pipelines"),
+        "pipelines_summary_url": reverse("aist_api:pipeline_summary"),
         "pipeline_export_url": _replace_str_placeholder(
             reverse("aist_api:pipeline_export_ai_results", kwargs={"pipeline_id": "PIPELINE_ID"}),
             "PIPELINE_ID",

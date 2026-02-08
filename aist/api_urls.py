@@ -2,9 +2,10 @@ from django.urls import path
 
 from aist.api import (
     AISTFindingListAPI,
+    AISTPipelineSummaryAPI,
+    AISTProductSummaryAPI,
     AISTProjectDetailAPI,
     AISTProjectListAPI,
-    AISTProductSummaryAPI,
     LaunchConfigDashboardListAPI,
     LaunchScheduleBulkDisableAPI,
     LaunchScheduleDetailAPI,
@@ -31,7 +32,6 @@ from aist.api import (
 from aist.api.ai import AIDeleteResponseAPI, AISendRequestAPI
 from aist.api.gitlab_integration import ImportProjectFromGitlabAPI
 from aist.api.integrations import GitlabProjectsListAPI
-from aist.api.tags import AvailableFindingTagsAPI
 from aist.api.pipelines import (
     ExportAIResultsAPI,
     PipelineDeduplicationProgressAPI,
@@ -45,6 +45,7 @@ from aist.api.pipelines import (
     PipelineStopAPI,
 )
 from aist.api.projects import AISTDefaultAnalyzersAPI, AISTProjectMetaAPI, AISTProjectUpdateAPI
+from aist.api.tags import AvailableFindingTagsAPI
 
 app_name = "aist_api"
 urlpatterns = [
@@ -69,6 +70,7 @@ urlpatterns = [
         name="pipeline_export_ai_results",
     ),
     path("pipelines/", PipelineListAPI.as_view(), name="pipelines"),
+    path("pipelines/summary/", AISTPipelineSummaryAPI.as_view(), name="pipeline_summary"),
     path(
         "pipelines/<str:pipeline_id>/logs/progressive/",
         PipelineLogsProgressiveAPI.as_view(),

@@ -4,6 +4,7 @@ from django.http import HttpResponseForbidden, HttpResponseNotFound
 
 
 class AistAdminGuardMiddleware:
+
     """Block non-superusers from DefectDojo UI while keeping API access intact."""
 
     admin_prefix = "/aist-admin/"
@@ -14,13 +15,13 @@ class AistAdminGuardMiddleware:
     def __call__(self, request):
         path = request.path_info
         if path.startswith(self.admin_prefix):
-            if path.startswith("/aist-admin/api/") or path.startswith("/aist-admin/static/"):
+            if path.startswith(("/aist-admin/api/", "/aist-admin/static/")):
                 return self.get_response(request)
 
             if request.headers.get("X-Aist-Admin-Gate") != "1":
                 return HttpResponseNotFound("Not Found")
 
-            if path in ("/aist-admin/login/", "/aist-admin/logout/"):
+            if path in {"/aist-admin/login/", "/aist-admin/logout/"}:
                 return self.get_response(request)
 
             user = request.user

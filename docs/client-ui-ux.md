@@ -112,6 +112,11 @@ This document captures the agreed UX structure for the client-facing UI.
 - Empty: no pipelines yet
 - Error: inline error + retry
 
+**Notes on current implementation**
+- Branch/commit search is a single text input (searches branch OR commit).
+- Date filters map to created date only.
+- Actions list shows the first 3 action runs with a “+N more” indicator.
+
 ## Search
 **Goal:** fast lookup across products/findings/pipelines.
 
