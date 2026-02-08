@@ -1,4 +1,5 @@
 import type { Project } from "../types";
+import SelectField from "./SelectField";
 
 type FilterPanelProps = {
   products: Project[];
@@ -35,47 +36,36 @@ export default function FilterPanel({
         Filters
       </div>
       <div className="space-y-4">
-        <div>
-          <label className="text-xs text-slate-400">Product</label>
-          <select
-            className="mt-2 w-full rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white"
-            value={selectedProductId ?? ""}
-            onChange={(event) =>
-              onProductChange(event.target.value ? Number(event.target.value) : undefined)
-            }
-          >
-            <option value="">All products</option>
-            {products.map((product) => (
-              <option key={product.id} value={product.productId}>
-                {product.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs text-slate-400">Severity</label>
-          <select
-            className="mt-2 w-full rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white"
-            value={selectedSeverity}
-            onChange={(event) => onSeverityChange(event.target.value)}
-          >
-            {["All severities", "Critical", "High", "Medium", "Low", "Info"].map((option) => (
-              <option key={option}>{option}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs text-slate-400">Status</label>
-          <select
-            className="mt-2 w-full rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white"
-            value={selectedStatus}
-            onChange={(event) => onStatusChange(event.target.value)}
-          >
-            {["All", "Enabled", "Disabled"].map((option) => (
-              <option key={option}>{option}</option>
-            ))}
-          </select>
-        </div>
+        <SelectField
+          label="Product"
+          value={selectedProductId ? String(selectedProductId) : ""}
+          onChange={(value) => onProductChange(value ? Number(value) : undefined)}
+          placeholder="All products"
+          options={[
+            ...products.map((product) => ({
+              value: String(product.productId),
+              label: product.name,
+            })),
+          ]}
+        />
+        <SelectField
+          label="Severity"
+          value={selectedSeverity}
+          onChange={onSeverityChange}
+          options={["All severities", "Critical", "High", "Medium", "Low", "Info"].map((option) => ({
+            value: option,
+            label: option,
+          }))}
+        />
+        <SelectField
+          label="Status"
+          value={selectedStatus}
+          onChange={onStatusChange}
+          options={["All", "Enabled", "Disabled"].map((option) => ({
+            value: option,
+            label: option,
+          }))}
+        />
         <div>
           <label className="text-xs text-slate-400">Risk State</label>
           <div className="mt-2 grid gap-2 text-xs text-slate-200">
@@ -101,25 +91,23 @@ export default function FilterPanel({
             ))}
           </div>
         </div>
-        <div>
-          <label className="text-xs text-slate-400">AI Verdict</label>
-          <select
-            className="mt-2 w-full rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white"
-            value={selectedAiVerdict}
-            onChange={(event) => onAiVerdictChange(event.target.value)}
-            disabled={aiVerdictDisabled}
-          >
-            <option value="All">All</option>
-            <option value="true_positive">True Positive</option>
-            <option value="false_positive">False Positive</option>
-            <option value="uncertain">Uncertain</option>
-          </select>
-          {aiVerdictDisabled ? (
-            <p className="mt-2 text-xs text-slate-500">
-              Select a product to enable AI verdict filters.
-            </p>
-          ) : null}
-        </div>
+        <SelectField
+          label="AI Verdict"
+          value={selectedAiVerdict}
+          onChange={onAiVerdictChange}
+          disabled={aiVerdictDisabled}
+          options={[
+            { value: "All", label: "All" },
+            { value: "true_positive", label: "True Positive" },
+            { value: "false_positive", label: "False Positive" },
+            { value: "uncertain", label: "Uncertain" },
+          ]}
+        />
+        {aiVerdictDisabled ? (
+          <p className="text-xs text-slate-500">
+            Select a product to enable AI verdict filters.
+          </p>
+        ) : null}
       </div>
     </aside>
   );

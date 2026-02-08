@@ -28,6 +28,7 @@ export type Finding = {
   snippetPreview?: string;
   riskStates?: RiskState[];
   projectVersionId?: number;
+  sourceFileLink?: string;
 };
 
 export type AIResponse = {

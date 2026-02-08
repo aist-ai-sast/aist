@@ -7,6 +7,7 @@ import DetailPanel from "../components/DetailPanel";
 import type { Finding } from "../types";
 import { useAiResponse, useFindingsWithFilters, usePipelines, useProjectMeta, useProjects } from "../lib/queries";
 import { useToast } from "../components/ToastProvider";
+import SelectField from "../components/SelectField";
 
 export default function FindingsPage() {
   const [selectedProductId, setSelectedProductId] = useState<number | undefined>();
@@ -35,8 +36,16 @@ export default function FindingsPage() {
   });
 
   const projects = projectsQuery.data ?? [];
+  const projectIdByProduct = useMemo(
+    () => new Map(projects.map((project) => [project.productId, project.id])),
+    [projects],
+  );
   const aistProjectForFilters = projects.find((project) => project.productId === selectedProductId);
   const pipelinesQuery = usePipelines(aistProjectForFilters?.id);
+  const filterMetaQuery = useProjectMeta(aistProjectForFilters?.id);
+  const filterProjectVersionId = filterMetaQuery.data?.versions?.length
+    ? Number(filterMetaQuery.data.versions[filterMetaQuery.data.versions.length - 1].id)
+    : undefined;
 
   const aiVerdictMap = useMemo(() => {
     const map = new Map<number, string>();
@@ -95,7 +104,7 @@ export default function FindingsPage() {
   const rowVirtualizer = useVirtualizer({
     count: findings.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 230,
+    estimateSize: () => 300,
     overscan: 6,
   });
 
@@ -174,15 +183,19 @@ export default function FindingsPage() {
             >
               Export current view
             </button>
-            <select
-              className="rounded-xl border border-night-500 bg-night-700 px-3 py-2 text-xs text-slate-200"
-              value={selectedSort}
-              onChange={(event) => setSelectedSort(event.target.value)}
-            >
-              <option value="severity">Sort: Severity</option>
-              <option value="date">Sort: Date</option>
-              <option value="title">Sort: Title</option>
-            </select>
+            <div className="w-44">
+              <SelectField
+                label="Sort"
+                value={selectedSort}
+                onChange={setSelectedSort}
+                hideLabel
+                options={[
+                  { value: "severity", label: "Sort: Severity" },
+                  { value: "date", label: "Sort: Date" },
+                  { value: "title", label: "Sort: Title" },
+                ]}
+              />
+            </div>
           </div>
         </div>
         {findingsQuery.isLoading ? (
@@ -209,7 +222,9 @@ export default function FindingsPage() {
                 const finding = findings[virtualRow.index];
                 return (
                   <div
-                    key={finding.id}
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={rowVirtualizer.measureElement}
                     style={{
                       position: "absolute",
                       top: 0,
@@ -218,7 +233,14 @@ export default function FindingsPage() {
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
-                    <FindingCard finding={finding} onSelect={setSelected} />
+                    <div className="pb-4">
+                      <FindingCard
+                        finding={finding}
+                        projectId={projectIdByProduct.get(finding.productId ?? 0)}
+                        projectVersionId={selectedProductId ? filterProjectVersionId : undefined}
+                        onSelect={setSelected}
+                      />
+                    </div>
                   </div>
                 );
               })}

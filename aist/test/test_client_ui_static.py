@@ -33,6 +33,12 @@ class ClientUIStaticTests(SimpleTestCase):
         self.assertIn("@monaco-editor/react", content)
         self.assertIn("Expand", content)
 
+    def test_client_ui_select_field_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        select_field = base_dir / "client-ui" / "src" / "components" / "SelectField.tsx"
+        self.assertTrue(select_field.exists())
+        self.assertIn("@radix-ui/react-select", select_field.read_text(encoding="utf-8"))
+
     def test_client_ui_auth_hook_present(self):
         base_dir = Path(__file__).resolve().parents[2]
         app_file = base_dir / "client-ui" / "src" / "App.tsx"

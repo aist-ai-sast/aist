@@ -89,7 +89,7 @@ def derive_engagement_name(analyzer_name: str, branch: str | None, commit: str |
 
 
 def resolve_scan_type(analyzer: dict[str, Any]) -> str:
-    ot = (analyzer.get("output_type") or "SARIF").strip()
+    ot = (analyzer.get("output_type") or "SARIF")
     if ot.lower() in {"xml", "generic-xml"}:
         return "Generic XML Import"
     return ot

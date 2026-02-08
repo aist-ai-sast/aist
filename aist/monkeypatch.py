@@ -76,6 +76,21 @@ def _wrap_dedupe_batch(func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+def _rebind_imported_symbol(module_path: str, name: str, wrapped: Callable[..., Any]) -> None:
+    try:
+        module = __import__(module_path, fromlist=[name])
+    except Exception:
+        return
+
+    current = getattr(module, name, None)
+    if current is None:
+        return
+    if getattr(current, "__wrapped__", None):
+        return
+
+    setattr(module, name, wrapped)
+
+
 def install_deduplication_monkeypatch() -> None:
     with _patch_lock:
         if _patched.is_set():
@@ -95,12 +110,41 @@ def install_deduplication_monkeypatch() -> None:
         else:
             dedupe_mod.do_dedupe_finding_task_internal = _wrap_dedupe_single(single)
 
-        batch = getattr(dedupe_mod, "do_dedupe_batch_task", None)
-        if batch is None:
+        batch_task = getattr(dedupe_mod, "do_dedupe_batch_task", None)
+        if batch_task is None:
             logger.warning("do_dedupe_batch_task not found in dojo.finding.deduplication; skipping batch monkeypatch")
-        elif getattr(batch, "__wrapped__", None):
+        elif getattr(batch_task, "__wrapped__", None):
             logger.warning("do_dedupe_batch_task already wrapped; skipping monkeypatch")
         else:
-            dedupe_mod.do_dedupe_batch_task = _wrap_dedupe_batch(batch)
+            wrapped_batch_task = _wrap_dedupe_batch(batch_task)
+            dedupe_mod.do_dedupe_batch_task = wrapped_batch_task
+            _rebind_imported_symbol(
+                "dojo.finding.helper",
+                "do_dedupe_batch_task",
+                wrapped_batch_task,
+            )
+
+        batch_findings = getattr(dedupe_mod, "dedupe_batch_of_findings", None)
+        if batch_findings is None:
+            logger.warning(
+                "dedupe_batch_of_findings not found in dojo.finding.deduplication; skipping batch-findings monkeypatch",
+            )
+        elif getattr(batch_findings, "__wrapped__", None):
+            logger.warning("dedupe_batch_of_findings already wrapped; skipping monkeypatch")
+        else:
+            wrapped_batch_findings = _wrap_dedupe_batch(batch_findings)
+            dedupe_mod.dedupe_batch_of_findings = wrapped_batch_findings
+            _rebind_imported_symbol(
+                "dojo.finding.helper",
+                "dedupe_batch_of_findings",
+                wrapped_batch_findings,
+            )
+
+        if single is not None and getattr(single, "__wrapped__", None) is None:
+            _rebind_imported_symbol(
+                "dojo.finding.helper",
+                "do_dedupe_finding_task_internal",
+                dedupe_mod.do_dedupe_finding_task_internal,
+            )
 
         _patched.set()
