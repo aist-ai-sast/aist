@@ -1,7 +1,8 @@
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
 from django.utils import timezone
-from dojo.finding.deduplication import do_dedupe_finding
+from dojo.finding import deduplication as dedupe_mod
+from dojo.finding import helper as finding_helper
 from dojo.models import (
     Engagement,
     Finding,
@@ -60,7 +61,26 @@ class MonkeypatchDedupSignalTest(TransactionTestCase):
             reporter=self.user,
         )
 
-        do_dedupe_finding(finding)
+        dedupe_mod.do_dedupe_finding_task_internal(finding)
+
+        self.assertTrue(
+            ProcessedFinding.objects.filter(test=self.test, finding=finding).exists(),
+        )
+
+    def test_batch_deduplication_updates_helper_binding(self):
+        _ = finding_helper.dedupe_batch_of_findings
+
+        install_deduplication_monkeypatch()
+
+        finding = Finding.objects.create(
+            test=self.test,
+            title="Batch finding",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+
+        finding_helper.dedupe_batch_of_findings([finding])
 
         self.assertTrue(
             ProcessedFinding.objects.filter(test=self.test, finding=finding).exists(),

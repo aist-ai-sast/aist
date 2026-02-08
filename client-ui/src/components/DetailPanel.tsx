@@ -38,7 +38,12 @@ export default function DetailPanel({ finding, aiResponse, pipelineId }: DetailP
       <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
         Selected Finding
       </div>
-      <h2 className="mt-3 text-lg font-semibold text-white">{finding.title}</h2>
+      <h2
+        className="mt-3 text-lg font-semibold text-white line-clamp-2"
+        title={finding.title}
+      >
+        {finding.title}
+      </h2>
       <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-400">
         <span>Severity: {finding.severity}</span>
         <span>Status: {finding.active ? "Enabled" : "Disabled"}</span>
@@ -77,6 +82,7 @@ export default function DetailPanel({ finding, aiResponse, pipelineId }: DetailP
         <CodeSnippet
           projectVersionId={finding.projectVersionId}
           filePath={finding.filePath}
+          sourceFileLink={finding.sourceFileLink}
           line={finding.line}
         />
       </div>

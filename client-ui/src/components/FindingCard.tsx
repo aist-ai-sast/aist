@@ -3,9 +3,12 @@ import { Link } from "react-router-dom";
 import type { Finding } from "../types";
 import { useUpdateFindingStatus } from "../lib/mutations";
 import { useToast } from "./ToastProvider";
+import FindingSnippetPreview from "./FindingSnippetPreview";
 
 type FindingCardProps = {
   finding: Finding;
+  projectId?: number;
+  projectVersionId?: number;
   onSelect: (finding: Finding) => void;
 };
 
@@ -23,7 +26,7 @@ const verdictLabel = {
   uncertain: "AI: Uncertain",
 };
 
-export default function FindingCard({ finding, onSelect }: FindingCardProps) {
+export default function FindingCard({ finding, projectId, projectVersionId, onSelect }: FindingCardProps) {
   const updateStatus = useUpdateFindingStatus();
   const toast = useToast();
   return (
@@ -42,14 +45,27 @@ export default function FindingCard({ finding, onSelect }: FindingCardProps) {
         </span>
         <span>{finding.active ? "Enabled" : "Disabled"}</span>
       </div>
-      <div className="mt-3 text-base font-semibold text-white">{finding.title}</div>
+      <div
+        className="mt-3 text-base font-semibold text-white line-clamp-2"
+        title={finding.title}
+      >
+        {finding.title}
+      </div>
       <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-400">
-        <span>{finding.filePath}</span>
+        <span className="max-w-full truncate" title={finding.filePath}>
+          {finding.filePath}
+        </span>
         <span>Line {finding.line}</span>
         {finding.aiVerdict ? <span>{verdictLabel[finding.aiVerdict]}</span> : null}
       </div>
-      <div className="mt-3 rounded-xl border border-night-500 bg-night-900 px-4 py-3 font-mono text-xs text-slate-200">
-        {finding.snippetPreview ?? "Snippet preview unavailable"}
+      <div className="mt-3">
+        <FindingSnippetPreview
+          projectId={projectId}
+          projectVersionId={projectVersionId}
+          filePath={finding.filePath}
+          sourceFileLink={finding.sourceFileLink}
+          line={finding.line}
+        />
       </div>
       <div className="mt-4 flex gap-2">
         <button
