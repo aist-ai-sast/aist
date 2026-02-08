@@ -4,6 +4,7 @@ from aist.api import (
     AISTFindingListAPI,
     AISTProjectDetailAPI,
     AISTProjectListAPI,
+    AISTProductSummaryAPI,
     LaunchConfigDashboardListAPI,
     LaunchScheduleBulkDisableAPI,
     LaunchScheduleDetailAPI,
@@ -48,6 +49,7 @@ from aist.api.projects import AISTDefaultAnalyzersAPI, AISTProjectMetaAPI, AISTP
 app_name = "aist_api"
 urlpatterns = [
     path("projects/", AISTProjectListAPI.as_view(), name="project_list"),
+    path("products/summary/", AISTProductSummaryAPI.as_view(), name="product_summary"),
     path("projects/<int:project_id>/", AISTProjectDetailAPI.as_view(), name="project_detail"),
     path("projects/<int:project_id>/meta/", AISTProjectMetaAPI.as_view(), name="project_meta"),
     path("projects/<int:project_id>/update/", AISTProjectUpdateAPI.as_view(), name="project_update"),

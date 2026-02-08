@@ -33,6 +33,10 @@ This document captures the agreed UX structure for the client-facing UI.
 - Empty: no products
 - Error: inline error + retry
 
+**Notes on current implementation**
+- Product status uses “active/inactive” derived from active findings count.
+- Manage access CTA is gated by `PermissionGate` (Maintainer/Owner or superuser).
+
 ## Findings (Triage Workspace)
 **Goal:** fast triage with AI context and code snippet viewer.
 
@@ -60,6 +64,13 @@ This document captures the agreed UX structure for the client-facing UI.
   - AI section (reasoning + scores + refs)
   - Code viewer (file + line highlight + copy)
   - Actions (role-based)
+
+**Notes on current implementation**
+- Product filter is single-select (not multi).
+- Findings list is non-virtualized for now.
+- Date range, tool, “has snippet”, and “has AI comment” filters are not yet implemented.
+- Write actions are gated via `PermissionGate` (DefectDojo role derived from `/api/v2/user_profile/`).
+- Tag filtering uses the AIST findings endpoint (`/api/v2/aist/findings/`) to support OR logic.
 
 **States**
 - Loading: skeleton list + panel

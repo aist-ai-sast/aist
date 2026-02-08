@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import FilterPanel from "../components/FilterPanel";
 import FindingCard from "../components/FindingCard";
 import DetailPanel from "../components/DetailPanel";
@@ -24,6 +25,7 @@ export default function FindingsPage() {
   const [selectedCwe, setSelectedCwe] = useState<string>("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const pageSize = 50;
   const projectsQuery = useProjects();
   const ordering =
@@ -133,6 +135,22 @@ export default function FindingsPage() {
     el.addEventListener("scroll", onScroll);
     return () => el.removeEventListener("scroll", onScroll);
   }, [findingsQuery]);
+
+  useEffect(() => {
+    const productParam = searchParams.get("product");
+    if (!productParam) return;
+    const parsed = Number(productParam);
+    if (!Number.isNaN(parsed)) {
+      setSelectedProductId(parsed);
+    }
+    setSearchParams(
+      (params) => {
+        params.delete("product");
+        return params;
+      },
+      { replace: true },
+    );
+  }, [searchParams, setSearchParams]);
 
   const exportCurrentView = () => {
     if (findings.length === 0) {

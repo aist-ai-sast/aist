@@ -59,6 +59,11 @@ class ClientUIStaticTests(SimpleTestCase):
         self.assertTrue(gate.exists())
         self.assertIn("PermissionGate", gate.read_text(encoding="utf-8"))
 
+    def test_client_ui_products_page_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        products = base_dir / "client-ui" / "src" / "pages" / "ProductsPage.tsx"
+        self.assertTrue(products.exists())
+
     def test_client_ui_auth_hook_present(self):
         base_dir = Path(__file__).resolve().parents[2]
         app_file = base_dir / "client-ui" / "src" / "App.tsx"

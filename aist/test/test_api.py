@@ -250,6 +250,57 @@ class AISTFindingTagsTests(AISTApiBase):
         self.assertIn(self.finding.id, ids)
         self.assertIn(self.other_finding.id, ids)
 
+
+class AISTProductSummaryTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.user)
+        self.engagement = Engagement.objects.create(
+            name="Engage",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        self.test_type = Test_Type.objects.create(name="Semgrep")
+        self.test = Test.objects.create(
+            engagement=self.engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=self.test_type,
+        )
+        Finding.objects.create(
+            test=self.test,
+            title="Critical Finding",
+            severity="Critical",
+            date=timezone.now(),
+            reporter=self.user,
+            active=True,
+        )
+        Finding.objects.create(
+            test=self.test,
+            title="Low Finding",
+            severity="Low",
+            date=timezone.now(),
+            reporter=self.user,
+            active=False,
+        )
+        AISTPipeline.objects.create(
+            id="pipe-summary",
+            project=self.project,
+            status=AISTStatus.FINISHED,
+        )
+
+    def test_product_summary_counts(self):
+        resp = self.client.get(reverse("aist_api:product_summary"))
+        self.assertEqual(resp.status_code, 200)
+        rows = resp.data.get("results", [])
+        row = next((item for item in rows if item["product_id"] == self.product.id), None)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["findings_total"], 2)
+        self.assertEqual(row["findings_active"], 1)
+        self.assertEqual(row["severity"]["Critical"], 1)
+        self.assertEqual(row["severity"]["Low"], 1)
+
 class AISTUIApiTests(AISTApiBase):
     def test_project_update_api(self):
         url = reverse("aist_api:project_update", kwargs={"project_id": self.project.id})
