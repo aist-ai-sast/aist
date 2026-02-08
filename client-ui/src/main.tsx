@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import App from "./App";
 import "./styles.css";
+import "highlight.js/styles/github-dark.css";
 import { ToastProvider } from "./components/ToastProvider";
 
 const queryClient = new QueryClient({

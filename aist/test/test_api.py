@@ -7,8 +7,9 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Product, Product_Member, Product_Type, Role, SLA_Configuration
+from dojo.models import Engagement, Finding, Product, Product_Member, Product_Type, Role, SLA_Configuration, Test, Test_Type
 from rest_framework.test import APIClient
 
 from aist.models import AISTPipeline, AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, AISTStatus, VersionType
@@ -171,6 +172,83 @@ class AISTAuthorizationTests(AISTApiBase):
         resp = self.client.get(reverse("aist_api:pipeline_status", kwargs={"pipeline_id": "pipe-other"}))
         self.assertEqual(resp.status_code, 404)
 
+
+class AISTFindingTagsTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.user)
+        self.engagement = Engagement.objects.create(
+            name="Engage",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        self.other_engagement = Engagement.objects.create(
+            name="Engage Other",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.other_product,
+        )
+        self.test_type = Test_Type.objects.create(name="Semgrep")
+        self.test = Test.objects.create(
+            engagement=self.engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=self.test_type,
+        )
+        self.other_test = Test.objects.create(
+            engagement=self.other_engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=self.test_type,
+        )
+
+        self.finding = Finding.objects.create(
+            test=self.test,
+            title="Finding A",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        self.finding.tags = "security,domxss"
+        self.finding.save()
+
+        self.other_finding = Finding.objects.create(
+            test=self.other_test,
+            title="Finding B",
+            severity="Low",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        self.other_finding.tags = "other"
+        self.other_finding.save()
+
+    def test_finding_tags_returns_global_tags(self):
+        url = reverse("aist_api:finding_tags")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        tags = resp.data.get("tags", [])
+        self.assertIn("security", tags)
+        self.assertIn("domxss", tags)
+        self.assertIn("other", tags)
+
+    def test_finding_tags_filters_by_product(self):
+        url = reverse("aist_api:finding_tags")
+        resp = self.client.get(url, data={"product_id": self.product.id})
+        self.assertEqual(resp.status_code, 200)
+        tags = resp.data.get("tags", [])
+        self.assertIn("security", tags)
+        self.assertIn("domxss", tags)
+        self.assertNotIn("other", tags)
+
+    def test_finding_list_tags_or(self):
+        url = reverse("aist_api:finding_list")
+        resp = self.client.get(url, data={"tags": "security,other"})
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", [])
+        ids = {row["id"] for row in results}
+        self.assertIn(self.finding.id, ids)
+        self.assertIn(self.other_finding.id, ids)
 
 class AISTUIApiTests(AISTApiBase):
     def test_project_update_api(self):

@@ -54,7 +54,7 @@ export default function App() {
           <Sidebar />
           <div className="flex flex-col">
             <Topbar />
-            <main className="flex-1 px-6 py-6 lg:px-8">
+            <main className="flex-1 min-h-0 px-6 py-6 lg:px-8">
               <Routes>
                 <Route path="/" element={<FindingsPage />} />
                 <Route path="/finding/:id" element={<FindingDetailPage />} />

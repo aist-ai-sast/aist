@@ -1,6 +1,7 @@
 from django.urls import path
 
 from aist.api import (
+    AISTFindingListAPI,
     AISTProjectDetailAPI,
     AISTProjectListAPI,
     LaunchConfigDashboardListAPI,
@@ -29,6 +30,7 @@ from aist.api import (
 from aist.api.ai import AIDeleteResponseAPI, AISendRequestAPI
 from aist.api.gitlab_integration import ImportProjectFromGitlabAPI
 from aist.api.integrations import GitlabProjectsListAPI
+from aist.api.tags import AvailableFindingTagsAPI
 from aist.api.pipelines import (
     ExportAIResultsAPI,
     PipelineDeduplicationProgressAPI,
@@ -110,6 +112,7 @@ urlpatterns = [
         OrganizationCreateAPI.as_view(),
         name="organization_create",
     ),
+    path("findings/", AISTFindingListAPI.as_view(), name="finding_list"),
     path(
         "projects_version/<int:project_version_id>/files/blob/<path:subpath>",
         ProjectVersionFileBlobAPI.as_view(),
@@ -122,6 +125,7 @@ urlpatterns = [
     ),
     path("import_project_from_gitlab/", ImportProjectFromGitlabAPI.as_view(), name="import_project_from_gitlab"),
     path("projects/gitlab/list/", GitlabProjectsListAPI.as_view(), name="gitlab_projects_list"),
+    path("findings/tags/", AvailableFindingTagsAPI.as_view(), name="finding_tags"),
     path(
         "projects/<int:project_id>/gitlab-token/",
         ProjectGitlabTokenUpdateAPI.as_view(),

@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
-
 import FilterPanel from "../components/FilterPanel";
 import FindingCard from "../components/FindingCard";
 import DetailPanel from "../components/DetailPanel";
 import type { Finding } from "../types";
-import { useAiResponse, useFindingsWithFilters, usePipelines, useProjectMeta, useProjects } from "../lib/queries";
+import {
+  useAiResponse,
+  useFindingTagsByProduct,
+  useFindingsWithFilters,
+  usePipelines,
+  useProjectMeta,
+  useProjects,
+} from "../lib/queries";
 import { useToast } from "../components/ToastProvider";
 import SelectField from "../components/SelectField";
 
@@ -16,6 +21,8 @@ export default function FindingsPage() {
   const [selectedRisk, setSelectedRisk] = useState<string[]>([]);
   const [selectedAiVerdict, setSelectedAiVerdict] = useState<string>("All");
   const [selectedSort, setSelectedSort] = useState<string>("severity");
+  const [selectedCwe, setSelectedCwe] = useState<string>("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const toast = useToast();
   const pageSize = 50;
   const projectsQuery = useProjects();
@@ -29,8 +36,10 @@ export default function FindingsPage() {
   const findingsQuery = useFindingsWithFilters({
     productId: selectedProductId,
     severity: selectedSeverity !== "All severities" && selectedSeverity !== "All" ? (selectedSeverity as any) : undefined,
-    status: selectedStatus === "Enabled" ? "enabled" : selectedStatus === "Disabled" ? "disabled" : undefined,
+    status: selectedStatus === "Active" ? "enabled" : selectedStatus === "Non-Active" ? "disabled" : undefined,
     riskStates: selectedRisk.length ? (selectedRisk as any) : undefined,
+    cwe: selectedCwe ? selectedCwe : undefined,
+    tags: selectedTags.length ? selectedTags : undefined,
     limit: pageSize,
     ordering,
   });
@@ -89,6 +98,17 @@ export default function FindingsPage() {
     return mapped;
   }, [findingsQuery.data, projects, aiVerdictMap, selectedAiVerdict]);
 
+  const tagsQuery = useFindingTagsByProduct(selectedProductId);
+  const availableTags = tagsQuery.data ?? [];
+
+  useEffect(() => {
+    setSelectedTags([]);
+  }, [selectedProductId]);
+
+  useEffect(() => {
+    setSelectedTags((current) => current.filter((tag) => availableTags.includes(tag)));
+  }, [availableTags]);
+
   const [selected, setSelected] = useState<Finding | undefined>(findings[0]);
   const parentRef = useRef<HTMLDivElement | null>(null);
 
@@ -101,28 +121,18 @@ export default function FindingsPage() {
     ? Number(metaQuery.data.versions[metaQuery.data.versions.length - 1].id)
     : undefined;
 
-  const rowVirtualizer = useVirtualizer({
-    count: findings.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 300,
-    overscan: 6,
-  });
-
-  const virtualItems = rowVirtualizer.getVirtualItems();
-
   useEffect(() => {
-    const [lastItem] = [...virtualItems].reverse();
-    if (!lastItem) return;
-    if (lastItem.index >= findings.length - 3 && findingsQuery.hasNextPage && !findingsQuery.isFetchingNextPage) {
-      findingsQuery.fetchNextPage();
-    }
-  }, [
-    virtualItems,
-    findings.length,
-    findingsQuery.hasNextPage,
-    findingsQuery.isFetchingNextPage,
-    findingsQuery.fetchNextPage,
-  ]);
+    const el = parentRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (!findingsQuery.hasNextPage || findingsQuery.isFetchingNextPage) return;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
+        findingsQuery.fetchNextPage();
+      }
+    };
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [findingsQuery]);
 
   const exportCurrentView = () => {
     if (findings.length === 0) {
@@ -157,7 +167,7 @@ export default function FindingsPage() {
   };
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[280px_1fr_360px]">
+    <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)_360px]">
       <FilterPanel
         products={projects}
         selectedProductId={selectedProductId}
@@ -168,12 +178,17 @@ export default function FindingsPage() {
         onStatusChange={setSelectedStatus}
         selectedRisk={selectedRisk}
         onRiskChange={setSelectedRisk}
+        selectedCwe={selectedCwe}
+        onCweChange={setSelectedCwe}
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onTagsChange={setSelectedTags}
         selectedAiVerdict={selectedAiVerdict}
         onAiVerdictChange={setSelectedAiVerdict}
         aiVerdictDisabled={!selectedProductId}
       />
 
-      <div className="space-y-4">
+      <div className="flex min-h-0 min-w-0 flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-[0.2em] text-slate-400">
           <span>Findings</span>
           <div className="flex items-center gap-2">
@@ -207,43 +222,17 @@ export default function FindingsPage() {
             No findings match the current filters.
           </div>
         ) : (
-          <div
-            ref={parentRef}
-            className="h-[calc(100vh-200px)] overflow-auto pr-2"
-          >
-            <div
-              style={{
-                height: `${rowVirtualizer.getTotalSize()}px`,
-                width: "100%",
-                position: "relative",
-              }}
-            >
-              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                const finding = findings[virtualRow.index];
-                return (
-                  <div
-                    key={virtualRow.key}
-                    data-index={virtualRow.index}
-                    ref={rowVirtualizer.measureElement}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "100%",
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    <div className="pb-4">
-                      <FindingCard
-                        finding={finding}
-                        projectId={projectIdByProduct.get(finding.productId ?? 0)}
-                        projectVersionId={selectedProductId ? filterProjectVersionId : undefined}
-                        onSelect={setSelected}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+          <div ref={parentRef} className="min-h-0 flex-1 overflow-auto pr-2">
+            <div className="space-y-4">
+              {findings.map((finding) => (
+                <FindingCard
+                  key={finding.id}
+                  finding={finding}
+                  projectId={projectIdByProduct.get(finding.productId ?? 0)}
+                  projectVersionId={selectedProductId ? filterProjectVersionId : undefined}
+                  onSelect={setSelected}
+                />
+              ))}
             </div>
           </div>
         )}

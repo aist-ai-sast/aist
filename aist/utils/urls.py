@@ -54,6 +54,7 @@ def _normalize_base_url(url: str) -> str:
 
 
 def get_public_base_url() -> str:
+    return "https://127.0.0.1:8443/"
     return getattr(settings, "PUBLIC_BASE_URL", "https://157.90.113.55:8443/")
 
 

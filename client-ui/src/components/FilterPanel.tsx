@@ -1,5 +1,6 @@
 import type { Project } from "../types";
 import SelectField from "./SelectField";
+import MultiSelectChips from "./MultiSelectChips";
 
 type FilterPanelProps = {
   products: Project[];
@@ -11,6 +12,11 @@ type FilterPanelProps = {
   onStatusChange: (value: string) => void;
   selectedRisk: string[];
   onRiskChange: (value: string[]) => void;
+  selectedCwe: string;
+  onCweChange: (value: string) => void;
+  availableTags: string[];
+  selectedTags: string[];
+  onTagsChange: (value: string[]) => void;
   selectedAiVerdict: string;
   onAiVerdictChange: (value: string) => void;
   aiVerdictDisabled?: boolean;
@@ -26,6 +32,11 @@ export default function FilterPanel({
   onStatusChange,
   selectedRisk,
   onRiskChange,
+  selectedCwe,
+  onCweChange,
+  availableTags,
+  selectedTags,
+  onTagsChange,
   selectedAiVerdict,
   onAiVerdictChange,
   aiVerdictDisabled,
@@ -61,36 +72,44 @@ export default function FilterPanel({
           label="Status"
           value={selectedStatus}
           onChange={onStatusChange}
-          options={["All", "Enabled", "Disabled"].map((option) => ({
+          options={["All", "Active", "Non-Active"].map((option) => ({
             value: option,
             label: option,
           }))}
         />
+        <MultiSelectChips
+          label="Risk State"
+          options={["Risk Accepted", "Under Review", "Mitigated"]}
+          selected={[
+            selectedRisk.includes("risk_accepted") ? "Risk Accepted" : "",
+            selectedRisk.includes("under_review") ? "Under Review" : "",
+            selectedRisk.includes("mitigated") ? "Mitigated" : "",
+          ].filter(Boolean)}
+          onChange={(values) => {
+            const next: string[] = [];
+            if (values.includes("Risk Accepted")) next.push("risk_accepted");
+            if (values.includes("Under Review")) next.push("under_review");
+            if (values.includes("Mitigated")) next.push("mitigated");
+            onRiskChange(next);
+          }}
+        />
         <div>
-          <label className="text-xs text-slate-400">Risk State</label>
-          <div className="mt-2 grid gap-2 text-xs text-slate-200">
-            {["risk_accepted", "under_review", "mitigated"].map((risk) => (
-              <label key={risk} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={selectedRisk.includes(risk)}
-                  onChange={(event) => {
-                    if (event.target.checked) {
-                      onRiskChange([...selectedRisk, risk]);
-                    } else {
-                      onRiskChange(selectedRisk.filter((item) => item !== risk));
-                    }
-                  }}
-                />
-                {risk === "risk_accepted"
-                  ? "Risk Accepted"
-                  : risk === "under_review"
-                    ? "Under Review"
-                    : "Mitigated"}
-              </label>
-            ))}
-          </div>
+          <label className="text-xs text-slate-400">CWE (comma-separated)</label>
+          <input
+            className="mt-2 w-full rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white placeholder:text-slate-400"
+            value={selectedCwe}
+            onChange={(event) => onCweChange(event.target.value)}
+            placeholder="e.g. 79, 89"
+          />
         </div>
+        <MultiSelectChips
+          label="Tags"
+          options={availableTags}
+          selected={selectedTags}
+          onChange={onTagsChange}
+          emptyLabel="No tags available."
+          visibleCount={10}
+        />
         <SelectField
           label="AI Verdict"
           value={selectedAiVerdict}

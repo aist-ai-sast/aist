@@ -2,9 +2,11 @@ import { useState } from "react";
 
 import type { AIResponse, Finding } from "../types";
 import CodeSnippet from "./CodeSnippet";
+import DescriptionBlock from "./DescriptionBlock";
 import { useAddFindingNote, useExportAiResults, useUpdateFindingStatus } from "../lib/mutations";
 import { useFindingNotes } from "../lib/queries";
 import { useToast } from "./ToastProvider";
+import PermissionGate from "./PermissionGate";
 
 type DetailPanelProps = {
   finding?: Finding;
@@ -46,7 +48,8 @@ export default function DetailPanel({ finding, aiResponse, pipelineId }: DetailP
       </h2>
       <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-400">
         <span>Severity: {finding.severity}</span>
-        <span>Status: {finding.active ? "Enabled" : "Disabled"}</span>
+        <span>Status: {finding.active ? "Active" : "Non-Active"}</span>
+        {finding.cwe ? <span>CWE: {finding.cwe}</span> : null}
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {finding.riskStates?.map((risk) => (
@@ -78,6 +81,27 @@ export default function DetailPanel({ finding, aiResponse, pipelineId }: DetailP
           </div>
         ) : null}
       </div>
+      {finding.tags?.length ? (
+        <div className="mt-4">
+          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Tags</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {finding.tags.map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full border border-night-500 bg-night-900 px-3 py-1 text-xs text-slate-200"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="mt-4">
+        <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Description</div>
+        <div className="mt-2 rounded-xl border border-night-500 bg-night-900 px-4 py-3">
+          <DescriptionBlock value={finding.description} />
+        </div>
+      </div>
       <div className="mt-4">
         <CodeSnippet
           projectVersionId={finding.projectVersionId}
@@ -87,50 +111,54 @@ export default function DetailPanel({ finding, aiResponse, pipelineId }: DetailP
         />
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
-        <button
-          className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white"
-          onClick={() =>
-            updateStatus.mutate(
-              { id: finding.id, active: !finding.active },
-              {
-                onSuccess: () => {
-                  toast.push(
-                    finding.active ? "Finding disabled." : "Finding enabled.",
-                    "success",
-                  );
-                },
-                onError: (error) => {
-                  const message = error instanceof Error ? error.message : String(error);
-                  toast.push(`Action failed: ${message}`, "error");
-                },
-              },
-            )
-          }
-        >
-          {finding.active ? "Disable" : "Enable"}
-        </button>
-        <button
-          className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white"
-          onClick={() => {
-            if (note.trim()) {
-              addNote.mutate(
-                { id: finding.id, entry: note },
+        <PermissionGate action="enable" productId={finding?.productId}>
+          <button
+            className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white"
+            onClick={() =>
+              updateStatus.mutate(
+                { id: finding.id, active: !finding.active },
                 {
                   onSuccess: () => {
-                    toast.push("Comment added.", "success");
+                    toast.push(
+                      finding.active ? "Finding disabled." : "Finding enabled.",
+                      "success",
+                    );
                   },
                   onError: (error) => {
                     const message = error instanceof Error ? error.message : String(error);
-                    toast.push(`Comment failed: ${message}`, "error");
+                    toast.push(`Action failed: ${message}`, "error");
                   },
                 },
-              );
-              setNote("");
+              )
             }
-          }}
-        >
-          Add Comment
-        </button>
+          >
+            {finding.active ? "Disable" : "Enable"}
+          </button>
+        </PermissionGate>
+        <PermissionGate action="comment" productId={finding?.productId}>
+          <button
+            className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white"
+            onClick={() => {
+              if (note.trim()) {
+                addNote.mutate(
+                  { id: finding.id, entry: note },
+                  {
+                    onSuccess: () => {
+                      toast.push("Comment added.", "success");
+                    },
+                    onError: (error) => {
+                      const message = error instanceof Error ? error.message : String(error);
+                      toast.push(`Comment failed: ${message}`, "error");
+                    },
+                  },
+                );
+                setNote("");
+              }
+            }}
+          >
+            Add Comment
+          </button>
+        </PermissionGate>
         <button
           className="rounded-xl bg-brand-500 px-3 py-2 text-xs font-semibold text-night-900 disabled:opacity-50"
           onClick={() => {
@@ -156,13 +184,15 @@ export default function DetailPanel({ finding, aiResponse, pipelineId }: DetailP
           Export
         </button>
       </div>
-      <textarea
-        className="mt-3 w-full rounded-xl border border-night-500 bg-night-900 px-3 py-2 text-xs text-slate-200"
-        rows={3}
-        placeholder="Add a comment for this finding..."
-        value={note}
-        onChange={(event) => setNote(event.target.value)}
-      />
+      <PermissionGate action="comment" productId={finding?.productId}>
+        <textarea
+          className="mt-3 w-full rounded-xl border border-night-500 bg-night-900 px-3 py-2 text-xs text-slate-200"
+          rows={3}
+          placeholder="Add a comment for this finding..."
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+        />
+      </PermissionGate>
       <div className="mt-4 text-xs text-slate-400 uppercase tracking-[0.2em]">
         Notes
       </div>

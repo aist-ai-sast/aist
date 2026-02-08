@@ -30,50 +30,7 @@ export default function CodeSnippet({
   const editorRef = useRef<any>(null);
   const decorationIds = useRef<string[]>([]);
 
-  const language = useMemo(() => {
-    if (!filePath) return "plaintext";
-    const ext = filePath.split(".").pop()?.toLowerCase();
-    switch (ext) {
-      case "js":
-      case "mjs":
-      case "cjs":
-        return "javascript";
-      case "ts":
-        return "typescript";
-      case "tsx":
-        return "typescript";
-      case "jsx":
-        return "javascript";
-      case "py":
-        return "python";
-      case "go":
-        return "go";
-      case "java":
-        return "java";
-      case "rb":
-        return "ruby";
-      case "rs":
-        return "rust";
-      case "php":
-        return "php";
-      case "cs":
-        return "csharp";
-      case "json":
-        return "json";
-      case "yml":
-      case "yaml":
-        return "yaml";
-      case "md":
-        return "markdown";
-      case "sh":
-      case "bash":
-        return "shell";
-      case "sql":
-        return "sql";
-      default:
-        return "plaintext";
-    }
-  }, [filePath]);
+  const language = useMemo(() => "plaintext", []);
 
   const snippetText = useMemo(() => {
     if (!snippet) return "";
@@ -149,10 +106,12 @@ export default function CodeSnippet({
   }
 
   return (
-    <div className="rounded-xl border border-night-500 bg-night-900">
-      <div className="flex items-center justify-between border-b border-night-500 px-3 py-2 text-xs text-slate-400">
-        <span>{filePath}</span>
-        <div className="flex items-center gap-2">
+    <div className="rounded-xl border border-night-500 bg-night-900 overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-night-500 px-3 py-2 text-xs text-slate-400">
+        <span className="min-w-0 flex-1 truncate" title={filePath ?? ""}>
+          {filePath ?? "File"}
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
           <button
             className="rounded-lg border border-night-500 bg-night-700 px-2 py-1 text-xs text-slate-200"
             onClick={() => setExpanded((value) => !value)}
@@ -209,8 +168,23 @@ export default function CodeSnippet({
             fontSize: 12,
             fontFamily: "IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
           }}
-          onMount={(editor) => {
+          onMount={(editor, monaco) => {
             editorRef.current = editor;
+            if (filePath) {
+              const lower = filePath.toLowerCase();
+              const baseName = lower.split("/").pop() ?? lower;
+              const ext = baseName.includes(".") ? `.${baseName.split(".").pop()}` : "";
+              const match = monaco.languages
+                .getLanguages()
+                .find(
+                  (lang) =>
+                    (ext && lang.extensions?.includes(ext)) ||
+                    (lang.filenames && lang.filenames.includes(baseName)),
+                );
+              if (match?.id && editor.getModel()) {
+                monaco.editor.setModelLanguage(editor.getModel()!, match.id);
+              }
+            }
           }}
         />
       </Suspense>
