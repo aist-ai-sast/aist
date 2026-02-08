@@ -4,6 +4,7 @@ import type { Finding } from "../types";
 import { useUpdateFindingStatus } from "../lib/mutations";
 import { useToast } from "./ToastProvider";
 import FindingSnippetPreview from "./FindingSnippetPreview";
+import PermissionGate from "./PermissionGate";
 
 type FindingCardProps = {
   finding: Finding;
@@ -31,7 +32,7 @@ export default function FindingCard({ finding, projectId, projectVersionId, onSe
   const toast = useToast();
   return (
     <article
-      className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel hover:border-brand-600/70 transition"
+      className="min-w-0 rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel hover:border-brand-600/70 transition overflow-hidden"
       onClick={() => onSelect(finding)}
     >
       <div className="flex items-center justify-between text-xs text-slate-400">
@@ -43,7 +44,7 @@ export default function FindingCard({ finding, projectId, projectVersionId, onSe
         >
           {finding.severity}
         </span>
-        <span>{finding.active ? "Enabled" : "Disabled"}</span>
+        <span>{finding.active ? "Active" : "Non-Active"}</span>
       </div>
       <div
         className="mt-3 text-base font-semibold text-white line-clamp-2"
@@ -68,38 +69,42 @@ export default function FindingCard({ finding, projectId, projectVersionId, onSe
         />
       </div>
       <div className="mt-4 flex gap-2">
-        <button
-          className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white"
-          onClick={(event) => {
-            event.stopPropagation();
-            updateStatus.mutate(
-              { id: finding.id, active: !finding.active },
-              {
-                onSuccess: () => {
-                  toast.push(
-                    finding.active ? "Finding disabled." : "Finding enabled.",
-                    "success",
-                  );
+        <PermissionGate action="enable" productId={finding.productId}>
+          <button
+            className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white"
+            onClick={(event) => {
+              event.stopPropagation();
+              updateStatus.mutate(
+                { id: finding.id, active: !finding.active },
+                {
+                  onSuccess: () => {
+                    toast.push(
+                      finding.active ? "Finding disabled." : "Finding enabled.",
+                      "success",
+                    );
+                  },
+                  onError: (error) => {
+                    const message = error instanceof Error ? error.message : String(error);
+                    toast.push(`Action failed: ${message}`, "error");
+                  },
                 },
-                onError: (error) => {
-                  const message = error instanceof Error ? error.message : String(error);
-                  toast.push(`Action failed: ${message}`, "error");
-                },
-              },
-            );
-          }}
-        >
-          {finding.active ? "Disable" : "Enable"}
-        </button>
-        <button
-          className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white"
-          onClick={(event) => {
-            event.stopPropagation();
-            onSelect(finding);
-          }}
-        >
-          Comment
-        </button>
+              );
+            }}
+          >
+            {finding.active ? "Disable" : "Enable"}
+          </button>
+        </PermissionGate>
+        <PermissionGate action="comment" productId={finding.productId}>
+          <button
+            className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect(finding);
+            }}
+          >
+            Comment
+          </button>
+        </PermissionGate>
         <Link
           to={`/finding/${finding.id}`}
           className="rounded-xl bg-brand-500 px-3 py-2 text-xs font-semibold text-night-900"

@@ -39,6 +39,26 @@ class ClientUIStaticTests(SimpleTestCase):
         self.assertTrue(select_field.exists())
         self.assertIn("@radix-ui/react-select", select_field.read_text(encoding="utf-8"))
 
+    def test_client_ui_multi_select_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        multi_select = base_dir / "client-ui" / "src" / "components" / "MultiSelectChips.tsx"
+        self.assertTrue(multi_select.exists())
+
+    def test_client_ui_description_block_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        block = base_dir / "client-ui" / "src" / "components" / "DescriptionBlock.tsx"
+        self.assertTrue(block.exists())
+
+    def test_client_ui_permissions_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        permissions = base_dir / "client-ui" / "src" / "lib" / "permissions.ts"
+        self.assertTrue(permissions.exists())
+        content = permissions.read_text(encoding="utf-8")
+        self.assertIn("useWritePermissions", content)
+        gate = base_dir / "client-ui" / "src" / "components" / "PermissionGate.tsx"
+        self.assertTrue(gate.exists())
+        self.assertIn("PermissionGate", gate.read_text(encoding="utf-8"))
+
     def test_client_ui_auth_hook_present(self):
         base_dir = Path(__file__).resolve().parents[2]
         app_file = base_dir / "client-ui" / "src" / "App.tsx"

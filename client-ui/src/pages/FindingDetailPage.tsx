@@ -2,16 +2,20 @@ import { Link, useParams } from "react-router-dom";
 import { useState } from "react";
 
 import CodeSnippet from "../components/CodeSnippet";
+import DescriptionBlock from "../components/DescriptionBlock";
 import {
   useAiResponse,
+  useEngagementProduct,
   useFinding,
   useFindingNotes,
   usePipelines,
   useProjectMeta,
   useProjects,
+  useTestEngagement,
 } from "../lib/queries";
 import { useAddFindingNote, useExportAiResults, useUpdateFindingStatus } from "../lib/mutations";
 import { useToast } from "../components/ToastProvider";
+import PermissionGate from "../components/PermissionGate";
 
 export default function FindingDetailPage() {
   const params = useParams();
@@ -27,8 +31,11 @@ export default function FindingDetailPage() {
   const toast = useToast();
 
   const projects = projectsQuery.data ?? [];
-  const aistProject = projects.find((project) => project.productId === finding?.productId);
-  const productName = projects.find((project) => project.productId === finding?.productId)?.name;
+  const testEngagementQuery = useTestEngagement(finding?.testId ?? null);
+  const engagementProductQuery = useEngagementProduct(testEngagementQuery.data ?? null);
+  const resolvedProductId = finding?.productId ?? engagementProductQuery.data ?? undefined;
+  const aistProject = projects.find((project) => project.productId === resolvedProductId);
+  const productName = projects.find((project) => project.productId === resolvedProductId)?.name;
   const pipelinesQuery = usePipelines(aistProject?.id);
   const aiResponse = useAiResponse(pipelinesQuery.data ?? [], finding?.id);
   const metaQuery = useProjectMeta(aistProject?.id);
@@ -59,58 +66,65 @@ export default function FindingDetailPage() {
           <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
             Finding Detail
           </div>
-          <h1 className="mt-2 text-2xl font-semibold">{finding.title}</h1>
+          <h1 className="mt-2 text-2xl font-semibold line-clamp-2" title={finding.title}>
+            {finding.title}
+          </h1>
           <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-400">
             <span>Severity: {finding.severity}</span>
-            <span>Status: {finding.active ? "Enabled" : "Disabled"}</span>
+            <span>Status: {finding.active ? "Active" : "Non-Active"}</span>
             <span>Product: {productName ?? finding.product}</span>
+            {finding.cwe ? <span>CWE: {finding.cwe}</span> : null}
           </div>
         </div>
         <div className="flex gap-2">
-          <button
-            className="rounded-xl border border-night-500 bg-night-700 px-4 py-2 text-xs text-white"
-            onClick={() =>
-              updateStatus.mutate(
-                { id: finding.id, active: !finding.active },
-                {
-                  onSuccess: () => {
-                    toast.push(
-                      finding.active ? "Finding disabled." : "Finding enabled.",
-                      "success",
-                    );
-                  },
-                  onError: (error) => {
-                    const message = error instanceof Error ? error.message : String(error);
-                    toast.push(`Action failed: ${message}`, "error");
-                  },
-                },
-              )
-            }
-          >
-            {finding.active ? "Disable" : "Enable"}
-          </button>
-          <button
-            className="rounded-xl border border-night-500 bg-night-700 px-4 py-2 text-xs text-white"
-            onClick={() => {
-              if (note.trim()) {
-                addNote.mutate(
-                  { id: finding.id, entry: note },
+          <PermissionGate action="enable" productId={resolvedProductId}>
+            <button
+              className="rounded-xl border border-night-500 bg-night-700 px-4 py-2 text-xs text-white"
+              onClick={() =>
+                updateStatus.mutate(
+                  { id: finding.id, active: !finding.active },
                   {
                     onSuccess: () => {
-                      toast.push("Comment added.", "success");
+                      toast.push(
+                        finding.active ? "Finding disabled." : "Finding enabled.",
+                        "success",
+                      );
                     },
                     onError: (error) => {
                       const message = error instanceof Error ? error.message : String(error);
-                      toast.push(`Comment failed: ${message}`, "error");
+                      toast.push(`Action failed: ${message}`, "error");
                     },
                   },
-                );
-                setNote("");
+                )
               }
-            }}
-          >
-            Comment
-          </button>
+            >
+              {finding.active ? "Disable" : "Enable"}
+            </button>
+          </PermissionGate>
+          <PermissionGate action="comment" productId={resolvedProductId}>
+            <button
+              className="rounded-xl border border-night-500 bg-night-700 px-4 py-2 text-xs text-white"
+              onClick={() => {
+                if (note.trim()) {
+                  addNote.mutate(
+                    { id: finding.id, entry: note },
+                    {
+                      onSuccess: () => {
+                        toast.push("Comment added.", "success");
+                      },
+                      onError: (error) => {
+                        const message = error instanceof Error ? error.message : String(error);
+                        toast.push(`Comment failed: ${message}`, "error");
+                      },
+                    },
+                  );
+                  setNote("");
+                }
+              }}
+            >
+              Comment
+            </button>
+          </PermissionGate>
           <button
             className="rounded-xl bg-brand-500 px-4 py-2 text-xs font-semibold text-night-900 disabled:opacity-50"
             onClick={() => {
@@ -172,6 +186,7 @@ export default function FindingDetailPage() {
           <CodeSnippet
             projectVersionId={projectVersionId}
             filePath={finding.filePath}
+            sourceFileLink={finding.sourceFileLink}
             line={finding.line}
           />
         </div>
@@ -180,25 +195,42 @@ export default function FindingDetailPage() {
       <section className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel">
           <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
-            Metadata
+            Description
           </div>
           <div className="mt-3 space-y-2 text-xs text-slate-300">
-            <div>Tool: {finding.tool}</div>
-            <div>File: {finding.filePath}</div>
-            <div>Line: {finding.line}</div>
+            {finding.tags?.length ? (
+              <div>
+                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Tags</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {finding.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-full border border-night-500 bg-night-900 px-3 py-1 text-xs text-slate-200"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <DescriptionBlock value={finding.description} />
+            <div className="text-xs text-slate-400">File: {finding.filePath}</div>
+            <div className="text-xs text-slate-400">Line: {finding.line}</div>
           </div>
         </div>
         <div className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel">
           <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
             Notes
           </div>
-          <textarea
-            className="mt-3 w-full rounded-xl border border-night-500 bg-night-900 px-3 py-2 text-xs text-slate-200"
-            rows={4}
-            placeholder="Add a comment for this finding..."
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-          />
+          <PermissionGate action="comment" productId={resolvedProductId}>
+            <textarea
+              className="mt-3 w-full rounded-xl border border-night-500 bg-night-900 px-3 py-2 text-xs text-slate-200"
+              rows={4}
+              placeholder="Add a comment for this finding..."
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+            />
+          </PermissionGate>
           <div className="mt-4 space-y-3 text-xs text-slate-300">
             {notesQuery.isLoading ? (
               <div>Loading notes...</div>

@@ -18,6 +18,55 @@
   overflow: hidden;
 }
 
+.hljs {
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.aist-markdown {
+  line-height: 1.6;
+}
+
+.aist-markdown p {
+  margin: 0.4rem 0;
+}
+
+.aist-markdown ul,
+.aist-markdown ol {
+  margin: 0.4rem 0 0.4rem 1.25rem;
+}
+
+.aist-markdown a {
+  color: #4dd4ff;
+  text-decoration: underline;
+}
+
+.aist-markdown code {
+  background: rgba(34, 48, 85, 0.6);
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.35rem;
+  font-size: 0.85em;
+}
+
+.aist-markdown pre {
+  background: rgba(13, 19, 33, 0.8);
+  border: 1px solid rgba(34, 48, 85, 0.8);
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  overflow-x: auto;
+}
+
+.snippet-preview-container {
+  max-height: 4.5rem;
+  overflow: hidden;
+}
+
+.snippet-preview-container pre {
+  white-space: pre;
+  overflow: hidden;
+}
+
 @layer base {
   body {
     font-family: "IBM Plex Sans", ui-sans-serif, system-ui;

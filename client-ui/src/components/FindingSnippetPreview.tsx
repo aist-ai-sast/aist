@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import hljs from "highlight.js";
 
 import { useFileSnippet } from "../lib/snippetCache";
 import { useProjectMeta } from "../lib/queries";
@@ -18,6 +19,7 @@ export default function FindingSnippetPreview({
   sourceFileLink,
   line,
 }: FindingSnippetPreviewProps) {
+
   const metaQuery = useProjectMeta(projectId);
   const resolvedProjectVersionId =
     projectVersionId ??
@@ -36,6 +38,11 @@ export default function FindingSnippetPreview({
     return snippet.lines.slice(0, 3).join("\n");
   }, [snippet]);
 
+  const highlighted = useMemo(() => {
+    if (!previewText) return "";
+    return hljs.highlightAuto(previewText).value;
+  }, [previewText]);
+
   if ((!filePath && !sourceFileLink) || (!resolvedProjectVersionId && !sourceFileLink)) {
     return (
       <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 font-mono text-xs text-slate-400">
@@ -53,8 +60,10 @@ export default function FindingSnippetPreview({
   }
 
   return (
-    <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 font-mono text-xs text-slate-200 whitespace-pre-wrap line-clamp-3">
-      {previewText ?? "Snippet preview unavailable"}
+    <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-xs text-slate-200 snippet-preview-container">
+      <pre className="hljs bg-transparent p-0 text-xs font-mono whitespace-pre">
+        <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+      </pre>
     </div>
   );
 }

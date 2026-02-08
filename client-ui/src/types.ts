@@ -8,6 +8,8 @@ export type FindingFilters = {
   status?: "enabled" | "disabled";
   riskStates?: RiskState[];
   aiVerdict?: AIVerdict;
+  cwe?: string;
+  tags?: string[];
   limit?: number;
   offset?: number;
   ordering?: string;
@@ -24,6 +26,10 @@ export type Finding = {
   filePath: string;
   line: number;
   tool: string;
+  description?: string;
+  cwe?: number | null;
+  tags?: string[];
+  testId?: number | null;
   aiVerdict?: AIVerdict;
   snippetPreview?: string;
   riskStates?: RiskState[];
