@@ -24,6 +24,7 @@ export default function FindingsPage() {
   const [selectedSort, setSelectedSort] = useState<string>("severity");
   const [selectedCwe, setSelectedCwe] = useState<string>("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedPipelineId, setSelectedPipelineId] = useState<string | undefined>();
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const pageSize = 50;
@@ -37,6 +38,7 @@ export default function FindingsPage() {
 
   const findingsQuery = useFindingsWithFilters({
     productId: selectedProductId,
+    pipelineId: selectedPipelineId,
     severity: selectedSeverity !== "All severities" && selectedSeverity !== "All" ? (selectedSeverity as any) : undefined,
     status: selectedStatus === "Active" ? "enabled" : selectedStatus === "Non-Active" ? "disabled" : undefined,
     riskStates: selectedRisk.length ? (selectedRisk as any) : undefined,
@@ -138,18 +140,26 @@ export default function FindingsPage() {
 
   useEffect(() => {
     const productParam = searchParams.get("product");
-    if (!productParam) return;
-    const parsed = Number(productParam);
-    if (!Number.isNaN(parsed)) {
-      setSelectedProductId(parsed);
+    const pipelineParam = searchParams.get("pipeline");
+    if (productParam) {
+      const parsed = Number(productParam);
+      if (!Number.isNaN(parsed)) {
+        setSelectedProductId(parsed);
+      }
     }
-    setSearchParams(
-      (params) => {
-        params.delete("product");
-        return params;
-      },
-      { replace: true },
-    );
+    if (pipelineParam) {
+      setSelectedPipelineId(pipelineParam);
+    }
+    if (productParam || pipelineParam) {
+      setSearchParams(
+        (params) => {
+          params.delete("product");
+          params.delete("pipeline");
+          return params;
+        },
+        { replace: true },
+      );
+    }
   }, [searchParams, setSearchParams]);
 
   const exportCurrentView = () => {
@@ -186,34 +196,42 @@ export default function FindingsPage() {
 
   return (
     <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)_360px]">
-      <FilterPanel
-        products={projects}
-        selectedProductId={selectedProductId}
-        onProductChange={setSelectedProductId}
-        selectedSeverity={selectedSeverity}
-        onSeverityChange={setSelectedSeverity}
-        selectedStatus={selectedStatus}
-        onStatusChange={setSelectedStatus}
-        selectedRisk={selectedRisk}
-        onRiskChange={setSelectedRisk}
-        selectedCwe={selectedCwe}
-        onCweChange={setSelectedCwe}
-        availableTags={availableTags}
-        selectedTags={selectedTags}
-        onTagsChange={setSelectedTags}
-        selectedAiVerdict={selectedAiVerdict}
-        onAiVerdictChange={setSelectedAiVerdict}
-        aiVerdictDisabled={!selectedProductId}
-      />
+      <div className="lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
+        <FilterPanel
+          products={projects}
+          selectedProductId={selectedProductId}
+          onProductChange={setSelectedProductId}
+          selectedSeverity={selectedSeverity}
+          onSeverityChange={setSelectedSeverity}
+          selectedStatus={selectedStatus}
+          onStatusChange={setSelectedStatus}
+          selectedRisk={selectedRisk}
+          onRiskChange={setSelectedRisk}
+          selectedCwe={selectedCwe}
+          onCweChange={setSelectedCwe}
+          availableTags={availableTags}
+          selectedTags={selectedTags}
+          onTagsChange={setSelectedTags}
+          selectedAiVerdict={selectedAiVerdict}
+          onAiVerdictChange={setSelectedAiVerdict}
+          aiVerdictDisabled={!selectedProductId}
+        />
+      </div>
 
       <div className="flex min-h-0 min-w-0 flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-[0.2em] text-slate-400">
           <span>Findings</span>
           <div className="flex items-center gap-2">
             <button
-              className="rounded-xl border border-night-500 bg-night-700 px-3 py-2 text-xs text-slate-200"
+              className="rounded-xl border border-night-500 bg-night-700 px-3 py-2 text-xs text-slate-200 inline-flex items-center gap-2"
               onClick={exportCurrentView}
             >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M12 3l4 4h-3v6h-2V7H8l4-4Zm-7 12h14v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-4Zm3 2v2h8v-2H8Z"
+                />
+              </svg>
               Export current view
             </button>
             <div className="w-44">
@@ -261,11 +279,13 @@ export default function FindingsPage() {
         ) : null}
       </div>
 
-      <DetailPanel
-        finding={selected ? { ...selected, projectVersionId } : undefined}
-        aiResponse={aiResponse}
-        pipelineId={selectedPipelinesQuery.data?.[0]?.id}
-      />
+      <div className="lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
+        <DetailPanel
+          finding={selected ? { ...selected, projectVersionId } : undefined}
+          aiResponse={aiResponse}
+          pipelineId={selectedPipelinesQuery.data?.[0]?.id}
+        />
+      </div>
     </div>
   );
 }

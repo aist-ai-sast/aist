@@ -1,19 +1,22 @@
 from __future__ import annotations
 
-from typing import List
+from typing import TYPE_CHECKING
 
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.pagination import LimitOffsetPagination
-from rest_framework.response import Response
-from rest_framework.views import APIView
-
+from dojo.api_v2 import serializers as dojo_serializers
 from dojo.authorization.roles_permissions import Permissions
 from dojo.filters import ApiFindingFilter
 from dojo.finding.queries import get_authorized_findings
-from dojo.api_v2 import serializers as dojo_serializers
+from rest_framework.pagination import LimitOffsetPagination
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
+
+from aist.queries import get_authorized_aist_pipelines
+
+if TYPE_CHECKING:
+    from rest_framework.response import Response
 
 
-def _parse_tags(request) -> List[str]:
+def _parse_tags(request) -> list[str]:
     raw_values = request.query_params.getlist("tags")
     tags: list[str] = []
     for raw in raw_values:
@@ -28,6 +31,14 @@ class AISTFindingListAPI(APIView):
 
     def get(self, request, *args, **kwargs) -> Response:
         queryset = get_authorized_findings(Permissions.Finding_View, user=request.user)
+        pipeline_id = request.query_params.get("pipeline_id")
+        if pipeline_id:
+            pipeline = (
+                get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
+                .filter(id=pipeline_id)
+                .first()
+            )
+            queryset = queryset.filter(test__aist_pipelines=pipeline) if pipeline else queryset.none()
 
         tags = _parse_tags(request)
         if tags:
@@ -36,6 +47,8 @@ class AISTFindingListAPI(APIView):
         params = request.query_params.copy()
         if "tags" in params:
             params.pop("tags")
+        if "pipeline_id" in params:
+            params.pop("pipeline_id")
         ordering = params.get("ordering")
         if ordering and not params.get("o"):
             params["o"] = ordering

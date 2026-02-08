@@ -10,6 +10,7 @@ import LoginPage from "./pages/LoginPage";
 import { useToast } from "./components/ToastProvider";
 import { getRoute } from "./lib/routes";
 import ProductsPage from "./pages/ProductsPage";
+import PipelinesPage from "./pages/PipelinesPage";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const auth = useAuthStatus();
@@ -65,12 +66,7 @@ export default function App() {
                 />
                 <Route
                   path="/pipelines"
-                  element={
-                    <PlaceholderPage
-                      title="Pipelines"
-                      description="Pipeline history, AI results, and actions timeline will be available here."
-                    />
-                  }
+                  element={<PipelinesPage />}
                 />
                 <Route
                   path="/search"

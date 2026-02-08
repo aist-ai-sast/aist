@@ -78,3 +78,9 @@
   background: rgba(77, 212, 255, 0.18);
   border-left: 2px solid #4dd4ff;
 }
+
+.date-input {
+  min-width: 0;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}

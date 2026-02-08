@@ -27,7 +27,7 @@ if "aist_site.middleware.AistAdminGuardMiddleware" not in MIDDLEWARE:  # noqa: F
     except ValueError:
         auth_index = len(middleware) - 1
     middleware.insert(auth_index + 1, "aist_site.middleware.AistAdminGuardMiddleware")
-    MIDDLEWARE = middleware  # noqa: F405
+    MIDDLEWARE = middleware
 
 # Register AIST app.
 extra_apps = [app for app in ("django_github_app", "aist.apps.AistConfig") if app not in INSTALLED_APPS]  # noqa: F405

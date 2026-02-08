@@ -5,14 +5,19 @@ from django.contrib.auth.models import AnonymousUser
 from django.http import HttpResponse
 from django.test import TestCase
 from django.test.client import RequestFactory
+from django.utils.crypto import get_random_string
 
 from aist_site.middleware import AistAdminGuardMiddleware
+
+
+def _make_password() -> str:
+    return get_random_string(12)
 
 
 class AistAdminGuardMiddlewareTests(TestCase):
     def setUp(self):
         self.factory = RequestFactory()
-        self.middleware = AistAdminGuardMiddleware(lambda request: HttpResponse("ok"))
+        self.middleware = AistAdminGuardMiddleware(lambda _request: HttpResponse("ok"))
 
     def test_blocks_admin_login_without_gate(self):
         request = self.factory.get("/aist-admin/login/")
@@ -33,7 +38,7 @@ class AistAdminGuardMiddlewareTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_blocks_non_superuser_ui_access(self):
-        user = get_user_model().objects.create_user(username="client", password="password")
+        user = get_user_model().objects.create_user(username="client", password=_make_password())
         request = self.factory.get("/aist-admin/", HTTP_X_AIST_ADMIN_GATE="1")
         request.user = user
         response = self.middleware(request)
@@ -42,7 +47,7 @@ class AistAdminGuardMiddlewareTests(TestCase):
     def test_allows_superuser_ui_access(self):
         user = get_user_model().objects.create_superuser(
             username="admin",
-            password="password",
+            password=_make_password(),
             email="admin@example.com",
         )
         request = self.factory.get("/aist-admin/", HTTP_X_AIST_ADMIN_GATE="1")
@@ -51,7 +56,7 @@ class AistAdminGuardMiddlewareTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_allows_api_access_for_non_superuser(self):
-        user = get_user_model().objects.create_user(username="client_api", password="password")
+        user = get_user_model().objects.create_user(username="client_api", password=_make_password())
         request = self.factory.get("/aist-admin/api/v2/findings/")
         request.user = user
         response = self.middleware(request)

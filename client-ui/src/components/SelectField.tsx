@@ -30,15 +30,13 @@ export default function SelectField({
     <div>
       {hideLabel ? null : <label className="text-xs text-slate-400">{label}</label>}
       <Select.Root value={value || undefined} onValueChange={onChange} disabled={disabled}>
-        <Select.Trigger
-          className={[
-            "flex w-full items-center justify-between rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white",
-            hideLabel ? "mt-0" : "mt-2",
-          ].join(" ")}
-        >
-          <Select.Value placeholder={placeholder}>
-            {selected?.label}
-          </Select.Value>
+      <Select.Trigger
+        className={[
+          "flex h-10 w-full items-center justify-between rounded-xl border border-night-500 bg-night-600 px-3 text-sm text-white outline-none transition focus-visible:border-brand-600 focus-visible:ring-2 focus-visible:ring-brand-600/60 data-[state=open]:border-brand-600 data-[state=open]:ring-2 data-[state=open]:ring-brand-600/60",
+          hideLabel ? "mt-0" : "mt-2",
+        ].join(" ")}
+      >
+        <Select.Value placeholder={placeholder} />
           <Select.Icon className="text-slate-400">
             <svg
               width="16"
