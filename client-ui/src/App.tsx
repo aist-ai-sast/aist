@@ -60,7 +60,7 @@ export default function App() {
           className="grid min-h-screen lg:grid-cols-[var(--sidebar-width)_1fr]"
           style={
             {
-              "--sidebar-width": sidebarCollapsed ? "80px" : "256px",
+              "--sidebar-width": sidebarCollapsed ? "64px" : "208px",
             } as CSSProperties
           }
         >
@@ -70,7 +70,7 @@ export default function App() {
           />
           <div className="flex flex-col">
             <Topbar />
-            <main className="flex-1 min-h-0 px-6 py-6 lg:px-8">
+            <main className="flex-1 min-h-0 px-4 py-4 pb-20 lg:px-8 lg:py-6">
               <Routes>
                 <Route path="/" element={<FindingsPage />} />
                 <Route path="/finding/:id" element={<FindingDetailPage />} />

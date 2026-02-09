@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import FilterPanel from "../components/FilterPanel";
 import FindingCard from "../components/FindingCard";
@@ -7,13 +7,14 @@ import type { Finding } from "../types";
 import {
   useAiResponse,
   useFindingTagsByProduct,
-  useFindingsWithFilters,
+  useFindingsPage,
   usePipelines,
   useProjectMeta,
   useProjects,
 } from "../lib/queries";
 import { useToast } from "../components/ToastProvider";
 import SelectField from "../components/SelectField";
+import PaginationBar from "../components/PaginationBar";
 
 export default function FindingsPage() {
   const [selectedProductId, setSelectedProductId] = useState<number | undefined>();
@@ -27,7 +28,8 @@ export default function FindingsPage() {
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | undefined>();
   const toast = useToast();
   const [searchParams] = useSearchParams();
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState<number>(50);
+  const [pageIndex, setPageIndex] = useState<number>(0);
   const projectsQuery = useProjects();
   const ordering =
     selectedSort === "severity"
@@ -36,7 +38,7 @@ export default function FindingsPage() {
         ? "-date"
         : "title";
 
-  const findingsQuery = useFindingsWithFilters({
+  const findingsQuery = useFindingsPage({
     productId: selectedProductId,
     pipelineId: selectedPipelineId,
     severity: selectedSeverity !== "All severities" && selectedSeverity !== "All" ? (selectedSeverity as any) : undefined,
@@ -45,6 +47,7 @@ export default function FindingsPage() {
     cwe: selectedCwe ? selectedCwe : undefined,
     tags: selectedTags.length ? selectedTags : undefined,
     limit: pageSize,
+    offset: pageIndex * pageSize,
     ordering,
   });
 
@@ -89,7 +92,7 @@ export default function FindingsPage() {
   }, [pipelinesQuery.data]);
 
   const findings = useMemo(() => {
-    const raw = findingsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+    const raw = findingsQuery.data?.items ?? [];
     const productMap = new Map(projects.map((project) => [project.productId, project.name]));
     let mapped = raw.map((finding) => ({
       ...finding,
@@ -105,7 +108,6 @@ export default function FindingsPage() {
   const tagsQuery = useFindingTagsByProduct(selectedProductId);
   const availableTags = tagsQuery.data ?? [];
   const [expandedIds, setExpandedIds] = useState<number[]>([]);
-  const parentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setSelectedTags([]);
@@ -127,17 +129,8 @@ export default function FindingsPage() {
     : undefined;
 
   useEffect(() => {
-    const el = parentRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      if (!findingsQuery.hasNextPage || findingsQuery.isFetchingNextPage) return;
-      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
-        findingsQuery.fetchNextPage();
-      }
-    };
-    el.addEventListener("scroll", onScroll);
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [findingsQuery]);
+    setPageIndex(0);
+  }, [selectedProductId, selectedSeverity, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiVerdict, selectedPipelineId, ordering, pageSize]);
 
   useEffect(() => {
     const productParam = searchParams.get("product");
@@ -187,7 +180,7 @@ export default function FindingsPage() {
 
   return (
     <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <div className="lg:sticky lg:top-24 self-start">
+      <div className="lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
         <FilterPanel
           products={projects}
           selectedProductId={selectedProductId}
@@ -210,11 +203,11 @@ export default function FindingsPage() {
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-col gap-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-[0.2em] text-slate-400">
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs uppercase tracking-[0.2em] text-slate-400">
           <span>Findings</span>
-          <div className="flex items-end gap-2">
+          <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-end">
             <button
-              className="aist-icon-button h-10"
+              className="aist-icon-button h-10 w-full sm:w-auto"
               onClick={exportCurrentView}
             >
               <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
@@ -225,7 +218,7 @@ export default function FindingsPage() {
               </svg>
               Export current view
             </button>
-            <div className="w-44">
+            <div className="w-full sm:w-44">
               <SelectField
                 label="Sort"
                 value={selectedSort}
@@ -240,86 +233,95 @@ export default function FindingsPage() {
             </div>
           </div>
         </div>
-        {findingsQuery.isLoading ? (
-          <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-            Loading findings...
-          </div>
-        ) : findings.length === 0 ? (
-          <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-            No findings match the current filters.
-          </div>
-        ) : (
-          <div ref={parentRef} className="min-h-0 flex-1 overflow-auto pr-2">
-            <div className="space-y-4">
-              {findings.map((finding) => {
-                const aiResponse = useAiResponse(pipelinesQuery.data ?? [], finding.id);
-                return (
-                  <div key={finding.id} className="space-y-3">
-                    <FindingCard
-                      finding={finding}
-                      projectId={projectIdByProduct.get(finding.productId ?? 0)}
-                      projectVersionId={selectedProductId ? filterProjectVersionId : undefined}
-                      isOpen={expandedIds.includes(finding.id)}
-                      selectedTags={selectedTags}
-                      onToggleTag={(tag) =>
-                        setSelectedTags((current) =>
-                          current.includes(tag)
-                            ? current.filter((item) => item !== tag)
-                            : [...current, tag],
-                        )
-                      }
-                      expandedContent={
-                        expandedIds.includes(finding.id) ? (
-                          <DetailPanel
-                            finding={{
-                              ...finding,
-                              projectVersionId:
-                                selectedProductId && selectedProductId === finding.productId
-                                  ? filterProjectVersionId
-                                  : projectVersionId,
-                            }}
-                            aiResponse={aiResponse}
-                            pipelineId={aiResponse?.pipelineId}
-                            selectedTags={selectedTags}
-                            onToggleTag={(tag) =>
-                              setSelectedTags((current) =>
-                                current.includes(tag)
-                                  ? current.filter((item) => item !== tag)
-                                  : [...current, tag],
-                              )
-                            }
-                            selectedCwe={selectedCwe}
-                            onToggleCwe={(cwe) =>
-                              setSelectedCwe((current) => (current === cwe ? "" : cwe))
-                            }
-                            embedded
-                          />
-                        ) : null
-                      }
-                      onSelect={() =>
-                        setExpandedIds((current) => {
-                          if (current.includes(finding.id)) {
-                            return current.filter((id) => id !== finding.id);
-                          }
-                          const next = [...current, finding.id];
-                          if (next.length > 3) {
-                            next.shift();
-                          }
-                          return next;
-                        })
-                      }
-                    />
-                  </div>
-                );
-              })}
+        <div className="flex min-h-[calc(100vh-280px)] flex-col">
+          {findingsQuery.isLoading ? (
+            <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
+              Loading findings...
             </div>
-          </div>
-        )}
-        {findingsQuery.isFetchingNextPage ? (
-          <div className="rounded-2xl border border-night-500 bg-night-700 p-4 text-xs text-slate-300">
-            Loading more findings...
-          </div>
-        ) : null}
+          ) : findings.length === 0 ? (
+            <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
+              No findings match the current filters.
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1 pr-2">
+              <div className="space-y-4">
+                {findings.map((finding) => {
+                  const aiResponse = useAiResponse(pipelinesQuery.data ?? [], finding.id);
+                  return (
+                    <div key={finding.id} className="space-y-3">
+                      <FindingCard
+                        finding={finding}
+                        projectId={projectIdByProduct.get(finding.productId ?? 0)}
+                        projectVersionId={selectedProductId ? filterProjectVersionId : undefined}
+                        isOpen={expandedIds.includes(finding.id)}
+                        selectedTags={selectedTags}
+                        onToggleTag={(tag) =>
+                          setSelectedTags((current) =>
+                            current.includes(tag)
+                              ? current.filter((item) => item !== tag)
+                              : [...current, tag],
+                          )
+                        }
+                        expandedContent={
+                          expandedIds.includes(finding.id) ? (
+                            <DetailPanel
+                              finding={{
+                                ...finding,
+                                projectVersionId:
+                                  selectedProductId && selectedProductId === finding.productId
+                                    ? filterProjectVersionId
+                                    : projectVersionId,
+                              }}
+                              aiResponse={aiResponse}
+                              pipelineId={aiResponse?.pipelineId}
+                              selectedTags={selectedTags}
+                              onToggleTag={(tag) =>
+                                setSelectedTags((current) =>
+                                  current.includes(tag)
+                                    ? current.filter((item) => item !== tag)
+                                    : [...current, tag],
+                                )
+                              }
+                              selectedCwe={selectedCwe}
+                              onToggleCwe={(cwe) =>
+                                setSelectedCwe((current) => (current === cwe ? "" : cwe))
+                              }
+                              embedded
+                            />
+                          ) : null
+                        }
+                        onSelect={() =>
+                          setExpandedIds((current) => {
+                            if (current.includes(finding.id)) {
+                              return current.filter((id) => id !== finding.id);
+                            }
+                            const next = [...current, finding.id];
+                            if (next.length > 3) {
+                              next.shift();
+                            }
+                            return next;
+                          })
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {findingsQuery.data ? (
+            <div className="mt-auto">
+              <PaginationBar
+                count={findingsQuery.data.count}
+                noun="findings"
+                pageIndex={pageIndex}
+                pageSize={pageSize}
+                onPageIndexChange={setPageIndex}
+                onPageSizeChange={setPageSize}
+              />
+            </div>
+          ) : null}
+        </div>
       </div>
 
     </div>

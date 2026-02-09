@@ -158,6 +158,80 @@ class WatchDeduplicationTests(TestCase):
 
         self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
 
+    @patch("aist.tasks.dedup.auto_push_to_ai_if_configured")
+    def test_timeout_releases_and_auto_pushes(self, mock_auto_push):
+        tests_mgr = MagicMock()
+        tests_mgr.exists.return_value = True
+        tests_mgr.filter().count.return_value = 1
+        tests_mgr.values_list.return_value = [1]
+        pipeline = _mk_pipeline(
+            status="WAITING_DEDUPLICATION_TO_FINISH",
+            tests=tests_mgr,
+            launch_data={"ai": {"mode": "AUTO_DEFAULT", "filter_snapshot": {"limit": 10}}},
+        )
+
+        progress_qs = MagicMock()
+        mock_started = MagicMock()
+        mock_started.exists.return_value = True
+        mock_attempts = MagicMock()
+        mock_attempts.exists.return_value = False
+
+        def _filter_side_effect(*args, **kwargs):
+            if "started_at__lt" in kwargs:
+                return mock_started
+            if "reconcile_attempts__gte" in kwargs and "last_progress_at__lt" in kwargs:
+                return mock_attempts
+            return progress_qs
+
+        progress_qs.filter.side_effect = _filter_side_effect
+        progress_qs.exclude.return_value = progress_qs
+        progress_qs.exists.return_value = False
+        progress_qs.values_list.return_value = [1]
+        progress_qs.__iter__.return_value = iter([])
+        progress_qs.update = MagicMock()
+
+        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs)
+
+        self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
+        mock_auto_push.delay.assert_called_once_with(pipeline.id)
+
+    @patch("aist.tasks.dedup.auto_push_to_ai_if_configured")
+    def test_retries_exhausted_releases_and_auto_pushes(self, mock_auto_push):
+        tests_mgr = MagicMock()
+        tests_mgr.exists.return_value = True
+        tests_mgr.filter().count.return_value = 1
+        tests_mgr.values_list.return_value = [1]
+        pipeline = _mk_pipeline(
+            status="WAITING_DEDUPLICATION_TO_FINISH",
+            tests=tests_mgr,
+            launch_data={"ai": {"mode": "AUTO_DEFAULT", "filter_snapshot": {"limit": 10}}},
+        )
+
+        progress_qs = MagicMock()
+        mock_started = MagicMock()
+        mock_started.exists.return_value = False
+        mock_attempts = MagicMock()
+        mock_attempts.exists.return_value = True
+
+        def _filter_side_effect(*args, **kwargs):
+            if "started_at__lt" in kwargs:
+                return mock_started
+            if "reconcile_attempts__gte" in kwargs and "last_progress_at__lt" in kwargs:
+                return mock_attempts
+            return progress_qs
+
+        progress_qs.filter.side_effect = _filter_side_effect
+        progress_qs.exclude.return_value = progress_qs
+        progress_qs.exists.return_value = False
+        progress_qs.values_list.return_value = [1]
+        progress_qs.__iter__.return_value = iter([])
+        progress_qs.update = MagicMock()
+
+        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs)
+
+        self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
+        mock_auto_push.delay.assert_called_once_with(pipeline.id)
+
 # ---- push_request_to_ai -----------------------------------------------------
 
 

@@ -166,6 +166,9 @@ def watch_deduplication(self, pipeline_id: str, log_level) -> None:
                         pipeline_id,
                     )
                     set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
+                    ai = (pipeline.launch_data or {}).get("ai") or {}
+                    if (ai.get("mode") == "AUTO_DEFAULT") and ai.get("filter_snapshot"):
+                        auto_push_to_ai_if_configured.delay(pipeline.id)
                     return
 
                 # If retries are exhausted for any stale test, also release the pipeline.
@@ -179,6 +182,9 @@ def watch_deduplication(self, pipeline_id: str, log_level) -> None:
                         pipeline_id,
                     )
                     set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
+                    ai = (pipeline.launch_data or {}).get("ai") or {}
+                    if (ai.get("mode") == "AUTO_DEFAULT") and ai.get("filter_snapshot"):
+                        auto_push_to_ai_if_configured.delay(pipeline.id)
                     return
 
                 # Identify stale tests and trigger reconcile (async) for those only.

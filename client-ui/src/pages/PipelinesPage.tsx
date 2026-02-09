@@ -4,6 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { usePipelineSummaries, useProjects } from "../lib/queries";
 import type { PipelineSummary } from "../types";
 import PipelineFilterPanel from "../components/PipelineFilterPanel";
+import PaginationBar from "../components/PaginationBar";
 
 const statusOptions = [
   { value: "all", label: "All statuses" },
@@ -59,6 +60,47 @@ function ActionsBadge({ actions }: { actions: PipelineSummary["actions"] }) {
   );
 }
 
+function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) {
+  if (!pipeline) {
+    return <div className="text-sm text-slate-400">Select a pipeline to view details.</div>;
+  }
+  return (
+    <div className="space-y-4 text-xs text-slate-300">
+      <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Pipeline Detail</div>
+      <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3">
+        <div className="grid gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Branch</span>
+            <span className="text-slate-200" title={pipeline.branch ?? undefined}>
+              {truncateText(pipeline.branch, 24)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Commit</span>
+            <span className="text-slate-200" title={pipeline.commit ?? undefined}>
+              {truncateText(pipeline.commit, 24)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Actions</div>
+        <div className="mt-2">
+          <ActionsBadge actions={pipeline.actions} />
+        </div>
+      </div>
+
+      <Link
+        to={`/?pipeline=${pipeline.id}`}
+        className="inline-flex rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
+      >
+        Open Findings
+      </Link>
+    </div>
+  );
+}
+
 export default function PipelinesPage() {
   const projectsQuery = useProjects();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -67,7 +109,9 @@ export default function PipelinesPage() {
   const [search, setSearch] = useState("");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
-  const [selectedPipeline, setSelectedPipeline] = useState<PipelineSummary | null>(null);
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [pageIndex, setPageIndex] = useState<number>(0);
+  const [expandedPipelineId, setExpandedPipelineId] = useState<string | null>(null);
 
   const projects = projectsQuery.data ?? [];
   useEffect(() => {
@@ -101,14 +145,15 @@ export default function PipelinesPage() {
     createdLte: createdTo || undefined,
     search: search || undefined,
     ordering: "-created",
+    limit: pageSize,
+    offset: pageIndex * pageSize,
   });
 
   const pipelines = pipelinesQuery.data?.items ?? [];
   useEffect(() => {
-    if (pipelines.length && !selectedPipeline) {
-      setSelectedPipeline(pipelines[0]);
-    }
-  }, [pipelines, selectedPipeline]);
+    if (!expandedPipelineId || pipelines.find((item) => item.id === expandedPipelineId)) return;
+    setExpandedPipelineId(null);
+  }, [pipelines, expandedPipelineId]);
 
   const productOptions = useMemo(
     () =>
@@ -138,9 +183,13 @@ export default function PipelinesPage() {
     };
   }, [pipelines]);
 
+  useEffect(() => {
+    setPageIndex(0);
+  }, [selectedProductId, status, search, createdFrom, createdTo, pageSize]);
+
   return (
-    <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_1fr_360px]">
-      <div className="lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
+    <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_1fr]">
+      <div className="lg:sticky lg:top-24 self-start lg:max-h-[calc(100vh-140px)] lg:overflow-auto">
         <PipelineFilterPanel
           productOptions={productOptions}
           selectedProductId={selectedProductId}
@@ -178,161 +227,138 @@ export default function PipelinesPage() {
           </div>
         </div>
 
-        {pipelinesQuery.isLoading ? (
-          <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-            Loading pipelines...
-          </div>
-        ) : pipelines.length === 0 ? (
-          <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-            No pipelines match the current filters.
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {pipelines.map((pipeline) => (
-              <article
-                key={pipeline.id}
-                className={[
-                  "p-5 aist-card aist-card--interactive",
-                  selectedPipeline?.id === pipeline.id
-                    ? "aist-card--expanded"
-                    : "",
-                ].join(" ")}
-                role="button"
-                tabIndex={0}
-                aria-expanded={selectedPipeline?.id === pipeline.id}
-                onClick={() => setSelectedPipeline(pipeline)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setSelectedPipeline(pipeline);
+        <div className="flex min-h-[calc(100vh-280px)] flex-col">
+          {pipelinesQuery.isLoading ? (
+            <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
+              Loading pipelines...
+            </div>
+          ) : pipelines.length === 0 ? (
+            <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
+              No pipelines match the current filters.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {pipelines.map((pipeline) => (
+                <article
+                  key={pipeline.id}
+                  className={[
+                    "p-5 aist-card aist-card--interactive",
+                    expandedPipelineId === pipeline.id ? "aist-card--expanded" : "",
+                  ].join(" ")}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expandedPipelineId === pipeline.id}
+                  onClick={() =>
+                    setExpandedPipelineId((current) =>
+                      current === pipeline.id ? null : pipeline.id,
+                    )
                   }
-                }}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span
-                      className={[
-                        "rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide",
-                        statusBadge(pipeline.status),
-                      ].join(" ")}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setExpandedPipelineId((current) =>
+                        current === pipeline.id ? null : pipeline.id,
+                      );
+                    }
+                  }}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span
+                        className={[
+                          "rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide",
+                          statusBadge(pipeline.status),
+                        ].join(" ")}
+                      >
+                        {pipeline.status}
+                      </span>
+                      <span className="text-xs text-slate-400">Pipeline {pipeline.id}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <span>{pipeline.productName}</span>
+                      <span
+                        className={[
+                          "inline-flex h-6 w-6 items-center justify-center rounded-full border border-night-500 bg-night-800 text-slate-300 transition-transform",
+                          expandedPipelineId === pipeline.id ? "rotate-180" : "",
+                        ].join(" ")}
+                        aria-hidden="true"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-4 w-4">
+                          <path fill="currentColor" d="M7 10l5 5 5-5H7Z" />
+                        </svg>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-2 text-xs text-slate-400 md:grid-cols-3">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Started</div>
+                      <div className="text-slate-200">{formatDate(pipeline.started)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Finished</div>
+                      <div className="text-slate-200">{formatDate(pipeline.updated)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Findings</div>
+                      <div className="text-slate-200">{pipeline.findings}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Branch</div>
+                      <div className="text-slate-200" title={pipeline.branch ?? undefined}>
+                        {truncateText(pipeline.branch, 28)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Commit</div>
+                      <div className="text-slate-200" title={pipeline.commit ?? undefined}>
+                        {truncateText(pipeline.commit, 16)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <ActionsBadge actions={pipeline.actions} />
+                  </div>
+                  <div className="mt-4 flex gap-2">
+                    <Link
+                      to={`/?pipeline=${pipeline.id}`}
+                      className="rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
                     >
-                      {pipeline.status}
-                    </span>
-                    <span className="text-xs text-slate-400">Pipeline {pipeline.id}</span>
+                      Open Findings
+                    </Link>
                   </div>
-                  <span className="text-xs text-slate-400">{pipeline.productName}</span>
-                </div>
-                <div className="mt-3 grid gap-2 text-xs text-slate-400 md:grid-cols-3">
-                  <div>
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Started</div>
-                    <div className="text-slate-200">{formatDate(pipeline.started)}</div>
+                  <div className="mt-4">
+                    {expandedPipelineId === pipeline.id ? (
+                      <div
+                        className="panel-collapse"
+                        data-state="open"
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => event.stopPropagation()}
+                      >
+                        <div className="panel-collapse-inner">
+                          <PipelineDetailCard pipeline={pipeline} />
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
-                  <div>
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Finished</div>
-                    <div className="text-slate-200">{formatDate(pipeline.updated)}</div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Findings</div>
-                    <div className="text-slate-200">{pipeline.findings}</div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Branch</div>
-                    <div className="text-slate-200" title={pipeline.branch ?? undefined}>
-                      {truncateText(pipeline.branch, 28)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Commit</div>
-                    <div className="text-slate-200" title={pipeline.commit ?? undefined}>
-                      {truncateText(pipeline.commit, 16)}
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-3">
-                  <ActionsBadge actions={pipeline.actions} />
-                </div>
-                <div className="mt-4 flex gap-2">
-                  <Link
-                    to={`/?pipeline=${pipeline.id}`}
-                    className="rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
-                  >
-                    Open Findings
-                  </Link>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
+                </article>
+              ))}
+            </div>
+          )}
+          {pipelinesQuery.data ? (
+            <div className="mt-auto">
+              <PaginationBar
+                count={pipelinesQuery.data.count}
+                noun="pipelines"
+                pageIndex={pageIndex}
+                pageSize={pageSize}
+                onPageIndexChange={setPageIndex}
+                onPageSizeChange={setPageSize}
+                rowOptions={[10, 25, 50]}
+              />
+            </div>
+          ) : null}
+        </div>
       </div>
-
-      <aside className="p-5 aist-card lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
-        {!selectedPipeline ? (
-          <div className="text-sm text-slate-400">Select a pipeline to view details.</div>
-        ) : (
-          <div className="space-y-4 text-xs text-slate-300">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Pipeline Detail</div>
-                <div className="mt-2 text-base font-semibold text-white" title={selectedPipeline.id}>
-                  {truncateText(selectedPipeline.id, 20)}
-                </div>
-                <div className="mt-1 text-xs text-slate-400">{selectedPipeline.productName}</div>
-              </div>
-              <span
-                className={[
-                  "rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide",
-                  statusBadge(selectedPipeline.status),
-                ].join(" ")}
-              >
-                {selectedPipeline.status}
-              </span>
-            </div>
-
-            <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3">
-              <div className="grid gap-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Started</span>
-                  <span className="text-slate-200">{formatDate(selectedPipeline.started)}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Finished</span>
-                  <span className="text-slate-200">{formatDate(selectedPipeline.updated)}</span>
-                </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Branch</span>
-                    <span className="text-slate-200" title={selectedPipeline.branch ?? undefined}>
-                      {truncateText(selectedPipeline.branch, 24)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Commit</span>
-                    <span className="text-slate-200" title={selectedPipeline.commit ?? undefined}>
-                      {truncateText(selectedPipeline.commit, 24)}
-                    </span>
-                  </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Findings</span>
-                  <span className="text-slate-200">{selectedPipeline.findings}</span>
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Actions</div>
-              <div className="mt-2">
-                <ActionsBadge actions={selectedPipeline.actions} />
-              </div>
-            </div>
-
-            <Link
-              to={`/?pipeline=${selectedPipeline.id}`}
-              className="inline-flex rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
-            >
-              Open Findings
-            </Link>
-          </div>
-        )}
-      </aside>
     </div>
   );
 }

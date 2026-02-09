@@ -54,50 +54,69 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <aside
       className={[
-        "sticky top-0 z-50 flex h-screen flex-col border-r border-night-500 bg-night-900/90 py-6 transition-[width] duration-200",
-        collapsed ? "w-20 px-3" : "w-64 px-6",
+        "z-[60] border-night-500 bg-night-900/95",
+        "fixed bottom-0 left-0 right-0 flex h-16 items-center gap-3 border-t px-4",
+        "lg:sticky lg:top-0 lg:h-screen lg:flex-col lg:border-r lg:border-t-0 lg:py-4 lg:transition-[width] lg:duration-200 lg:overflow-hidden lg:pr-2 box-border",
+        collapsed ? "lg:w-[64px] lg:px-2" : "lg:w-[216px] lg:px-4",
       ].join(" ")}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-night-500 bg-night-700">
-            <img src="/logo.svg" alt="AIST" className="h-8 w-8 object-contain" />
-          </div>
-          {collapsed ? null : (
-            <div className="text-brand-500 text-xs tracking-[0.2em] font-semibold uppercase">
-              AIST Client
-            </div>
-          )}
-        </div>
-        <button
-          className="rounded-lg border border-night-500 bg-night-700 p-2 text-slate-300 relative z-50"
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-expanded={!collapsed}
-          onClick={onToggle}
+      <div className="hidden w-full flex-col lg:flex">
+        <div
+          className={[
+            "flex items-center gap-3",
+            collapsed ? "justify-center" : "justify-between",
+          ].join(" ")}
         >
-          <svg
-            viewBox="0 0 24 24"
-            className={[
-              "h-5 w-5 transition-transform",
-              collapsed ? "rotate-180" : "",
-            ].join(" ")}
-            aria-hidden="true"
+          <div className={collapsed ? "hidden" : "w-full pl-3"}>
+            <div className="text-xs uppercase tracking-[0.3em] text-brand-500 leading-none">
+              AIST Portal
+            </div>
+          </div>
+          <button
+            className="rounded-xl px-3 py-2 transition flex items-center justify-center gap-2 lg:w-10 lg:px-0 lg:py-3 lg:justify-center text-slate-400 hover:text-white hover:bg-night-700"
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!collapsed}
+            onClick={onToggle}
           >
-            <path
-              fill="currentColor"
-              d="M15 6 9 12l6 6 1.4-1.4L11.8 12 16.4 7.4 15 6Z"
-            />
-          </svg>
-        </button>
+            <svg
+              viewBox="0 0 24 24"
+              className={[
+                "h-4 w-4 transition-transform",
+                collapsed ? "rotate-180" : "",
+              ].join(" ")}
+              aria-hidden="true"
+            >
+              <path
+                fill="currentColor"
+                d="M15 6 9 12l6 6 1.4-1.4L11.8 12 16.4 7.4 15 6Z"
+              />
+            </svg>
+          </button>
+        </div>
+        {collapsed ? null : (
+          <div className="mt-1 pl-3 text-[11px] text-slate-500">Security Intelligence</div>
+        )}
       </div>
-      <nav className={["mt-8 flex flex-col gap-2 text-sm", collapsed ? "items-center" : ""].join(" ")}>
+      <div className={["hidden lg:block", collapsed ? "opacity-0" : "opacity-100"].join(" ")}>
+        <div className="mt-2 h-px w-full bg-gradient-to-r from-transparent via-brand-500/40 to-transparent" />
+      </div>
+      <nav
+        className={[
+          "flex flex-1 items-center justify-around gap-2 text-sm",
+          "lg:w-full lg:flex-col lg:items-stretch lg:justify-start lg:gap-2",
+          collapsed ? "lg:items-center lg:mt-8" : "lg:mt-8",
+        ].join(" ")}
+      >
         {links.map((link) => (
           <NavLink
             key={link.to}
             to={link.to}
             className={({ isActive }) =>
               [
-                "rounded-xl px-4 py-3 transition flex items-center gap-3",
+                "rounded-xl px-3 py-2 transition flex items-center justify-center gap-2",
+                collapsed
+                  ? "lg:w-10 lg:px-0 lg:py-3 lg:justify-center"
+                  : "lg:px-3 lg:py-3 lg:justify-start lg:text-left lg:w-full",
                 isActive
                   ? "bg-night-600 text-white"
                   : "text-slate-400 hover:text-white hover:bg-night-700",
@@ -105,15 +124,15 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
             }
           >
             <span className="text-slate-400">{link.icon}</span>
-            {collapsed ? null : <span>{link.label}</span>}
+            {collapsed ? null : <span className="hidden lg:inline">{link.label}</span>}
           </NavLink>
         ))}
-      </nav>
-      <div className="mt-auto pt-6">
         <button
           className={[
-            "rounded-xl border border-night-500 bg-night-700 px-4 py-3 text-xs text-slate-200 inline-flex items-center justify-center gap-2",
-            collapsed ? "w-12 px-0" : "w-full",
+            "rounded-xl border border-night-500 bg-night-700 px-3 py-2 text-xs text-slate-200 inline-flex items-center justify-center gap-2",
+            collapsed
+              ? "lg:w-10 lg:px-0 lg:justify-center lg:mt-auto"
+              : "lg:mt-auto lg:px-3 lg:py-3 lg:justify-start lg:text-left lg:w-full",
           ].join(" ")}
           onClick={async () => {
             await logoutSession();
@@ -128,9 +147,9 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
               d="M10 5H5v14h5v2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5v2Zm4.5 2.5L19 12l-4.5 4.5-1.4-1.4L15.2 13H9v-2h6.2l-2.1-2.1 1.4-1.4Z"
             />
           </svg>
-          {collapsed ? null : "Sign out"}
+          {collapsed ? null : <span className="hidden lg:inline">Sign out</span>}
         </button>
-      </div>
+      </nav>
     </aside>
   );
 }

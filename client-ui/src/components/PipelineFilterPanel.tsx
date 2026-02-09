@@ -58,7 +58,7 @@ export default function PipelineFilterPanel({
         </div>
         <div>
           <label className="text-xs text-slate-400">Created between</label>
-          <div className="mt-2 grid grid-cols-2 gap-2">
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <DateField
               label="From"
               value={createdFrom}
