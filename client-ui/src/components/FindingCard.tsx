@@ -1,16 +1,15 @@
-import { Link } from "react-router-dom";
-
 import type { Finding } from "../types";
-import { useUpdateFindingStatus } from "../lib/mutations";
-import { useToast } from "./ToastProvider";
 import FindingSnippetPreview from "./FindingSnippetPreview";
-import PermissionGate from "./PermissionGate";
 
 type FindingCardProps = {
   finding: Finding;
   projectId?: number;
   projectVersionId?: number;
   onSelect: (finding: Finding) => void;
+  isOpen?: boolean;
+  expandedContent?: React.ReactNode;
+  selectedTags?: string[];
+  onToggleTag?: (tag: string) => void;
 };
 
 const severityStyles: Record<Finding["severity"], string> = {
@@ -27,24 +26,95 @@ const verdictLabel = {
   uncertain: "AI: Uncertain",
 };
 
-export default function FindingCard({ finding, projectId, projectVersionId, onSelect }: FindingCardProps) {
-  const updateStatus = useUpdateFindingStatus();
-  const toast = useToast();
+export default function FindingCard({
+  finding,
+  projectId,
+  projectVersionId,
+  onSelect,
+  isOpen = false,
+  expandedContent,
+  selectedTags = [],
+  onToggleTag,
+}: FindingCardProps) {
+  const tags = finding.tags ?? [];
+  const visibleTags = tags.slice(0, 6);
+  const hiddenTags = tags.length > visibleTags.length ? tags.length - visibleTags.length : 0;
   return (
     <article
-      className="min-w-0 rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel hover:border-brand-600/70 transition overflow-hidden"
+      className={[
+        "min-w-0 p-5 overflow-hidden aist-card aist-card--interactive",
+        isOpen ? "aist-card--expanded" : "",
+      ].join(" ")}
+      role="button"
+      tabIndex={0}
+      aria-expanded={isOpen}
       onClick={() => onSelect(finding)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect(finding);
+        }
+      }}
     >
-      <div className="flex items-center justify-between text-xs text-slate-400">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={[
+              "rounded-full border px-3 py-1 font-semibold uppercase tracking-wide",
+              severityStyles[finding.severity],
+            ].join(" ")}
+          >
+            {finding.severity}
+          </span>
+          {finding.isMitigated ? (
+            <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-300">
+              Mitigated
+            </span>
+          ) : null}
+          {finding.riskAccepted ? (
+            <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1 text-xs text-amber-300">
+              Risk Accepted
+            </span>
+          ) : null}
+          {finding.falsePositive ? (
+            <span className="rounded-full border border-purple-400/40 bg-purple-400/10 px-3 py-1 text-xs text-purple-300">
+              False Positive
+            </span>
+          ) : null}
+          {finding.outOfScope ? (
+            <span className="rounded-full border border-slate-400/40 bg-slate-400/10 px-3 py-1 text-xs text-slate-300">
+              Out of Scope
+            </span>
+          ) : null}
+          {finding.duplicate ? (
+            <span className="rounded-full border border-slate-400/40 bg-slate-400/10 px-3 py-1 text-xs text-slate-300">
+              Duplicate
+            </span>
+          ) : null}
+          {!finding.isMitigated &&
+          !finding.riskAccepted &&
+          !finding.falsePositive &&
+          !finding.outOfScope &&
+          !finding.duplicate ? (
+            <span className="rounded-full border border-night-500 bg-night-900 px-3 py-1 text-xs text-slate-200">
+              {finding.active ? "Active" : "Non-Active"}
+            </span>
+          ) : null}
+        </div>
         <span
           className={[
-            "rounded-full border px-3 py-1 font-semibold uppercase tracking-wide",
-            severityStyles[finding.severity],
+            "inline-flex h-6 w-6 items-center justify-center rounded-full border border-night-500 bg-night-800 text-slate-300 transition-transform",
+            isOpen ? "rotate-180" : "",
           ].join(" ")}
+          aria-hidden="true"
         >
-          {finding.severity}
+          <svg viewBox="0 0 24 24" className="h-4 w-4">
+            <path
+              fill="currentColor"
+              d="M7 10l5 5 5-5H7Z"
+            />
+          </svg>
         </span>
-        <span>{finding.active ? "Active" : "Non-Active"}</span>
       </div>
       <div
         className="mt-3 text-base font-semibold text-white line-clamp-2"
@@ -59,71 +129,57 @@ export default function FindingCard({ finding, projectId, projectVersionId, onSe
         <span>Line {finding.line}</span>
         {finding.aiVerdict ? <span>{verdictLabel[finding.aiVerdict]}</span> : null}
       </div>
+      {tags.length ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {visibleTags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              className={[
+                "rounded-full border px-3 py-1 text-xs transition",
+                selectedTags.includes(tag)
+                  ? "border-brand-600/70 bg-brand-600/20 text-brand-400"
+                  : "border-night-500 bg-night-900 text-slate-200 hover:border-brand-600/40",
+              ].join(" ")}
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleTag?.(tag);
+              }}
+            >
+              {tag}
+            </button>
+          ))}
+          {hiddenTags ? (
+            <span className="rounded-full border border-night-500 bg-night-900 px-3 py-1 text-xs text-slate-400">
+              +{hiddenTags}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <div className="mt-3">
-        <FindingSnippetPreview
-          projectId={projectId}
-          projectVersionId={projectVersionId}
-          filePath={finding.filePath}
-          sourceFileLink={finding.sourceFileLink}
-          line={finding.line}
-        />
+        {isOpen ? (
+          <div
+            className="panel-collapse"
+            data-state="open"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-collapse-inner">
+              {expandedContent}
+            </div>
+          </div>
+        ) : (
+          <FindingSnippetPreview
+            projectId={projectId}
+            projectVersionId={projectVersionId}
+            filePath={finding.filePath}
+            sourceFileLink={finding.sourceFileLink}
+            line={finding.line}
+          />
+        )}
       </div>
-      <div className="mt-4 flex gap-2">
-        <PermissionGate action="enable" productId={finding.productId}>
-          <button
-            className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white inline-flex items-center gap-2"
-            onClick={(event) => {
-              event.stopPropagation();
-              updateStatus.mutate(
-                { id: finding.id, active: !finding.active },
-                {
-                  onSuccess: () => {
-                    toast.push(
-                      finding.active ? "Finding disabled." : "Finding enabled.",
-                      "success",
-                    );
-                  },
-                  onError: (error) => {
-                    const message = error instanceof Error ? error.message : String(error);
-                    toast.push(`Action failed: ${message}`, "error");
-                  },
-                },
-              );
-            }}
-          >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M6 5h2v14H6V5Zm10 0h2v14h-2V5Z"
-              />
-            </svg>
-            {finding.active ? "Disable" : "Enable"}
-          </button>
-        </PermissionGate>
-        <PermissionGate action="comment" productId={finding.productId}>
-          <button
-            className="rounded-xl border border-night-500 bg-transparent px-3 py-2 text-xs text-white inline-flex items-center gap-2"
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelect(finding);
-            }}
-          >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v9h16V6H4Z"
-              />
-            </svg>
-            Comment
-          </button>
-        </PermissionGate>
-        <Link
-          to={`/finding/${finding.id}`}
-          className="rounded-xl bg-brand-500 px-3 py-2 text-xs font-semibold text-night-900"
-          onClick={(event) => event.stopPropagation()}
-        >
-          Open Detail
-        </Link>
+      <div className="mt-4 text-xs text-slate-400">
+        {isOpen ? "Click to collapse." : "Click to view details."}
       </div>
     </article>
   );

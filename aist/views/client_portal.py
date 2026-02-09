@@ -25,6 +25,7 @@ def _build_routes() -> dict[str, Any]:
         "findings_list_url": reverse("aist_api:finding_list"),
         "finding_detail_url": _replace_int_placeholder(reverse("finding-detail", args=[0]), "id"),
         "finding_notes_url": _replace_int_placeholder(reverse("finding-notes", args=[0]), "id"),
+        "finding_close_url": _replace_int_placeholder(reverse("finding-close", args=[0]), "id"),
         "test_detail_url": _replace_int_placeholder(reverse("test-detail", args=[0]), "id"),
         "engagement_detail_url": _replace_int_placeholder(reverse("engagement-detail", args=[0]), "id"),
         "projects_list_url": reverse("aist_api:project_list"),

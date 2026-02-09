@@ -192,12 +192,21 @@ export default function PipelinesPage() {
               <article
                 key={pipeline.id}
                 className={[
-                  "rounded-2xl border bg-night-700/80 p-5 shadow-panel transition",
+                  "p-5 aist-card aist-card--interactive",
                   selectedPipeline?.id === pipeline.id
-                    ? "border-brand-600/70 shadow-[0_0_0_1px_rgba(77,212,255,0.25)]"
-                    : "border-night-500 hover:border-brand-600/50",
+                    ? "aist-card--expanded"
+                    : "",
                 ].join(" ")}
+                role="button"
+                tabIndex={0}
+                aria-expanded={selectedPipeline?.id === pipeline.id}
                 onClick={() => setSelectedPipeline(pipeline)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setSelectedPipeline(pipeline);
+                  }
+                }}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-3">
@@ -256,7 +265,7 @@ export default function PipelinesPage() {
         )}
       </div>
 
-      <aside className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
+      <aside className="p-5 aist-card lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
         {!selectedPipeline ? (
           <div className="text-sm text-slate-400">Select a pipeline to view details.</div>
         ) : (

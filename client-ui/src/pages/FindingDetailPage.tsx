@@ -1,21 +1,17 @@
 import { Link, useParams } from "react-router-dom";
-import { useState } from "react";
-
-import CodeSnippet from "../components/CodeSnippet";
-import DescriptionBlock from "../components/DescriptionBlock";
+import FindingDetailTabs from "../components/FindingDetailTabs";
 import {
   useAiResponse,
   useEngagementProduct,
   useFinding,
-  useFindingNotes,
   usePipelines,
   useProjectMeta,
   useProjects,
   useTestEngagement,
 } from "../lib/queries";
-import { useAddFindingNote, useExportAiResults, useUpdateFindingStatus } from "../lib/mutations";
+import { useExportAiResults } from "../lib/mutations";
 import { useToast } from "../components/ToastProvider";
-import PermissionGate from "../components/PermissionGate";
+import FindingStatusActions from "../components/FindingStatusActions";
 
 export default function FindingDetailPage() {
   const params = useParams();
@@ -23,11 +19,7 @@ export default function FindingDetailPage() {
   const findingQuery = useFinding(findingId);
   const projectsQuery = useProjects();
   const finding = findingQuery.data ?? undefined;
-  const [note, setNote] = useState("");
-  const updateStatus = useUpdateFindingStatus();
-  const addNote = useAddFindingNote();
   const exportAi = useExportAiResults();
-  const notesQuery = useFindingNotes(findingId);
   const toast = useToast();
 
   const projects = projectsQuery.data ?? [];
@@ -70,82 +62,69 @@ export default function FindingDetailPage() {
             {finding.title}
           </h1>
           <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-400">
-            <span>Severity: {finding.severity}</span>
-            <span>Status: {finding.active ? "Active" : "Non-Active"}</span>
             <span>Product: {productName ?? finding.product}</span>
             {finding.cwe ? <span>CWE: {finding.cwe}</span> : null}
           </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <span
+              className={[
+                "rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide",
+                finding.severity === "Critical"
+                  ? "border-danger-500/50 text-danger-500 bg-danger-500/10"
+                  : finding.severity === "High"
+                    ? "border-danger-500/30 text-danger-500/80 bg-danger-500/10"
+                    : finding.severity === "Medium"
+                      ? "border-amber-400/40 text-amber-400 bg-amber-400/10"
+                      : finding.severity === "Low"
+                        ? "border-slate-500/40 text-slate-300 bg-slate-500/10"
+                        : "border-slate-500/40 text-slate-300 bg-slate-500/10",
+              ].join(" ")}
+            >
+              {finding.severity}
+            </span>
+            {finding.isMitigated ? (
+              <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-300">
+                Mitigated
+              </span>
+            ) : null}
+            {finding.riskAccepted ? (
+              <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1 text-xs text-amber-300">
+                Risk Accepted
+              </span>
+            ) : null}
+            {finding.falsePositive ? (
+              <span className="rounded-full border border-purple-400/40 bg-purple-400/10 px-3 py-1 text-xs text-purple-300">
+                False Positive
+              </span>
+            ) : null}
+            {finding.outOfScope ? (
+              <span className="rounded-full border border-slate-400/40 bg-slate-400/10 px-3 py-1 text-xs text-slate-300">
+                Out of Scope
+              </span>
+            ) : null}
+            {finding.duplicate ? (
+              <span className="rounded-full border border-slate-400/40 bg-slate-400/10 px-3 py-1 text-xs text-slate-300">
+                Duplicate
+              </span>
+            ) : null}
+            {!finding.isMitigated && !finding.riskAccepted && !finding.falsePositive && !finding.outOfScope && !finding.duplicate ? (
+              <span className="rounded-full border border-night-500 bg-night-900 px-3 py-1 text-xs text-slate-200">
+                {finding.active ? "Active" : "Non-Active"}
+              </span>
+            ) : null}
+          </div>
         </div>
-        <div className="flex gap-2">
-          <PermissionGate action="enable" productId={resolvedProductId}>
-            <button
-              className="rounded-xl border border-night-500 bg-night-700 px-4 py-2 text-xs text-white inline-flex items-center gap-2"
-              onClick={() =>
-                updateStatus.mutate(
-                  { id: finding.id, active: !finding.active },
-                  {
-                    onSuccess: () => {
-                      toast.push(
-                        finding.active ? "Finding disabled." : "Finding enabled.",
-                        "success",
-                      );
-                    },
-                    onError: (error) => {
-                      const message = error instanceof Error ? error.message : String(error);
-                      toast.push(`Action failed: ${message}`, "error");
-                    },
-                  },
-                )
-              }
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M6 5h2v14H6V5Zm10 0h2v14h-2V5Z"
-                />
-              </svg>
-              {finding.active ? "Disable" : "Enable"}
-            </button>
-          </PermissionGate>
-          <PermissionGate action="comment" productId={resolvedProductId}>
-            <button
-              className="rounded-xl border border-night-500 bg-night-700 px-4 py-2 text-xs text-white inline-flex items-center gap-2"
-              onClick={() => {
-                if (note.trim()) {
-                  addNote.mutate(
-                    { id: finding.id, entry: note },
-                    {
-                      onSuccess: () => {
-                        toast.push("Comment added.", "success");
-                      },
-                      onError: (error) => {
-                        const message = error instanceof Error ? error.message : String(error);
-                        toast.push(`Comment failed: ${message}`, "error");
-                      },
-                    },
-                  );
-                  setNote("");
-                }
-              }}
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v9h16V6H4Z"
-                />
-              </svg>
-              Comment
-            </button>
-          </PermissionGate>
+        <div className="flex items-end gap-3">
+          <FindingStatusActions finding={finding} />
           <button
-            className="rounded-xl bg-brand-500 px-4 py-2 text-xs font-semibold text-night-900 disabled:opacity-50 inline-flex items-center gap-2"
+            className="aist-icon-button h-10 disabled:opacity-50"
             onClick={() => {
-              if (!pipelinesQuery.data?.[0]?.id) {
-                toast.push("No pipeline available for export.", "error");
+              if (!aiResponse?.pipelineId) {
+                toast.push("AI results are not available for export.", "error");
                 return;
               }
               exportAi.mutate(
-                { pipelineId: pipelinesQuery.data[0].id },
+                { pipelineId: aiResponse.pipelineId },
                 {
                   onSuccess: () => {
                     toast.push("Export started.", "success");
@@ -157,9 +136,9 @@ export default function FindingDetailPage() {
                 },
               );
             }}
-            disabled={!pipelinesQuery.data?.[0]?.id}
+            disabled={!aiResponse?.pipelineId}
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
               <path
                 fill="currentColor"
                 d="M12 3l4 4h-3v6h-2V7H8l4-4Zm-7 12h14v4a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-4Zm3 2v2h8v-2H8Z"
@@ -171,102 +150,10 @@ export default function FindingDetailPage() {
       </div>
 
       <section className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel">
-        <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
-          AI Summary
-        </div>
-        <p className="mt-3 text-sm text-slate-200">
-          {aiResponse?.reasoning ?? "AI reasoning and evidence from the pipeline response will be displayed here."}
-        </p>
-        {aiResponse ? (
-          <div className="mt-3 grid gap-2 text-xs text-slate-300">
-            <div>EPSS: {aiResponse.epssScore ?? "n/a"}</div>
-            <div>Impact: {aiResponse.impactScore ?? "n/a"}</div>
-            <div>Exploitability: {aiResponse.exploitabilityScore ?? "n/a"}</div>
-            {aiResponse.references?.length ? (
-              <div>
-                References:
-                <ul className="mt-1 list-disc pl-4">
-                  {aiResponse.references.map((ref) => (
-                    <li key={ref}>{ref}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
-
-      <section className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel">
-        <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
-          Code Viewer
-        </div>
-        <div className="mt-3">
-          <CodeSnippet
-            projectVersionId={projectVersionId}
-            filePath={finding.filePath}
-            sourceFileLink={finding.sourceFileLink}
-            line={finding.line}
-          />
-        </div>
-      </section>
-
-      <section className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel">
-          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
-            Description
-          </div>
-          <div className="mt-3 space-y-2 text-xs text-slate-300">
-            {finding.tags?.length ? (
-              <div>
-                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Tags</div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {finding.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded-full border border-night-500 bg-night-900 px-3 py-1 text-xs text-slate-200"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            <DescriptionBlock value={finding.description} />
-            <div className="text-xs text-slate-400">File: {finding.filePath}</div>
-            <div className="text-xs text-slate-400">Line: {finding.line}</div>
-          </div>
-        </div>
-        <div className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel">
-          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
-            Notes
-          </div>
-          <PermissionGate action="comment" productId={resolvedProductId}>
-            <textarea
-              className="mt-3 w-full rounded-xl border border-night-500 bg-night-900 px-3 py-2 text-xs text-slate-200"
-              rows={4}
-              placeholder="Add a comment for this finding..."
-              value={note}
-              onChange={(event) => setNote(event.target.value)}
-            />
-          </PermissionGate>
-          <div className="mt-4 space-y-3 text-xs text-slate-300">
-            {notesQuery.isLoading ? (
-              <div>Loading notes...</div>
-            ) : notesQuery.data && notesQuery.data.length > 0 ? (
-              notesQuery.data.map((item) => (
-                <div key={item.id} className="rounded-lg border border-night-500 bg-night-900 px-3 py-2">
-                  <div className="text-slate-400">
-                    {item.author?.username ?? "Unknown"} ·{" "}
-                    {item.date ? new Date(item.date).toLocaleString() : ""}
-                  </div>
-                  <div className="mt-1 text-slate-200">{item.entry}</div>
-                </div>
-              ))
-            ) : (
-              <div>No comments yet.</div>
-            )}
-          </div>
-        </div>
+        <FindingDetailTabs
+          finding={{ ...finding, projectVersionId }}
+          aiResponse={aiResponse}
+        />
       </section>
     </div>
   );

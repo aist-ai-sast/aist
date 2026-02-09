@@ -1,4 +1,5 @@
 import SelectField from "./SelectField";
+import DateField from "./DateField";
 
 type Option = {
   value: string;
@@ -35,7 +36,7 @@ export default function PipelineFilterPanel({
   statusOptions,
 }: PipelineFilterPanelProps) {
   return (
-    <aside className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel">
+    <aside className="p-5 aist-card">
       <div className="text-xs uppercase tracking-[0.2em] text-slate-400 mb-4">Filters</div>
       <div className="space-y-4">
         <SelectField
@@ -58,17 +59,17 @@ export default function PipelineFilterPanel({
         <div>
           <label className="text-xs text-slate-400">Created between</label>
           <div className="mt-2 grid grid-cols-2 gap-2">
-            <input
-              type="date"
-              className="date-input h-10 w-full rounded-xl border border-night-500 bg-night-600 px-3 text-sm text-white outline-none focus-visible:border-brand-600 focus-visible:ring-2 focus-visible:ring-brand-600/60"
+            <DateField
+              label="From"
               value={createdFrom}
-              onChange={(event) => onCreatedFromChange(event.target.value)}
+              onChange={onCreatedFromChange}
+              placeholder="dd.mm.yy"
             />
-            <input
-              type="date"
-              className="date-input h-10 w-full rounded-xl border border-night-500 bg-night-600 px-3 text-sm text-white outline-none focus-visible:border-brand-600 focus-visible:ring-2 focus-visible:ring-brand-600/60"
+            <DateField
+              label="To"
               value={createdTo}
-              onChange={(event) => onCreatedToChange(event.target.value)}
+              onChange={onCreatedToChange}
+              placeholder="dd.mm.yy"
             />
           </div>
         </div>

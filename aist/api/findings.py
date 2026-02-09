@@ -30,7 +30,7 @@ class AISTFindingListAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs) -> Response:
-        queryset = get_authorized_findings(Permissions.Finding_View, user=request.user)
+        queryset = get_authorized_findings(Permissions.Finding_View, user=request.user).prefetch_related("tags")
         pipeline_id = request.query_params.get("pipeline_id")
         if pipeline_id:
             pipeline = (

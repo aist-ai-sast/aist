@@ -1,11 +1,13 @@
 import { Route, Routes } from "react-router-dom";
+import { useState } from "react";
+import type { CSSProperties } from "react";
 
 import Sidebar from "./components/Sidebar";
 import Topbar from "./components/Topbar";
 import FindingsPage from "./pages/FindingsPage";
 import FindingDetailPage from "./pages/FindingDetailPage";
 import PlaceholderPage from "./pages/PlaceholderPage";
-import { logoutSession, useAuthStatus } from "./lib/auth";
+import { useAuthStatus } from "./lib/auth";
 import LoginPage from "./pages/LoginPage";
 import { useToast } from "./components/ToastProvider";
 import { getRoute } from "./lib/routes";
@@ -49,11 +51,23 @@ export default function App() {
     );
   }
 
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
   return (
     <div className="min-h-screen bg-night-800 text-slate-100">
       <RequireAuth>
-        <div className="grid min-h-screen lg:grid-cols-[256px_1fr]">
-          <Sidebar />
+        <div
+          className="grid min-h-screen lg:grid-cols-[var(--sidebar-width)_1fr]"
+          style={
+            {
+              "--sidebar-width": sidebarCollapsed ? "80px" : "256px",
+            } as CSSProperties
+          }
+        >
+          <Sidebar
+            collapsed={sidebarCollapsed}
+            onToggle={() => setSidebarCollapsed((value) => !value)}
+          />
           <div className="flex flex-col">
             <Topbar />
             <main className="flex-1 min-h-0 px-6 py-6 lg:px-8">

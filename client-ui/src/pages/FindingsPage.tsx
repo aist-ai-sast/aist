@@ -26,7 +26,7 @@ export default function FindingsPage() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | undefined>();
   const toast = useToast();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const pageSize = 50;
   const projectsQuery = useProjects();
   const ordering =
@@ -104,6 +104,8 @@ export default function FindingsPage() {
 
   const tagsQuery = useFindingTagsByProduct(selectedProductId);
   const availableTags = tagsQuery.data ?? [];
+  const [expandedIds, setExpandedIds] = useState<number[]>([]);
+  const parentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setSelectedTags([]);
@@ -113,14 +115,13 @@ export default function FindingsPage() {
     setSelectedTags((current) => current.filter((tag) => availableTags.includes(tag)));
   }, [availableTags]);
 
-  const [selected, setSelected] = useState<Finding | undefined>(findings[0]);
-  const parentRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!expandedIds.length) return;
+    const allowed = new Set(findings.map((finding) => finding.id));
+    setExpandedIds((current) => current.filter((id) => allowed.has(id)));
+  }, [findings, expandedIds.length]);
 
-  const aistProjectForSelected = projects.find((project) => project.productId === selected?.productId);
-  const selectedPipelinesQuery = usePipelines(aistProjectForSelected?.id);
-  const aiResponse = useAiResponse(selectedPipelinesQuery.data ?? [], selected?.id);
-
-  const metaQuery = useProjectMeta(aistProjectForSelected?.id);
+  const metaQuery = useProjectMeta(aistProjectForFilters?.id);
   const projectVersionId = metaQuery.data?.versions?.length
     ? Number(metaQuery.data.versions[metaQuery.data.versions.length - 1].id)
     : undefined;
@@ -150,17 +151,7 @@ export default function FindingsPage() {
     if (pipelineParam) {
       setSelectedPipelineId(pipelineParam);
     }
-    if (productParam || pipelineParam) {
-      setSearchParams(
-        (params) => {
-          params.delete("product");
-          params.delete("pipeline");
-          return params;
-        },
-        { replace: true },
-      );
-    }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams]);
 
   const exportCurrentView = () => {
     if (findings.length === 0) {
@@ -195,8 +186,8 @@ export default function FindingsPage() {
   };
 
   return (
-    <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)_360px]">
-      <div className="lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
+    <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="lg:sticky lg:top-24 self-start">
         <FilterPanel
           products={projects}
           selectedProductId={selectedProductId}
@@ -221,9 +212,9 @@ export default function FindingsPage() {
       <div className="flex min-h-0 min-w-0 flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-[0.2em] text-slate-400">
           <span>Findings</span>
-          <div className="flex items-center gap-2">
+          <div className="flex items-end gap-2">
             <button
-              className="rounded-xl border border-night-500 bg-night-700 px-3 py-2 text-xs text-slate-200 inline-flex items-center gap-2"
+              className="aist-icon-button h-10"
               onClick={exportCurrentView}
             >
               <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
@@ -260,15 +251,67 @@ export default function FindingsPage() {
         ) : (
           <div ref={parentRef} className="min-h-0 flex-1 overflow-auto pr-2">
             <div className="space-y-4">
-              {findings.map((finding) => (
-                <FindingCard
-                  key={finding.id}
-                  finding={finding}
-                  projectId={projectIdByProduct.get(finding.productId ?? 0)}
-                  projectVersionId={selectedProductId ? filterProjectVersionId : undefined}
-                  onSelect={setSelected}
-                />
-              ))}
+              {findings.map((finding) => {
+                const aiResponse = useAiResponse(pipelinesQuery.data ?? [], finding.id);
+                return (
+                  <div key={finding.id} className="space-y-3">
+                    <FindingCard
+                      finding={finding}
+                      projectId={projectIdByProduct.get(finding.productId ?? 0)}
+                      projectVersionId={selectedProductId ? filterProjectVersionId : undefined}
+                      isOpen={expandedIds.includes(finding.id)}
+                      selectedTags={selectedTags}
+                      onToggleTag={(tag) =>
+                        setSelectedTags((current) =>
+                          current.includes(tag)
+                            ? current.filter((item) => item !== tag)
+                            : [...current, tag],
+                        )
+                      }
+                      expandedContent={
+                        expandedIds.includes(finding.id) ? (
+                          <DetailPanel
+                            finding={{
+                              ...finding,
+                              projectVersionId:
+                                selectedProductId && selectedProductId === finding.productId
+                                  ? filterProjectVersionId
+                                  : projectVersionId,
+                            }}
+                            aiResponse={aiResponse}
+                            pipelineId={aiResponse?.pipelineId}
+                            selectedTags={selectedTags}
+                            onToggleTag={(tag) =>
+                              setSelectedTags((current) =>
+                                current.includes(tag)
+                                  ? current.filter((item) => item !== tag)
+                                  : [...current, tag],
+                              )
+                            }
+                            selectedCwe={selectedCwe}
+                            onToggleCwe={(cwe) =>
+                              setSelectedCwe((current) => (current === cwe ? "" : cwe))
+                            }
+                            embedded
+                          />
+                        ) : null
+                      }
+                      onSelect={() =>
+                        setExpandedIds((current) => {
+                          if (current.includes(finding.id)) {
+                            return current.filter((id) => id !== finding.id);
+                          }
+                          const next = [...current, finding.id];
+                          if (next.length > 3) {
+                            next.shift();
+                          }
+                          return next;
+                        })
+                      }
+                    />
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -279,13 +322,6 @@ export default function FindingsPage() {
         ) : null}
       </div>
 
-      <div className="lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
-        <DetailPanel
-          finding={selected ? { ...selected, projectVersionId } : undefined}
-          aiResponse={aiResponse}
-          pipelineId={selectedPipelinesQuery.data?.[0]?.id}
-        />
-      </div>
     </div>
   );
 }

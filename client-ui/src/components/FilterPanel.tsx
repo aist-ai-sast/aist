@@ -42,7 +42,7 @@ export default function FilterPanel({
   aiVerdictDisabled,
 }: FilterPanelProps) {
   return (
-    <aside className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel">
+    <aside className="p-5 aist-card aist-filter-panel overflow-hidden">
       <div className="text-xs uppercase tracking-[0.2em] text-slate-400 mb-4">
         Filters
       </div>

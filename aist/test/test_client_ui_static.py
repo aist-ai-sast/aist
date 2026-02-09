@@ -17,6 +17,14 @@ class ClientUIStaticTests(SimpleTestCase):
         detail = base_dir / "client-ui" / "src" / "pages" / "FindingDetailPage.tsx"
         self.assertTrue(detail.exists())
         self.assertIn("Finding Detail", detail.read_text(encoding="utf-8"))
+        finding_card = base_dir / "client-ui" / "src" / "components" / "FindingCard.tsx"
+        self.assertTrue(finding_card.exists())
+        self.assertIn("aria-expanded", finding_card.read_text(encoding="utf-8"))
+        status_actions = base_dir / "client-ui" / "src" / "components" / "FindingStatusActions.tsx"
+        self.assertTrue(status_actions.exists())
+        self.assertIn("Close as", status_actions.read_text(encoding="utf-8"))
+        tabs = base_dir / "client-ui" / "src" / "components" / "FindingDetailTabs.tsx"
+        self.assertTrue(tabs.exists())
 
     def test_client_ui_api_queries_present(self):
         base_dir = Path(__file__).resolve().parents[2]
@@ -24,6 +32,10 @@ class ClientUIStaticTests(SimpleTestCase):
         self.assertTrue(routes.exists())
         content = routes.read_text(encoding="utf-8")
         self.assertIn("__AIST_ROUTES__", content)
+        self.assertIn("finding_close_url", content)
+        types_file = base_dir / "client-ui" / "src" / "types.ts"
+        self.assertTrue(types_file.exists())
+        self.assertIn("falsePositive", types_file.read_text(encoding="utf-8"))
 
     def test_client_ui_monaco_present(self):
         base_dir = Path(__file__).resolve().parents[2]
@@ -32,6 +44,10 @@ class ClientUIStaticTests(SimpleTestCase):
         content = code_snippet.read_text(encoding="utf-8")
         self.assertIn("@monaco-editor/react", content)
         self.assertIn("Expand", content)
+        self.assertIn("lineNumbers", content)
+        self.assertIn("renderLineHighlight", content)
+        self.assertIn("monaco-highlight-line", (Path(__file__).resolve().parents[2] / "client-ui" / "src" / "styles.css").read_text(encoding="utf-8"))
+        self.assertIn("monaco-highlight-line-inline", (Path(__file__).resolve().parents[2] / "client-ui" / "src" / "styles.css").read_text(encoding="utf-8"))
 
     def test_client_ui_select_field_present(self):
         base_dir = Path(__file__).resolve().parents[2]
@@ -63,13 +79,37 @@ class ClientUIStaticTests(SimpleTestCase):
         base_dir = Path(__file__).resolve().parents[2]
         products = base_dir / "client-ui" / "src" / "pages" / "ProductsPage.tsx"
         self.assertTrue(products.exists())
+        self.assertIn("tabIndex={0}", products.read_text(encoding="utf-8"))
 
     def test_client_ui_pipelines_page_present(self):
         base_dir = Path(__file__).resolve().parents[2]
         pipelines = base_dir / "client-ui" / "src" / "pages" / "PipelinesPage.tsx"
         self.assertTrue(pipelines.exists())
+        self.assertIn("aria-expanded", pipelines.read_text(encoding="utf-8"))
         panel = base_dir / "client-ui" / "src" / "components" / "PipelineFilterPanel.tsx"
         self.assertTrue(panel.exists())
+
+    def test_client_ui_date_input_styles_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        styles = base_dir / "client-ui" / "src" / "styles.css"
+        self.assertTrue(styles.exists())
+        content = styles.read_text(encoding="utf-8")
+        self.assertIn(".date-input", content)
+        date_field = base_dir / "client-ui" / "src" / "components" / "DateField.tsx"
+        self.assertTrue(date_field.exists())
+
+    def test_client_ui_snippet_retry_present(self):
+        base_dir = Path(__file__).resolve().parents[2]
+        snippet = base_dir / "client-ui" / "src" / "lib" / "snippetCache.ts"
+        self.assertTrue(snippet.exists())
+        content = snippet.read_text(encoding="utf-8")
+        self.assertIn("retry", content)
+        styles = base_dir / "client-ui" / "src" / "styles.css"
+        self.assertTrue(styles.exists())
+        self.assertIn("panel-collapse", styles.read_text(encoding="utf-8"))
+        self.assertIn("aist-card", styles.read_text(encoding="utf-8"))
+        self.assertIn("focus-within", styles.read_text(encoding="utf-8"))
+        self.assertIn("aist-icon-button", styles.read_text(encoding="utf-8"))
 
     def test_client_ui_auth_hook_present(self):
         base_dir = Path(__file__).resolve().parents[2]

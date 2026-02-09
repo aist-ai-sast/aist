@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import type { ProductSummary } from "../types";
 import { useProductSummaries } from "../lib/queries";
@@ -71,10 +71,10 @@ function SeverityBar({ severity }: { severity: ProductSummary["severity"] }) {
 }
 
 export default function ProductsPage() {
+  const navigate = useNavigate();
   const summariesQuery = useProductSummaries();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
-  const [selectedRisk, setSelectedRisk] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
   const summaries = summariesQuery.data ?? [];
@@ -89,16 +89,9 @@ export default function ProductsPage() {
       if (status !== "all" && summary.status !== status) return false;
       if (search && !summary.name.toLowerCase().includes(search.toLowerCase())) return false;
       if (selectedTags.length && !selectedTags.some((tag) => summary.tags.includes(tag))) return false;
-      if (selectedRisk.length) {
-        const hasRisk =
-          (selectedRisk.includes("Risk Accepted") && summary.risk.riskAccepted > 0) ||
-          (selectedRisk.includes("Under Review") && summary.risk.underReview > 0) ||
-          (selectedRisk.includes("Mitigated") && summary.risk.mitigated > 0);
-        if (!hasRisk) return false;
-      }
       return true;
     });
-  }, [summaries, status, search, selectedTags, selectedRisk]);
+  }, [summaries, status, search, selectedTags]);
 
   const lastSync = useMemo(() => {
     const dates = summaries
@@ -135,7 +128,7 @@ export default function ProductsPage() {
         </PermissionGate>
       </div>
 
-      <div className="rounded-2xl border border-night-500 bg-night-700 p-4">
+      <div className="p-4 aist-card">
         <div className="flex flex-wrap items-center gap-3">
           <input
             className="flex-1 rounded-xl border border-night-500 bg-night-600 px-4 py-2 text-sm text-white placeholder:text-slate-400"
@@ -155,13 +148,6 @@ export default function ProductsPage() {
         </div>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <MultiSelectChips
-            label="Risk State"
-            options={["Risk Accepted", "Under Review", "Mitigated"]}
-            selected={selectedRisk}
-            onChange={setSelectedRisk}
-            visibleCount={6}
-          />
-          <MultiSelectChips
             label="Tags"
             options={tagOptions}
             selected={selectedTags}
@@ -180,7 +166,17 @@ export default function ProductsPage() {
           {filtered.map((summary) => (
             <article
               key={summary.productId}
-              className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel"
+              className="p-5 aist-card aist-card--interactive"
+              role="button"
+              tabIndex={0}
+              aria-label={`Open findings for ${summary.name}`}
+              onClick={() => navigate(`/?product=${summary.productId}`)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  navigate(`/?product=${summary.productId}`);
+                }
+              }}
             >
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-white">{summary.name}</h3>
@@ -193,23 +189,6 @@ export default function ProductsPage() {
                   <span>Total findings: {summary.findingsTotal}</span>
                 </div>
               </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {summary.risk.riskAccepted > 0 ? (
-                  <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1 text-xs text-amber-400">
-                    Risk Accepted
-                  </span>
-                ) : null}
-                {summary.risk.underReview > 0 ? (
-                  <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1 text-xs text-amber-400">
-                    Under Review
-                  </span>
-                ) : null}
-                {summary.risk.mitigated > 0 ? (
-                  <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1 text-xs text-amber-400">
-                    Mitigated
-                  </span>
-                ) : null}
-              </div>
               <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
                 <span>Last pipeline: {formatLastPipeline(summary.lastPipeline)}</span>
                 <span>{formatLastSync(summary.lastPipeline?.updated)}</span>
@@ -218,12 +197,14 @@ export default function ProductsPage() {
                 <Link
                   to={`/?product=${summary.productId}`}
                   className="rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
+                  onClick={(event) => event.stopPropagation()}
                 >
                   View findings
                 </Link>
                 <Link
                   to={`/pipelines?product=${summary.productId}`}
                   className="rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
+                  onClick={(event) => event.stopPropagation()}
                 >
                   View pipelines
                 </Link>

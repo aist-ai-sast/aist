@@ -27,10 +27,19 @@ export default function CodeSnippet({
   });
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [editorReady, setEditorReady] = useState(false);
   const editorRef = useRef<any>(null);
+  const monacoRef = useRef<any>(null);
   const decorationIds = useRef<string[]>([]);
 
   const language = useMemo(() => "plaintext", []);
+
+  const lineNumbers = useMemo(() => {
+    if (!snippet || expanded) {
+      return "on" as const;
+    }
+    return (lineNumber: number) => String(snippet.start + lineNumber - 1);
+  }, [snippet, expanded]);
 
   const snippetText = useMemo(() => {
     if (!snippet) return "";
@@ -48,30 +57,38 @@ export default function CodeSnippet({
     return snippet.highlight - snippet.start + 1;
   }, [snippet, expanded]);
 
-  useEffect(() => {
-    if (!editorRef.current || !highlightLine) return;
+  const applyHighlight = () => {
+    if (!editorRef.current || !highlightLine || !monacoRef.current) return;
     const editor = editorRef.current;
     const model = editor.getModel();
     if (!model) return;
+    const safeLine = Math.min(Math.max(1, highlightLine), model.getLineCount());
+    const Range = monacoRef.current.Range;
     decorationIds.current = editor.deltaDecorations(
       decorationIds.current,
       [
         {
-          range: {
-            startLineNumber: highlightLine,
-            endLineNumber: highlightLine,
-            startColumn: 1,
-            endColumn: model.getLineMaxColumn(highlightLine),
-          },
+          range: new Range(safeLine, 1, safeLine, model.getLineMaxColumn(safeLine)),
           options: {
             isWholeLine: true,
             className: "monaco-highlight-line",
+            inlineClassName: "monaco-highlight-line-inline",
+            linesDecorationsClassName: "monaco-highlight-line",
+            overviewRuler: {
+              color: "#4dd4ff",
+              position: 2,
+            },
           },
         },
       ],
     );
-    editor.revealLineInCenter(highlightLine);
-  }, [highlightLine, snippetText]);
+    editor.revealLineInCenter(safeLine);
+  };
+
+  useEffect(() => {
+    if (!editorReady) return;
+    applyHighlight();
+  }, [editorReady, highlightLine, snippetText]);
 
   if ((!filePath && !sourceFileLink) || !line) {
     return (
@@ -156,11 +173,14 @@ export default function CodeSnippet({
             readOnly: true,
             minimap: { enabled: false },
             scrollBeyondLastLine: false,
-            lineNumbers: "on",
+            lineNumbers,
             lineNumbersMinChars: 3,
             glyphMargin: false,
             folding: false,
             renderLineHighlight: "none",
+            selectionHighlight: false,
+            occurrencesHighlight: "off",
+            renderValidationDecorations: "off",
             scrollbar: {
               vertical: "hidden",
               horizontal: "hidden",
@@ -170,6 +190,8 @@ export default function CodeSnippet({
           }}
           onMount={(editor, monaco) => {
             editorRef.current = editor;
+            monacoRef.current = monaco;
+            setEditorReady(true);
             if (filePath) {
               const lower = filePath.toLowerCase();
               const baseName = lower.split("/").pop() ?? lower;
@@ -185,6 +207,7 @@ export default function CodeSnippet({
                 monaco.editor.setModelLanguage(editor.getModel()!, match.id);
               }
             }
+            applyHighlight();
           }}
         />
       </Suspense>

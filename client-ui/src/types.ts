@@ -21,6 +21,11 @@ export type Finding = {
   title: string;
   severity: Severity;
   active: boolean;
+  isMitigated?: boolean;
+  riskAccepted?: boolean;
+  falsePositive?: boolean;
+  outOfScope?: boolean;
+  duplicate?: boolean;
   product: string;
   productId?: number;
   date?: string;
@@ -44,6 +49,7 @@ export type AIResponse = {
   impactScore?: number;
   exploitabilityScore?: number;
   references?: string[];
+  pipelineId?: string;
 };
 
 export type Note = {

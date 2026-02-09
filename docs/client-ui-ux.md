@@ -58,7 +58,6 @@ This document captures the agreed UX structure for the client-facing UI.
   - File + line
   - AI verdict badge
   - Snippet preview (2–4 lines)
-  - Quick actions: Enable/Disable, Comment, Export (role-based)
 - Detail panel (right)
   - Summary (title, product, severity, status, risk state)
   - AI section (reasoning + scores + refs)
@@ -71,6 +70,8 @@ This document captures the agreed UX structure for the client-facing UI.
 - Date range, tool, “has snippet”, and “has AI comment” filters are not yet implemented.
 - Write actions are gated via `PermissionGate` (DefectDojo role derived from `/api/v2/user_profile/`).
 - Tag filtering uses the AIST findings endpoint (`/api/v2/aist/findings/`) to support OR logic.
+- Finding detail is rendered inline below the selected card (accordion), not in a right sidebar.
+- Quick actions are removed from cards; actions live inside the expanded detail panel.
 
 **States**
 - Loading: skeleton list + panel
