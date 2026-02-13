@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django.http import HttpResponseForbidden, HttpResponseNotFound
+from django.shortcuts import render
 
 
 class AistAdminGuardMiddleware:
@@ -19,14 +19,24 @@ class AistAdminGuardMiddleware:
                 return self.get_response(request)
 
             if request.headers.get("X-Aist-Admin-Gate") != "1":
-                return HttpResponseNotFound("Not Found")
+                return render(
+                    request,
+                    "aist/error.html",
+                    {"title": "Page Not Found", "message": "The page you're looking for is unavailable or access is restricted."},
+                    status=404,
+                )
 
             if path in {"/aist-admin/login/", "/aist-admin/logout/"}:
                 return self.get_response(request)
 
             user = request.user
             if user.is_authenticated and not user.is_superuser:
-                return HttpResponseForbidden("Forbidden")
+                return render(
+                    request,
+                    "aist/error.html",
+                    {"title": "Access Denied", "message": "You don't have permission to access this page."},
+                    status=403,
+                )
             return self.get_response(request)
 
         return self.get_response(request)

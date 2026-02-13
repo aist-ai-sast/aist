@@ -3,6 +3,7 @@ from dojo.user.views import login_view, logout_view
 from dojo.utils import get_system_setting
 
 from aist.views.client_portal import client_portal_index
+from aist_site import views as aist_site_views
 
 urlpatterns = [
     path("aist-admin/aist/", include(("aist.urls", "aist"), namespace="aist")),
@@ -16,3 +17,7 @@ urlpatterns = [
     path("aist-admin/", include("dojo.urls")),
     re_path(r"^(?!aist-admin/|aist/|api/|projects_version/|auth/|assets/).*$", client_portal_index),
 ]
+
+handler404 = aist_site_views.aist_not_found
+handler403 = aist_site_views.aist_forbidden
+handler500 = aist_site_views.aist_server_error

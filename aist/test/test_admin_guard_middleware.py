@@ -42,7 +42,7 @@ class AistAdminGuardMiddlewareTests(TestCase):
         request = self.factory.get("/aist-admin/", HTTP_X_AIST_ADMIN_GATE="1")
         request.user = user
         response = self.middleware(request)
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 403)
 
     def test_allows_superuser_ui_access(self):
         user = get_user_model().objects.create_superuser(

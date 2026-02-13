@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AIST Portal · {{ title }}</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body class="min-h-screen bg-night-800 text-slate-100">
+    <main class="min-h-screen flex items-center justify-center px-6 py-10">
+      <div class="w-full max-w-xl">
+        <div class="aist-card p-10 text-center">
+          <div class="flex items-center justify-center gap-3">
+            <div class="flex h-11 w-11 items-center justify-center rounded-xl border border-night-500 bg-night-700">
+              <img src="/logo.svg" alt="AIST" class="h-7 w-7 object-contain" />
+            </div>
+            <div class="text-xs uppercase tracking-[0.3em] text-slate-400">
+              AIST Client Portal
+            </div>
+          </div>
+          <div class="mt-6 text-[11px] uppercase tracking-[0.35em] text-brand-500">
+            Security Intelligence
+          </div>
+          <h1 class="mt-3 text-2xl font-semibold text-white">{{ title }}</h1>
+          <p class="mt-2 text-sm text-slate-400">
+            {{ message }}
+          </p>
+          <div class="mt-6 flex items-center justify-center gap-3">
+            <a class="aist-icon-button inline-flex justify-center" href="/">
+              Back to Portal
+            </a>
+          </div>
+        </div>
+        <div class="mt-6 text-center text-[10px] uppercase tracking-[0.3em] text-slate-600">
+          © AIST Security
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

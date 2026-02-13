@@ -182,6 +182,7 @@ COPY \
   requirements-dev.txt \
   docker/unit-tests.sh \
   ./
+COPY vendor/defectdojo/requirements-dev.txt ./vendor/defectdojo/requirements-dev.txt
 COPY \
   docker/entrypoint-celery-worker-dev.sh \
   docker/entrypoint-uwsgi-dev.sh \

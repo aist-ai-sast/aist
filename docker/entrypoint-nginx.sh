@@ -22,7 +22,7 @@ else
   NGINX_CONFIG="/tmp/nginx.conf"
 fi
 
-cp "$NGINX_CONFIG_SOURCE" "$NGINX_CONFIG"
+envsubst '$AIST_DOMAIN' < "$NGINX_CONFIG_SOURCE" > "$NGINX_CONFIG"
 
 if ! ip -6 addr show dev lo | grep -q 'inet6 ::1'; then
   sed -i '/listen \[::\]:/d' "$NGINX_CONFIG"
@@ -42,15 +42,6 @@ if [ "${METRICS_HTTP_AUTH_PASSWORD}" != "" ]; then
 else
   echo "Basic auth is off (HTTP_AUTH_PASSWORD not provided)"
 fi
-
-if [ "${BASIC_AUTH_USER}" = "" ] || [ "${BASIC_AUTH_PASSWORD}" = "" ]; then
-  echo "BASIC_AUTH_USER and BASIC_AUTH_PASSWORD must be set to protect /aist-admin."
-  exit 1
-fi
-rm -rf /etc/nginx/htpasswd
-openssl_passwd=$(openssl passwd -apr1 "$BASIC_AUTH_PASSWORD")
-echo "${BASIC_AUTH_USER}":"$openssl_passwd" >> /etc/nginx/htpasswd
-echo "Basic auth is on for user ${BASIC_AUTH_USER}..."
 
 echo "uwsgi_pass ${DD_UWSGI_PASS};" > /run/defectdojo/uwsgi_pass
 echo "server ${DD_UWSGI_HOST}:${DD_UWSGI_PORT};" > /run/defectdojo/uwsgi_server

@@ -149,3 +149,7 @@ docs/.devcontainer/Dockerfile
 docs/LICENSE
 docs/.hugo_build.lock
 .cursor-rules
+
+# Frontend source folder intentionally tracked.
+!client-ui/src/lib/
+!client-ui/src/lib/**
