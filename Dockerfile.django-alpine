@@ -95,10 +95,10 @@ COPY \
 COPY wsgi.py manage.py ./
 COPY aist/ ./aist/
 COPY aist_site/ ./aist_site/
-COPY vendor/defectdojo/dojo/ ./dojo/
+COPY vendor/defectdojo/ ./vendor/defectdojo/
 
 # Add extra fixtures to docker image which are loaded by the initializer
-COPY docker/extra_fixtures/* /app/dojo/fixtures/
+COPY docker/extra_fixtures/* /app/vendor/defectdojo/dojo/fixtures/
 
 COPY sast-combinator/sast-pipeline/ /app/sast-combinator/sast-pipeline
 ENV AIST_PIPELINE_CODE_PATH=/app/sast-combinator/sast-pipeline
@@ -107,9 +107,9 @@ RUN \
   # Remove placeholder copied from docker/certs
   rm -f /readme.txt && \
   # Remove placeholder copied from docker/extra_fixtures
-  rm -f dojo/fixtures/readme.txt && \
-  mkdir -p dojo/migrations && \
-  chmod g=u dojo/migrations && \
+  rm -f /app/vendor/defectdojo/dojo/fixtures/readme.txt && \
+  mkdir -p /app/vendor/defectdojo/dojo/migrations && \
+  chmod g=u /app/vendor/defectdojo/dojo/migrations && \
   true
 USER root
 RUN \
@@ -119,18 +119,23 @@ RUN \
     chown -R root:root /app && \
     chmod -R u+rwX,go+rX,go-w /app && \
     # Allow for bind mounting local_settings.py and other setting overrides
-    chown -R root:${appuser} /app/dojo/settings && \
-    chmod -R 775 /app/dojo/settings && \
+    chown -R root:${appuser} /app/vendor/defectdojo/dojo/settings && \
+    chmod -R 775 /app/vendor/defectdojo/dojo/settings && \
     mkdir /var/run/${appuser} && \
     chown ${appuser} /var/run/${appuser} && \
     chmod g=u /var/run/${appuser} && \
     chmod 775 /*.sh && \
     mkdir -p media/threat && chown -R ${uid} media && \
-    # To avoid warning: (staticfiles.W004) The directory '/app/components/node_modules' in the STATICFILES_DIRS setting does not exist.
-    mkdir -p components/node_modules && \
-    chown ${appuser} components/node_modules
+    mkdir -p /app/tmp && chown ${appuser} /app/tmp && \
+    # To avoid warning: missing node_modules in STATICFILES_DIRS from DefectDojo settings.
+    mkdir -p /app/vendor/defectdojo/components/node_modules && \
+    chown ${appuser} /app/vendor/defectdojo/components/node_modules
 USER ${uid}
 ENV \
+  PYTHONPATH=/app/vendor/defectdojo \
+  DD_ROOT=/app/vendor/defectdojo/dojo \
+  DD_MEDIA_ROOT=/app/media \
+  DD_STATIC_ROOT=/app/static \
   # Only variables that are not defined in settings.dist.py
   DD_ADMIN_USER=admin \
   DD_ADMIN_MAIL=admin@defectdojo.local \
@@ -164,6 +169,7 @@ COPY \
   docker/entrypoint-celery-worker-dev.sh \
   docker/entrypoint-uwsgi-dev.sh \
   docker/entrypoint-unit-tests.sh \
+  docker/entrypoint-unit-tests-aist.sh \
   docker/entrypoint-unit-tests-devDocker.sh \
   /
 RUN pip3 install --no-cache-dir -r requirements-dev.txt && \
@@ -171,5 +177,4 @@ RUN pip3 install --no-cache-dir -r requirements-dev.txt && \
 USER ${uid}
 
 FROM development AS django-unittests
-COPY vendor/defectdojo/unittests/ ./unittests/
-COPY vendor/defectdojo/tests/ ./tests/
+COPY --chown=${uid}:${gid} vendor/defectdojo/ ./vendor/defectdojo/

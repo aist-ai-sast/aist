@@ -60,7 +60,11 @@ if [[ -n "$DD_INTEGRATION_TEST_FILENAME" ]]; then
     else
         test=$DD_INTEGRATION_TEST_FILENAME
         echo "Running: $test"
-        if python3 "$DD_INTEGRATION_TEST_FILENAME"; then
+        test_file="$DD_INTEGRATION_TEST_FILENAME"
+        if [[ "$test_file" == tests/* ]]; then
+            test_file="/app/vendor/defectdojo/$test_file"
+        fi
+        if python3 "$test_file"; then
             success "$test"
         else
             fail "$test"
@@ -70,7 +74,7 @@ if [[ -n "$DD_INTEGRATION_TEST_FILENAME" ]]; then
 else
     test="Finding integration tests"
     echo "Running: $test"
-    if python3 tests/finding_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/finding_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -78,7 +82,7 @@ else
 
     test="Report Builder tests"
     echo "Running: $test"
-    if python3 tests/report_builder_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/report_builder_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -86,7 +90,7 @@ else
 
     test="Notes integration tests"
     echo "Running: $test"
-    if python3 tests/notes_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/notes_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -94,7 +98,7 @@ else
 
     test="Regulation integration tests"
     echo "Running: $test"
-    if python3 tests/regulations_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/regulations_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -102,7 +106,7 @@ else
 
     test="Product type integration tests"
     echo "Running: $test"
-    if python3 tests/product_type_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/product_type_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -110,7 +114,7 @@ else
 
     test="Product integration tests"
     echo "Running: $test"
-    if python3 tests/product_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/product_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -118,7 +122,7 @@ else
 
     test="Endpoint integration tests"
     echo "Running: $test"
-    if python3 tests/endpoint_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/endpoint_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -126,7 +130,7 @@ else
 
     test="Engagement integration tests"
     echo "Running: $test"
-    if python3 tests/engagement_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/engagement_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -134,7 +138,7 @@ else
 
     test="Environment integration tests"
     echo "Running: $test"
-    if python3 tests/environment_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/environment_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -142,7 +146,7 @@ else
 
     test="Test integration tests"
     echo "Running: $test"
-    if python3 tests/test_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/test_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -150,7 +154,7 @@ else
 
     test="User integration tests"
     echo "Running: $test"
-    if python3 tests/user_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/user_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -158,7 +162,7 @@ else
 
     test="Group integration tests"
     echo "Running: $test"
-    if python3 tests/group_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/group_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -166,7 +170,7 @@ else
 
     test="Product Group integration tests"
     echo "Running: $test"
-    if python3 tests/product_group_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/product_group_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -174,7 +178,7 @@ else
 
     test="Product Type Group integration tests"
     echo "Running: $test"
-    if python3 tests/product_type_group_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/product_type_group_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -182,7 +186,7 @@ else
 
     test="Product member integration tests"
     echo "Running: $test"
-    if python3 tests/product_member_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/product_member_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -190,7 +194,7 @@ else
 
     test="Product type member integration tests"
     echo "Running: $test"
-    if python3 tests/product_type_member_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/product_type_member_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -198,7 +202,7 @@ else
 
     test="Ibm Appscan integration test"
     echo "Running: $test"
-    if python3 tests/ibm_appscan_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/ibm_appscan_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -207,7 +211,7 @@ else
 
     test="Search integration test"
     echo "Running: $test"
-    if python3 tests/search_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/search_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -215,7 +219,7 @@ else
 
     test="File Upload tests"
     echo "Running: $test"
-    if python3 tests/file_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/file_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -223,7 +227,7 @@ else
 
     test="Dedupe integration tests"
     echo "Running: $test"
-    if python3 tests/dedupe_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/dedupe_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -231,7 +235,7 @@ else
 
     test="Global Announcement Banner tests"
     echo "Running: $test"
-    if python3 tests/announcement_banner_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/announcement_banner_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -239,7 +243,7 @@ else
 
     test="Close Old Findings with dedupe integration tests"
     echo "Running: $test"
-    if python3 tests/close_old_findings_dedupe_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/close_old_findings_dedupe_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -247,7 +251,7 @@ else
 
     test="Close Old Findings without dedupe integration tests"
     echo "Running: $test"
-    if python3 tests/close_old_findings_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/close_old_findings_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -255,7 +259,7 @@ else
 
     test="False Positive History tests"
     echo "Running: $test"
-    if python3 tests/false_positive_history_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/false_positive_history_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -265,7 +269,7 @@ else
 ## Once Ready they can be uncommented.
 
     echo "Check Various Pages integration test"
-    if python3 tests/check_various_pages.py ; then
+    if python3 /app/vendor/defectdojo/tests/check_various_pages.py ; then
         echo "Success: Check Various Pages tests passed"
     else
         echo "Error: Check Various Pages test failed"; exit 1
@@ -276,14 +280,14 @@ else
     ## Once Ready they can be uncommented.
 
     # echo "Import Scanner integration test"
-    # if python3 tests/import_scanner_test.py ; then
+    # if python3 /app/vendor/defectdojo/tests/import_scanner_test.py ; then
     #     echo "Success: Import Scanner integration tests passed"
     # else
     #     echo "Error: Import Scanner integration test failed"; exit 1
     # fi
 
     # echo "Zap integration test"
-    # if python3 tests/zap.py ; then
+    # if python3 /app/vendor/defectdojo/tests/zap.py ; then
     #     echo "Success: zap integration tests passed"
     # else
     #     echo "Error: Zap integration test failed"; exit 1
@@ -291,7 +295,7 @@ else
 
     test="Notifications tests"
     echo "Running: $test"
-    if python3 tests/notifications_test.py ; then
+    if python3 /app/vendor/defectdojo/tests/notifications_test.py ; then
         success "$test"
     else
         fail "$test"
@@ -299,7 +303,7 @@ else
 
     test="Tool Config integration tests"
     echo "Running: $test"
-    if python3 tests/tool_config.py ; then
+    if python3 /app/vendor/defectdojo/tests/tool_config.py ; then
         success "$test"
     else
         fail "$test"

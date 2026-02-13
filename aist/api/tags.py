@@ -3,6 +3,8 @@ from __future__ import annotations
 from django.core.cache import cache
 from dojo.authorization.roles_permissions import Permissions
 from dojo.finding.queries import get_authorized_findings
+from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
+from rest_framework import serializers
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -11,6 +13,17 @@ from rest_framework.views import APIView
 class AvailableFindingTagsAPI(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["aist"],
+        summary="List available finding tags",
+        parameters=[OpenApiParameter(name="product_id", required=False, type=int)],
+        responses={
+            200: inline_serializer(
+                name="AvailableFindingTagsResponse",
+                fields={"tags": serializers.ListField(child=serializers.CharField())},
+            ),
+        },
+    )
     def get(self, request):
         product_id = request.query_params.get("product_id")
         cache_key = f"aist_findings_tags_{request.user.id}_{product_id or 'all'}"

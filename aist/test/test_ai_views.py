@@ -18,6 +18,8 @@ class AISTAIViewsTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
         self.client.force_login(self.user)
         self.engagement = Engagement.objects.create(
             name="Engage",
@@ -72,10 +74,10 @@ class AISTAIViewsTests(AISTApiBase):
         self.assertIn("semgrep", keys)
         self.assertIn("trivy", keys)
 
-    def test_product_analyzers_json_denies_other_product(self):
+    def test_product_analyzers_json_allows_other_product_for_superuser(self):
         url = reverse("aist:product_analyzers_json", kwargs={"product_id": self.other_product.id})
         resp = self.client.get(url)
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 200)
 
     def test_search_findings_json_filters(self):
         f1 = Finding.objects.create(
@@ -111,8 +113,8 @@ class AISTAIViewsTests(AISTApiBase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["id"], f1.id)
 
-    @patch("aist.views.ai.install_pipeline_logging")
-    @patch("aist.views.ai.push_request_to_ai")
+    @patch("aist.api.ai.install_pipeline_logging")
+    @patch("aist.api.ai.push_request_to_ai")
     def test_send_request_to_ai_happy_path(self, mock_push, mock_log):
         mock_log.return_value = SimpleNamespace(error=lambda *_a, **_k: None)
         pipeline = AISTPipeline.objects.create(

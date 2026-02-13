@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from django.http import JsonResponse
 from django.test import RequestFactory, TestCase
 
 from aist.tasks.ai import push_request_to_ai as _push_request_to_ai
@@ -85,10 +86,11 @@ class AfterUploadEnrichTests(TestCase):
 # ---- watch_deduplication ----------------------------------------------------
 
 
-def _call_watch_dedup(*, pipeline, progress_qs=None):
+def _call_watch_dedup(*, pipeline, progress_qs=None, remaining_counts=None):
     with patch("aist.tasks.dedup.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
          patch("aist.tasks.dedup.AISTPipeline") as mock_model, \
-         patch("aist.tasks.dedup.TestDeduplicationProgress") as mock_progress:
+         patch("aist.tasks.dedup.TestDeduplicationProgress") as mock_progress, \
+         patch("aist.tasks.dedup.AISTTestMeta") as mock_meta:
         mock_model.objects.get.return_value = pipeline
         if progress_qs is None:
             progress_qs = MagicMock()
@@ -99,6 +101,12 @@ def _call_watch_dedup(*, pipeline, progress_qs=None):
             progress_qs.__iter__.return_value = iter([])
         mock_progress.objects.filter.return_value = progress_qs
         mock_progress.objects.bulk_create.return_value = []
+        if remaining_counts is None:
+            remaining_counts = [0]
+        mock_meta_qs = MagicMock()
+        mock_meta_qs.count.side_effect = [*remaining_counts, remaining_counts[-1]]
+        mock_meta.objects.filter.return_value = mock_meta_qs
+        mock_meta.objects.bulk_create.return_value = []
         _watch_deduplication.run(pipeline_id=pipeline.id, log_level="INFO")
         return pipeline
 
@@ -122,7 +130,7 @@ class WatchDeduplicationTests(TestCase):
         tests_mgr.values_list.return_value = [1]
         pipeline = _mk_pipeline(status="WAITING_DEDUPLICATION_TO_FINISH", tests=tests_mgr)
 
-        _call_watch_dedup(pipeline=pipeline)
+        _call_watch_dedup(pipeline=pipeline, remaining_counts=[0])
 
         self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
         pipeline.save.assert_any_call(update_fields=["status", "updated"])
@@ -154,7 +162,7 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.__iter__.return_value = iter([])
         progress_qs.update = MagicMock()
 
-        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs)
+        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
 
         self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
 
@@ -190,7 +198,7 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.__iter__.return_value = iter([])
         progress_qs.update = MagicMock()
 
-        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs)
+        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
 
         self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
         mock_auto_push.delay.assert_called_once_with(pipeline.id)
@@ -227,7 +235,7 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.__iter__.return_value = iter([])
         progress_qs.update = MagicMock()
 
-        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs)
+        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
 
         self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
         mock_auto_push.delay.assert_called_once_with(pipeline.id)
@@ -239,6 +247,7 @@ class PushRequestToAITests(TestCase):
     def test_does_not_push_when_not_ready(self):
         with patch("aist.tasks.ai.requests.post") as mock_post, \
              patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
+             patch("aist.tasks.ai.finish_pipeline") as mock_finish, \
              patch("aist.tasks.ai.AISTPipeline") as mock_model:
             pipeline = _mk_pipeline(status="WAITING_CONFIRMATION_TO_PUSH_TO_AI")
             mock_model.objects.select_for_update().select_related().get.return_value = pipeline
@@ -246,7 +255,7 @@ class PushRequestToAITests(TestCase):
             _push_request_to_ai.run(pipeline_id=pipeline.id, finding_ids=[1, 2], filters={}, log_level="INFO")
 
             mock_post.assert_not_called()
-            self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
+            mock_finish.assert_called_once_with(pipeline)
 
     def test_push_success_transitions_to_waiting_result(self):
         with patch("aist.tasks.ai.requests.post") as mock_post, \
@@ -273,10 +282,9 @@ class PushRequestToAITests(TestCase):
 
 class SendRequestToAITests(TestCase):
     def test_send_request_pushes_when_confirmed(self):
-        with patch("aist.views.ai.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
-             patch("aist.views.ai.push_request_to_ai") as mock_push, \
-             patch("aist.views.ai.AISTPipeline") as mock_pipeline_model, \
-             patch("aist.views.ai.Finding") as mock_finding:
+        with patch("aist.views.ai.send_request_to_ai_for_pipeline") as mock_delegate, \
+             patch("aist.views.ai.get_authorized_aist_pipelines") as mock_authorized_qs, \
+             patch("aist.views.ai.user_has_permission_or_403") as mock_perm_check:
 
             rf = RequestFactory()
             body = b'{"pipeline_id":"pipeline-123","finding_ids":[1,2,3],"filters":{"analyzers":["X"]}}'
@@ -284,19 +292,17 @@ class SendRequestToAITests(TestCase):
             req.user = SimpleNamespace(is_authenticated=True)
 
             pipeline = _mk_pipeline(status="WAITING_CONFIRMATION_TO_PUSH_TO_AI")
-            mock_pipeline_model.objects.select_related().get.return_value = pipeline
-            mock_pipeline_model.objects.select_for_update().get.return_value = pipeline
-
-            mock_qs = MagicMock()
-            mock_qs.select_related().values_list.return_value = [1, 2, 3]
-            mock_finding.objects.filter.return_value = mock_qs
+            mock_delegate.return_value = JsonResponse({"ok": True})
+            authorized_qs = MagicMock()
+            authorized_qs.select_related.return_value = authorized_qs
+            authorized_qs.get.return_value = pipeline
+            mock_authorized_qs.return_value = authorized_qs
 
             resp = _send_request_to_ai(req, pipeline_id="pipeline-123")
 
             self.assertEqual(resp.status_code, 200)
-            self.assertEqual(pipeline.status, "PUSH_TO_AI")
-            pipeline.save.assert_any_call(update_fields=["status", "updated"])
-            mock_push.delay.assert_called_once_with("pipeline-123", [1, 2, 3], {"analyzers": ["X"]})
+            mock_perm_check.assert_called_once()
+            mock_delegate.assert_called_once_with(req, pipeline)
 
 # ---- make_enrich_chord progress ---------------------------------------------
 

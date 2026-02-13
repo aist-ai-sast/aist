@@ -5,12 +5,26 @@
 set -x
 set -e
 set -v
-export DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-aist_site.settings}
+export DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-dojo.settings.settings}
 
 . /secret-file-loader.sh
 . /reach_database.sh
 
 cd /app
+
+# Allow for bind-mount multiple settings.py overrides.
+shopt -s nullglob
+FILES=(/app/docker/extra_settings/*.py)
+shopt -u nullglob
+if [ "${#FILES[@]}" -gt 0 ]; then
+    COMMA_LIST=$(printf "%s\n" "${FILES[@]}" | paste -sd ", " -)
+    echo "============================================================"
+    echo "     Overriding DefectDojo's local_settings.py with multiple"
+    echo "     Files: $COMMA_LIST"
+    echo "============================================================"
+    cp "${FILES[@]}" /app/vendor/defectdojo/dojo/settings/
+fi
+
 # Unset the database URL so that we can force the DD_TEST_DATABASE_NAME (see django "DATABASES" configuration in settings.dist.py)
 unset DD_DATABASE_URL
 

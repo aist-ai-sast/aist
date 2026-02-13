@@ -6,6 +6,7 @@ from dojo.api_v2 import serializers as dojo_serializers
 from dojo.authorization.roles_permissions import Permissions
 from dojo.filters import ApiFindingFilter
 from dojo.finding.queries import get_authorized_findings
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -29,6 +30,18 @@ def _parse_tags(request) -> list[str]:
 class AISTFindingListAPI(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["aist"],
+        summary="List AIST findings",
+        parameters=[
+            OpenApiParameter(name="pipeline_id", required=False, type=str),
+            OpenApiParameter(name="tags", required=False, type=str, many=True),
+            OpenApiParameter(name="ordering", required=False, type=str),
+            OpenApiParameter(name="limit", required=False, type=int),
+            OpenApiParameter(name="offset", required=False, type=int),
+        ],
+        responses={200: dojo_serializers.FindingSerializer(many=True)},
+    )
     def get(self, request, *args, **kwargs) -> Response:
         queryset = get_authorized_findings(Permissions.Finding_View, user=request.user).prefetch_related("tags")
         pipeline_id = request.query_params.get("pipeline_id")

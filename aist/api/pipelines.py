@@ -45,6 +45,15 @@ class PipelineResponseSerializer(serializers.Serializer):
     updated = serializers.DateTimeField()
 
 
+class PipelineStopResponseSerializer(serializers.Serializer):
+    ok = serializers.BooleanField()
+
+
+class ExportAIResultsRequestSerializer(serializers.Serializer):
+    format = serializers.ChoiceField(choices=["csv", "xlsx"], required=False)
+    columns = serializers.ListField(child=serializers.CharField(), required=False)
+
+
 class PipelineStartAPI(APIView):
 
     """Start a new AIST pipeline."""
@@ -636,7 +645,10 @@ def pipeline_enrich_progress_response(pipeline_id: str) -> StreamingHttpResponse
 class PipelineStopAPI(APIView):
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(responses={200: OpenApiResponse(description="Pipeline stopped")})
+    @extend_schema(
+        request=None,
+        responses={200: PipelineStopResponseSerializer},
+    )
     def post(self, request, pipeline_id: str):
         pipeline = get_object_or_404(
             get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
@@ -650,7 +662,13 @@ class PipelineStopAPI(APIView):
 class ExportAIResultsAPI(APIView):
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(responses={200: OpenApiResponse(description="Export file")})
+    @extend_schema(
+        request=ExportAIResultsRequestSerializer,
+        responses={
+            200: OpenApiResponse(description="Export file"),
+            400: OpenApiResponse(description="No AI responses available for export"),
+        },
+    )
     def post(self, request, pipeline_id: str):
         pipeline = get_object_or_404(
             get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),

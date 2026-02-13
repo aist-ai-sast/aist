@@ -7,7 +7,8 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
-from dojo.models import Product, Product_Type, SLA_Configuration
+from dojo.authorization.roles_permissions import Roles
+from dojo.models import Product, Product_Member, Product_Type, Role, SLA_Configuration
 
 from aist.celery_signals import on_pipeline_status_changed
 from aist.models import AISTPipeline, AISTProject, AISTProjectVersion, AISTStatus, VersionType
@@ -38,6 +39,8 @@ class OneOffActionsTests(TestCase):
             email="tester@example.com",
             password="pass",  # noqa: S106
         )
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
         self.client.force_login(self.user)
 
         self.sla = SLA_Configuration.objects.create(name="SLA default")
@@ -47,6 +50,15 @@ class OneOffActionsTests(TestCase):
             description="desc",
             prod_type=self.prod_type,
             sla_configuration_id=self.sla.id,
+        )
+        role_maintainer, _ = Role.objects.get_or_create(
+            id=Roles.Maintainer,
+            defaults={"name": "Maintainer"},
+        )
+        Product_Member.objects.create(
+            product=self.product,
+            user=self.user,
+            role=role_maintainer,
         )
 
         self.project = AISTProject.objects.create(

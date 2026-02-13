@@ -20,6 +20,8 @@ class GitlabIntegrationAPITests(TestCase):
             email="tester@example.com",
             password="pass",  # noqa: S106
         )
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
         self.client.force_authenticate(user=self.user)
         SLA_Configuration.objects.bulk_create(
             [SLA_Configuration(id=1, name="SLA default")],

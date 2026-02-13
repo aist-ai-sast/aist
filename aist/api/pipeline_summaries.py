@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any
 from django.db.models import Count, DateTimeField, OuterRef, Q, Subquery
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding, Test
+from drf_spectacular.utils import OpenApiParameter, extend_schema
+from rest_framework import serializers
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -15,9 +17,39 @@ if TYPE_CHECKING:
     from rest_framework.response import Response
 
 
+class AISTPipelineSummaryRowSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    status = serializers.CharField()
+    project_id = serializers.IntegerField()
+    product_id = serializers.IntegerField()
+    product_name = serializers.CharField()
+    started = serializers.DateTimeField(allow_null=True)
+    created = serializers.DateTimeField()
+    updated = serializers.DateTimeField()
+    branch = serializers.CharField(allow_null=True)
+    commit = serializers.CharField(allow_null=True)
+    findings = serializers.IntegerField()
+    actions = serializers.JSONField()
+
+
 class AISTPipelineSummaryAPI(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["aist"],
+        summary="List pipeline summaries",
+        parameters=[
+            OpenApiParameter(name="product_id", required=False, type=int),
+            OpenApiParameter(name="status", required=False, type=str),
+            OpenApiParameter(name="created_gte", required=False, type=str),
+            OpenApiParameter(name="created_lte", required=False, type=str),
+            OpenApiParameter(name="search", required=False, type=str),
+            OpenApiParameter(name="ordering", required=False, type=str),
+            OpenApiParameter(name="limit", required=False, type=int),
+            OpenApiParameter(name="offset", required=False, type=int),
+        ],
+        responses={200: AISTPipelineSummaryRowSerializer(many=True)},
+    )
     def get(self, request, *args, **kwargs) -> Response:
         qs = (
             get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)

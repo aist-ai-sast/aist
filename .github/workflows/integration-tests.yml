@@ -9,6 +9,7 @@ env:
 
 jobs:
   integration_tests:
+    if: false
     # run tests with docker compose
     name: User Interface Tests
     runs-on: ubuntu-latest

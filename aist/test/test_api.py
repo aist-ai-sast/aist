@@ -20,6 +20,7 @@ from dojo.models import (
     Test,
     Test_Type,
 )
+from drf_spectacular.generators import SchemaGenerator
 from rest_framework.test import APIClient
 
 from aist.models import AISTPipeline, AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, AISTStatus, VersionType
@@ -211,6 +212,11 @@ class AISTFindingTagsTests(AISTApiBase):
             target_start=timezone.now(),
             target_end=timezone.now(),
             test_type=self.test_type,
+        )
+        Product_Member.objects.create(
+            product=self.other_product,
+            user=self.user,
+            role=self.role_maintainer,
         )
 
         self.finding = Finding.objects.create(
@@ -433,6 +439,24 @@ class AISTUIApiTests(AISTApiBase):
         url = reverse("aist_api:pipeline_send_request", kwargs={"pipeline_id": pipeline.id})
         resp = self.client.post(url, data={"finding_ids": []}, format="json")
         self.assertEqual(resp.status_code, 400)
+
+
+class AISTSchemaTests(AISTApiBase):
+    def test_openapi_includes_custom_aist_api_views(self):
+        schema = SchemaGenerator().get_schema(request=None, public=True)
+        paths = schema.get("paths", {})
+
+        required_operations = {
+            "/api/v2/aist/findings/": "get",
+            "/api/v2/aist/findings/tags/": "get",
+            "/api/v2/aist/pipelines/summary/": "get",
+            "/api/v2/aist/products/summary/": "get",
+            "/api/v2/aist/pipelines/{pipeline_id}/stop/": "post",
+            "/api/v2/aist/pipelines/{pipeline_id}/export-ai-results/": "post",
+        }
+        for path, method in required_operations.items():
+            self.assertIn(path, paths)
+            self.assertIn(method, paths[path])
 
 
 class LaunchConfigAPITests(AISTApiBase):

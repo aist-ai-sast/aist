@@ -7,16 +7,16 @@ export DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-aist_site.settings}
 . /reach_database.sh
 
 # Allow for bind-mount multiple settings.py overrides
-FILES=$(ls /app/docker/extra_settings/* 2>/dev/null || true)
-NUM_FILES=$(echo "$FILES" | wc -w)
-if [ "$NUM_FILES" -gt 0 ]; then
-    COMMA_LIST=$(echo "$FILES" | tr -s '[:blank:]' ', ')
+shopt -s nullglob
+FILES=(/app/docker/extra_settings/*.py)
+shopt -u nullglob
+if [ "${#FILES[@]}" -gt 0 ]; then
+    COMMA_LIST=$(printf "%s\n" "${FILES[@]}" | paste -sd ", " -)
     echo "============================================================"
     echo "     Overriding DefectDojo's local_settings.py with multiple"
     echo "     Files: $COMMA_LIST"
     echo "============================================================"
-    cp /app/docker/extra_settings/* /app/dojo/settings/
-    rm -f /app/dojo/settings/README.md
+    cp "${FILES[@]}" /app/vendor/defectdojo/dojo/settings/
 fi
 
 umask 0002

@@ -12,12 +12,13 @@ env:
     -f docker-compose.yml -f docker-compose.override.aist_cd.yml -f docker-compose.override.unit_tests_cicd.yml
 jobs:
   unit_tests:
-    name: Rest Framework Unit Tests
+    name: Unit Tests (${{ matrix.suite }}, ${{ matrix.os }})
     runs-on: ${{ inputs.platform ==  'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     strategy:
       matrix:
         os: [alpine, debian]
+        suite: [dd, aist]
 
     steps:
       # Replace slashes so we can use this in filenames
@@ -53,9 +54,17 @@ jobs:
         run: docker compose $COMPOSE_FILES up --no-deps -d postgres webhook.endpoint
 
       # no celery or initializer needed for unit tests
-      - name: Unit tests
+      - name: DD tests
+        if: matrix.suite == 'dd'
         timeout-minutes: 20
         run: docker compose $COMPOSE_FILES up --no-deps --exit-code-from uwsgi uwsgi
+        env:
+          DJANGO_VERSION: ${{ matrix.os }}
+
+      - name: AIST tests
+        if: matrix.suite == 'aist'
+        timeout-minutes: 20
+        run: docker compose $COMPOSE_FILES run --rm --no-deps --entrypoint /entrypoint-unit-tests-aist.sh uwsgi
         env:
           DJANGO_VERSION: ${{ matrix.os }}
 

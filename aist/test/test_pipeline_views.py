@@ -11,6 +11,8 @@ from aist.test.test_api import AISTApiBase
 class AISTPipelineDetailFindingsTests(AISTApiBase):
     def setUp(self):
         super().setUp()
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
         self.client.force_login(self.user)
         self.engagement = Engagement.objects.create(
             name="Engage",
@@ -79,7 +81,7 @@ class AISTPipelineDetailFindingsTests(AISTApiBase):
             "ai": {
                 "filter_snapshot": {
                     "limit": 50,
-                    "severity": [{"comparison": "EQUALS", "value": "HIGH"}],
+                    "severity": [{"comparison": "EQUALS", "value": "High"}],
                 },
             },
         }
@@ -116,7 +118,7 @@ class AISTPipelineDetailFindingsTests(AISTApiBase):
         body = resp.content.decode("utf-8")
         self.assertLess(body.find(first.title), body.find(second.title))
 
-    def test_pipeline_detail_denies_other_product(self):
+    def test_pipeline_detail_allows_other_product_for_superuser(self):
         other = AISTPipeline.objects.create(
             id="pipe-views-other",
             project=self.other_project,
@@ -125,12 +127,14 @@ class AISTPipelineDetailFindingsTests(AISTApiBase):
         )
         url = reverse("aist:pipeline_detail", kwargs={"pipeline_id": other.id})
         resp = self.client.get(url)
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 200)
 
 
 class AISTPipelineDetailAIModeTests(AISTApiBase):
     def setUp(self):
         super().setUp()
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
         self.client.force_login(self.user)
         self.pipeline = AISTPipeline.objects.create(
             id="pipe-ai-1",

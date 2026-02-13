@@ -28,8 +28,8 @@ fi
 watchmedo shell-command \
   --patterns="*.html;*.tpl" \
   --recursive \
-  --command='touch /app/dojo/settings/settings.py' \
-  /app/dojo &
+  --command='touch /app/vendor/defectdojo/dojo/settings/settings.py' \
+  /app/vendor/defectdojo/dojo &
 
 
 exec uwsgi \
@@ -44,5 +44,5 @@ exec uwsgi \
   --py-autoreload 1 \
   --buffer-size="${DD_UWSGI_BUFFER_SIZE:-8192}" \
   --lazy-apps \
-  --touch-reload="/app/dojo/settings/settings.py" \
+  --touch-reload="/app/vendor/defectdojo/dojo/settings/settings.py" \
   --logformat "${DD_UWSGI_LOGFORMAT:-$DD_UWSGI_LOGFORMAT_DEFAULT}"

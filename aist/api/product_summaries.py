@@ -5,6 +5,8 @@ from typing import Any
 from django.db.models import Count, DateTimeField, OuterRef, Q, Subquery
 from dojo.authorization.roles_permissions import Permissions
 from dojo.finding.queries import get_authorized_findings
+from drf_spectacular.utils import extend_schema
+from rest_framework import serializers
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -13,9 +15,28 @@ from aist.models import AISTPipeline
 from aist.queries import get_authorized_aist_projects
 
 
+class AISTProductSummaryRowSerializer(serializers.Serializer):
+    project_id = serializers.IntegerField()
+    product_id = serializers.IntegerField()
+    product_name = serializers.CharField()
+    tags = serializers.ListField(child=serializers.CharField())
+    status = serializers.CharField()
+    findings_total = serializers.IntegerField()
+    findings_active = serializers.IntegerField()
+    severity = serializers.JSONField()
+    risk = serializers.JSONField()
+    last_pipeline = serializers.JSONField()
+    last_sync = serializers.DateTimeField(allow_null=True)
+
+
 class AISTProductSummaryAPI(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["aist"],
+        summary="List product summaries",
+        responses={200: AISTProductSummaryRowSerializer(many=True)},
+    )
     def get(self, request, *args, **kwargs) -> Response:
         projects = (
             get_authorized_aist_projects(Permissions.Product_View, user=request.user)

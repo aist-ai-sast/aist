@@ -535,7 +535,12 @@ class AISTTestMeta(models.Model):
     updated = models.DateTimeField(auto_now=True)
 
     class Meta:
-        indexes = [models.Index(fields=["deduplication_complete"])]
+        indexes = [
+            models.Index(
+                fields=["deduplication_complete"],
+                name="aist_testmeta_dedup_idx",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"AISTTestMeta(test={self.test_id}, dedup_complete={self.deduplication_complete})"

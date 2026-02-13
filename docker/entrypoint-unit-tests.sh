@@ -4,18 +4,32 @@
 # - Exit container after running tests to allow exit code to propagate as test result
 # set -x
 set -e
-export DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-aist_site.settings}
+export DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE:-dojo.settings.settings}
 # set -v
 
 . /secret-file-loader.sh
 . /reach_database.sh
 
-cd /app || exit
+cd /app/vendor/defectdojo || exit
+
+# Allow for bind-mount multiple settings.py overrides.
+shopt -s nullglob
+FILES=(/app/docker/extra_settings/*.py)
+shopt -u nullglob
+if [ "${#FILES[@]}" -gt 0 ]; then
+    COMMA_LIST=$(printf "%s\n" "${FILES[@]}" | paste -sd ", " -)
+    echo "============================================================"
+    echo "     Overriding DefectDojo's local_settings.py with multiple"
+    echo "     Files: $COMMA_LIST"
+    echo "============================================================"
+    cp "${FILES[@]}" /app/vendor/defectdojo/dojo/settings/
+fi
+
 # Unset the database URL so that we can force the DD_TEST_DATABASE_NAME (see django "DATABASES" configuration in settings.dist.py)
 unset DD_DATABASE_URL
 
-# Unset the celery broker URL so that we can force the other DD_CELERY_BROKER settings
-unset DD_CELERY_BROKER_URL
+# Force absolute sqlite broker path for tests, independent of current cwd.
+export DD_CELERY_BROKER_URL="sqla+sqlite:////tmp/dojo.celerydb.sqlite"
 
 # TARGET_SETTINGS_FILE=dojo/settings/settings.py
 # if [ ! -f ${TARGET_SETTINGS_FILE} ]; then

@@ -57,9 +57,10 @@ RUN pip3 install \
 	-r ./requirements-dev.txt
 
 # generate static files
-COPY vendor/defectdojo/components/ ./components/
+COPY vendor/defectdojo/ ./vendor/defectdojo/
 RUN \
-  cd components && \
+  rm -f vendor/defectdojo/.git && \
+  cd vendor/defectdojo/components && \
   yarn
 COPY client-ui/ ./client-ui/
 RUN \
@@ -69,11 +70,13 @@ RUN \
 COPY manage.py ./
 COPY aist/ ./aist/
 COPY aist_site/ ./aist_site/
-COPY vendor/defectdojo/dojo/ ./dojo/
 COPY sast-combinator/sast-pipeline/ /app/sast-combinator/sast-pipeline/
 ENV AIST_PIPELINE_CODE_PATH=/app/sast-combinator/sast-pipeline
 # always collect static for debug toolbar as we can't make it dependant on env variables or build arguments without breaking docker layer caching
 RUN FIELD_ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())") \
+    DD_ROOT='/app/vendor/defectdojo/dojo' \
+    DD_MEDIA_ROOT='/app/media' \
+    DD_STATIC_ROOT='/app/static' \
     DD_SECRET_KEY='dummy' \
     DD_DJANGO_DEBUG_TOOLBAR_ENABLED=True \
     python3 manage.py collectstatic --noinput --verbosity=2
