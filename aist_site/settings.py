@@ -46,7 +46,7 @@ LOGIN_REDIRECT_URL = "/aist-admin/"
 
 AIST_PROJECTS_BUILD_DIR = env("AIST_PROJECTS_BUILD_DIR", default="/tmp/aist/projects")  # noqa: F405,S108
 
-PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="https://157.90.113.55:8443/")  # noqa: F405
+PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="https://aist.itsec-europe.com/")  # noqa: F405
 AIST_AI_TRIAGE_WEBHOOK_URL = env(  # noqa: F405
     "AIST_AI_TRIAGE_WEBHOOK_URL",
     default="https://flaming.app.n8n.cloud/webhook/triage-sast",

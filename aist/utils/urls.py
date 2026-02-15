@@ -54,7 +54,7 @@ def _normalize_base_url(url: str) -> str:
 
 
 def get_public_base_url() -> str:
-    return getattr(settings, "PUBLIC_BASE_URL", "https://157.90.113.55:8443/")
+    return getattr(settings, "PUBLIC_BASE_URL", "https://aist.itsec-europe.com/")
 
 
 def build_callback_url(pipeline_id: str) -> str:
