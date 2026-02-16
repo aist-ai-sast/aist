@@ -36,9 +36,13 @@ def _build_ai_export_rows(
     for item in findings_raw:
         original = item.get("originalFinding") or {}
 
-        # Project version is expected to come from AI response when available;
-        # we fall back to the pipeline's project_version label.
-        project_version_label = pipeline.resolved_commit or pipeline.project_version.version
+        project_version = pipeline.project_version
+        project_version_label = ""
+        if project_version:
+            if project_version.version_type == "GIT_BRANCH":
+                project_version_label = project_version.last_resolved_commit or project_version.version
+            else:
+                project_version_label = project_version.version
 
         row = {
             "title": item.get("title") or "",

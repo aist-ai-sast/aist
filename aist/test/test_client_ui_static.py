@@ -17,6 +17,7 @@ class ClientPortalRouteTests(SimpleTestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<div id="root"></div>', html=True)
+        self.assertContains(response, "<title>AIST Security Command Center</title>", html=True)
         self.assertContains(response, "window.__AIST_ROUTES__")
         self.assertContains(response, "window.__AIST_CSRF__")
 
@@ -40,6 +41,8 @@ class ClientPortalRouteTests(SimpleTestCase):
         self.assertIn("{pipeline_id}", routes["pipeline_export_url"])
         self.assertIn("{project_version_id}", routes["project_version_file_url"])
         self.assertIn("{subpath}", routes["project_version_file_url"])
+        self.assertEqual(routes["ui_findings_path"], "/")
+        self.assertIn(":id", routes["ui_finding_detail_path"])
 
 
 class ClientPortalAuthFlowTests(TestCase):

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
 
 type MultiSelectChipsProps = {
   label: string;
@@ -31,8 +32,8 @@ export default function MultiSelectChips({
               className={[
                 "rounded-full border px-3 py-1 text-xs",
                 selected.includes(option)
-                  ? "border-brand-600/70 bg-brand-600/20 text-brand-500"
-                  : "border-night-500 bg-night-600 text-slate-200",
+                  ? ACCENT_SELECTED_CLASS
+                  : "border-night-500 bg-night-600 text-slate-200 hover:border-night-400",
               ].join(" ")}
               onClick={() => {
                 if (selected.includes(option)) {

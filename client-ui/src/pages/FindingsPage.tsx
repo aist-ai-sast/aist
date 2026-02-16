@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import FilterPanel from "../components/FilterPanel";
 import FindingCard from "../components/FindingCard";
 import DetailPanel from "../components/DetailPanel";
+import SegmentedSortControl from "../components/SegmentedSortControl";
 import type { Finding } from "../types";
 import {
   useAiResponse,
@@ -13,35 +14,36 @@ import {
   useProjects,
 } from "../lib/queries";
 import { useToast } from "../components/ToastProvider";
-import SelectField from "../components/SelectField";
 import PaginationBar from "../components/PaginationBar";
+import { buildFindingsOrdering, FINDINGS_SORT_OPTIONS, type FindingsSortKey } from "../lib/findingsSort";
 
 export default function FindingsPage() {
   const [selectedProductId, setSelectedProductId] = useState<number | undefined>();
-  const [selectedSeverity, setSelectedSeverity] = useState<string>("All severities");
+  const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
   const [selectedStatus, setSelectedStatus] = useState<string>("All");
   const [selectedRisk, setSelectedRisk] = useState<string[]>([]);
   const [selectedAiVerdict, setSelectedAiVerdict] = useState<string>("All");
-  const [selectedSort, setSelectedSort] = useState<string>("severity");
+  const [selectedSort, setSelectedSort] = useState<FindingsSortKey>("severity");
+  const [selectedSortDirection, setSelectedSortDirection] = useState<"asc" | "desc">("desc");
   const [selectedCwe, setSelectedCwe] = useState<string>("");
+  const [selectedFile, setSelectedFile] = useState<string>("");
+  const [selectedProjectVersion, setSelectedProjectVersion] = useState<string>("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | undefined>();
+  const [findingOverrides, setFindingOverrides] = useState<Record<number, Partial<Finding>>>({});
   const toast = useToast();
   const [searchParams] = useSearchParams();
   const [pageSize, setPageSize] = useState<number>(50);
   const [pageIndex, setPageIndex] = useState<number>(0);
   const projectsQuery = useProjects();
-  const ordering =
-    selectedSort === "severity"
-      ? "numerical_severity"
-      : selectedSort === "date"
-        ? "-date"
-        : "title";
+  const ordering = buildFindingsOrdering(selectedSort, selectedSortDirection);
 
   const findingsQuery = useFindingsPage({
     productId: selectedProductId,
     pipelineId: selectedPipelineId,
-    severity: selectedSeverity !== "All severities" && selectedSeverity !== "All" ? (selectedSeverity as any) : undefined,
+    projectVersion: selectedProjectVersion || undefined,
+    file: selectedFile || undefined,
+    severities: selectedSeverities.length ? (selectedSeverities as any) : undefined,
     status: selectedStatus === "Active" ? "enabled" : selectedStatus === "Non-Active" ? "disabled" : undefined,
     riskStates: selectedRisk.length ? (selectedRisk as any) : undefined,
     cwe: selectedCwe ? selectedCwe : undefined,
@@ -94,16 +96,20 @@ export default function FindingsPage() {
   const findings = useMemo(() => {
     const raw = findingsQuery.data?.items ?? [];
     const productMap = new Map(projects.map((project) => [project.productId, project.name]));
-    let mapped = raw.map((finding) => ({
-      ...finding,
-      product: productMap.get(finding.productId ?? 0) ?? finding.product,
-      aiVerdict: aiVerdictMap.get(finding.id) as any,
-    }));
+    let mapped = raw.map((finding) => {
+      const override = findingOverrides[finding.id] ?? {};
+      return {
+        ...finding,
+        ...override,
+        product: productMap.get(finding.productId ?? 0) ?? finding.product,
+        aiVerdict: aiVerdictMap.get(finding.id) as any,
+      };
+    });
     if (selectedAiVerdict !== "All") {
       mapped = mapped.filter((finding) => finding.aiVerdict === selectedAiVerdict);
     }
     return mapped;
-  }, [findingsQuery.data, projects, aiVerdictMap, selectedAiVerdict]);
+  }, [findingsQuery.data, projects, aiVerdictMap, selectedAiVerdict, findingOverrides]);
 
   const tagsQuery = useFindingTagsByProduct(selectedProductId);
   const availableTags = tagsQuery.data ?? [];
@@ -130,21 +136,62 @@ export default function FindingsPage() {
 
   useEffect(() => {
     setPageIndex(0);
-  }, [selectedProductId, selectedSeverity, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiVerdict, selectedPipelineId, ordering, pageSize]);
+  }, [selectedProductId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiVerdict, selectedPipelineId, selectedFile, selectedProjectVersion, ordering, pageSize]);
+
+  const applyCloseState = (
+    findingId: number,
+    reason: "mitigated" | "false_positive" | "out_of_scope" | "duplicate",
+  ) => {
+    setFindingOverrides((current) => ({
+      ...current,
+      [findingId]: {
+        ...current[findingId],
+        active: false,
+        isMitigated: reason === "mitigated",
+        falsePositive: reason === "false_positive",
+        outOfScope: reason === "out_of_scope",
+        duplicate: reason === "duplicate",
+      },
+    }));
+  };
+
+  const applyReopenState = (findingId: number) => {
+    setFindingOverrides((current) => ({
+      ...current,
+      [findingId]: {
+        ...current[findingId],
+        active: true,
+        isMitigated: false,
+        falsePositive: false,
+        outOfScope: false,
+        duplicate: false,
+      },
+    }));
+  };
 
   useEffect(() => {
     const productParam = searchParams.get("product");
     const pipelineParam = searchParams.get("pipeline");
+    const projectVersionParam = searchParams.get("project_version");
+    const fileParam = searchParams.get("file");
+
     if (productParam) {
       const parsed = Number(productParam);
       if (!Number.isNaN(parsed)) {
         setSelectedProductId(parsed);
       }
+    } else {
+      setSelectedProductId(undefined);
     }
-    if (pipelineParam) {
-      setSelectedPipelineId(pipelineParam);
-    }
+    setSelectedPipelineId(pipelineParam || undefined);
+    setSelectedProjectVersion(projectVersionParam ?? "");
+    setSelectedFile(fileParam ?? "");
   }, [searchParams]);
+
+  const handleProductChange = (productId?: number) => {
+    setSelectedProductId(productId);
+    setSelectedProjectVersion("");
+  };
 
   const exportCurrentView = () => {
     if (findings.length === 0) {
@@ -180,13 +227,19 @@ export default function FindingsPage() {
 
   return (
     <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <div className="lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
+      <div className="aist-scrollbar lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
         <FilterPanel
           products={projects}
           selectedProductId={selectedProductId}
-          onProductChange={setSelectedProductId}
-          selectedSeverity={selectedSeverity}
-          onSeverityChange={setSelectedSeverity}
+          onProductChange={handleProductChange}
+          selectedSeverities={selectedSeverities}
+          onSeveritiesChange={setSelectedSeverities}
+          selectedFile={selectedFile}
+          onFileChange={setSelectedFile}
+          selectedProjectVersion={selectedProjectVersion}
+          onProjectVersionChange={(value) => {
+            setSelectedProjectVersion(value);
+          }}
           selectedStatus={selectedStatus}
           onStatusChange={setSelectedStatus}
           selectedRisk={selectedRisk}
@@ -204,7 +257,7 @@ export default function FindingsPage() {
 
       <div className="flex min-h-0 min-w-0 flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs uppercase tracking-[0.2em] text-slate-400">
-          <span>Findings</span>
+          <span>Findings · Total {findingsQuery.data?.count ?? 0}</span>
           <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-end">
             <button
               className="aist-icon-button h-10 w-full sm:w-auto"
@@ -218,19 +271,15 @@ export default function FindingsPage() {
               </svg>
               Export current view
             </button>
-            <div className="w-full sm:w-44">
-              <SelectField
-                label="Sort"
-                value={selectedSort}
-                onChange={setSelectedSort}
-                hideLabel
-                options={[
-                  { value: "severity", label: "Sort: Severity" },
-                  { value: "date", label: "Sort: Date" },
-                  { value: "title", label: "Sort: Title" },
-                ]}
-              />
-            </div>
+            <SegmentedSortControl
+              options={FINDINGS_SORT_OPTIONS}
+              value={selectedSort}
+              direction={selectedSortDirection}
+              onValueChange={setSelectedSort}
+              onDirectionToggle={() =>
+                setSelectedSortDirection((current) => (current === "desc" ? "asc" : "desc"))
+              }
+            />
           </div>
         </div>
         <div className="flex min-h-[calc(100vh-280px)] flex-col">
@@ -254,14 +303,13 @@ export default function FindingsPage() {
                         projectId={projectIdByProduct.get(finding.productId ?? 0)}
                         projectVersionId={selectedProductId ? filterProjectVersionId : undefined}
                         isOpen={expandedIds.includes(finding.id)}
-                        selectedTags={selectedTags}
-                        onToggleTag={(tag) =>
-                          setSelectedTags((current) =>
-                            current.includes(tag)
-                              ? current.filter((item) => item !== tag)
-                              : [...current, tag],
-                          )
-                        }
+                        onSelectProjectVersion={(projectVersion) => {
+                          setSelectedProjectVersion(projectVersion);
+                          if (finding.productId) {
+                            setSelectedProductId(finding.productId);
+                          }
+                        }}
+                        onSelectFile={setSelectedFile}
                         expandedContent={
                           expandedIds.includes(finding.id) ? (
                             <DetailPanel
@@ -286,6 +334,8 @@ export default function FindingsPage() {
                               onToggleCwe={(cwe) =>
                                 setSelectedCwe((current) => (current === cwe ? "" : cwe))
                               }
+                              onCloseApplied={applyCloseState}
+                              onReopened={applyReopenState}
                               embedded
                             />
                           ) : null

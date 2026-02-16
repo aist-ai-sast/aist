@@ -28,7 +28,7 @@ export async function loginWithSession(username: string, password: string) {
     username,
     password,
     csrfmiddlewaretoken: csrf ?? getCsrfToken() ?? "",
-    next: "/",
+    next: getRoute("ui_findings_path"),
   });
 
   const resp = await fetch(loginUrl, {

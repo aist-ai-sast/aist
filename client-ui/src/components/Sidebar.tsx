@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { logoutSession } from "../lib/auth";
 import { useToast } from "./ToastProvider";
+import { getRoute } from "../lib/routes";
 
 const Icons = {
   findings: (
@@ -37,13 +38,6 @@ const Icons = {
   ),
 };
 
-const links = [
-  { to: "/", label: "Findings", icon: Icons.findings },
-  { to: "/products", label: "Products", icon: Icons.products },
-  { to: "/pipelines", label: "Pipelines", icon: Icons.pipelines },
-  { to: "/settings", label: "Settings", icon: Icons.settings },
-];
-
 type SidebarProps = {
   collapsed: boolean;
   onToggle: () => void;
@@ -51,6 +45,12 @@ type SidebarProps = {
 
 export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const toast = useToast();
+  const links = [
+    { to: getRoute("ui_findings_path"), label: "Findings", icon: Icons.findings },
+    { to: getRoute("ui_products_path"), label: "Products", icon: Icons.products },
+    { to: getRoute("ui_pipelines_path"), label: "Pipelines", icon: Icons.pipelines },
+    { to: getRoute("ui_settings_path"), label: "Settings", icon: Icons.settings },
+  ];
   return (
     <aside
       className={[

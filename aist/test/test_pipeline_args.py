@@ -14,7 +14,7 @@ from django.test import TestCase
 from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.ai_filter import validate_and_normalize_filter
-from aist.models import AISTProject
+from aist.models import AISTProject, AISTProjectVersion, VersionType
 from aist.pipeline_args import PipelineArguments
 
 
@@ -238,6 +238,21 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
             profile={},
         )
 
+    def test_normalize_params_prefers_latest_git_branch_when_project_version_omitted(self):
+        branch = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_BRANCH,
+            version="main",
+        )
+        AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="0123456789abcdef0123456789abcdef01234567",
+        )
+
+        normalized = PipelineArguments.normalize_params(project=self.project, raw_params={})
+        self.assertEqual(normalized["project_version"]["id"], branch.id)
+
     def test_normalize_params_manual_forces_snapshot_none(self):
         out = PipelineArguments.normalize_params(
             project=self.project,
@@ -260,3 +275,61 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
                 project=self.project,
                 raw_params={"ai_mode": "AUTO_DEFAULT"},
             )
+
+    def test_build_project_version_descriptor_keeps_excluded_paths_for_resolved_version(self):
+        self.project.profile = {"paths": {"exclude": ["vendor/", "node_modules/"]}}
+        self.project.save(update_fields=["profile"])
+        resolved = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="0123456789abcdef0123456789abcdef01234567",
+        )
+        args = PipelineArguments(
+            project=self.project,
+            project_version={"id": 0, "version": "main", "type": VersionType.GIT_BRANCH},
+            selected_analyzers=[],
+            selected_languages=[],
+            log_level="INFO",
+            rebuild_images=False,
+            ai_mode="MANUAL",
+            ai_filter_snapshot=None,
+            time_class_level="slow",
+        )
+
+        args.project_version = resolved.as_dict()
+        descriptor = args.build_project_version_descriptor()
+        self.assertEqual(descriptor["id"], resolved.id)
+        self.assertEqual(descriptor["version"], resolved.version)
+        self.assertEqual(descriptor["type"], VersionType.GIT_HASH)
+        self.assertEqual(descriptor["excluded_paths"], ["vendor/", "node_modules/"])
+
+    def test_resolve_effective_project_version_creates_hash_and_links_branch(self):
+        branch = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_BRANCH,
+            version="main",
+        )
+        args = PipelineArguments(
+            project=self.project,
+            project_version=branch.as_dict(),
+            selected_analyzers=[],
+            selected_languages=[],
+            log_level="INFO",
+            rebuild_images=False,
+            ai_mode="MANUAL",
+            ai_filter_snapshot=None,
+            time_class_level="slow",
+        )
+        commit = "1234567890abcdef1234567890abcdef12345678"
+
+        resolved = args.resolve_effective_project_version(
+            resolved_commit=commit,
+        )
+
+        branch.refresh_from_db()
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.version_type, VersionType.GIT_HASH)
+        self.assertEqual(resolved.version, commit)
+        self.assertEqual(resolved.resolved_from_branch_id, branch.id)
+        self.assertEqual(branch.last_resolved_commit, commit)
+        self.assertIsNotNone(branch.last_resolved_at)

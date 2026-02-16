@@ -7,6 +7,7 @@ import { useAddFindingNote } from "../lib/mutations";
 import { useFinding, useFindingNotes } from "../lib/queries";
 import PermissionGate from "./PermissionGate";
 import { useToast } from "./ToastProvider";
+import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
 
 type FindingDetailTabsProps = {
   finding: Finding;
@@ -59,7 +60,7 @@ export default function FindingDetailTabs({
             className={[
               "rounded-full border px-3 py-1 text-xs",
               tab === item.id
-                ? "border-brand-600/70 bg-brand-600/20 text-brand-400"
+                ? ACCENT_SELECTED_CLASS
                 : "border-night-500 bg-night-900 text-slate-300",
             ].join(" ")}
             onClick={() => setTab(item.id)}
@@ -103,7 +104,7 @@ export default function FindingDetailTabs({
                     className={[
                       "rounded-full border px-3 py-1 text-xs transition",
                       selectedTags.includes(tag)
-                        ? "border-brand-600/70 bg-brand-600/20 text-brand-400"
+                        ? ACCENT_SELECTED_CLASS
                         : "border-night-500 bg-night-900 text-slate-200 hover:border-brand-600/40",
                     ].join(" ")}
                     onClick={() => onToggleTag?.(tag)}
@@ -135,7 +136,7 @@ export default function FindingDetailTabs({
                   className={[
                     "rounded-full border px-3 py-1 text-xs transition",
                     selectedCwe === String(finding.cwe)
-                      ? "border-brand-600/70 bg-brand-600/20 text-brand-400"
+                      ? ACCENT_SELECTED_CLASS
                       : "border-night-500 bg-night-900 text-slate-200 hover:border-brand-600/40",
                   ].join(" ")}
                   onClick={() => onToggleCwe?.(String(finding.cwe))}

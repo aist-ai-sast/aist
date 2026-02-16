@@ -31,11 +31,15 @@ class AISTProjectVersionForm(forms.ModelForm):
             if not src:
                 self.add_error("source_archive", "Archive is required for FILE_HASH.")
         elif not version:
-            self.add_error("version", "Git hash / ref is required for GIT_HASH.")
+            self.add_error("version", "Git ref is required for GIT_BRANCH/GIT_HASH.")
 
         proj = cleaned.get("project")
         if proj and version:
-            if AISTProjectVersion.objects.filter(project=proj, version=version).exists():
+            if AISTProjectVersion.objects.filter(
+                project=proj,
+                version=version,
+                version_type=version_type,
+            ).exists():
                 self.add_error("version", "This version already exists for the selected project.")
 
         return cleaned
@@ -244,7 +248,14 @@ class AISTPipelineRunForm(_AISTPipelineArgsBaseForm):
 
         project_version: AISTProjectVersion | None = cleaned.get("project_version")
         if not project_version:
-            project_version = project.versions.order_by("-created").first()
+            project_version = (
+                project.versions
+                .filter(version_type=VersionType.GIT_BRANCH)
+                .order_by("-updated", "-created")
+                .first()
+            )
+            if project_version is None:
+                project_version = project.versions.order_by("-updated", "-created").first()
             cleaned["project_version"] = project_version
 
         if project_version and has_unfinished_pipeline(project_version):

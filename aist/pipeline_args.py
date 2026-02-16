@@ -6,9 +6,10 @@ from itertools import chain
 from pathlib import Path
 
 from django.conf import settings
+from django.utils import timezone
 
 from aist.ai_filter import validate_and_normalize_filter
-from aist.models import AISTProject, AISTProjectVersion
+from aist.models import AISTProject, AISTProjectVersion, VersionType
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 # Error messages (for TRY003/EM101/EM102)
@@ -39,6 +40,56 @@ class PipelineArguments:
         configured_pipeline = getattr(settings, "AIST_PIPELINE_CODE_PATH", None)
         self.pipeline_path: Path | None = Path(configured_pipeline) if configured_pipeline else None
         self.project_version["excluded_paths"] = self.project.get_excluded_paths()
+
+    def build_project_version_descriptor(self) -> dict:
+        """
+        Build a runtime descriptor for LinkBuilder/enrich.
+        Keeps policy fields (like excluded paths) owned by PipelineArguments.
+        """
+        base = dict(self.project_version or {})
+        base["excluded_paths"] = self.project.get_excluded_paths()
+        return base
+
+    def resolve_effective_project_version(
+        self,
+        *,
+        resolved_commit: str,
+    ) -> AISTProjectVersion | None:
+        """
+        Resolve and persist effective project version for pipeline execution.
+        Keeps self.project_version as a single source of truth.
+        """
+        commit = (resolved_commit or "").strip()
+        effective = None
+        pv_id = (self.project_version or {}).get("id")
+        if pv_id:
+            effective = (
+                AISTProjectVersion.objects
+                .select_for_update()
+                .filter(pk=pv_id, project=self.project)
+                .first()
+            )
+
+        if commit and effective and effective.version_type == VersionType.GIT_BRANCH:
+            resolved_version, _ = AISTProjectVersion.objects.get_or_create(
+                project_id=effective.project_id,
+                version=commit,
+                version_type=VersionType.GIT_HASH,
+                defaults={"resolved_from_branch": effective},
+            )
+            if resolved_version.resolved_from_branch_id is None:
+                resolved_version.resolved_from_branch = effective
+                resolved_version.save(update_fields=["resolved_from_branch", "updated"])
+
+            effective.last_resolved_commit = commit
+            effective.last_resolved_at = timezone.now()
+            effective.save(update_fields=["last_resolved_commit", "last_resolved_at", "updated"])
+            effective = resolved_version
+
+        if effective is not None:
+            self.project_version = effective.as_dict()
+
+        return effective
 
     @classmethod
     def normalize_project_name(cls, project: AISTProject) -> str:
@@ -72,10 +123,17 @@ class PipelineArguments:
             # allow omission: means "latest project version" if exists
             latest = (
                 AISTProjectVersion.objects
-                .filter(project=project)
-                .order_by("-created")
+                .filter(project=project, version_type=VersionType.GIT_BRANCH)
+                .order_by("-updated", "-created")
                 .first()
             )
+            if latest is None:
+                latest = (
+                    AISTProjectVersion.objects
+                    .filter(project=project)
+                    .order_by("-updated", "-created")
+                    .first()
+                )
             normalized["project_version"] = latest.as_dict() if latest else {}
         elif isinstance(pv, int):
             obj = AISTProjectVersion.objects.get(pk=pv, project=project)

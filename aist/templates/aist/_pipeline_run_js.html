@@ -874,7 +874,7 @@
                 }
 
                 function applyVisibility() {
-                    var t = typeSel ? String(typeSel.value || '') : 'GIT_HASH';
+                    var t = typeSel ? String(typeSel.value || '') : 'GIT_BRANCH';
                     var isFile = (t === 'FILE_HASH');
 
                     if (grpFile) grpFile.style.display = isFile ? '' : 'none';
@@ -915,7 +915,7 @@
                 if (inpFile) {
                     inpFile.addEventListener('change', async function () {
                         if (!inpFile.files || !inpFile.files[0]) return;
-                        var t = typeSel ? String(typeSel.value || '') : 'GIT_HASH';
+                        var t = typeSel ? String(typeSel.value || '') : 'GIT_BRANCH';
                         var isFile = (t === 'FILE_HASH');
                         if (!isFile) return;
                         if (inpText && inpText.value.trim()) return;
@@ -1019,12 +1019,12 @@
                 var inpText = formEl.querySelector('input[name="version"]');
                 var inpFile = formEl.querySelector('input[type="file"][name="source_archive"]');
 
-                var type = typeSel ? String(typeSel.value || '') : 'GIT_HASH';
+                var type = typeSel ? String(typeSel.value || '') : 'GIT_BRANCH';
                 var isFile = (type === 'FILE_HASH');
                 var version = (inpText && inpText.value) ? inpText.value.trim() : '';
 
                 if (!isFile && !version) {
-                    markError(inpText, 'Version is required for GIT_HASH.');
+                    markError(inpText, 'Version is required for GIT_BRANCH/GIT_HASH.');
                     return;
                 }
                 if (isFile && (!inpFile || !inpFile.files || !inpFile.files[0])) {

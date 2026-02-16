@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import type { ProductSummary } from "../types";
 import { useProductSummaries } from "../lib/queries";
+import { getRoute } from "../lib/routes";
 import MultiSelectChips from "../components/MultiSelectChips";
 import SelectField from "../components/SelectField";
 import PermissionGate from "../components/PermissionGate";
@@ -191,11 +192,17 @@ export default function ProductsPage() {
                   role="button"
                   tabIndex={0}
                   aria-label={`Open findings for ${summary.name}`}
-                  onClick={() => navigate(`/?product=${summary.productId}`)}
+                  onClick={() =>
+                    navigate(
+                      `${getRoute("ui_findings_path")}?${new URLSearchParams({ product: String(summary.productId) }).toString()}`,
+                    )
+                  }
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      navigate(`/?product=${summary.productId}`);
+                      navigate(
+                        `${getRoute("ui_findings_path")}?${new URLSearchParams({ product: String(summary.productId) }).toString()}`,
+                      );
                     }
                   }}
                 >
@@ -216,14 +223,14 @@ export default function ProductsPage() {
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <Link
-                      to={`/?product=${summary.productId}`}
+                      to={`${getRoute("ui_findings_path")}?${new URLSearchParams({ product: String(summary.productId) }).toString()}`}
                       className="rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
                       onClick={(event) => event.stopPropagation()}
                     >
                       View findings
                     </Link>
                     <Link
-                      to={`/pipelines?product=${summary.productId}`}
+                      to={`${getRoute("ui_pipelines_path")}?${new URLSearchParams({ product: String(summary.productId) }).toString()}`}
                       className="rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
                       onClick={(event) => event.stopPropagation()}
                     >

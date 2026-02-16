@@ -1,13 +1,17 @@
 import type { Project } from "../types";
-import SelectField from "./SelectField";
 import MultiSelectChips from "./MultiSelectChips";
+import SelectField from "./SelectField";
 
 type FilterPanelProps = {
   products: Project[];
   selectedProductId?: number;
   onProductChange: (productId?: number) => void;
-  selectedSeverity: string;
-  onSeverityChange: (value: string) => void;
+  selectedSeverities: string[];
+  onSeveritiesChange: (value: string[]) => void;
+  selectedFile: string;
+  onFileChange: (value: string) => void;
+  selectedProjectVersion: string;
+  onProjectVersionChange: (value: string) => void;
   selectedStatus: string;
   onStatusChange: (value: string) => void;
   selectedRisk: string[];
@@ -26,8 +30,12 @@ export default function FilterPanel({
   products,
   selectedProductId,
   onProductChange,
-  selectedSeverity,
-  onSeverityChange,
+  selectedSeverities,
+  onSeveritiesChange,
+  selectedFile,
+  onFileChange,
+  selectedProjectVersion,
+  onProjectVersionChange,
   selectedStatus,
   onStatusChange,
   selectedRisk,
@@ -59,15 +67,30 @@ export default function FilterPanel({
             })),
           ]}
         />
-        <SelectField
+        <MultiSelectChips
           label="Severity"
-          value={selectedSeverity}
-          onChange={onSeverityChange}
-          options={["All severities", "Critical", "High", "Medium", "Low", "Info"].map((option) => ({
-            value: option,
-            label: option,
-          }))}
+          options={["Critical", "High", "Medium", "Low", "Info"]}
+          selected={selectedSeverities}
+          onChange={onSeveritiesChange}
         />
+        <div>
+          <label className="text-xs text-slate-400">Project Version</label>
+          <input
+            className="mt-2 w-full rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white placeholder:text-slate-400"
+            value={selectedProjectVersion}
+            onChange={(event) => onProjectVersionChange(event.target.value)}
+            placeholder="e.g. master or commit hash"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-slate-400">File</label>
+          <input
+            className="mt-2 w-full rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white placeholder:text-slate-400"
+            value={selectedFile}
+            onChange={(event) => onFileChange(event.target.value)}
+            placeholder="e.g. src/app/main.py"
+          />
+        </div>
         <SelectField
           label="Status"
           value={selectedStatus}

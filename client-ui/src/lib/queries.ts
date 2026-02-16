@@ -11,6 +11,8 @@ type FindingApi = {
   active: boolean;
   product: number;
   date?: string;
+  created?: string;
+  project_version?: string | null;
   file_path?: string | null;
   line?: number | null;
   description?: string | null;
@@ -173,7 +175,11 @@ export function useFindingsPage(filters: FindingFilters) {
         offset: String(offset),
         ...(filters.productId ? { test__engagement__product: String(filters.productId) } : {}),
         ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
-        ...(filters.severity ? { severity: filters.severity } : {}),
+        ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
+        ...(filters.file ? { file: filters.file } : {}),
+        ...(filters.severities?.length
+          ? { severity: filters.severities.join(",") }
+          : {}),
         ...(filters.status
           ? { active: filters.status === "enabled" ? "true" : "false" }
           : {}),
@@ -207,6 +213,8 @@ export function useFindingsPage(filters: FindingFilters) {
         product: String(item.product),
         productId: item.product,
         date: item.date,
+        createdAt: item.created ?? item.date,
+        projectVersion: item.project_version ?? undefined,
         filePath: item.file_path ?? "",
         line: item.line ?? 0,
         tool: "",
@@ -238,7 +246,11 @@ export function useFindingsWithFilters(filters: FindingFilters) {
         offset: String(pageParam),
         ...(filters.productId ? { test__engagement__product: String(filters.productId) } : {}),
         ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
-        ...(filters.severity ? { severity: filters.severity } : {}),
+        ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
+        ...(filters.file ? { file: filters.file } : {}),
+        ...(filters.severities?.length
+          ? { severity: filters.severities.join(",") }
+          : {}),
         ...(filters.status
           ? { active: filters.status === "enabled" ? "true" : "false" }
           : {}),
@@ -272,6 +284,8 @@ export function useFindingsWithFilters(filters: FindingFilters) {
         product: String(item.product),
         productId: item.product,
         date: item.date,
+        createdAt: item.created ?? item.date,
+        projectVersion: item.project_version ?? undefined,
         filePath: item.file_path ?? "",
         line: item.line ?? 0,
         tool: "",
@@ -319,6 +333,8 @@ export function useFinding(findingId?: number) {
         product: String(item.product ?? ""),
         productId: item.product,
         date: item.date,
+        createdAt: item.created ?? item.date,
+        projectVersion: item.project_version ?? undefined,
         filePath: item.file_path ?? "",
         line: item.line ?? 0,
         tool: "",
@@ -332,6 +348,25 @@ export function useFinding(findingId?: number) {
           item.is_mitigated ? "mitigated" : null,
         ].filter(Boolean) as Finding["riskStates"],
       } satisfies Finding;
+    },
+    enabled: Boolean(findingId),
+  });
+}
+
+export function useFindingProjectVersion(findingId?: number) {
+  return useQuery({
+    queryKey: ["finding-project-version", findingId],
+    queryFn: async () => {
+      if (!findingId) return undefined;
+      const params = new URLSearchParams({
+        limit: "1",
+        id: String(findingId),
+      });
+      const payload = await fetchJson<ListResponse<FindingApi>>(
+        `${getRoute("findings_list_url")}?${params.toString()}`,
+      );
+      const item = normalizeList(payload)[0];
+      return item?.project_version ?? undefined;
     },
     enabled: Boolean(findingId),
   });

@@ -18,7 +18,7 @@ class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
     Serializer for creating AISTProjectVersion instances via API.
     Performs the same validations as AISTProjectVersionForm:
     - For FILE_HASH requires `source_archive`
-    - For GIT_HASH requires `version`
+    - For GIT_BRANCH/GIT_HASH requires `version`
     - Ensures the combination (project, version) is unique
     """
 
@@ -47,14 +47,16 @@ class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
                 {"source_archive": "This field is required for FILE_HASH versions."},
             )
 
-        if version_type == VersionType.GIT_HASH and not version:
+        if version_type in {VersionType.GIT_BRANCH, VersionType.GIT_HASH} and not version:
             raise serializers.ValidationError(
-                {"version": "This field is required for GIT_HASH versions."},
+                {"version": "This field is required for GIT_BRANCH/GIT_HASH versions."},
             )
 
         if version:
             exists = AISTProjectVersion.objects.filter(
-                project=project, version=version,
+                project=project,
+                version=version,
+                version_type=version_type,
             ).exists()
             if exists:
                 raise serializers.ValidationError(

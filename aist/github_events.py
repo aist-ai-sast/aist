@@ -5,7 +5,15 @@ from asgiref.sync import sync_to_async
 from django_github_app.routing import GitHubRouter
 from dojo.models import Product, Product_Type
 
-from aist.models import AISTProject, AISTProjectVersion, PullRequest, RepositoryInfo, ScmGithubBinding, ScmType
+from aist.models import (
+    AISTProject,
+    AISTProjectVersion,
+    PullRequest,
+    RepositoryInfo,
+    ScmGithubBinding,
+    ScmType,
+    VersionType,
+)
 from aist.tasks import run_sast_pipeline
 from aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline
 from aist.utils.pipeline_imports import _load_analyzers_config
@@ -154,6 +162,7 @@ async def on_pr_event(event, gh, **_):
     pv, created = await sync_to_async(AISTProjectVersion.objects.get_or_create)(
         project=aist_project,
         version=head_sha,
+        version_type=VersionType.GIT_HASH,
     )
     if created:
         logger.info(f"Created new AISTProjectVersion: {head_sha}")

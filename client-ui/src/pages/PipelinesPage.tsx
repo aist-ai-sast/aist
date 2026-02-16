@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { usePipelineSummaries, useProjects } from "../lib/queries";
 import type { PipelineSummary } from "../types";
 import PipelineFilterPanel from "../components/PipelineFilterPanel";
 import PaginationBar from "../components/PaginationBar";
+import { getRoute } from "../lib/routes";
 
 const statusOptions = [
   { value: "all", label: "All statuses" },
@@ -39,6 +40,19 @@ function statusBadge(status: string) {
   return "border-slate-500/40 text-slate-300 bg-night-700";
 }
 
+function findingsPath(params: {
+  product?: number;
+  pipeline?: string;
+  project_version?: string;
+}) {
+  const search = new URLSearchParams();
+  if (params.product) search.set("product", String(params.product));
+  if (params.pipeline) search.set("pipeline", params.pipeline);
+  if (params.project_version) search.set("project_version", params.project_version);
+  const query = search.toString();
+  return query ? `${getRoute("ui_findings_path")}?${query}` : getRoute("ui_findings_path");
+}
+
 function ActionsBadge({ actions }: { actions: PipelineSummary["actions"] }) {
   if (!actions.length) {
     return <span className="text-xs text-slate-400">No actions</span>;
@@ -71,15 +85,31 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
         <div className="grid gap-3">
           <div className="flex items-center justify-between">
             <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Branch</span>
-            <span className="text-slate-200" title={pipeline.branch ?? undefined}>
-              {truncateText(pipeline.branch, 24)}
-            </span>
+            {pipeline.branch ? (
+              <Link
+                to={findingsPath({ product: pipeline.productId, project_version: pipeline.branch })}
+                className="aist-clickable-text"
+                title={pipeline.branch}
+              >
+                {truncateText(pipeline.branch, 24)}
+              </Link>
+            ) : (
+              <span className="text-slate-200">—</span>
+            )}
           </div>
           <div className="flex items-center justify-between">
             <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Commit</span>
-            <span className="text-slate-200" title={pipeline.commit ?? undefined}>
-              {truncateText(pipeline.commit, 24)}
-            </span>
+            {pipeline.commit ? (
+              <Link
+                to={findingsPath({ product: pipeline.productId, project_version: pipeline.commit })}
+                className="aist-clickable-text font-mono"
+                title={pipeline.commit}
+              >
+                {truncateText(pipeline.commit, 24)}
+              </Link>
+            ) : (
+              <span className="text-slate-200">—</span>
+            )}
           </div>
         </div>
       </div>
@@ -92,7 +122,7 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
       </div>
 
       <Link
-        to={`/?pipeline=${pipeline.id}`}
+        to={findingsPath({ pipeline: pipeline.id, product: pipeline.productId })}
         className="inline-flex rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
       >
         Open Findings
@@ -102,6 +132,7 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
 }
 
 export default function PipelinesPage() {
+  const navigate = useNavigate();
   const projectsQuery = useProjects();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedProductId, setSelectedProductId] = useState<number | undefined>();
@@ -189,7 +220,7 @@ export default function PipelinesPage() {
 
   return (
     <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_1fr]">
-      <div className="lg:sticky lg:top-24 self-start lg:max-h-[calc(100vh-140px)] lg:overflow-auto">
+      <div className="aist-scrollbar lg:sticky lg:top-24 self-start lg:max-h-[calc(100vh-140px)] lg:overflow-auto">
         <PipelineFilterPanel
           productOptions={productOptions}
           selectedProductId={selectedProductId}
@@ -275,7 +306,16 @@ export default function PipelinesPage() {
                       <span className="text-xs text-slate-400">Pipeline {pipeline.id}</span>
                     </div>
                     <div className="flex items-center gap-2 text-xs text-slate-400">
-                      <span>{pipeline.productName}</span>
+                      <button
+                        type="button"
+                        className="aist-clickable-text"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          navigate(findingsPath({ product: pipeline.productId }));
+                        }}
+                      >
+                        {pipeline.productName}
+                      </button>
                       <span
                         className={[
                           "inline-flex h-6 w-6 items-center justify-center rounded-full border border-night-500 bg-night-800 text-slate-300 transition-transform",
@@ -304,15 +344,33 @@ export default function PipelinesPage() {
                     </div>
                     <div>
                       <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Branch</div>
-                      <div className="text-slate-200" title={pipeline.branch ?? undefined}>
-                        {truncateText(pipeline.branch, 28)}
-                      </div>
+                      {pipeline.branch ? (
+                        <Link
+                          to={findingsPath({ product: pipeline.productId, project_version: pipeline.branch })}
+                          className="aist-clickable-text"
+                          title={pipeline.branch}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          {truncateText(pipeline.branch, 28)}
+                        </Link>
+                      ) : (
+                        <div className="text-slate-200">—</div>
+                      )}
                     </div>
                     <div>
                       <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Commit</div>
-                      <div className="text-slate-200" title={pipeline.commit ?? undefined}>
-                        {truncateText(pipeline.commit, 16)}
-                      </div>
+                      {pipeline.commit ? (
+                        <Link
+                          to={findingsPath({ product: pipeline.productId, project_version: pipeline.commit })}
+                          className="aist-clickable-text font-mono"
+                          title={pipeline.commit}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          {truncateText(pipeline.commit, 16)}
+                        </Link>
+                      ) : (
+                        <div className="text-slate-200">—</div>
+                      )}
                     </div>
                   </div>
                   <div className="mt-3">
@@ -320,7 +378,7 @@ export default function PipelinesPage() {
                   </div>
                   <div className="mt-4 flex gap-2">
                     <Link
-                      to={`/?pipeline=${pipeline.id}`}
+                      to={findingsPath({ pipeline: pipeline.id, product: pipeline.productId })}
                       className="rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
                     >
                       Open Findings

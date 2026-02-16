@@ -53,6 +53,12 @@ def _build_routes() -> dict[str, Any]:
             "SUBPATH",
             "subpath",
         ),
+        "ui_findings_path": "/",
+        "ui_finding_detail_path": "/finding/:id",
+        "ui_products_path": "/products",
+        "ui_pipelines_path": "/pipelines",
+        "ui_search_path": "/search",
+        "ui_settings_path": "/settings",
     }
 
 

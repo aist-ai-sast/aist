@@ -14,7 +14,7 @@
   </div>
 
   <div class="form-group" id="grp_version_text">
-    <label class="control-label">Git hash / ref (for GIT_HASH)</label>
+    <label class="control-label">Git ref / hash (for GIT_BRANCH/GIT_HASH)</label>
     {{ form.version }}
     {% for e in form.version.errors %}<div class="invalid-feedback d-block">{{ e }}</div>{% endfor %}
   </div>

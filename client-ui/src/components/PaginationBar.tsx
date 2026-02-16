@@ -1,6 +1,7 @@
 import { useRef } from "react";
 
 import SelectField from "./SelectField";
+import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
 
 type PaginationBarProps = {
   count: number;
@@ -72,7 +73,7 @@ export default function PaginationBar({
                 className={[
                   "min-w-8 rounded-lg border px-2 py-1 text-xs",
                   item === current
-                    ? "border-brand-500/60 bg-brand-500/20 text-brand-100"
+                    ? ACCENT_SELECTED_CLASS
                     : "border-night-500 bg-night-800 text-slate-200 hover:border-brand-500/40",
                 ].join(" ")}
                 onClick={() => onPageIndexChange(item - 1)}

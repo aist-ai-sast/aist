@@ -96,7 +96,7 @@
 }
 
 .panel-collapse[data-state="open"] {
-  max-height: 1200px;
+  max-height: 9999px;
   opacity: 1;
   transform: translateY(0);
 }
@@ -157,6 +157,50 @@
 .aist-icon-button:hover {
   border-color: rgba(77, 212, 255, 0.5);
   color: #e5f3ff;
+}
+
+.aist-clickable-text {
+  color: #9fb3d6;
+  transition: color 140ms ease;
+  text-decoration: none;
+}
+
+.aist-clickable-text:hover {
+  color: #dbe6fb;
+}
+
+html,
+body,
+.aist-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(63, 85, 123, 0.9) rgba(14, 22, 40, 0.95);
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+.aist-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track,
+.aist-scrollbar::-webkit-scrollbar-track {
+  background: rgba(14, 22, 40, 0.95);
+}
+
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb,
+.aist-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(63, 85, 123, 0.9);
+  border-radius: 9999px;
+  border: 2px solid rgba(14, 22, 40, 0.95);
+}
+
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover,
+.aist-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(86, 114, 158, 0.95);
 }
 
 .date-input {

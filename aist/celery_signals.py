@@ -45,7 +45,7 @@ def create_default_master_version(sender, instance: AISTProject, created: bool, 
         AISTProjectVersion.objects.get_or_create(
             project=instance,
             version=default_branch,
-            defaults={"version_type": VersionType.GIT_HASH},
+            defaults={"version_type": VersionType.GIT_BRANCH},
         )
 
     transaction.on_commit(_create_if_absent)

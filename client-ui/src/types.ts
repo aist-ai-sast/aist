@@ -5,7 +5,9 @@ export type AIVerdict = "true_positive" | "false_positive" | "uncertain";
 export type FindingFilters = {
   productId?: number;
   pipelineId?: string;
-  severity?: Severity;
+  projectVersion?: string;
+  file?: string;
+  severities?: Severity[];
   status?: "enabled" | "disabled";
   riskStates?: RiskState[];
   aiVerdict?: AIVerdict;
@@ -29,6 +31,7 @@ export type Finding = {
   product: string;
   productId?: number;
   date?: string;
+  createdAt?: string;
   filePath: string;
   line: number;
   tool: string;
@@ -40,6 +43,7 @@ export type Finding = {
   snippetPreview?: string;
   riskStates?: RiskState[];
   projectVersionId?: number;
+  projectVersion?: string;
   sourceFileLink?: string;
 };
 

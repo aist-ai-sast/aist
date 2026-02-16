@@ -18,7 +18,7 @@ from dojo.utils import add_breadcrumb
 from aist.ai_filter import apply_ai_filter, get_ai_filter_reference
 from aist.api.launch_configs import ACTION_CREATE_SERIALIZERS
 from aist.forms import AISTPipelineRunForm
-from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus
+from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus, VersionType
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects
 from aist.tasks import run_sast_pipeline
 from aist.utils.action_config import encrypt_action_secret_config
@@ -384,7 +384,10 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                 p = create_pipeline_object(
                     form.cleaned_data["project"],
                     form.cleaned_data.get("project_version")
-                    or form.cleaned_data["project"].versions.order_by("-created").first(),
+                    or form.cleaned_data["project"].versions.filter(version_type=VersionType.GIT_BRANCH).order_by(
+                        "-updated", "-created",
+                    ).first()
+                    or form.cleaned_data["project"].versions.order_by("-updated", "-created").first(),
                     None,
                 )
                 if one_off_actions:

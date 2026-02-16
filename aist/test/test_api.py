@@ -295,6 +295,98 @@ class AISTFindingTagsTests(AISTApiBase):
         self.assertIn(self.finding.id, ids)
         self.assertNotIn(other_finding.id, ids)
 
+    def test_finding_list_filters_by_project_version_and_file(self):
+        pv_hash = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        self.finding.file_path = "src/app/main.py"
+        self.finding.save(update_fields=["file_path"])
+        self.other_finding.file_path = "src/lib/helper.py"
+        self.other_finding.save(update_fields=["file_path"])
+        pv_hash.findings.add(self.finding)
+
+        url = reverse("aist_api:finding_list")
+        resp = self.client.get(url, data={"project_version": pv_hash.version, "file": "main.py"})
+        self.assertEqual(resp.status_code, 200)
+
+        results = resp.data.get("results", [])
+        ids = {row["id"] for row in results}
+        self.assertIn(self.finding.id, ids)
+        self.assertNotIn(self.other_finding.id, ids)
+
+    def test_finding_list_includes_project_version_and_created(self):
+        pv_hash = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+        pv_hash.findings.add(self.finding)
+
+        url = reverse("aist_api:finding_list")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+
+        rows = {row["id"]: row for row in resp.data.get("results", [])}
+        row = rows[self.finding.id]
+        self.assertEqual(row.get("project_version"), pv_hash.version)
+        self.assertIn("created", row)
+
+    def test_finding_list_filters_by_multiple_severities(self):
+        self.other_finding.severity = "Critical"
+        self.other_finding.save(update_fields=["severity"])
+        medium_finding = Finding.objects.create(
+            test=self.test,
+            title="Finding M",
+            severity="Medium",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+
+        url = reverse("aist_api:finding_list")
+        resp = self.client.get(url, data={"severity": "High,Critical"})
+        self.assertEqual(resp.status_code, 200)
+        ids = {row["id"] for row in resp.data.get("results", [])}
+        self.assertIn(self.finding.id, ids)
+        self.assertIn(self.other_finding.id, ids)
+        self.assertNotIn(medium_finding.id, ids)
+
+    def test_finding_list_sql_injection_payloads_do_not_bypass_filters(self):
+        pv_hash = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="dddddddddddddddddddddddddddddddddddddddd",
+        )
+        pv_hash.findings.add(self.finding)
+        self.finding.file_path = "src/app/main.py"
+        self.finding.save(update_fields=["file_path"])
+
+        url = reverse("aist_api:finding_list")
+
+        project_version_injection = self.client.get(
+            url,
+            data={"project_version": "' OR 1=1 --"},
+        )
+        self.assertEqual(project_version_injection.status_code, 200)
+        self.assertEqual(project_version_injection.data.get("results", []), [])
+
+        file_injection = self.client.get(
+            url,
+            data={"file": "' OR 1=1 --"},
+        )
+        self.assertEqual(file_injection.status_code, 200)
+        self.assertEqual(file_injection.data.get("results", []), [])
+
+        severity_injection = self.client.get(
+            url,
+            data={"severity": "High,' OR 1=1 --"},
+        )
+        self.assertEqual(severity_injection.status_code, 200)
+        ids = {row["id"] for row in severity_injection.data.get("results", [])}
+        self.assertIn(self.finding.id, ids)
+        self.assertNotIn(self.other_finding.id, ids)
+
 
 class AISTProductSummaryTests(AISTApiBase):
     def setUp(self):

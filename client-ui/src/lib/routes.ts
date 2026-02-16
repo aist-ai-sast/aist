@@ -13,6 +13,12 @@ type RouteMap = {
   pipelines_summary_url: string;
   pipeline_export_url: string;
   project_version_file_url: string;
+  ui_findings_path: string;
+  ui_finding_detail_path: string;
+  ui_products_path: string;
+  ui_pipelines_path: string;
+  ui_search_path: string;
+  ui_settings_path: string;
 };
 
 declare global {
@@ -31,6 +37,7 @@ export function getRoute(name: keyof RouteMap, params?: Record<string, string | 
   if (params) {
     Object.entries(params).forEach(([key, value]) => {
       url = url.replace(`{${key}}`, encodeURIComponent(String(value)));
+      url = url.replace(`:${key}`, encodeURIComponent(String(value)));
     });
   }
   return url;

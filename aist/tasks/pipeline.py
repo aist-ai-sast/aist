@@ -92,6 +92,14 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
             params = PipelineArguments.from_dict(params)
 
         logger.info(f"Project version: {params.project_version}")
+        param_project_version_id = (params.project_version or {}).get("id")
+        if pipeline and pipeline.project_version_id and param_project_version_id:
+            if int(pipeline.project_version_id) != int(param_project_version_id):
+                msg = (
+                    "Pipeline project_version mismatch: "
+                    f"pipeline={pipeline.project_version_id} params={param_project_version_id}"
+                )
+                raise ValueError(msg)
         if params.project_version and "id" in params.project_version:
             project_version = AISTProjectVersion.objects.get(pk=params.project_version["id"])
             project_version.ensure_extracted()
@@ -100,6 +108,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         project_name = params.project_name
         languages = params.languages
         project_version = params.project_version
+        project_version_descriptor = params.build_project_version_descriptor()
         output_dir = params.output_dir
         rebuild_images = params.rebuild_images
         analyzers = params.analyzers
@@ -144,19 +153,20 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         if resolved_commit:
             with transaction.atomic():
                 p2 = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+                pipeline_update_fields = ["updated"]
 
-                # store per-run resolved sha (this makes runs on same branch distinguishable)
-                p2.resolved_commit = resolved_commit
-                p2.save(update_fields=["resolved_commit", "updated"])
-
-                # also update the version's last known resolved commit (optional, for visibility)
                 pv_id = p2.project_version_id
                 if pv_id:
-                    pv = AISTProjectVersion.objects.select_for_update().get(pk=pv_id)
-                    if pv.version_type == VersionType.GIT_HASH:
-                        pv.last_resolved_commit = resolved_commit
-                        pv.last_resolved_at = timezone.now()
-                        pv.save(update_fields=["last_resolved_commit", "last_resolved_at", "updated"])
+                    resolved_version = params.resolve_effective_project_version(
+                        resolved_commit=resolved_commit,
+                    )
+                    if resolved_version and p2.project_version_id != resolved_version.id:
+                        p2.project_version = resolved_version
+                        pipeline_update_fields.append("project_version")
+                    if resolved_version:
+                        project_version_descriptor = params.build_project_version_descriptor()
+
+                p2.save(update_fields=pipeline_update_fields)
 
         with transaction.atomic():
             pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
@@ -196,6 +206,14 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         )
 
         test_ids = [t.id for t in tests]
+        if test_ids and pipeline and pipeline.project_version_id:
+            with transaction.atomic():
+                pv = AISTProjectVersion.objects.select_for_update().get(id=pipeline.project_version_id)
+                pv.findings.add(*finding_ids)
+                if pv.version_type == VersionType.GIT_HASH and pv.resolved_from_branch_id:
+                    parent = AISTProjectVersion.objects.select_for_update().get(id=pv.resolved_from_branch_id)
+                    parent.findings.add(*finding_ids)
+
         if not finding_ids:
             with transaction.atomic():
                 pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
@@ -205,7 +223,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         else:
             raise self.replace(
                 postprocess_findings(
-                    pipeline_id, finding_ids, trim_path, test_ids, log_level, project_version,
+                    pipeline_id, finding_ids, trim_path, test_ids, log_level, project_version_descriptor,
                 ),
             )
     except Ignore:

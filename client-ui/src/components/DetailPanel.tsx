@@ -3,6 +3,8 @@ import { useExportAiResults } from "../lib/mutations";
 import { useToast } from "./ToastProvider";
 import FindingStatusActions from "./FindingStatusActions";
 import FindingDetailTabs from "./FindingDetailTabs";
+import { Link } from "react-router-dom";
+import { getRoute } from "../lib/routes";
 
 type DetailPanelProps = {
   finding?: Finding;
@@ -13,6 +15,8 @@ type DetailPanelProps = {
   onToggleTag?: (tag: string) => void;
   selectedCwe?: string;
   onToggleCwe?: (cwe: string) => void;
+  onCloseApplied?: (findingId: number, reason: "mitigated" | "false_positive" | "out_of_scope" | "duplicate") => void;
+  onReopened?: (findingId: number) => void;
 };
 
 export default function DetailPanel({
@@ -24,6 +28,8 @@ export default function DetailPanel({
   onToggleTag,
   selectedCwe,
   onToggleCwe,
+  onCloseApplied,
+  onReopened,
 }: DetailPanelProps) {
   const exportAi = useExportAiResults();
   const toast = useToast();
@@ -106,11 +112,15 @@ export default function DetailPanel({
         />
       </div>
       <div className="mt-4 flex items-center justify-between gap-3">
-        <FindingStatusActions finding={finding} />
+        <FindingStatusActions
+          finding={finding}
+          onApplied={(reason) => onCloseApplied?.(finding.id, reason)}
+          onReopened={() => onReopened?.(finding.id)}
+        />
       </div>
-      <a href={`/finding/${finding.id}`} className="mt-4 inline-flex text-sm text-brand-500">
+      <Link to={getRoute("ui_finding_detail_path", { id: finding.id })} className="mt-4 inline-flex text-sm text-brand-500">
         Open full detail →
-      </a>
+      </Link>
     </>
   );
 

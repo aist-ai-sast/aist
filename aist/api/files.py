@@ -25,6 +25,7 @@ from aist.utils.pipeline import get_project_build_path
 # ----------------------------
 ERR_FILE_NOT_FOUND_IN_ARCHIVE = "File not found in version archive"
 ERR_FILE_NOT_FOUND_IN_REPOSITORY = "File not found in remote repository"
+ERR_BRANCH_HAS_NO_RESOLVED_COMMIT = "Branch has no resolved commit yet"
 
 
 class _NoBodySerializer(serializers.Serializer):
@@ -116,8 +117,13 @@ class ProjectVersionFileBlobAPI(generics.GenericAPIView):
         if project_version.version_type == VersionType.FILE_HASH:
             return self._return_local_file(project_version, subpath)
 
-        # --- Case 2: Git-based version (GIT_HASH) ---
-        ref = (project_version.version or "master").strip()
+        # --- Case 2: Git-based version (GIT_BRANCH/GIT_HASH) ---
+        if project_version.version_type == VersionType.GIT_BRANCH:
+            ref = (project_version.last_resolved_commit or "").strip()
+            if not ref:
+                ref = (project_version.version or "master").strip()
+        else:
+            ref = (project_version.version or "master").strip()
         repo_obj = getattr(project_version.project, "repository", None)
 
         link_builder = LinkBuilder({"id": project_version.id})
@@ -136,7 +142,7 @@ class ProjectVersionFileBlobAPI(generics.GenericAPIView):
         # --- Case 3: No repository_info, use local build path + repo_info ---
         try:
             repo_path = get_project_build_path(project_version.project.product.name,
-                                               project_version.version or "default")
+                                               ref or "default")
         except RuntimeError:
             return HttpResponseServerError()
 

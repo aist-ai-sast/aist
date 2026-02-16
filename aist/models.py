@@ -35,6 +35,9 @@ _repo_part_validator = RegexValidator(
 ERR_FILEHASH_REQUIRES_SOURCE = "For FILE_HASH version type, source_archive is required."
 ERR_VERSION_ALREADY_EXISTS = "This version already exists for the selected project."
 ERR_UNSUPPORTED_ARCHIVE = "Unsupported archive format: not a ZIP or TAR.*"
+ERR_GITHASH_PARENT_MUST_BE_BRANCH = "resolved_from_branch must point to a GIT_BRANCH version."
+ERR_GITHASH_PARENT_PROJECT_MISMATCH = "resolved_from_branch must belong to the same project."
+ERR_RESOLVED_FROM_BRANCH_ONLY_FOR_GITHASH = "resolved_from_branch is allowed only for GIT_HASH versions."
 
 gh = GitHubRouter()
 
@@ -319,6 +322,7 @@ class AISTProject(models.Model):
 
 
 class VersionType(models.TextChoices):
+    GIT_BRANCH = "GIT_BRANCH", "Git branch"
     GIT_HASH = "GIT_HASH", "Git commit/hash"
     FILE_HASH = "FILE_HASH", "File hash (uploaded archive)"
 
@@ -332,13 +336,21 @@ class AISTProjectVersion(models.Model):
     last_resolved_at = models.DateTimeField(null=True, blank=True)
     description = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
+    findings = models.ManyToManyField(Finding, related_name="aist_project_versions", blank=True)
+    resolved_from_branch = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="resolved_hash_versions",
+    )
 
     created = models.DateTimeField(auto_now_add=True, editable=False)
     updated = models.DateTimeField(auto_now=True)
     version_type = models.CharField(
         max_length=16,
         choices=VersionType.choices,
-        default=VersionType.GIT_HASH,
+        default=VersionType.GIT_BRANCH,
         db_index=True,
     )
 
@@ -351,8 +363,8 @@ class AISTProjectVersion(models.Model):
     class Meta:  # noqa: DJ012
         constraints = [
             models.UniqueConstraint(
-                fields=["project", "version"],
-                name="uniq_project_version_per_project",
+                fields=["project", "version", "version_type"],
+                name="uniq_project_version_type_per_project",
             ),
         ]
         ordering = ["-created"]
@@ -380,6 +392,16 @@ class AISTProjectVersion(models.Model):
                 ).exclude(pk=self.pk).exists()
                 if exists:
                     raise ValidationError({"version": ERR_VERSION_ALREADY_EXISTS})
+
+        if self.resolved_from_branch_id and self.version_type != VersionType.GIT_HASH:
+            raise ValidationError({"resolved_from_branch": ERR_RESOLVED_FROM_BRANCH_ONLY_FOR_GITHASH})
+
+        if self.version_type == VersionType.GIT_HASH and self.resolved_from_branch_id:
+            parent = self.resolved_from_branch
+            if parent.version_type != VersionType.GIT_BRANCH:
+                raise ValidationError({"resolved_from_branch": ERR_GITHASH_PARENT_MUST_BE_BRANCH})
+            if parent.project_id != self.project_id:
+                raise ValidationError({"resolved_from_branch": ERR_GITHASH_PARENT_PROJECT_MISMATCH})
 
     def as_dict(self):
         return {
@@ -421,7 +443,7 @@ class AISTProjectVersion(models.Model):
         return (self.version or "").strip()
 
     def is_git(self) -> bool:
-        return self.version_type == VersionType.GIT_HASH
+        return self.version_type in {VersionType.GIT_BRANCH, VersionType.GIT_HASH}
 
     def ensure_extracted(self) -> Path | None:
         """
@@ -500,7 +522,6 @@ class AISTPipeline(models.Model):
         db_index=True,
         null=True, blank=True,
     )
-    resolved_commit = models.CharField(max_length=40, blank=True, default="")
     status = models.CharField(max_length=64, choices=AISTStatus.choices, default=AISTStatus.FINISHED)
 
     tests = models.ManyToManyField(Test, related_name="aist_pipelines", blank=True)

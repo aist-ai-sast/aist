@@ -164,13 +164,15 @@ export default function CodeSnippet({
           <div className="px-4 py-3 text-xs text-slate-400">Loading code viewer...</div>
         }
       >
+        <div className={expanded ? "max-h-[70vh] overflow-auto" : ""}>
         <MonacoEditor
-          height={Math.max(160, (snippetText.split("\n").length + 1) * 18)}
+          height={expanded ? "70vh" : Math.max(160, (snippetText.split("\n").length + 1) * 18)}
           theme="vs-dark"
           language={language}
           value={snippetText}
           options={{
             readOnly: true,
+            automaticLayout: true,
             minimap: { enabled: false },
             scrollBeyondLastLine: false,
             lineNumbers,
@@ -182,8 +184,8 @@ export default function CodeSnippet({
             occurrencesHighlight: "off",
             renderValidationDecorations: "off",
             scrollbar: {
-              vertical: "hidden",
-              horizontal: "hidden",
+              vertical: "auto",
+              horizontal: "auto",
             },
             fontSize: 12,
             fontFamily: "IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -210,6 +212,7 @@ export default function CodeSnippet({
             applyHighlight();
           }}
         />
+        </div>
       </Suspense>
     </div>
   );

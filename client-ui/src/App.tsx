@@ -72,18 +72,18 @@ export default function App() {
             <Topbar />
             <main className="flex-1 min-h-0 px-4 py-4 pb-20 lg:px-8 lg:py-6">
               <Routes>
-                <Route path="/" element={<FindingsPage />} />
-                <Route path="/finding/:id" element={<FindingDetailPage />} />
+                <Route path={getRoute("ui_findings_path")} element={<FindingsPage />} />
+                <Route path={getRoute("ui_finding_detail_path")} element={<FindingDetailPage />} />
                 <Route
-                  path="/products"
+                  path={getRoute("ui_products_path")}
                   element={<ProductsPage />}
                 />
                 <Route
-                  path="/pipelines"
+                  path={getRoute("ui_pipelines_path")}
                   element={<PipelinesPage />}
                 />
                 <Route
-                  path="/search"
+                  path={getRoute("ui_search_path")}
                   element={
                     <PlaceholderPage
                       title="Search"
@@ -92,7 +92,7 @@ export default function App() {
                   }
                 />
                 <Route
-                  path="/settings"
+                  path={getRoute("ui_settings_path")}
                   element={
                     <PlaceholderPage
                       title="Settings"

@@ -8,8 +8,8 @@ type FindingCardProps = {
   onSelect: (finding: Finding) => void;
   isOpen?: boolean;
   expandedContent?: React.ReactNode;
-  selectedTags?: string[];
-  onToggleTag?: (tag: string) => void;
+  onSelectProjectVersion?: (projectVersion: string) => void;
+  onSelectFile?: (filePath: string) => void;
 };
 
 const severityStyles: Record<Finding["severity"], string> = {
@@ -33,12 +33,14 @@ export default function FindingCard({
   onSelect,
   isOpen = false,
   expandedContent,
-  selectedTags = [],
-  onToggleTag,
+  onSelectProjectVersion,
+  onSelectFile,
 }: FindingCardProps) {
-  const tags = finding.tags ?? [];
-  const visibleTags = tags.slice(0, 6);
-  const hiddenTags = tags.length > visibleTags.length ? tags.length - visibleTags.length : 0;
+  const createdLabel = finding.createdAt
+    ? new Date(finding.createdAt).toLocaleString()
+    : finding.date
+      ? new Date(finding.date).toLocaleString()
+      : null;
   return (
     <article
       className={[
@@ -123,39 +125,39 @@ export default function FindingCard({
         {finding.title}
       </div>
       <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-400">
-        <span className="max-w-full truncate" title={finding.filePath}>
+        <button
+          type="button"
+          className="aist-clickable-text max-w-full truncate text-left"
+          title={finding.filePath}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelectFile?.(finding.filePath);
+          }}
+        >
           {finding.filePath}
-        </span>
+        </button>
         <span>Line {finding.line}</span>
+        {finding.projectVersion ? (
+          <button
+            type="button"
+            className="aist-clickable-text inline-flex items-center gap-1"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelectProjectVersion?.(finding.projectVersion);
+            }}
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M7 6a3 3 0 1 1 2.83 4H9v4h1a3 3 0 1 1 0 2H9a2 2 0 0 1-2-2v-4a3 3 0 0 1 0-4Z"
+              />
+            </svg>
+            {finding.projectVersion}
+          </button>
+        ) : null}
+        {createdLabel ? <span>Created {createdLabel}</span> : null}
         {finding.aiVerdict ? <span>{verdictLabel[finding.aiVerdict]}</span> : null}
       </div>
-      {tags.length ? (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {visibleTags.map((tag) => (
-            <button
-              key={tag}
-              type="button"
-              className={[
-                "rounded-full border px-3 py-1 text-xs transition",
-                selectedTags.includes(tag)
-                  ? "border-brand-600/70 bg-brand-600/20 text-brand-400"
-                  : "border-night-500 bg-night-900 text-slate-200 hover:border-brand-600/40",
-              ].join(" ")}
-              onClick={(event) => {
-                event.stopPropagation();
-                onToggleTag?.(tag);
-              }}
-            >
-              {tag}
-            </button>
-          ))}
-          {hiddenTags ? (
-            <span className="rounded-full border border-night-500 bg-night-900 px-3 py-1 text-xs text-slate-400">
-              +{hiddenTags}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
       <div className="mt-3">
         {isOpen ? (
           <div

@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import type { Finding } from "../types";
-import { useCloseFinding } from "../lib/mutations";
+import { useCloseFinding, useUpdateFindingStatus } from "../lib/mutations";
 import { useToast } from "./ToastProvider";
 import SelectField from "./SelectField";
 import PermissionGate from "./PermissionGate";
@@ -17,45 +17,75 @@ const reasonOptions: { value: CloseReason; label: string }[] = [
 
 type FindingStatusActionsProps = {
   finding: Finding;
+  onApplied?: (reason: CloseReason) => void;
+  onReopened?: () => void;
 };
 
-export default function FindingStatusActions({ finding }: FindingStatusActionsProps) {
+export default function FindingStatusActions({ finding, onApplied, onReopened }: FindingStatusActionsProps) {
   const toast = useToast();
   const closeFinding = useCloseFinding();
+  const updateFindingStatus = useUpdateFindingStatus();
   const [reason, setReason] = useState<CloseReason>("mitigated");
 
   return (
     <div className="mt-4">
       <PermissionGate action="enable" productId={finding.productId}>
         <div className="flex flex-wrap items-end gap-2">
-          <div className="w-56">
-            <SelectField
-              label="Close Action"
-              value={reason}
-              onChange={(value) => setReason(value as CloseReason)}
-              options={reasonOptions}
-            />
-          </div>
-          <button
-            className="h-10 rounded-xl bg-brand-500 px-4 text-xs font-semibold text-night-900 disabled:opacity-50"
-            onClick={() =>
-              closeFinding.mutate(
-                { id: finding.id, reason },
-                {
-                  onSuccess: () => {
-                    toast.push("Finding closed.", "success");
+          {finding.active ? (
+            <div className="w-56">
+              <SelectField
+                label="Close Action"
+                value={reason}
+                onChange={(value) => setReason(value as CloseReason)}
+                options={reasonOptions}
+              />
+            </div>
+          ) : null}
+          {finding.active ? (
+            <button
+              className="h-10 rounded-xl bg-brand-500 px-4 text-xs font-semibold text-night-900 disabled:opacity-50"
+              onClick={() =>
+                closeFinding.mutate(
+                  { id: finding.id, reason },
+                  {
+                    onSuccess: () => {
+                      onApplied?.(reason);
+                      toast.push("Finding closed.", "success");
+                    },
+                    onError: (error) => {
+                      const message = error instanceof Error ? error.message : String(error);
+                      toast.push(`Close failed: ${message}`, "error");
+                    },
                   },
-                  onError: (error) => {
-                    const message = error instanceof Error ? error.message : String(error);
-                    toast.push(`Close failed: ${message}`, "error");
+                )
+              }
+              disabled={closeFinding.isPending}
+            >
+              Apply
+            </button>
+          ) : (
+            <button
+              className="h-10 rounded-xl border border-brand-600/50 bg-transparent px-4 text-xs font-semibold text-brand-300 disabled:opacity-50"
+              onClick={() =>
+                updateFindingStatus.mutate(
+                  { id: finding.id, active: true, clearCloseFlags: true },
+                  {
+                    onSuccess: () => {
+                      onReopened?.();
+                      toast.push("Finding reopened.", "success");
+                    },
+                    onError: (error) => {
+                      const message = error instanceof Error ? error.message : String(error);
+                      toast.push(`Reopen failed: ${message}`, "error");
+                    },
                   },
-                },
-              )
-            }
-            disabled={!finding.active || closeFinding.isPending}
-          >
-            Apply
-          </button>
+                )
+              }
+              disabled={updateFindingStatus.isPending}
+            >
+              Reopen
+            </button>
+          )}
         </div>
       </PermissionGate>
     </div>

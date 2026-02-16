@@ -6,10 +6,25 @@ import { getRoute } from "./routes";
 export function useUpdateFindingStatus() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, active }: { id: number; active: boolean }) => {
+    mutationFn: async ({
+      id,
+      active,
+      clearCloseFlags,
+    }: {
+      id: number;
+      active: boolean;
+      clearCloseFlags?: boolean;
+    }) => {
+      const payload: Record<string, unknown> = { active };
+      if (clearCloseFlags) {
+        payload.is_mitigated = false;
+        payload.false_p = false;
+        payload.out_of_scope = false;
+        payload.duplicate = false;
+      }
       return fetchJson(getRoute("finding_detail_url", { id }), {
         method: "PATCH",
-        body: JSON.stringify({ active }),
+        body: JSON.stringify(payload),
       });
     },
     onSuccess: () => {

@@ -1,9 +1,11 @@
 import { Link, useParams } from "react-router-dom";
+import { useState } from "react";
 import FindingDetailTabs from "../components/FindingDetailTabs";
 import {
   useAiResponse,
   useEngagementProduct,
   useFinding,
+  useFindingProjectVersion,
   usePipelines,
   useProjectMeta,
   useProjects,
@@ -12,13 +14,16 @@ import {
 import { useExportAiResults } from "../lib/mutations";
 import { useToast } from "../components/ToastProvider";
 import FindingStatusActions from "../components/FindingStatusActions";
+import { getRoute } from "../lib/routes";
 
 export default function FindingDetailPage() {
   const params = useParams();
   const findingId = params.id ? Number(params.id) : undefined;
   const findingQuery = useFinding(findingId);
   const projectsQuery = useProjects();
-  const finding = findingQuery.data ?? undefined;
+  const [localFindingOverride, setLocalFindingOverride] = useState<Partial<NonNullable<typeof findingQuery.data>>>({});
+  const finding = findingQuery.data ? { ...findingQuery.data, ...localFindingOverride } : undefined;
+  const findingProjectVersionQuery = useFindingProjectVersion(findingId);
   const exportAi = useExportAiResults();
   const toast = useToast();
 
@@ -34,6 +39,26 @@ export default function FindingDetailPage() {
   const projectVersionId = metaQuery.data?.versions?.length
     ? Number(metaQuery.data.versions[metaQuery.data.versions.length - 1].id)
     : undefined;
+  const latestMetaVersion = metaQuery.data?.versions?.length
+    ? metaQuery.data.versions[metaQuery.data.versions.length - 1]
+    : undefined;
+  const normalizedMetaVersion = latestMetaVersion?.label?.replace(/^\d+:\s*/, "");
+  const resolvedProjectVersion =
+    finding?.projectVersion ?? findingProjectVersionQuery.data ?? normalizedMetaVersion;
+  const findingsFilterLink = ({
+    projectVersion,
+    file,
+  }: {
+    projectVersion?: string;
+    file?: string;
+  }) => {
+    const params = new URLSearchParams();
+    if (resolvedProductId) params.set("product", String(resolvedProductId));
+    if (projectVersion) params.set("project_version", projectVersion);
+    if (file) params.set("file", file);
+    const query = params.toString();
+    return query ? `${getRoute("ui_findings_path")}?${query}` : getRoute("ui_findings_path");
+  };
 
   if (findingQuery.isLoading) {
     return (
@@ -46,7 +71,7 @@ export default function FindingDetailPage() {
   if (!finding) {
     return (
       <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-        Finding not found. <Link to="/">Back to Findings</Link>
+        Finding not found. <Link to={getRoute("ui_findings_path")}>Back to Findings</Link>
       </div>
     );
   }
@@ -64,6 +89,29 @@ export default function FindingDetailPage() {
           <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-400">
             <span>Product: {productName ?? finding.product}</span>
             {finding.cwe ? <span>CWE: {finding.cwe}</span> : null}
+            {resolvedProjectVersion ? (
+              <Link
+                to={findingsFilterLink({ projectVersion: resolvedProjectVersion })}
+                className="aist-clickable-text inline-flex items-center gap-1"
+              >
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M7 6a3 3 0 1 1 2.83 4H9v4h1a3 3 0 1 1 0 2H9a2 2 0 0 1-2-2v-4a3 3 0 0 1 0-4Z"
+                  />
+                </svg>
+                Version: {resolvedProjectVersion}
+              </Link>
+            ) : null}
+            {finding.filePath ? (
+              <Link
+                to={findingsFilterLink({ file: finding.filePath })}
+                className="aist-clickable-text max-w-full truncate"
+                title={finding.filePath}
+              >
+                File: {finding.filePath}
+              </Link>
+            ) : null}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <span
@@ -115,7 +163,27 @@ export default function FindingDetailPage() {
           </div>
         </div>
         <div className="flex items-end gap-3">
-          <FindingStatusActions finding={finding} />
+          <FindingStatusActions
+            finding={finding}
+            onApplied={(reason) => {
+              setLocalFindingOverride({
+                active: false,
+                isMitigated: reason === "mitigated",
+                falsePositive: reason === "false_positive",
+                outOfScope: reason === "out_of_scope",
+                duplicate: reason === "duplicate",
+              });
+            }}
+            onReopened={() => {
+              setLocalFindingOverride({
+                active: true,
+                isMitigated: false,
+                falsePositive: false,
+                outOfScope: false,
+                duplicate: false,
+              });
+            }}
+          />
           <button
             className="aist-icon-button h-10 disabled:opacity-50"
             onClick={() => {
