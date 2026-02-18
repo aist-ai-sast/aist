@@ -476,6 +476,84 @@ class AIFindingResponseAPITests(AISTApiBase):
         self.assertTrue(AISTAIFindingResponse.objects.filter(pipeline=pipeline, finding=finding).exists())
 
 
+class AISTFindingAIFilterTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.engagement = Engagement.objects.create(
+            name="Engage AI filter",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        self.test_type = Test_Type.objects.create(name="Semgrep ai filter")
+        self.test = Test.objects.create(
+            engagement=self.engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=self.test_type,
+        )
+        self.finding_with_ai = Finding.objects.create(
+            test=self.test,
+            title="Finding with AI",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        self.finding_without_ai = Finding.objects.create(
+            test=self.test,
+            title="Finding without AI",
+            severity="Low",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        self.pipeline = AISTPipeline.objects.create(
+            id="pipe-ai-filter",
+            project=self.project,
+            status=AISTStatus.FINISHED,
+        )
+        self.pipeline.tests.add(self.test)
+        ai_response = AISTAIResponse.objects.create(pipeline=self.pipeline, payload={"results": {}})
+        AISTAIFindingResponse.objects.create(
+            pipeline=self.pipeline,
+            source_response=ai_response,
+            finding=self.finding_with_ai,
+            verdict=AISTAIFindingResponse.Verdict.TRUE_POSITIVE,
+            title="AI title",
+            summary="AI reasoning",
+        )
+
+    def test_finding_list_filters_has_ai_response(self):
+        resp = self.client.get(
+            reverse("aist_api:finding_list"),
+            data={"test__engagement__product": self.product.id, "ai_response": "has_ai"},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        ids = [row["id"] for row in resp.data["results"]]
+        self.assertIn(self.finding_with_ai.id, ids)
+        self.assertNotIn(self.finding_without_ai.id, ids)
+        self.assertEqual(resp.data["count"], 1)
+
+    def test_finding_list_filters_no_ai_response(self):
+        resp = self.client.get(
+            reverse("aist_api:finding_list"),
+            data={"test__engagement__product": self.product.id, "ai_response": "no_ai"},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        ids = [row["id"] for row in resp.data["results"]]
+        self.assertIn(self.finding_without_ai.id, ids)
+        self.assertNotIn(self.finding_with_ai.id, ids)
+        self.assertEqual(resp.data["count"], 1)
+
+    def test_finding_list_rejects_invalid_ai_response_filter(self):
+        resp = self.client.get(
+            reverse("aist_api:finding_list"),
+            data={"test__engagement__product": self.product.id, "ai_response": "invalid"},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+
 class AISTFindingTagsTests(AISTApiBase):
     def setUp(self):
         super().setUp()
@@ -736,6 +814,17 @@ class AISTPipelineSummaryTests(AISTApiBase):
     def setUp(self):
         super().setUp()
         self.client.force_login(self.user)
+        self.branch_version = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_BRANCH,
+            version="release/main",
+        )
+        self.hash_version = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="deadbeef123",
+            resolved_from_branch=self.branch_version,
+        )
         self.engagement = Engagement.objects.create(
             name="Engage",
             target_start=timezone.now(),
@@ -756,6 +845,7 @@ class AISTPipelineSummaryTests(AISTApiBase):
             project=self.project,
             status=AISTStatus.FINISHED,
             launch_data={"action_runs": [{"action_type": "export", "status": "performed"}]},
+            project_version=self.hash_version,
         )
         self.pipeline.tests.add(self.test)
         Finding.objects.create(
@@ -773,8 +863,8 @@ class AISTPipelineSummaryTests(AISTApiBase):
         row = next((item for item in results if item["id"] == self.pipeline.id), None)
         self.assertIsNotNone(row)
         self.assertEqual(row["status"], AISTStatus.FINISHED)
-        self.assertEqual(row["branch"], "main")
-        self.assertEqual(row["commit"], "abc123")
+        self.assertEqual(row["branch"], "release/main")
+        self.assertEqual(row["commit"], "deadbeef123")
         self.assertEqual(row["findings"], 1)
 
     def test_pipeline_filter_findings(self):

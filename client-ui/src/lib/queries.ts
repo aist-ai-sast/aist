@@ -194,6 +194,7 @@ export function useFindingsPage(filters: FindingFilters) {
         ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
         ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
         ...(filters.file ? { file: filters.file } : {}),
+        ...(filters.aiResponse ? { ai_response: filters.aiResponse } : {}),
         ...(filters.severities?.length
           ? { severity: filters.severities.join(",") }
           : {}),
@@ -266,6 +267,7 @@ export function useFindingsWithFilters(filters: FindingFilters) {
         ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
         ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
         ...(filters.file ? { file: filters.file } : {}),
+        ...(filters.aiResponse ? { ai_response: filters.aiResponse } : {}),
         ...(filters.severities?.length
           ? { severity: filters.severities.join(",") }
           : {}),

@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from dojo.api_v2 import serializers as dojo_serializers
 from dojo.authorization.roles_permissions import Permissions
 from dojo.filters import ApiFindingFilter
 from dojo.finding.queries import get_authorized_findings
 from drf_spectacular.utils import OpenApiParameter, extend_schema
+from rest_framework import status
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from aist.models import VersionType
+from aist.models import AISTAIFindingResponse, VersionType
 from aist.queries import get_authorized_aist_pipelines
-
-if TYPE_CHECKING:
-    from rest_framework.response import Response
 
 
 def _parse_tags(request) -> list[str]:
@@ -67,6 +64,7 @@ class AISTFindingListAPI(APIView):
             OpenApiParameter(name="severity", required=False, type=str, many=True),
             OpenApiParameter(name="project_version", required=False, type=str),
             OpenApiParameter(name="file", required=False, type=str),
+            OpenApiParameter(name="ai_response", required=False, type=str, description="All | has_ai | no_ai"),
             OpenApiParameter(name="ordering", required=False, type=str),
             OpenApiParameter(name="limit", required=False, type=int),
             OpenApiParameter(name="offset", required=False, type=int),
@@ -78,6 +76,7 @@ class AISTFindingListAPI(APIView):
             "tags", "aist_project_versions",
         )
         pipeline_id = request.query_params.get("pipeline_id")
+        pipeline = None
         if pipeline_id:
             pipeline = (
                 get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
@@ -85,6 +84,20 @@ class AISTFindingListAPI(APIView):
                 .first()
             )
             queryset = queryset.filter(test__aist_pipelines=pipeline) if pipeline else queryset.none()
+
+        ai_response = (request.query_params.get("ai_response") or "").strip().lower()
+        if ai_response:
+            if ai_response not in {"has_ai", "no_ai"}:
+                return Response({"detail": "ai_response must be one of: has_ai, no_ai"}, status=status.HTTP_400_BAD_REQUEST)
+            ai_qs = AISTAIFindingResponse.objects
+            if pipeline:
+                ai_qs = ai_qs.filter(pipeline_id=pipeline.id)
+            ai_finding_ids = ai_qs.values_list("finding_id", flat=True)
+            if ai_response == "has_ai":
+                queryset = queryset.filter(id__in=ai_finding_ids)
+            else:
+                queryset = queryset.exclude(id__in=ai_finding_ids)
+            queryset = queryset.distinct()
 
         tags = _parse_tags(request)
         if tags:
@@ -112,6 +125,8 @@ class AISTFindingListAPI(APIView):
             params.pop("file")
         if "severity" in params:
             params.pop("severity")
+        if "ai_response" in params:
+            params.pop("ai_response")
         ordering = params.get("ordering")
         if ordering and not params.get("o"):
             params["o"] = ordering

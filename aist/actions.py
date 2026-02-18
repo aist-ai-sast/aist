@@ -16,6 +16,7 @@ from aist.models import AISTLaunchConfigAction, AISTPipeline
 from aist.notifications import AISTSlackNotificationManager
 from aist.utils.action_config import decrypt_action_secret_config
 from aist.utils.export import build_ai_export_csv_text
+from aist.utils.project_version_refs import resolve_project_version_git_refs
 from aist.utils.urls import get_public_base_url
 
 logger = logging.getLogger("aist")
@@ -39,11 +40,13 @@ class BaseAction:
 
     def _build_simple_message(self, *, pipeline: AISTPipeline, new_status: str) -> str:
         project_name = self._get_project_name(pipeline)
+        branch = self._get_branch(pipeline)
         commit = self._get_commit(pipeline)
         findings_url = self._build_pipeline_findings_url(pipeline)
         return (
             f"AIST pipeline {pipeline.id} status changed to {new_status}.\n"
             f"Project: {project_name}\n"
+            f"Branch: {branch}\n"
             f"Commit: {commit}\n"
             f"Findings: {findings_url}"
         )
@@ -75,6 +78,7 @@ class BaseAction:
                 f"*Status:* {new_status}\n"
                 f"*Project:* {self._get_project_name(pipeline)}\n"
                 f"*Project version:* {version_text}\n"
+                f"*Branch:* {self._get_branch(pipeline)}\n"
                 f"*Commit:* {self._get_commit(pipeline)}\n"
                 f"*Duration:* {duration}\n"
                 f"*Findings total:* {total_findings}\n"
@@ -86,6 +90,7 @@ class BaseAction:
             f"Status: {new_status}\n"
             f"Project: {self._get_project_name(pipeline)}\n"
             f"Project version: {version_text}\n"
+            f"Branch: {self._get_branch(pipeline)}\n"
             f"Commit: {self._get_commit(pipeline)}\n"
             f"Duration: {duration}\n"
             f"Findings total: {total_findings}\n"
@@ -98,15 +103,14 @@ class BaseAction:
         return pipeline.project.product.name
 
     @staticmethod
+    def _get_branch(pipeline: AISTPipeline) -> str:
+        refs = resolve_project_version_git_refs(pipeline.project_version)
+        return refs.branch or "unknown"
+
+    @staticmethod
     def _get_commit(pipeline: AISTPipeline) -> str:
-        launch_data = pipeline.launch_data or {}
-        git_meta = launch_data.get("git") or {}
-        resolved_commit = str(git_meta.get("resolved_commit") or "").strip()
-        if resolved_commit:
-            return resolved_commit
-        if pipeline.project_version and pipeline.project_version.version:
-            return str(pipeline.project_version.version)
-        return "unknown"
+        refs = resolve_project_version_git_refs(pipeline.project_version)
+        return refs.commit or "unknown"
 
     @staticmethod
     def _build_pipeline_findings_url(pipeline: AISTPipeline) -> str:
@@ -120,12 +124,16 @@ class BaseAction:
 
     @staticmethod
     def _pipeline_duration(pipeline: AISTPipeline) -> str:
-        if not pipeline.started:
-            return "unknown"
         end = pipeline.updated or timezone.now()
-        if end < pipeline.started:
-            end = pipeline.started
-        seconds = int((end - pipeline.started).total_seconds())
+        start = pipeline.started or pipeline.created
+        if not start:
+            return "unknown"
+        if pipeline.created and start >= end and pipeline.created < end:
+            start = pipeline.created
+        if end < start and pipeline.created:
+            start = pipeline.created
+        end = max(end, start)
+        seconds = int((end - start).total_seconds())
         hours, rem = divmod(seconds, 3600)
         minutes, secs = divmod(rem, 60)
         if hours:

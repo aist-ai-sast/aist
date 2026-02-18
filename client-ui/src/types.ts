@@ -11,6 +11,7 @@ export type FindingFilters = {
   severities?: Severity[];
   status?: "enabled" | "disabled";
   riskStates?: RiskState[];
+  aiResponse?: "has_ai" | "no_ai";
   aiVerdict?: AIVerdict;
   cwe?: string;
   tags?: string[];

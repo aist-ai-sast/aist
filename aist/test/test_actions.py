@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 from types import SimpleNamespace
-from urllib.parse import urlencode
 from unittest.mock import Mock, patch
+from urllib.parse import urlencode
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
@@ -169,8 +169,19 @@ class ActionsTests(TestCase):
     @override_settings(SITE_URL="https://aist.itsec-europe.com")
     @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
     def test_slack_action_default_message_includes_project_commit_and_findings_url(self, mock_post):
-        self.pipeline.launch_data = {"git": {"resolved_commit": "abc123def"}}
-        self.pipeline.save(update_fields=["launch_data"])
+        branch = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_BRANCH,
+            version="main",
+        )
+        hash_version = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="abc123def",
+            resolved_from_branch=branch,
+        )
+        self.pipeline.project_version = hash_version
+        self.pipeline.save(update_fields=["project_version", "updated"])
         action = self._make_action(
             AISTLaunchConfigAction.ActionType.PUSH_TO_SLACK,
             {"channels": ["#alerts"], "include_ai_csv": False},
@@ -181,6 +192,7 @@ class ActionsTests(TestCase):
 
         message = mock_post.call_args.kwargs["message"]
         self.assertIn("Project: Test Product", message)
+        self.assertIn("Branch: main", message)
         self.assertIn("Commit: abc123def", message)
         self.assertIn(
             f"https://aist.itsec-europe.com{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}",
@@ -204,6 +216,55 @@ class ActionsTests(TestCase):
         self.assertIn("Project version:* GIT_HASH:main", message)
         self.assertIn("Severity:* Critical: 1 | High: 1 | Medium: 0 | Low: 1 | Info: 0", message)
 
+    @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
+    def test_slack_common_summary_uses_project_version_branch_commit_and_created_duration_fallback(self, mock_post):
+        branch = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_BRANCH,
+            version="release/main",
+        )
+        hash_version = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="abcdef1234567890",
+            resolved_from_branch=branch,
+        )
+        self.pipeline.project_version = hash_version
+        self.pipeline.save(update_fields=["project_version", "updated"])
+
+        engagement = Engagement.objects.create(
+            name="Engage Summary Branch Commit",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep summary")
+        dd_test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+            branch_tag="release/main",
+            commit_hash="abcdef1234567890",
+        )
+        self.pipeline.tests.add(dd_test)
+        self.pipeline.created = timezone.now() - timedelta(minutes=7, seconds=3)
+        self.pipeline.started = self.pipeline.updated
+        self.pipeline.save(update_fields=["created", "started", "updated"])
+
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.PUSH_TO_SLACK,
+            {"channels": ["#alerts"], "include_common_summary": True},
+            {"slack_token": "xoxb-test"},
+        )
+
+        SlackAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+
+        message = mock_post.call_args.kwargs["message"]
+        self.assertIn("Branch:* release/main", message)
+        self.assertIn("Commit:* abcdef1234567890", message)
+        self.assertNotIn("Duration:* 0s", message)
+
     @patch("aist.actions.EmailNotificationManger.send_mail_notification")
     def test_email_action_requires_ai_response_when_csv_requested(self, mock_send):
         action = self._make_action(
@@ -226,8 +287,19 @@ class ActionsTests(TestCase):
     @override_settings(SITE_URL="https://aist.itsec-europe.com")
     @patch("aist.actions.EmailNotificationManger.send_mail_notification")
     def test_email_action_default_message_includes_project_commit_and_findings_url(self, mock_send):
-        self.pipeline.launch_data = {"git": {"resolved_commit": "abc123def"}}
-        self.pipeline.save(update_fields=["launch_data"])
+        branch = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_BRANCH,
+            version="main",
+        )
+        hash_version = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="abc123def",
+            resolved_from_branch=branch,
+        )
+        self.pipeline.project_version = hash_version
+        self.pipeline.save(update_fields=["project_version", "updated"])
         action = self._make_action(
             AISTLaunchConfigAction.ActionType.SEND_EMAIL,
             {"emails": ["a@example.com"], "include_ai_csv": False},
@@ -238,6 +310,7 @@ class ActionsTests(TestCase):
         kwargs = mock_send.call_args.kwargs
         self.assertIn("Test Product", kwargs["title"])
         self.assertIn("Project: Test Product", kwargs["description"])
+        self.assertIn("Branch: main", kwargs["description"])
         self.assertIn("Commit: abc123def", kwargs["description"])
         self.assertIn(
             f"https://aist.itsec-europe.com{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}",

@@ -40,6 +40,7 @@ export default function FindingsPage() {
   const findingsQuery = useFindingsPage({
     productId: selectedProductId,
     pipelineId: selectedPipelineId,
+    aiResponse: selectedAiResponse === "All" ? undefined : (selectedAiResponse as "has_ai" | "no_ai"),
     projectVersion: selectedProjectVersion || undefined,
     file: selectedFile || undefined,
     severities: selectedSeverities.length ? (selectedSeverities as any) : undefined,
@@ -85,7 +86,7 @@ export default function FindingsPage() {
   const findings = useMemo(() => {
     const raw = findingsQuery.data?.items ?? [];
     const productMap = new Map(projects.map((project) => [project.productId, project.name]));
-    let mapped = raw.map((finding) => {
+    return raw.map((finding) => {
       const override = findingOverrides[finding.id] ?? {};
       return {
         ...finding,
@@ -94,13 +95,7 @@ export default function FindingsPage() {
         aiVerdict: aiVerdictMap.get(finding.id) as any,
       };
     });
-    if (selectedAiResponse === "has_ai") {
-      mapped = mapped.filter((finding) => Boolean(finding.aiVerdict));
-    } else if (selectedAiResponse === "no_ai") {
-      mapped = mapped.filter((finding) => !finding.aiVerdict);
-    }
-    return mapped;
-  }, [findingsQuery.data, projects, aiVerdictMap, selectedAiResponse, findingOverrides]);
+  }, [findingsQuery.data, projects, aiVerdictMap, findingOverrides]);
 
   const tagsQuery = useFindingTagsByProduct(selectedProductId);
   const availableTags = tagsQuery.data ?? [];

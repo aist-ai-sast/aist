@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from django.db.models import Count, DateTimeField, OuterRef, Q, Subquery
+from django.db.models import Count, Q
 from dojo.authorization.roles_permissions import Permissions
-from dojo.models import Finding, Test
+from dojo.models import Finding
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import serializers
 from rest_framework.pagination import LimitOffsetPagination
@@ -12,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from aist.queries import get_authorized_aist_pipelines
+from aist.utils.project_version_refs import resolve_project_version_git_refs
 
 if TYPE_CHECKING:
     from rest_framework.response import Response
@@ -53,7 +54,7 @@ class AISTPipelineSummaryAPI(APIView):
     def get(self, request, *args, **kwargs) -> Response:
         qs = (
             get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
-            .select_related("project", "project__product")
+            .select_related("project", "project__product", "project_version", "project_version__resolved_from_branch")
             .order_by("-created")
         )
         qp = request.query_params
@@ -75,31 +76,14 @@ class AISTPipelineSummaryAPI(APIView):
             qs = qs.filter(created__lte=created_lte)
         if search:
             qs = qs.filter(
-                Q(tests__branch_tag__icontains=search)
-                | Q(tests__commit_hash__icontains=search),
+                Q(project_version__version__icontains=search)
+                | Q(project_version__resolved_from_branch__version__icontains=search),
             )
 
         qs = qs.distinct()
 
         if ordering in {"created", "-created", "updated", "-updated"}:
             qs = qs.order_by(ordering)
-
-        latest_test = (
-            Test.objects.filter(aist_pipelines=OuterRef("pk"))
-            .order_by("-target_end", "-target_start", "-id")
-        )
-        qs = qs.annotate(
-            branch_tag=Subquery(latest_test.values("branch_tag")[:1]),
-            commit_hash=Subquery(latest_test.values("commit_hash")[:1]),
-            target_start=Subquery(
-                latest_test.values("target_start")[:1],
-                output_field=DateTimeField(),
-            ),
-            target_end=Subquery(
-                latest_test.values("target_end")[:1],
-                output_field=DateTimeField(),
-            ),
-        )
 
         paginator = LimitOffsetPagination()
         page = paginator.paginate_queryset(qs, request)
@@ -117,6 +101,8 @@ class AISTPipelineSummaryAPI(APIView):
 
         results: list[dict[str, Any]] = []
         for pipeline in page:
+            refs = resolve_project_version_git_refs(pipeline.project_version)
+
             action_runs = (pipeline.launch_data or {}).get("action_runs") or []
             actions = [
                 {
@@ -137,8 +123,8 @@ class AISTPipelineSummaryAPI(APIView):
                     "started": pipeline.started,
                     "created": pipeline.created,
                     "updated": pipeline.updated,
-                    "branch": pipeline.branch_tag,
-                    "commit": pipeline.commit_hash,
+                    "branch": refs.branch,
+                    "commit": refs.commit,
                     "findings": counts.get(pipeline.id, 0),
                     "actions": actions,
                 },
