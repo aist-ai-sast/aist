@@ -100,6 +100,42 @@ class LaunchConfigActionsAPITests(AISTApiBase):
         self.assertEqual(resp.status_code, 201)
         self.assertTrue(resp.data.get("config", {}).get("include_ai_csv"))
 
+    def test_slack_action_rejects_both_common_and_ai_summary(self):
+        cfg = self._config()
+        resp = self.client.post(
+            self._actions_url(cfg.id),
+            data={
+                "trigger_status": AISTStatus.FINISHED,
+                "action_type": "PUSH_TO_SLACK",
+                "config": {
+                    "channels": ["#alerts"],
+                    "include_ai_csv": True,
+                    "include_common_summary": True,
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("config", resp.data)
+
+    def test_email_action_rejects_both_common_and_ai_summary(self):
+        cfg = self._config()
+        resp = self.client.post(
+            self._actions_url(cfg.id),
+            data={
+                "trigger_status": AISTStatus.FINISHED,
+                "action_type": "SEND_EMAIL",
+                "config": {
+                    "emails": ["a@example.com"],
+                    "include_ai_csv": True,
+                    "include_common_summary": True,
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("config", resp.data)
+
     def test_action_type_mismatch_rejected(self):
         cfg = self._config()
         resp = self.client.post(

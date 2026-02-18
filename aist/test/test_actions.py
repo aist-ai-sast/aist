@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from types import SimpleNamespace
 from urllib.parse import urlencode
 from unittest.mock import Mock, patch
 
+from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
-from dojo.models import Product, Product_Type, SLA_Configuration
+from django.utils import timezone
+from dojo.models import Engagement, Finding, Product, Product_Type, SLA_Configuration, Test, Test_Type
 
 from aist.actions import EmailAction, SlackAction, WriteLogAction
 from aist.models import (
@@ -32,6 +35,7 @@ class ActionsTests(TestCase):
             prod_type=self.prod_type,
             sla_configuration_id=self.sla.id,
         )
+        self.reporter = get_user_model().objects.create_user(username="actions-reporter", email="actions@example.com")
         self.project = AISTProject.objects.create(
             product=self.product,
             supported_languages=["python"],
@@ -90,6 +94,46 @@ class ActionsTests(TestCase):
             action.save(update_fields=["secret_config"])
         return action
 
+    def _attach_pipeline_findings(self):
+        engagement = Engagement.objects.create(
+            name="Engage",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep")
+        dd_test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        Finding.objects.create(
+            test=dd_test,
+            title="Critical finding",
+            severity="Critical",
+            date=timezone.now(),
+            reporter=self.reporter,
+        )
+        Finding.objects.create(
+            test=dd_test,
+            title="High finding",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.reporter,
+        )
+        Finding.objects.create(
+            test=dd_test,
+            title="Low finding",
+            severity="Low",
+            date=timezone.now(),
+            reporter=self.reporter,
+        )
+        self.pipeline.tests.add(dd_test)
+        self.pipeline.started = timezone.now() - timedelta(minutes=5, seconds=7)
+        self.pipeline.updated = timezone.now()
+        self.pipeline.save(update_fields=["started", "updated"])
+
     @patch("aist.actions.AISTSlackNotificationManager.send_message_with_file")
     def test_slack_action_sends_file_when_requested(self, mock_send_file):
         self._create_ai_response()
@@ -143,6 +187,23 @@ class ActionsTests(TestCase):
             message,
         )
 
+    @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
+    def test_slack_action_common_summary_contains_pipeline_stats(self, mock_post):
+        self._attach_pipeline_findings()
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.PUSH_TO_SLACK,
+            {"channels": ["#alerts"], "include_common_summary": True},
+            {"slack_token": "xoxb-test"},
+        )
+
+        SlackAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+
+        message = mock_post.call_args.kwargs["message"]
+        self.assertIn("AIST Pipeline Summary", message)
+        self.assertIn("Findings total:* 3", message)
+        self.assertIn("Project version:* GIT_HASH:main", message)
+        self.assertIn("Severity:* Critical: 1 | High: 1 | Medium: 0 | Low: 1 | Info: 0", message)
+
     @patch("aist.actions.EmailNotificationManger.send_mail_notification")
     def test_email_action_requires_ai_response_when_csv_requested(self, mock_send):
         action = self._make_action(
@@ -182,6 +243,22 @@ class ActionsTests(TestCase):
             f"https://aist.itsec-europe.com{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}",
             kwargs["description"],
         )
+
+    @patch("aist.actions.EmailNotificationManger.send_mail_notification")
+    def test_email_action_common_summary_contains_pipeline_stats(self, mock_send):
+        self._attach_pipeline_findings()
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.SEND_EMAIL,
+            {"emails": ["a@example.com"], "include_common_summary": True},
+        )
+
+        EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+
+        kwargs = mock_send.call_args.kwargs
+        self.assertIn("AIST Pipeline Summary", kwargs["description"])
+        self.assertIn("Findings total: 3", kwargs["description"])
+        self.assertIn("Project version: GIT_HASH:main", kwargs["description"])
+        self.assertIn("Severity: Critical: 1 | High: 1 | Medium: 0 | Low: 1 | Info: 0", kwargs["description"])
 
     @patch("aist.actions.install_pipeline_logging")
     def test_write_log_action_requires_ai_response_when_csv_requested(self, mock_install):

@@ -71,11 +71,23 @@
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" id="action-include-ai-csv">
                                 <label class="form-check-label" for="action-include-ai-csv">
-                                    Add AI result CSV
+                                    Send AI summary
                                 </label>
                             </div>
                             <div class="text-muted small mt-1">
-                                If AI response isn’t ready at the selected status, the action will be marked failed.
+                                Sends AI-based summary; Slack also attaches CSV. If AI response isn’t ready, action fails.
+                            </div>
+                        </div>
+                        <div class="aist-action-spacer" aria-hidden="true"></div>
+                        <div class="aist-action-row">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="action-include-common-summary">
+                                <label class="form-check-label" for="action-include-common-summary">
+                                    Send common summary
+                                </label>
+                            </div>
+                            <div class="text-muted small mt-1">
+                                Includes duration, findings total, project version, and severity breakdown for this pipeline.
                             </div>
                         </div>
                         <div class="aist-action-spacer" aria-hidden="true"></div>

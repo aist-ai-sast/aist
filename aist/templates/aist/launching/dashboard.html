@@ -1440,6 +1440,7 @@
             var createActionTitle = document.getElementById("action-title");
             var createActionDescription = document.getElementById("action-description");
             var createActionIncludeAiCsv = document.getElementById("action-include-ai-csv");
+            var createActionIncludeCommonSummary = document.getElementById("action-include-common-summary");
             var createActionSlackFields = document.getElementById("action-slack-fields");
             var createActionSlackChannels = document.getElementById("action-slack-channels");
             var createActionSlackToken = document.getElementById("action-slack-token");
@@ -1479,6 +1480,7 @@
                 if (createActionTitle) createActionTitle.value = "";
                 if (createActionDescription) createActionDescription.value = "";
                 if (createActionIncludeAiCsv) createActionIncludeAiCsv.checked = false;
+                if (createActionIncludeCommonSummary) createActionIncludeCommonSummary.checked = false;
                 if (createActionSlackChannels) createActionSlackChannels.value = "";
                 if (createActionSlackToken) createActionSlackToken.value = "";
                 if (createActionEmails) createActionEmails.value = "";
@@ -1790,6 +1792,18 @@
                     showCreateActionFields(createActionType.value);
                 });
             }
+            if (createActionIncludeAiCsv && createActionIncludeCommonSummary) {
+                createActionIncludeAiCsv.addEventListener("change", function () {
+                    if (createActionIncludeAiCsv.checked) {
+                        createActionIncludeCommonSummary.checked = false;
+                    }
+                });
+                createActionIncludeCommonSummary.addEventListener("change", function () {
+                    if (createActionIncludeCommonSummary.checked) {
+                        createActionIncludeAiCsv.checked = false;
+                    }
+                });
+            }
 
             if (btnSaveLaunchAction) {
                 btnSaveLaunchAction.addEventListener("click", function () {
@@ -1804,12 +1818,14 @@
                     var title = createActionTitle ? createActionTitle.value.trim() : "";
                     var description = createActionDescription ? createActionDescription.value.trim() : "";
                     var includeAiCsv = createActionIncludeAiCsv ? !!createActionIncludeAiCsv.checked : false;
+                    var includeCommonSummary = createActionIncludeCommonSummary ? !!createActionIncludeCommonSummary.checked : false;
 
                     if (payload.action_type === "PUSH_TO_SLACK") {
                         payload.config.channels = normalizeList(createActionSlackChannels ? createActionSlackChannels.value : "");
                         payload.config.title = title;
                         payload.config.description = description;
                         payload.config.include_ai_csv = includeAiCsv;
+                        payload.config.include_common_summary = includeCommonSummary;
                         var token = createActionSlackToken ? createActionSlackToken.value.trim() : "";
                         if (token) payload.secret_config.slack_token = token;
                     } else if (payload.action_type === "SEND_EMAIL") {
@@ -1817,6 +1833,7 @@
                         payload.config.title = title;
                         payload.config.description = description;
                         payload.config.include_ai_csv = includeAiCsv;
+                        payload.config.include_common_summary = includeCommonSummary;
                     } else if (payload.action_type === "WRITE_LOG") {
                         payload.config.level = createActionLogLevel ? createActionLogLevel.value : "INFO";
                         payload.config.description = description;

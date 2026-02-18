@@ -5,8 +5,10 @@ import logging
 import uuid
 from urllib.parse import urlencode, urljoin
 
-from django.conf import settings
+from django.db.models import Count
 from django.urls import reverse
+from django.utils import timezone
+from dojo.models import Finding
 from dojo.notifications.helper import EmailNotificationManger
 
 from aist.logging_transport import install_pipeline_logging
@@ -50,6 +52,47 @@ class BaseAction:
         project_name = self._get_project_name(pipeline)
         return f"AIST [{project_name}] pipeline {pipeline.id} status {new_status}"
 
+    def _build_common_summary(self, *, pipeline: AISTPipeline, new_status: str, for_slack: bool) -> str:
+        findings_qs = Finding.objects.filter(test__aist_pipelines=pipeline)
+        total_findings = findings_qs.count()
+        severity_counts_raw = findings_qs.values("severity").annotate(total=Count("id"))
+        severity_counts = {str(item["severity"] or "Info"): int(item["total"]) for item in severity_counts_raw}
+
+        severity_order = ["Critical", "High", "Medium", "Low", "Info"]
+        severity_text = " | ".join(f"{sev}: {severity_counts.get(sev, 0)}" for sev in severity_order)
+
+        if pipeline.project_version:
+            version_text = f"{pipeline.project_version.version_type}:{pipeline.project_version.version}"
+        else:
+            version_text = "unknown"
+
+        duration = self._pipeline_duration(pipeline)
+        findings_url = self._build_pipeline_findings_url(pipeline)
+
+        if for_slack:
+            return (
+                f"*AIST Pipeline Summary* (`{pipeline.id}`)\n"
+                f"*Status:* {new_status}\n"
+                f"*Project:* {self._get_project_name(pipeline)}\n"
+                f"*Project version:* {version_text}\n"
+                f"*Commit:* {self._get_commit(pipeline)}\n"
+                f"*Duration:* {duration}\n"
+                f"*Findings total:* {total_findings}\n"
+                f"*Severity:* {severity_text}\n"
+                f"*Findings:* {findings_url}"
+            )
+        return (
+            f"AIST Pipeline Summary ({pipeline.id})\n"
+            f"Status: {new_status}\n"
+            f"Project: {self._get_project_name(pipeline)}\n"
+            f"Project version: {version_text}\n"
+            f"Commit: {self._get_commit(pipeline)}\n"
+            f"Duration: {duration}\n"
+            f"Findings total: {total_findings}\n"
+            f"Severity: {severity_text}\n"
+            f"Findings: {findings_url}"
+        )
+
     @staticmethod
     def _get_project_name(pipeline: AISTPipeline) -> str:
         return pipeline.project.product.name
@@ -75,11 +118,38 @@ class BaseAction:
             return path
         return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
 
+    @staticmethod
+    def _pipeline_duration(pipeline: AISTPipeline) -> str:
+        if not pipeline.started:
+            return "unknown"
+        end = pipeline.updated or timezone.now()
+        if end < pipeline.started:
+            end = pipeline.started
+        seconds = int((end - pipeline.started).total_seconds())
+        hours, rem = divmod(seconds, 3600)
+        minutes, secs = divmod(rem, 60)
+        if hours:
+            return f"{hours}h {minutes}m {secs}s"
+        if minutes:
+            return f"{minutes}m {secs}s"
+        return f"{secs}s"
+
     def _get_csv_text(self, pipeline: AISTPipeline) -> str:
         return build_ai_export_csv_text(pipeline)
 
     def _include_ai_csv(self) -> bool:
         return bool(self.config.get("include_ai_csv"))
+
+    def _include_common_summary(self) -> bool:
+        return bool(self.config.get("include_common_summary"))
+
+    def _validate_summary_mode(self) -> tuple[bool, bool]:
+        include_ai_csv = self._include_ai_csv()
+        include_common_summary = self._include_common_summary()
+        if include_ai_csv and include_common_summary:
+            msg = "include_common_summary and include_ai_csv are mutually exclusive"
+            raise RuntimeError(msg)
+        return include_ai_csv, include_common_summary
 
     def run(self, *, pipeline: AISTPipeline, new_status: str) -> None:  # pragma: no cover - interface
         raise NotImplementedError
@@ -97,11 +167,36 @@ class SlackAction(BaseAction):
     def _get_token(self, mgr: AISTSlackNotificationManager) -> str | None:
         return self.secret_config.get("slack_token") or mgr.system_settings.slack_token
 
-    def _build_slack_message(self, *, pipeline: AISTPipeline, new_status: str, title: str) -> str:
-        description = self.config.get("description") or self._build_simple_message(
-            pipeline=pipeline,
-            new_status=new_status,
-        )
+    def _build_slack_message(
+        self,
+        *,
+        pipeline: AISTPipeline,
+        new_status: str,
+        title: str,
+        include_ai_csv: bool,
+        include_common_summary: bool,
+        csv_text: str | None,
+    ) -> str:
+        description = self.config.get("description")
+        if not description:
+            if include_ai_csv:
+                description = self._build_message(
+                    pipeline=pipeline,
+                    new_status=new_status,
+                    csv_text=csv_text or "",
+                    for_slack=True,
+                )
+            elif include_common_summary:
+                description = self._build_common_summary(
+                    pipeline=pipeline,
+                    new_status=new_status,
+                    for_slack=True,
+                )
+            else:
+                description = self._build_simple_message(
+                    pipeline=pipeline,
+                    new_status=new_status,
+                )
         return AISTSlackNotificationManager()._create_notification_message(
             "other",
             None,
@@ -178,9 +273,16 @@ class SlackAction(BaseAction):
             pipeline=pipeline,
             new_status=new_status,
         )
-        include_ai_csv = self._include_ai_csv()
+        include_ai_csv, include_common_summary = self._validate_summary_mode()
         csv_text = self._get_csv_or_raise(pipeline) if include_ai_csv else None
-        message = self._build_slack_message(pipeline=pipeline, new_status=new_status, title=title)
+        message = self._build_slack_message(
+            pipeline=pipeline,
+            new_status=new_status,
+            title=title,
+            include_ai_csv=include_ai_csv,
+            include_common_summary=include_common_summary,
+            csv_text=csv_text,
+        )
 
         had_error = False
         error_message = ""
@@ -219,7 +321,7 @@ class EmailAction(BaseAction):
             pipeline=pipeline,
             new_status=new_status,
         )
-        include_ai_csv = self._include_ai_csv()
+        include_ai_csv, include_common_summary = self._validate_summary_mode()
         csv_text = ""
         if include_ai_csv:
             csv_text = self._get_csv_text(pipeline)
@@ -235,6 +337,12 @@ class EmailAction(BaseAction):
                 for_slack=False,
             )
             if include_ai_csv
+            else self._build_common_summary(
+                pipeline=pipeline,
+                new_status=new_status,
+                for_slack=False,
+            )
+            if include_common_summary
             else self._build_simple_message(
                 pipeline=pipeline,
                 new_status=new_status,

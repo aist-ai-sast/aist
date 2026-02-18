@@ -140,6 +140,7 @@
             var actionTitle = document.getElementById("action-title");
             var actionDescription = document.getElementById("action-description");
             var actionIncludeAiCsv = document.getElementById("action-include-ai-csv");
+            var actionIncludeCommonSummary = document.getElementById("action-include-common-summary");
             var actionSlackFields = document.getElementById("action-slack-fields");
             var actionSlackChannels = document.getElementById("action-slack-channels");
             var actionSlackToken = document.getElementById("action-slack-token");
@@ -238,7 +239,10 @@
                         detail = (a.config && a.config.level) ? ("Level: " + a.config.level) : "";
                     }
                     if (a.config && a.config.include_ai_csv) {
-                        detail = detail ? (detail + " · AI CSV") : "AI CSV";
+                        detail = detail ? (detail + " · AI summary") : "AI summary";
+                    }
+                    if (a.config && a.config.include_common_summary) {
+                        detail = detail ? (detail + " · Common summary") : "Common summary";
                     }
                     html += '<div class="list-group-item d-flex align-items-center justify-content-between">';
                     html += '<div>';
@@ -284,7 +288,10 @@
                         detail = (a.config && a.config.level) ? ("Level: " + a.config.level) : "";
                     }
                     if (a.config && a.config.include_ai_csv) {
-                        detail = detail ? (detail + " · AI CSV") : "AI CSV";
+                        detail = detail ? (detail + " · AI summary") : "AI summary";
+                    }
+                    if (a.config && a.config.include_common_summary) {
+                        detail = detail ? (detail + " · Common summary") : "Common summary";
                     }
                     html += '<div class="list-group-item">';
                     html += '<div class="fw-semibold">' + label + '</div>';
@@ -362,6 +369,18 @@
                     showActionFields(actionType.value);
                 });
             }
+            if (actionIncludeAiCsv && actionIncludeCommonSummary) {
+                actionIncludeAiCsv.addEventListener("change", function () {
+                    if (actionIncludeAiCsv.checked) {
+                        actionIncludeCommonSummary.checked = false;
+                    }
+                });
+                actionIncludeCommonSummary.addEventListener("change", function () {
+                    if (actionIncludeCommonSummary.checked) {
+                        actionIncludeAiCsv.checked = false;
+                    }
+                });
+            }
 
             if (btnOpenAction) {
                 btnOpenAction.addEventListener("click", function () {
@@ -386,12 +405,14 @@
                     var title = actionTitle ? actionTitle.value.trim() : "";
                     var description = actionDescription ? actionDescription.value.trim() : "";
                     var includeAiCsv = actionIncludeAiCsv ? !!actionIncludeAiCsv.checked : false;
+                    var includeCommonSummary = actionIncludeCommonSummary ? !!actionIncludeCommonSummary.checked : false;
 
                     if (payload.action_type === "PUSH_TO_SLACK") {
                         payload.config.channels = normalizeList(actionSlackChannels ? actionSlackChannels.value : "");
                         payload.config.title = title;
                         payload.config.description = description;
                         payload.config.include_ai_csv = includeAiCsv;
+                        payload.config.include_common_summary = includeCommonSummary;
                         var token = actionSlackToken ? actionSlackToken.value.trim() : "";
                         if (token) payload.secret_config.slack_token = token;
                     } else if (payload.action_type === "SEND_EMAIL") {
@@ -399,6 +420,7 @@
                         payload.config.title = title;
                         payload.config.description = description;
                         payload.config.include_ai_csv = includeAiCsv;
+                        payload.config.include_common_summary = includeCommonSummary;
                     } else if (payload.action_type === "WRITE_LOG") {
                         payload.config.level = actionLogLevel ? actionLogLevel.value : "INFO";
                         payload.config.description = description;

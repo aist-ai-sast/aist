@@ -173,12 +173,18 @@ class SlackActionCreateSerializer(BaseActionCreateSerializer):
         title = config.get("title") or ""
         description = config.get("description") or ""
         include_ai_csv = bool(config.get("include_ai_csv"))
+        include_common_summary = bool(config.get("include_common_summary"))
+        if include_ai_csv and include_common_summary:
+            raise serializers.ValidationError(
+                {"config": {"include_common_summary": "Choose either AI summary or common summary, not both."}},
+            )
 
         attrs["config"] = {
             "channels": channels,
             "title": title,
             "description": description,
             "include_ai_csv": include_ai_csv,
+            "include_common_summary": include_common_summary,
         }
 
         secret_config = attrs.get("secret_config") or {}
@@ -202,12 +208,18 @@ class EmailActionCreateSerializer(BaseActionCreateSerializer):
         title = config.get("title") or ""
         description = config.get("description") or ""
         include_ai_csv = bool(config.get("include_ai_csv"))
+        include_common_summary = bool(config.get("include_common_summary"))
+        if include_ai_csv and include_common_summary:
+            raise serializers.ValidationError(
+                {"config": {"include_common_summary": "Choose either AI summary or common summary, not both."}},
+            )
 
         attrs["config"] = {
             "emails": emails,
             "title": title,
             "description": description,
             "include_ai_csv": include_ai_csv,
+            "include_common_summary": include_common_summary,
         }
         attrs["secret_config"] = {}
         return attrs
