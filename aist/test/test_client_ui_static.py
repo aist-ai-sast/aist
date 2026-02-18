@@ -36,6 +36,7 @@ class ClientPortalRouteTests(SimpleTestCase):
         self.assertIn("{id}", routes["finding_detail_url"])
         self.assertIn("{id}", routes["finding_close_url"])
         self.assertIn("{pipeline_id}", routes["pipeline_export_url"])
+        self.assertEqual(routes["ai_finding_responses_url"], "/api/v2/aist/ai-finding-responses/")
         self.assertIn("{project_version_id}", routes["project_version_file_url"])
         self.assertIn("{subpath}", routes["project_version_file_url"])
         self.assertEqual(routes["ui_findings_path"], "/findings")

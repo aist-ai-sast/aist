@@ -21,9 +21,8 @@ type FilterPanelProps = {
   availableTags: string[];
   selectedTags: string[];
   onTagsChange: (value: string[]) => void;
-  selectedAiVerdict: string;
-  onAiVerdictChange: (value: string) => void;
-  aiVerdictDisabled?: boolean;
+  selectedAiResponse: string;
+  onAiResponseChange: (value: string) => void;
 };
 
 export default function FilterPanel({
@@ -45,9 +44,8 @@ export default function FilterPanel({
   availableTags,
   selectedTags,
   onTagsChange,
-  selectedAiVerdict,
-  onAiVerdictChange,
-  aiVerdictDisabled,
+  selectedAiResponse,
+  onAiResponseChange,
 }: FilterPanelProps) {
   return (
     <aside className="p-5 aist-card aist-filter-panel overflow-hidden">
@@ -134,22 +132,15 @@ export default function FilterPanel({
           visibleCount={10}
         />
         <SelectField
-          label="AI Verdict"
-          value={selectedAiVerdict}
-          onChange={onAiVerdictChange}
-          disabled={aiVerdictDisabled}
+          label="AI Response"
+          value={selectedAiResponse}
+          onChange={onAiResponseChange}
           options={[
             { value: "All", label: "All" },
-            { value: "true_positive", label: "True Positive" },
-            { value: "false_positive", label: "False Positive" },
-            { value: "uncertain", label: "Uncertain" },
+            { value: "has_ai", label: "Has AI Response" },
+            { value: "no_ai", label: "No AI Response" },
           ]}
         />
-        {aiVerdictDisabled ? (
-          <p className="text-xs text-slate-500">
-            Select a product to enable AI verdict filters.
-          </p>
-        ) : null}
       </div>
     </aside>
   );

@@ -12,6 +12,7 @@ type RouteMap = {
   pipelines_list_url: string;
   pipelines_summary_url: string;
   pipeline_export_url: string;
+  ai_finding_responses_url: string;
   project_version_file_url: string;
   ui_findings_path: string;
   ui_finding_detail_path: string;

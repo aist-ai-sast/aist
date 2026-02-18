@@ -1,12 +1,13 @@
 import { Link, useParams } from "react-router-dom";
 import { useState } from "react";
 import FindingDetailTabs from "../components/FindingDetailTabs";
+import AiVerdictBadge from "../components/AiVerdictBadge";
 import {
+  useAiFindingResponses,
   useAiResponse,
   useEngagementProduct,
   useFinding,
   useFindingProjectVersion,
-  usePipelines,
   useProjectMeta,
   useProjects,
   useTestEngagement,
@@ -34,8 +35,12 @@ export default function FindingDetailPage() {
   const resolvedProductId = finding?.productId ?? engagementProductQuery.data ?? undefined;
   const aistProject = projects.find((project) => project.productId === resolvedProductId);
   const productName = projects.find((project) => project.productId === resolvedProductId)?.name;
-  const pipelinesQuery = usePipelines(aistProject?.id);
-  const aiResponse = useAiResponse(pipelinesQuery.data ?? [], finding?.id);
+  const aiResponsesQuery = useAiFindingResponses(
+    aistProject?.id,
+    undefined,
+    finding?.id ? [finding.id] : undefined,
+  );
+  const aiResponse = useAiResponse(aiResponsesQuery.data ?? new Map(), finding?.id);
   const metaQuery = useProjectMeta(aistProject?.id);
   const projectVersionId = metaQuery.data?.versions?.length
     ? Number(metaQuery.data.versions[metaQuery.data.versions.length - 1].id)
@@ -166,6 +171,7 @@ export default function FindingDetailPage() {
             >
               {finding.severity}
             </span>
+            <AiVerdictBadge verdict={aiResponse?.verdict} />
             {finding.isMitigated ? (
               <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-300">
                 Mitigated

@@ -24,7 +24,17 @@ from drf_spectacular.generators import SchemaGenerator
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
-from aist.models import AISTAIResponse, AISTPipeline, AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, AISTStatus, VersionType
+from aist.models import (
+    AISTAIFindingResponse,
+    AISTAIResponse,
+    AISTPipeline,
+    AISTProject,
+    AISTProjectLaunchConfig,
+    AISTProjectVersion,
+    AISTStatus,
+    VersionType,
+)
+from aist.utils.ai_response import sync_ai_finding_responses
 from aist.utils.secrets import MASKED_VALUE
 
 
@@ -165,6 +175,71 @@ class PipelineCallbackAPITests(AISTApiBase):
         self.assertEqual(resp.data, {"ok": True})
         self.assertTrue(AISTAIResponse.objects.filter(pipeline=pipeline).exists())
 
+    def test_pipeline_callback_creates_ai_finding_responses_for_valid_findings_only(self):
+        superuser = get_user_model().objects.create_superuser(
+            username="callback_admin_ai_finding",
+            email="callback_admin_ai_finding@example.com",
+            password="pass",  # noqa: S106
+        )
+        token = Token.objects.create(user=superuser)
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-callback-ai-findings",
+            project=self.project,
+            status=AISTStatus.WAITING_RESULT_FROM_AI,
+        )
+
+        engagement = Engagement.objects.create(
+            name="Engage Callback",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep callback")
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Callback finding",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        missing_finding_id = finding.id + 1000
+
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        resp = client.post(
+            reverse("aist_api:pipeline_callback", kwargs={"pipeline_id": pipeline.id}),
+            data={
+                "job_id": "internal-job-id",
+                "results": {
+                    "true_positives": [
+                        {
+                            "title": "Valid finding",
+                            "reasoning": "valid",
+                            "originalFinding": {"id": finding.id},
+                        },
+                        {
+                            "title": "Missing finding",
+                            "reasoning": "missing",
+                            "originalFinding": {"id": missing_finding_id},
+                        },
+                    ],
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(AISTAIFindingResponse.objects.filter(pipeline=pipeline).count(), 1)
+        row = AISTAIFindingResponse.objects.get(pipeline=pipeline, finding_id=finding.id)
+        self.assertEqual(row.verdict, AISTAIFindingResponse.Verdict.TRUE_POSITIVE)
+        self.assertEqual(row.summary, "valid")
+
     def test_old_ui_callback_url_is_not_available(self):
         superuser = get_user_model().objects.create_superuser(
             username="callback_admin_old_url",
@@ -234,6 +309,107 @@ class AISTAuthorizationTests(AISTApiBase):
         )
         resp = self.client.get(reverse("aist_api:pipeline_status", kwargs={"pipeline_id": "pipe-other"}))
         self.assertEqual(resp.status_code, 404)
+
+
+class AIFindingResponseAPITests(AISTApiBase):
+    def test_returns_sanitized_ai_finding_responses_without_job_id(self):
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-ai-finding-api",
+            project=self.project,
+            status=AISTStatus.FINISHED,
+        )
+        engagement = Engagement.objects.create(
+            name="Engage AI API",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep ai api")
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Finding for AI API",
+            severity="Medium",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        ai_response = AISTAIResponse.objects.create(
+            pipeline=pipeline,
+            payload={"job_id": "internal-only", "results": {}},
+        )
+        AISTAIFindingResponse.objects.create(
+            pipeline=pipeline,
+            source_response=ai_response,
+            finding=finding,
+            verdict=AISTAIFindingResponse.Verdict.FALSE_POSITIVE,
+            title="AI title",
+            summary="AI reasoning",
+            references=["https://owasp.org/www-community/vulnerabilities/Insecure_Randomness"],
+            epss_score=0.12,
+        )
+
+        resp = self.client.get(
+            reverse("aist_api:ai_finding_responses"),
+            data={"project_id": self.project.id, "finding_ids": str(finding.id)},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data), 1)
+        item = resp.data[0]
+        self.assertEqual(item["finding_id"], finding.id)
+        self.assertEqual(item["pipeline_id"], pipeline.id)
+        self.assertEqual(item["verdict"], "false_positive")
+        self.assertEqual(item["reasoning"], "AI reasoning")
+        self.assertNotIn("job_id", item)
+
+    def test_sync_ai_finding_responses_ignores_entries_without_original_finding_id(self):
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-ai-sync",
+            project=self.project,
+            status=AISTStatus.FINISHED,
+        )
+        engagement = Engagement.objects.create(
+            name="Engage AI Sync",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep ai sync")
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Finding for sync",
+            severity="Low",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        ai_response = AISTAIResponse.objects.create(
+            pipeline=pipeline,
+            payload={
+                "results": {
+                    "true_positives": [
+                        {"title": "No finding id", "originalFinding": {}},
+                        {"title": "Valid", "reasoning": "ok", "originalFinding": {"id": finding.id}},
+                    ],
+                },
+            },
+        )
+
+        stats = sync_ai_finding_responses(pipeline=pipeline, ai_response=ai_response)
+
+        self.assertEqual(stats["saved"], 1)
+        self.assertEqual(stats["dropped"], 1)
+        self.assertTrue(AISTAIFindingResponse.objects.filter(pipeline=pipeline, finding=finding).exists())
 
 
 class AISTFindingTagsTests(AISTApiBase):

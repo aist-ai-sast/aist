@@ -1,5 +1,6 @@
 import type { Finding } from "../types";
 import { formatProjectVersionText } from "../lib/projectVersion";
+import AiVerdictBadge from "./AiVerdictBadge";
 import FindingSnippetPreview from "./FindingSnippetPreview";
 
 type FindingCardProps = {
@@ -19,12 +20,6 @@ const severityStyles: Record<Finding["severity"], string> = {
   Medium: "border-amber-400/40 text-amber-400 bg-amber-400/10",
   Low: "border-slate-500/40 text-slate-300 bg-slate-500/10",
   Info: "border-slate-500/40 text-slate-300 bg-slate-500/10",
-};
-
-const verdictLabel = {
-  true_positive: "AI: True Positive",
-  false_positive: "AI: False Positive",
-  uncertain: "AI: Uncertain",
 };
 
 export default function FindingCard({
@@ -69,6 +64,7 @@ export default function FindingCard({
           >
             {finding.severity}
           </span>
+          <AiVerdictBadge verdict={finding.aiVerdict} />
           {finding.isMitigated ? (
             <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-300">
               Mitigated
@@ -171,7 +167,6 @@ export default function FindingCard({
             Created {createdLabel}
           </span>
         ) : null}
-        {finding.aiVerdict ? <span>{verdictLabel[finding.aiVerdict]}</span> : null}
       </div>
       <div className="mt-3">
         {isOpen ? (

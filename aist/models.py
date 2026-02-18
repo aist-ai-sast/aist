@@ -693,6 +693,65 @@ class AISTAIResponse(models.Model):
         return f"AIResponse[{self.pipeline_id}] @ {self.created:%Y-%m-%d %H:%M:%S}"
 
 
+class AISTAIFindingResponse(models.Model):
+    class Verdict(models.TextChoices):
+        TRUE_POSITIVE = "true_positive", "True Positive"
+        FALSE_POSITIVE = "false_positive", "False Positive"
+        UNCERTAIN = "uncertain", "Uncertain"
+
+    pipeline = models.ForeignKey(
+        "AISTPipeline",
+        on_delete=models.CASCADE,
+        related_name="ai_finding_responses",
+        db_index=True,
+    )
+    source_response = models.ForeignKey(
+        "AISTAIResponse",
+        on_delete=models.SET_NULL,
+        related_name="finding_responses",
+        null=True,
+        blank=True,
+    )
+    finding = models.ForeignKey(
+        Finding,
+        on_delete=models.CASCADE,
+        related_name="aist_ai_responses",
+        db_index=True,
+    )
+    verdict = models.CharField(
+        max_length=32,
+        choices=Verdict.choices,
+        db_index=True,
+    )
+    title = models.CharField(max_length=512, blank=True, default="")
+    summary = models.TextField(blank=True, default="")
+    references = models.JSONField(default=list, blank=True)
+    epss_score = models.FloatField(null=True, blank=True)
+    impact_score = models.FloatField(null=True, blank=True)
+    exploitability_score = models.FloatField(null=True, blank=True)
+    uncertainty_level = models.FloatField(null=True, blank=True)
+    uncertainty_spread = models.FloatField(null=True, blank=True)
+    exploit_code_maturity = models.CharField(max_length=64, blank=True, default="")
+    created = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["pipeline", "finding"],
+                name="uniq_aist_ai_finding_per_pipeline",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["pipeline", "verdict"], name="aist_aistai_pipelin_3868d4_idx"),
+            models.Index(fields=["pipeline", "finding"], name="aist_aistai_pipelin_6a546f_idx"),
+        ]
+        ordering = ["-updated"]
+
+    def __str__(self):
+        return f"AIFindingResponse[pipeline={self.pipeline_id}, finding={self.finding_id}]"
+
+
 def _ensure_aware(value: dt) -> dt:
     if timezone.is_naive(value):
         return timezone.make_aware(value, timezone.get_default_timezone())

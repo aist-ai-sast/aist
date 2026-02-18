@@ -6,10 +6,9 @@ import DetailPanel from "../components/DetailPanel";
 import SegmentedSortControl from "../components/SegmentedSortControl";
 import type { Finding } from "../types";
 import {
-  useAiResponse,
+  useAiFindingResponses,
   useFindingTagsByProduct,
   useFindingsPage,
-  usePipelines,
   useProjectMeta,
   useProjects,
 } from "../lib/queries";
@@ -22,7 +21,7 @@ export default function FindingsPage() {
   const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
   const [selectedStatus, setSelectedStatus] = useState<string>("All");
   const [selectedRisk, setSelectedRisk] = useState<string[]>([]);
-  const [selectedAiVerdict, setSelectedAiVerdict] = useState<string>("All");
+  const [selectedAiResponse, setSelectedAiResponse] = useState<string>("All");
   const [selectedSort, setSelectedSort] = useState<FindingsSortKey>("severity");
   const [selectedSortDirection, setSelectedSortDirection] = useState<"asc" | "desc">("desc");
   const [selectedCwe, setSelectedCwe] = useState<string>("");
@@ -59,39 +58,29 @@ export default function FindingsPage() {
     [projects],
   );
   const aistProjectForFilters = projects.find((project) => project.productId === selectedProductId);
-  const pipelinesQuery = usePipelines(aistProjectForFilters?.id);
   const filterMetaQuery = useProjectMeta(aistProjectForFilters?.id);
+  const findingIds = useMemo(
+    () => (findingsQuery.data?.items ?? []).map((finding) => finding.id),
+    [findingsQuery.data],
+  );
+  const aiResponsesQuery = useAiFindingResponses(
+    aistProjectForFilters?.id,
+    selectedPipelineId,
+    findingIds,
+  );
   const filterProjectVersionId = filterMetaQuery.data?.versions?.length
     ? Number(filterMetaQuery.data.versions[filterMetaQuery.data.versions.length - 1].id)
     : undefined;
 
   const aiVerdictMap = useMemo(() => {
     const map = new Map<number, string>();
-    for (const pipeline of pipelinesQuery.data ?? []) {
-      const response = pipeline.response_from_ai;
-      if (!response?.results) continue;
-      const pools = [
-        ...(response.results.true_positives ?? []).map((entry: any) => ({
-          id: entry?.originalFinding?.id,
-          verdict: "true_positive",
-        })),
-        ...(response.results.false_positives ?? []).map((entry: any) => ({
-          id: entry?.originalFinding?.id,
-          verdict: "false_positive",
-        })),
-        ...(response.results.uncertainly ?? []).map((entry: any) => ({
-          id: entry?.originalFinding?.id,
-          verdict: "uncertain",
-        })),
-      ];
-      for (const item of pools) {
-        if (item.id) {
-          map.set(item.id, item.verdict);
-        }
+    for (const [findingId, aiResponse] of aiResponsesQuery.data ?? new Map()) {
+      if (aiResponse.verdict) {
+        map.set(findingId, aiResponse.verdict);
       }
     }
     return map;
-  }, [pipelinesQuery.data]);
+  }, [aiResponsesQuery.data]);
 
   const findings = useMemo(() => {
     const raw = findingsQuery.data?.items ?? [];
@@ -105,11 +94,13 @@ export default function FindingsPage() {
         aiVerdict: aiVerdictMap.get(finding.id) as any,
       };
     });
-    if (selectedAiVerdict !== "All") {
-      mapped = mapped.filter((finding) => finding.aiVerdict === selectedAiVerdict);
+    if (selectedAiResponse === "has_ai") {
+      mapped = mapped.filter((finding) => Boolean(finding.aiVerdict));
+    } else if (selectedAiResponse === "no_ai") {
+      mapped = mapped.filter((finding) => !finding.aiVerdict);
     }
     return mapped;
-  }, [findingsQuery.data, projects, aiVerdictMap, selectedAiVerdict, findingOverrides]);
+  }, [findingsQuery.data, projects, aiVerdictMap, selectedAiResponse, findingOverrides]);
 
   const tagsQuery = useFindingTagsByProduct(selectedProductId);
   const availableTags = tagsQuery.data ?? [];
@@ -136,7 +127,7 @@ export default function FindingsPage() {
 
   useEffect(() => {
     setPageIndex(0);
-  }, [selectedProductId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiVerdict, selectedPipelineId, selectedFile, selectedProjectVersion, ordering, pageSize]);
+  }, [selectedProductId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiResponse, selectedPipelineId, selectedFile, selectedProjectVersion, ordering, pageSize]);
 
   const applyCloseState = (
     findingId: number,
@@ -249,9 +240,8 @@ export default function FindingsPage() {
           availableTags={availableTags}
           selectedTags={selectedTags}
           onTagsChange={setSelectedTags}
-          selectedAiVerdict={selectedAiVerdict}
-          onAiVerdictChange={setSelectedAiVerdict}
-          aiVerdictDisabled={!selectedProductId}
+          selectedAiResponse={selectedAiResponse}
+          onAiResponseChange={setSelectedAiResponse}
         />
       </div>
 
@@ -295,7 +285,7 @@ export default function FindingsPage() {
             <div className="min-h-0 flex-1 pr-2">
               <div className="space-y-4">
                 {findings.map((finding) => {
-                  const aiResponse = useAiResponse(pipelinesQuery.data ?? [], finding.id);
+                  const aiResponse = (aiResponsesQuery.data ?? new Map()).get(finding.id) ?? null;
                   return (
                     <div key={finding.id} className="space-y-3">
                       <FindingCard

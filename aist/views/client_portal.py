@@ -41,6 +41,7 @@ def _build_routes() -> dict[str, Any]:
             "PIPELINE_ID",
             "pipeline_id",
         ),
+        "ai_finding_responses_url": reverse("aist_api:ai_finding_responses"),
         "finding_tags_url": reverse("aist_api:finding_tags"),
         "project_version_file_url": _replace_str_placeholder(
             _replace_int_placeholder(

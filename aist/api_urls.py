@@ -29,7 +29,7 @@ from aist.api import (
     ProjectVersionCreateAPI,
     ProjectVersionFileBlobAPI,
 )
-from aist.api.ai import AIDeleteResponseAPI, AIPipelineCallbackAPI, AISendRequestAPI
+from aist.api.ai import AIDeleteResponseAPI, AIFindingResponseListAPI, AIPipelineCallbackAPI, AISendRequestAPI
 from aist.api.gitlab_integration import ImportProjectFromGitlabAPI
 from aist.api.integrations import GitlabProjectsListAPI
 from aist.api.pipelines import (
@@ -60,6 +60,7 @@ urlpatterns = [
     path("pipelines/<str:pipeline_id>/stop/", PipelineStopAPI.as_view(), name="pipeline_stop"),
     path("pipelines/<str:pipeline_id>/send-request-to-ai/", AISendRequestAPI.as_view(), name="pipeline_send_request"),
     path("pipelines/<str:pipeline_id>/callback/", AIPipelineCallbackAPI.as_view(), name="pipeline_callback"),
+    path("ai-finding-responses/", AIFindingResponseListAPI.as_view(), name="ai_finding_responses"),
     path(
         "pipelines/<str:pipeline_id>/ai-response/<int:response_id>/",
         AIDeleteResponseAPI.as_view(),

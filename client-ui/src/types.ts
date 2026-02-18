@@ -50,10 +50,15 @@ export type Finding = {
 };
 
 export type AIResponse = {
+  verdict?: AIVerdict;
+  title?: string;
   reasoning: string;
   epssScore?: number;
   impactScore?: number;
   exploitabilityScore?: number;
+  uncertaintyLevel?: number;
+  uncertaintySpread?: number;
+  exploitCodeMaturity?: string;
   references?: string[];
   pipelineId?: string;
 };

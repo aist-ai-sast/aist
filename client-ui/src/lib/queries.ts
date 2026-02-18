@@ -72,6 +72,22 @@ type PipelineApi = {
   updated: string;
 };
 
+type AIFindingResponseApi = {
+  pipeline_id: string;
+  finding_id: number;
+  verdict: "true_positive" | "false_positive" | "uncertain";
+  title: string;
+  reasoning: string;
+  epssScore?: number | null;
+  impactScore?: number | null;
+  exploitabilityScore?: number | null;
+  uncertaintyLevel?: number | null;
+  uncertaintySpread?: number | null;
+  exploitCodeMaturity?: string;
+  references?: string[];
+  created?: string;
+};
+
 type PipelineSummaryApi = {
   id: string;
   status: string;
@@ -473,6 +489,49 @@ export function usePipelines(projectId?: number) {
   });
 }
 
+export function useAiFindingResponses(
+  projectId?: number,
+  pipelineId?: string,
+  findingIds?: number[],
+) {
+  return useQuery({
+    queryKey: ["ai-finding-responses", projectId, pipelineId, findingIds],
+    queryFn: async () => {
+      if (!projectId && !findingIds?.length) return new Map<number, AIResponse>();
+
+      const params = new URLSearchParams({
+        ...(projectId ? { project_id: String(projectId) } : {}),
+        ...(pipelineId ? { pipeline_id: pipelineId } : {}),
+      });
+      if (findingIds?.length) {
+        params.set("finding_ids", findingIds.join(","));
+      }
+
+      const payload = await fetchJson<AIFindingResponseApi[]>(
+        `${getRoute("ai_finding_responses_url")}?${params.toString()}`,
+      );
+      const map = new Map<number, AIResponse>();
+      for (const item of payload ?? []) {
+        map.set(item.finding_id, {
+          verdict: item.verdict,
+          title: item.title ?? "",
+          reasoning: item.reasoning ?? "AI response available.",
+          epssScore: item.epssScore ?? undefined,
+          impactScore: item.impactScore ?? undefined,
+          exploitabilityScore: item.exploitabilityScore ?? undefined,
+          uncertaintyLevel: item.uncertaintyLevel ?? undefined,
+          uncertaintySpread: item.uncertaintySpread ?? undefined,
+          exploitCodeMaturity: item.exploitCodeMaturity ?? undefined,
+          references: item.references ?? [],
+          pipelineId: item.pipeline_id,
+        });
+      }
+      return map;
+    },
+    enabled: Boolean(projectId || findingIds?.length),
+  });
+}
+
 type PipelineSummaryFilters = {
   productId?: number;
   status?: string;
@@ -547,31 +606,7 @@ export function useFindingTagsByProduct(productId?: number) {
   });
 }
 
-function findAiEntry(response: any, findingId: number) {
-  if (!response?.results) return null;
-  const { true_positives, false_positives, uncertainly } = response.results;
-  const pools = [
-    ...(true_positives ?? []),
-    ...(false_positives ?? []),
-    ...(uncertainly ?? []),
-  ];
-  return pools.find((entry: any) => entry?.originalFinding?.id === findingId);
-}
-
-export function useAiResponse(pipelines: PipelineApi[], findingId?: number): AIResponse | null {
+export function useAiResponse(aiByFinding: Map<number, AIResponse>, findingId?: number): AIResponse | null {
   if (!findingId) return null;
-  for (const pipeline of pipelines) {
-    const entry = findAiEntry(pipeline.response_from_ai, findingId);
-    if (entry) {
-      return {
-        reasoning: entry.reasoning ?? "AI response available.",
-        epssScore: entry.epssScore,
-        impactScore: entry.impactScore,
-        exploitabilityScore: entry.exploitabilityScore,
-        references: entry.references,
-        pipelineId: pipeline.id,
-      };
-    }
-  }
-  return null;
+  return aiByFinding.get(findingId) ?? null;
 }
