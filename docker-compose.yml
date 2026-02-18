@@ -20,12 +20,8 @@ services:
         published: ${DD_PORT:-8080}
         protocol: tcp
         mode: host
-      - target: 8443
-        published: 443
-        protocol: tcp
-        mode: host
-      - target: 8443
-        published: ${DD_TLS_PORT:-8443}
+      - target: 443
+        published: ${DD_TLS_PORT:-443}
         protocol: tcp
         mode: host
   uwsgi:

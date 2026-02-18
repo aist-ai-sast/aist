@@ -6,6 +6,12 @@ from django.urls import reverse
 
 
 class AdminRouteTests(TestCase):
+    def _assert_no_8443_in_redirects(self, response) -> None:
+        for _, location in response.redirect_chain:
+            self.assertNotIn(":8443", location)
+        if "Location" in response.headers:
+            self.assertNotIn(":8443", response["Location"])
+
     def test_aist_project_ui_is_under_admin_prefix(self):
         url = reverse("aist:aist_project_list")
         self.assertTrue(url.startswith("/aist-admin/aist/"))
@@ -23,3 +29,13 @@ class AdminRouteTests(TestCase):
         self.client.force_login(user)
         response = self.client.get(reverse("aist:aist_project_list"))
         self.assertNotEqual(response.status_code, 404)
+
+    def test_admin_prefix_without_trailing_slash_redirects_cleanly(self):
+        response = self.client.get("/aist-admin", follow=True)
+        self._assert_no_8443_in_redirects(response)
+        self.assertEqual(response.status_code, 200)
+
+    def test_login_flow_next_param_has_no_8443(self):
+        response = self.client.get("/auth/login/?next=/aist-admin/aist/projects/", follow=True)
+        self._assert_no_8443_in_redirects(response)
+        self.assertEqual(response.status_code, 200)
