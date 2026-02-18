@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from urllib.parse import urlencode, urljoin
 
+from django.conf import settings
+from django.urls import reverse
 from dojo.notifications.helper import EmailNotificationManger
 
 from aist.logging_transport import install_pipeline_logging
@@ -11,6 +14,7 @@ from aist.models import AISTLaunchConfigAction, AISTPipeline
 from aist.notifications import AISTSlackNotificationManager
 from aist.utils.action_config import decrypt_action_secret_config
 from aist.utils.export import build_ai_export_csv_text
+from aist.utils.urls import get_public_base_url
 
 logger = logging.getLogger("aist")
 
@@ -24,7 +28,7 @@ class BaseAction:
         self.secret_config = action.get_secret_config()
 
     def _build_message(self, *, pipeline: AISTPipeline, new_status: str, csv_text: str, for_slack: bool) -> str:
-        header = f"AIST pipeline {pipeline.id} status changed to {new_status}."
+        header = self._build_simple_message(pipeline=pipeline, new_status=new_status)
         if not csv_text:
             return f"{header}\n\nNo AI report is available."
         if for_slack:
@@ -32,7 +36,44 @@ class BaseAction:
         return f"{header}\n\nAI report (CSV):\n{csv_text}"
 
     def _build_simple_message(self, *, pipeline: AISTPipeline, new_status: str) -> str:
-        return f"AIST pipeline {pipeline.id} status changed to {new_status}."
+        project_name = self._get_project_name(pipeline)
+        commit = self._get_commit(pipeline)
+        findings_url = self._build_pipeline_findings_url(pipeline)
+        return (
+            f"AIST pipeline {pipeline.id} status changed to {new_status}.\n"
+            f"Project: {project_name}\n"
+            f"Commit: {commit}\n"
+            f"Findings: {findings_url}"
+        )
+
+    def _build_default_title(self, *, pipeline: AISTPipeline, new_status: str) -> str:
+        project_name = self._get_project_name(pipeline)
+        return f"AIST [{project_name}] pipeline {pipeline.id} status {new_status}"
+
+    @staticmethod
+    def _get_project_name(pipeline: AISTPipeline) -> str:
+        return pipeline.project.product.name
+
+    @staticmethod
+    def _get_commit(pipeline: AISTPipeline) -> str:
+        launch_data = pipeline.launch_data or {}
+        git_meta = launch_data.get("git") or {}
+        resolved_commit = str(git_meta.get("resolved_commit") or "").strip()
+        if resolved_commit:
+            return resolved_commit
+        if pipeline.project_version and pipeline.project_version.version:
+            return str(pipeline.project_version.version)
+        return "unknown"
+
+    @staticmethod
+    def _build_pipeline_findings_url(pipeline: AISTPipeline) -> str:
+        base_path = reverse("findings")
+        query = urlencode({"product": pipeline.project.product_id, "pipeline": pipeline.id})
+        path = f"{base_path}?{query}"
+        base_url = get_public_base_url()
+        if not base_url:
+            return path
+        return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
 
     def _get_csv_text(self, pipeline: AISTPipeline) -> str:
         return build_ai_export_csv_text(pipeline)
@@ -57,7 +98,10 @@ class SlackAction(BaseAction):
         return self.secret_config.get("slack_token") or mgr.system_settings.slack_token
 
     def _build_slack_message(self, *, pipeline: AISTPipeline, new_status: str, title: str) -> str:
-        description = self.config.get("description") or f"AIST pipeline {pipeline.id} status {new_status}."
+        description = self.config.get("description") or self._build_simple_message(
+            pipeline=pipeline,
+            new_status=new_status,
+        )
         return AISTSlackNotificationManager()._create_notification_message(
             "other",
             None,
@@ -130,7 +174,10 @@ class SlackAction(BaseAction):
             logger.warning("Slack token missing for action %s", self.action.id)
             return
 
-        title = self.config.get("title") or f"AIST pipeline {pipeline.id} status {new_status}"
+        title = self.config.get("title") or self._build_default_title(
+            pipeline=pipeline,
+            new_status=new_status,
+        )
         include_ai_csv = self._include_ai_csv()
         csv_text = self._get_csv_or_raise(pipeline) if include_ai_csv else None
         message = self._build_slack_message(pipeline=pipeline, new_status=new_status, title=title)
@@ -168,7 +215,10 @@ class EmailAction(BaseAction):
         if not emails:
             return
 
-        title = self.config.get("title") or f"AIST pipeline {pipeline.id} status {new_status}"
+        title = self.config.get("title") or self._build_default_title(
+            pipeline=pipeline,
+            new_status=new_status,
+        )
         include_ai_csv = self._include_ai_csv()
         csv_text = ""
         if include_ai_csv:

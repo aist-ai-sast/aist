@@ -209,10 +209,20 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         if test_ids and pipeline and pipeline.project_version_id:
             with transaction.atomic():
                 pv = AISTProjectVersion.objects.select_for_update().get(id=pipeline.project_version_id)
-                pv.findings.add(*finding_ids)
-                if pv.version_type == VersionType.GIT_HASH and pv.resolved_from_branch_id:
-                    parent = AISTProjectVersion.objects.select_for_update().get(id=pv.resolved_from_branch_id)
-                    parent.findings.add(*finding_ids)
+                locked_findings = Finding.objects.select_for_update().filter(id__in=finding_ids)
+                valid_finding_ids = list(locked_findings.values_list("id", flat=True))
+                dropped_findings_count = len(finding_ids) - len(valid_finding_ids)
+                if dropped_findings_count > 0:
+                    logger.info(
+                        "Dropped %s missing finding IDs before attaching to project version",
+                        dropped_findings_count,
+                    )
+                finding_ids = valid_finding_ids
+                if finding_ids:
+                    pv.findings.add(*finding_ids)
+                    if pv.version_type == VersionType.GIT_HASH and pv.resolved_from_branch_id:
+                        parent = AISTProjectVersion.objects.select_for_update().get(id=pv.resolved_from_branch_id)
+                        parent.findings.add(*finding_ids)
 
         if not finding_ids:
             with transaction.atomic():

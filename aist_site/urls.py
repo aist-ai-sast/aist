@@ -1,4 +1,5 @@
 from django.urls import include, path, re_path
+from django.views.generic import RedirectView
 from dojo.user.views import login_view, logout_view
 from dojo.utils import get_system_setting
 
@@ -6,6 +7,19 @@ from aist.views.client_portal import client_portal_index
 from aist_site import views as aist_site_views
 
 urlpatterns = [
+    path(
+        "",
+        RedirectView.as_view(pattern_name="findings", permanent=False),
+    ),
+    path(
+        "findings",
+        client_portal_index,
+        name="findings",
+    ),
+    path(
+        "findings/",
+        client_portal_index,
+    ),
     path("aist-admin/aist/", include(("aist.urls", "aist"), namespace="aist")),
     re_path(
         r"^{}api/v2/aist/".format(get_system_setting("url_prefix")),

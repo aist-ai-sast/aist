@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from urllib.parse import urlencode
 from unittest.mock import Mock, patch
 
 from django.test import TestCase, override_settings
+from django.urls import reverse
 from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.actions import EmailAction, SlackAction, WriteLogAction
@@ -120,6 +122,27 @@ class ActionsTests(TestCase):
         SlackAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
         self.assertTrue(mock_post.called)
 
+    @override_settings(SITE_URL="https://aist.itsec-europe.com")
+    @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
+    def test_slack_action_default_message_includes_project_commit_and_findings_url(self, mock_post):
+        self.pipeline.launch_data = {"git": {"resolved_commit": "abc123def"}}
+        self.pipeline.save(update_fields=["launch_data"])
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.PUSH_TO_SLACK,
+            {"channels": ["#alerts"], "include_ai_csv": False},
+            {"slack_token": "xoxb-test"},
+        )
+
+        SlackAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+
+        message = mock_post.call_args.kwargs["message"]
+        self.assertIn("Project: Test Product", message)
+        self.assertIn("Commit: abc123def", message)
+        self.assertIn(
+            f"https://aist.itsec-europe.com{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}",
+            message,
+        )
+
     @patch("aist.actions.EmailNotificationManger.send_mail_notification")
     def test_email_action_requires_ai_response_when_csv_requested(self, mock_send):
         action = self._make_action(
@@ -138,6 +161,27 @@ class ActionsTests(TestCase):
         )
         EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
         self.assertTrue(mock_send.called)
+
+    @override_settings(SITE_URL="https://aist.itsec-europe.com")
+    @patch("aist.actions.EmailNotificationManger.send_mail_notification")
+    def test_email_action_default_message_includes_project_commit_and_findings_url(self, mock_send):
+        self.pipeline.launch_data = {"git": {"resolved_commit": "abc123def"}}
+        self.pipeline.save(update_fields=["launch_data"])
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.SEND_EMAIL,
+            {"emails": ["a@example.com"], "include_ai_csv": False},
+        )
+
+        EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+
+        kwargs = mock_send.call_args.kwargs
+        self.assertIn("Test Product", kwargs["title"])
+        self.assertIn("Project: Test Product", kwargs["description"])
+        self.assertIn("Commit: abc123def", kwargs["description"])
+        self.assertIn(
+            f"https://aist.itsec-europe.com{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}",
+            kwargs["description"],
+        )
 
     @patch("aist.actions.install_pipeline_logging")
     def test_write_log_action_requires_ai_response_when_csv_requested(self, mock_install):

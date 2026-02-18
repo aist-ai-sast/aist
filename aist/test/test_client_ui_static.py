@@ -13,13 +13,10 @@ class ClientPortalRouteTests(SimpleTestCase):
         self.assertIsNotNone(match)
         return json.loads(match.group(1))
 
-    def test_root_renders_client_portal_shell(self):
+    def test_root_redirects_to_findings(self):
         response = self.client.get("/")
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '<div id="root"></div>', html=True)
-        self.assertContains(response, "<title>AIST Security Command Center</title>", html=True)
-        self.assertContains(response, "window.__AIST_ROUTES__")
-        self.assertContains(response, "window.__AIST_CSRF__")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "/findings")
 
     def test_client_side_route_fallback_renders_same_shell(self):
         response = self.client.get("/findings/123")
@@ -28,7 +25,7 @@ class ClientPortalRouteTests(SimpleTestCase):
         self.assertContains(response, "window.__AIST_ROUTES__")
 
     def test_runtime_routes_include_expected_api_endpoints(self):
-        response = self.client.get("/")
+        response = self.client.get("/pipelines")
         self.assertEqual(response.status_code, 200)
 
         html = response.content.decode("utf-8")
@@ -41,7 +38,7 @@ class ClientPortalRouteTests(SimpleTestCase):
         self.assertIn("{pipeline_id}", routes["pipeline_export_url"])
         self.assertIn("{project_version_id}", routes["project_version_file_url"])
         self.assertIn("{subpath}", routes["project_version_file_url"])
-        self.assertEqual(routes["ui_findings_path"], "/")
+        self.assertEqual(routes["ui_findings_path"], "/findings")
         self.assertIn(":id", routes["ui_finding_detail_path"])
 
 
