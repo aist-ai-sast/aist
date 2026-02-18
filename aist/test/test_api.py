@@ -240,6 +240,70 @@ class PipelineCallbackAPITests(AISTApiBase):
         self.assertEqual(row.verdict, AISTAIFindingResponse.Verdict.TRUE_POSITIVE)
         self.assertEqual(row.summary, "valid")
 
+    def test_pipeline_callback_closes_false_positive_finding_with_ai_note(self):
+        superuser = get_user_model().objects.create_superuser(
+            username="callback_admin_ai_fp",
+            email="callback_admin_ai_fp@example.com",
+            password="pass",  # noqa: S106
+        )
+        token = Token.objects.create(user=superuser)
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-callback-ai-fp",
+            project=self.project,
+            status=AISTStatus.WAITING_RESULT_FROM_AI,
+        )
+
+        engagement = Engagement.objects.create(
+            name="Engage Callback FP",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep callback fp")
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Callback FP finding",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+            active=True,
+            false_p=False,
+            is_mitigated=False,
+        )
+
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        resp = client.post(
+            reverse("aist_api:pipeline_callback", kwargs={"pipeline_id": pipeline.id}),
+            data={
+                "results": {
+                    "false_positives": [
+                        {
+                            "title": "FP finding",
+                            "reasoning": "should close",
+                            "originalFinding": {"id": finding.id},
+                        },
+                    ],
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        finding.refresh_from_db()
+        self.assertFalse(finding.active)
+        self.assertTrue(finding.false_p)
+        self.assertTrue(finding.is_mitigated)
+        self.assertTrue(finding.notes.filter(entry__contains="AI mitigated").exists())
+        row = AISTAIFindingResponse.objects.get(pipeline=pipeline, finding_id=finding.id)
+        self.assertEqual(row.verdict, AISTAIFindingResponse.Verdict.FALSE_POSITIVE)
+
     def test_old_ui_callback_url_is_not_available(self):
         superuser = get_user_model().objects.create_superuser(
             username="callback_admin_old_url",
@@ -407,8 +471,8 @@ class AIFindingResponseAPITests(AISTApiBase):
 
         stats = sync_ai_finding_responses(pipeline=pipeline, ai_response=ai_response)
 
-        self.assertEqual(stats["saved"], 1)
-        self.assertEqual(stats["dropped"], 1)
+        self.assertEqual(stats.saved, 1)
+        self.assertEqual(stats.dropped, 1)
         self.assertTrue(AISTAIFindingResponse.objects.filter(pipeline=pipeline, finding=finding).exists())
 
 

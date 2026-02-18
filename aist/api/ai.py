@@ -141,11 +141,15 @@ class AIPipelineCallbackAPI(APIView):
             ai_response = AISTAIResponse.objects.create(pipeline=locked, payload=response_from_ai)
             locked.response_from_ai = response_from_ai
             locked.save(update_fields=["response_from_ai", "updated"])
-            sync_stats = sync_ai_finding_responses(pipeline=locked, ai_response=ai_response)
-            if sync_stats["dropped"] > 0:
+            sync_stats = sync_ai_finding_responses(
+                pipeline=locked,
+                ai_response=ai_response,
+                user=request.user,
+            )
+            if sync_stats.dropped > 0:
                 logger.warning(
                     "Dropped %s AI findings that could not be matched to existing findings.",
-                    sync_stats["dropped"],
+                    sync_stats.dropped,
                 )
             finish_pipeline(locked)
 

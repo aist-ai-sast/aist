@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from django.utils import timezone
+from dojo.finding.helper import close_finding
 from dojo.models import Finding
 
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline
@@ -11,6 +14,17 @@ VERDICT_KEYS: dict[str, tuple[str, ...]] = {
     AISTAIFindingResponse.Verdict.FALSE_POSITIVE: ("false_positives",),
     AISTAIFindingResponse.Verdict.UNCERTAIN: ("uncertainly", "uncertain"),
 }
+
+
+@dataclass(frozen=True)
+class SyncAIFindingResponsesResult:
+    saved: int
+    dropped: int
+    deleted: int
+
+
+def _needs_false_positive_close(finding: Finding) -> bool:
+    return not (finding.false_p and finding.is_mitigated and not finding.active)
 
 
 def _normalize_references(value) -> list[str]:
@@ -60,12 +74,17 @@ def iter_ai_payload_entries(payload: dict) -> list[tuple[str, dict]]:
     return entries
 
 
-def sync_ai_finding_responses(*, pipeline: AISTPipeline, ai_response: AISTAIResponse) -> dict[str, int]:
+def sync_ai_finding_responses(
+    *,
+    pipeline: AISTPipeline,
+    ai_response: AISTAIResponse,
+    user=None,
+) -> SyncAIFindingResponsesResult:
     payload = ai_response.payload or {}
     parsed_entries = iter_ai_payload_entries(payload)
     if not parsed_entries:
         deleted, _ = pipeline.ai_finding_responses.all().delete()
-        return {"saved": 0, "dropped": 0, "deleted": deleted}
+        return SyncAIFindingResponsesResult(saved=0, dropped=0, deleted=deleted)
 
     candidate_ids: list[int] = []
     for _, entry in parsed_entries:
@@ -75,14 +94,15 @@ def sync_ai_finding_responses(*, pipeline: AISTPipeline, ai_response: AISTAIResp
 
     if not candidate_ids:
         deleted, _ = pipeline.ai_finding_responses.all().delete()
-        return {"saved": 0, "dropped": len(parsed_entries), "deleted": deleted}
+        return SyncAIFindingResponsesResult(saved=0, dropped=len(parsed_entries), deleted=deleted)
 
-    valid_ids = set(
-        Finding.objects.filter(
+    valid_findings = {
+        finding.id: finding for finding in Finding.objects.filter(
             id__in=set(candidate_ids),
             test__engagement__product_id=pipeline.project.product_id,
-        ).values_list("id", flat=True),
-    )
+        )
+    }
+    valid_ids = set(valid_findings.keys())
 
     seen_finding_ids: set[int] = set()
     saved = 0
@@ -95,6 +115,22 @@ def sync_ai_finding_responses(*, pipeline: AISTPipeline, ai_response: AISTAIResp
         if finding_id in seen_finding_ids:
             continue
         seen_finding_ids.add(finding_id)
+
+        if verdict == AISTAIFindingResponse.Verdict.FALSE_POSITIVE and user:
+            finding = valid_findings.get(finding_id)
+            if finding and _needs_false_positive_close(finding):
+                close_finding(
+                    finding=finding,
+                    user=user,
+                    is_mitigated=True,
+                    mitigated=timezone.now(),
+                    mitigated_by=user,
+                    false_p=True,
+                    out_of_scope=False,
+                    duplicate=False,
+                    note_entry=f"AI mitigated: automatically marked as False Positive by pipeline {pipeline.id}.",
+                    note_type=None,
+                )
 
         AISTAIFindingResponse.objects.update_or_create(
             pipeline=pipeline,
@@ -117,4 +153,4 @@ def sync_ai_finding_responses(*, pipeline: AISTPipeline, ai_response: AISTAIResp
 
     stale_qs = pipeline.ai_finding_responses.exclude(finding_id__in=seen_finding_ids)
     deleted, _ = stale_qs.delete()
-    return {"saved": saved, "dropped": dropped, "deleted": deleted}
+    return SyncAIFindingResponsesResult(saved=saved, dropped=dropped, deleted=deleted)
