@@ -8,6 +8,8 @@ from pathlib import Path
 import redis
 from django.conf import settings
 
+from aist.utils.secrets import get_sensitive_log_filter
+
 REDIS_URL = getattr(settings, "CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
 PUBSUB_CHANNEL_TPL = "aist:pipeline:{pipeline_id}:logs"
 STREAM_KEY = "aist:logs"
@@ -60,6 +62,7 @@ def install_pipeline_logging(pipeline_id: str, level=logging.INFO) -> logging.Lo
     file_handler.pipeline_id = pipeline_id
     file_handler.setLevel(level)
     file_handler.setFormatter(fmt)
+    file_handler.addFilter(get_sensitive_log_filter())
 
     plog = logging.getLogger("pipeline")
     plog.propagate = True

@@ -1,7 +1,49 @@
 from __future__ import annotations
 
+import json
+from typing import TYPE_CHECKING
+
 from django.conf import settings
 from django.shortcuts import render
+
+from aist.utils.secrets import mask_sensitive_data
+
+if TYPE_CHECKING:
+    from django.http import HttpResponse
+
+
+class AistResponseMaskingMiddleware:
+    aist_prefixes = ("/aist/", "/aist-admin/aist/")
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        if not any(request.path_info.startswith(prefix) for prefix in self.aist_prefixes):
+            return response
+        return self._mask_json_response(response)
+
+    def _mask_json_response(self, response: HttpResponse) -> HttpResponse:
+        if getattr(response, "streaming", False):
+            return response
+
+        content_type = (response.get("Content-Type") or "").lower()
+        if "application/json" not in content_type:
+            return response
+
+        try:
+            payload = json.loads(response.content.decode("utf-8"))
+        except Exception:
+            return response
+
+        masked = mask_sensitive_data(payload)
+        if masked == payload:
+            return response
+
+        response.content = json.dumps(masked, ensure_ascii=False).encode("utf-8")
+        response.headers["Content-Length"] = str(len(response.content))
+        return response
 
 
 class AistAdminGuardMiddleware:

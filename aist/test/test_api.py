@@ -24,6 +24,7 @@ from drf_spectacular.generators import SchemaGenerator
 from rest_framework.test import APIClient
 
 from aist.models import AISTPipeline, AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, AISTStatus, VersionType
+from aist.utils.secrets import MASKED_VALUE
 
 
 class AISTApiBase(TestCase):
@@ -568,6 +569,9 @@ class LaunchConfigAPITests(AISTApiBase):
             kwargs={"project_id": self.project.id, "config_id": cfg_id},
         )
 
+    def _dashboard_url(self):
+        return reverse("aist_api:launch_config_dashboard_list")
+
     def test_delete_launch_config(self):
         cfg = AISTProjectLaunchConfig.objects.create(
             project=self.project,
@@ -659,6 +663,38 @@ class LaunchConfigAPITests(AISTApiBase):
 
         self.assertFalse(cfg1.is_default)
         self.assertTrue(cfg2.is_default)
+
+    def test_launch_config_detail_masks_sensitive_params(self):
+        cfg = AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            name="Preset Secret",
+            description="",
+            params={"env": {"API_TOKEN": "plain-token", "NORMAL": "ok"}},
+            is_default=False,
+        )
+
+        resp = self.client.get(self._detail_url(cfg.id))
+
+        self.assertEqual(resp.status_code, 200)
+        env = resp.data.get("params", {}).get("env", {})
+        self.assertEqual(env.get("API_TOKEN"), MASKED_VALUE)
+        self.assertEqual(env.get("NORMAL"), "ok")
+
+    def test_launch_config_dashboard_masks_sensitive_params(self):
+        AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            name="Preset Secret Dashboard",
+            description="",
+            params={"env": {"PRIVATE_TOKEN": "plain-token"}},
+            is_default=False,
+        )
+
+        resp = self.client.get(self._dashboard_url())
+
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data if isinstance(resp.data, list) else resp.data.get("results", [])
+        self.assertTrue(results)
+        self.assertEqual(results[0].get("params", {}).get("env", {}).get("PRIVATE_TOKEN"), MASKED_VALUE)
 
     @patch("aist.api.launch_configs.run_sast_pipeline")
     @patch("aist.api.launch_configs.PipelineArguments.normalize_params")

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from django.urls import reverse
 
-from aist.models import AISTProjectLaunchConfig, AISTStatus
+from aist.models import AISTLaunchConfigAction, AISTProjectLaunchConfig, AISTStatus
 from aist.test.test_api import AISTApiBase
+from aist.utils.secrets import MASKED_VALUE
 
 
 class LaunchConfigActionsAPITests(AISTApiBase):
@@ -134,6 +135,20 @@ class LaunchConfigActionsAPITests(AISTApiBase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["config"]["level"], "WARNING")
+
+    def test_action_detail_masks_sensitive_config_fields(self):
+        cfg = self._config()
+        action = AISTLaunchConfigAction.objects.create(
+            launch_config=cfg,
+            trigger_status=AISTStatus.FINISHED,
+            action_type=AISTLaunchConfigAction.ActionType.WRITE_LOG,
+            config={"token": "plain-token", "level": "INFO"},
+        )
+
+        detail_resp = self.client.get(self._action_detail_url(cfg.id, action.id))
+        self.assertEqual(detail_resp.status_code, 200)
+        self.assertEqual(detail_resp.data.get("config", {}).get("token"), MASKED_VALUE)
+        self.assertEqual(detail_resp.data.get("config", {}).get("level"), "INFO")
 
     def test_duplicate_actions_allowed(self):
         cfg = self._config()

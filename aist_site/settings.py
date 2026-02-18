@@ -19,9 +19,15 @@ ROOT_URLCONF = "aist_site.urls"
 WSGI_APPLICATION = "aist_site.wsgi.application"
 ASGI_APPLICATION = "aist_site.asgi.application"
 
-# Guard DefectDojo UI from non-superusers while keeping API access intact.
-if "aist_site.middleware.AistAdminGuardMiddleware" not in MIDDLEWARE:  # noqa: F405
+
+if "aist_site.middleware.AistResponseMaskingMiddleware" not in MIDDLEWARE:  # noqa: F405
     middleware = list(MIDDLEWARE)  # noqa: F405
+    middleware.insert(0, "aist_site.middleware.AistResponseMaskingMiddleware")
+    MIDDLEWARE = middleware
+
+# Guard DefectDojo UI from non-superusers while keeping API access intact.
+if "aist_site.middleware.AistAdminGuardMiddleware" not in MIDDLEWARE:
+    middleware = list(MIDDLEWARE)
     try:
         auth_index = middleware.index("django.contrib.auth.middleware.AuthenticationMiddleware")
     except ValueError:

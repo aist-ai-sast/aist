@@ -17,10 +17,10 @@ def gitlab_projects_list_payload(gitlab_url: str, gitlab_token: str) -> tuple[di
     try:
         gl = gitlab.Gitlab(gitlab_url, private_token=gitlab_token)
         gl.auth()
-    except Exception:
+    except Exception as exc:
         return {
             "ok": False,
-            "error": "Unable to authenticate with GitLab. Please check URL and personal access token.",
+            "error": f"Unable to authenticate with GitLab. Please check URL and personal access token. Details: {exc}",
         }, 400
 
     projects: list[dict] = []
@@ -31,8 +31,11 @@ def gitlab_projects_list_payload(gitlab_url: str, gitlab_token: str) -> tuple[di
             order_by="last_activity_at",
             sort="desc",
         )
-    except Exception:
-        return {"ok": False, "error": "Failed to fetch projects list from GitLab."}, 400
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"Failed to fetch projects list from GitLab. Details: {exc}",
+        }, 400
 
     for pr in gl_projects:
         language = ""

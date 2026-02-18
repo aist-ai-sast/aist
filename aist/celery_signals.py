@@ -22,6 +22,7 @@ from aist.models import (
     VersionType,
 )
 from aist.signals import finding_deduplicated, pipeline_status_changed
+from aist.utils.secrets import mask_sensitive_text
 
 
 @receiver(post_save, sender=AISTProject, dispatch_uid="aistproject_autoversion_master")
@@ -201,7 +202,7 @@ def _update_action_run(
             "trigger_status": trigger_status,
             "source": source,
             "status": status,
-            "error": error or "",
+            "error": mask_sensitive_text(error or ""),
             "updated_at": updated_at,
         }
 

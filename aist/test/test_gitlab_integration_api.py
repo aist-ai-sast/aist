@@ -10,6 +10,7 @@ from dojo.models import Product, Product_Type, SLA_Configuration
 from rest_framework.test import APIClient
 
 from aist.models import AISTProject, Organization, RepositoryInfo, ScmGitlabBinding, ScmType
+from aist.utils.secrets import MASKED_VALUE
 
 
 class GitlabIntegrationAPITests(TestCase):
@@ -91,6 +92,29 @@ class GitlabIntegrationAPITests(TestCase):
         )
 
         self.assertEqual(resp.status_code, 404)
+
+    @patch("aist.api.gitlab_integration.gitlab.Gitlab")
+    def test_import_gitlab_project_masks_token_in_error_detail(self, mock_gitlab):
+        mock_gitlab.return_value.projects.get.side_effect = gitlab.exceptions.GitlabGetError(
+            error_message="upstream failed for glpat-abcdef12345678",
+            response_code=500,
+            response_body="",
+        )
+
+        resp = self.client.post(
+            self._url(),
+            data={
+                "project_id": 999,
+                "gitlab_api_token": "glpat-abcdef12345678",
+                "base_url": "https://gitlab.example.com",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 502)
+        self.assertNotIn("glpat-abcdef12345678", resp.data.get("detail", ""))
+        self.assertIn("GitLab API error:", resp.data.get("detail", ""))
+        self.assertIn(MASKED_VALUE, resp.data.get("detail", ""))
 
     @patch("aist.api.gitlab_integration._load_analyzers_config")
     @patch("aist.api.gitlab_integration.gitlab.Gitlab")
