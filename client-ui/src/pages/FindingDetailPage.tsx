@@ -14,6 +14,7 @@ import {
 import { useExportAiResults } from "../lib/mutations";
 import { useToast } from "../components/ToastProvider";
 import FindingStatusActions from "../components/FindingStatusActions";
+import { formatProjectVersionText } from "../lib/projectVersion";
 import { getRoute } from "../lib/routes";
 
 export default function FindingDetailPage() {
@@ -43,8 +44,15 @@ export default function FindingDetailPage() {
     ? metaQuery.data.versions[metaQuery.data.versions.length - 1]
     : undefined;
   const normalizedMetaVersion = latestMetaVersion?.label?.replace(/^\d+:\s*/, "");
+  const resolvedProjectVersionType =
+    finding?.projectVersionType ?? findingProjectVersionQuery.data?.versionType;
   const resolvedProjectVersion =
-    finding?.projectVersion ?? findingProjectVersionQuery.data ?? normalizedMetaVersion;
+    finding?.projectVersion ?? findingProjectVersionQuery.data?.version ?? normalizedMetaVersion;
+  const createdLabel = finding?.createdAt
+    ? new Date(finding.createdAt).toLocaleString()
+    : finding?.date
+      ? new Date(finding.date).toLocaleString()
+      : null;
   const findingsFilterLink = ({
     projectVersion,
     file,
@@ -87,8 +95,22 @@ export default function FindingDetailPage() {
             {finding.title}
           </h1>
           <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-400">
-            <span>Product: {productName ?? finding.product}</span>
-            {finding.cwe ? <span>CWE: {finding.cwe}</span> : null}
+            <span className="inline-flex items-center gap-1">
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3 4 7.5 12 12l8-4.5L12 3Z" />
+                <path d="M4 7.5V16.5L12 21" />
+                <path d="M20 7.5V16.5L12 21" />
+              </svg>
+              Product: {productName ?? finding.product}
+            </span>
+            {finding.cwe ? (
+              <span className="inline-flex items-center gap-1">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                  <path fill="currentColor" d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Zm0 2.2 6 2.2V11c0 4.1-2.7 8-6 9.2-3.3-1.2-6-5.1-6-9.2V6.4l6-2.2Z" />
+                </svg>
+                CWE: {finding.cwe}
+              </span>
+            ) : null}
             {resolvedProjectVersion ? (
               <Link
                 to={findingsFilterLink({ projectVersion: resolvedProjectVersion })}
@@ -100,17 +122,31 @@ export default function FindingDetailPage() {
                     d="M7 6a3 3 0 1 1 2.83 4H9v4h1a3 3 0 1 1 0 2H9a2 2 0 0 1-2-2v-4a3 3 0 0 1 0-4Z"
                   />
                 </svg>
-                Version: {resolvedProjectVersion}
+                {formatProjectVersionText(resolvedProjectVersion, resolvedProjectVersionType)}
               </Link>
             ) : null}
             {finding.filePath ? (
               <Link
                 to={findingsFilterLink({ file: finding.filePath })}
-                className="aist-clickable-text max-w-full truncate"
+                className="aist-clickable-text inline-flex max-w-full items-center gap-1 truncate"
                 title={finding.filePath}
               >
-                File: {finding.filePath}
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm7 1.5V7h3.5L13 3.5ZM6 4v16h10V8h-4a1 1 0 0 1-1-1V4H6Z"
+                  />
+                </svg>
+                <span className="truncate">File: {finding.filePath}</span>
               </Link>
+            ) : null}
+            {createdLabel ? (
+              <span className="inline-flex items-center gap-1">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                  <path fill="currentColor" d="M7 2h2v2h6V2h2v2h3v18H4V4h3V2Zm11 8H6v10h12V10Zm0-4H6v2h12V6Z" />
+                </svg>
+                Created: {createdLabel}
+              </span>
             ) : null}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">

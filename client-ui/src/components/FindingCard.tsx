@@ -1,4 +1,5 @@
 import type { Finding } from "../types";
+import { formatProjectVersionText } from "../lib/projectVersion";
 import FindingSnippetPreview from "./FindingSnippetPreview";
 
 type FindingCardProps = {
@@ -127,14 +128,20 @@ export default function FindingCard({
       <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-400">
         <button
           type="button"
-          className="aist-clickable-text max-w-full truncate text-left"
+          className="aist-clickable-text inline-flex max-w-full items-center gap-1 truncate text-left"
           title={finding.filePath}
           onClick={(event) => {
             event.stopPropagation();
             onSelectFile?.(finding.filePath);
           }}
         >
-          {finding.filePath}
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm7 1.5V7h3.5L13 3.5ZM6 4v16h10V8h-4a1 1 0 0 1-1-1V4H6Z"
+            />
+          </svg>
+          <span className="truncate">File: {finding.filePath}</span>
         </button>
         <span>Line {finding.line}</span>
         {finding.projectVersion ? (
@@ -145,6 +152,7 @@ export default function FindingCard({
               event.stopPropagation();
               onSelectProjectVersion?.(finding.projectVersion);
             }}
+            title={finding.projectVersion}
           >
             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
               <path
@@ -152,10 +160,17 @@ export default function FindingCard({
                 d="M7 6a3 3 0 1 1 2.83 4H9v4h1a3 3 0 1 1 0 2H9a2 2 0 0 1-2-2v-4a3 3 0 0 1 0-4Z"
               />
             </svg>
-            {finding.projectVersion}
+            {formatProjectVersionText(finding.projectVersion, finding.projectVersionType)}
           </button>
         ) : null}
-        {createdLabel ? <span>Created {createdLabel}</span> : null}
+        {createdLabel ? (
+          <span className="inline-flex items-center gap-1">
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+              <path fill="currentColor" d="M7 2h2v2h6V2h2v2h3v18H4V4h3V2Zm11 8H6v10h12V10Zm0-4H6v2h12V6Z" />
+            </svg>
+            Created {createdLabel}
+          </span>
+        ) : null}
         {finding.aiVerdict ? <span>{verdictLabel[finding.aiVerdict]}</span> : null}
       </div>
       <div className="mt-3">

@@ -1,7 +1,6 @@
 from aist.views.ai import (
     ai_filter_reference,
     delete_ai_response,
-    pipeline_callback,
     product_analyzers_json,
     search_findings_json,
     send_request_to_ai,
@@ -50,7 +49,6 @@ __all__ = [
     "export_ai_results",
     "gitlab_projects_list",
     "launching_dashboard",
-    "pipeline_callback",
     "pipeline_detail",
     "pipeline_enrich_progress_sse",
     "pipeline_list",

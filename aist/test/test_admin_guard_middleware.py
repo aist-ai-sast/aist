@@ -6,13 +6,22 @@ from django.contrib.auth.models import AnonymousUser
 from django.http import HttpResponse
 from django.test import TestCase
 from django.test.client import RequestFactory
+from django.test.utils import override_settings
 from django.utils.crypto import get_random_string
+from rest_framework.authentication import BaseAuthentication
+from rest_framework.authtoken.models import Token
+from rest_framework.exceptions import AuthenticationFailed
 
 from aist_site.middleware import AistAdminGuardMiddleware
 
 
 def _make_password() -> str:
     return get_random_string(12)
+
+
+class AlwaysFailAuthentication(BaseAuthentication):
+    def authenticate(self, request):
+        raise AuthenticationFailed("forced failure")
 
 
 class AistAdminGuardMiddlewareTests(TestCase):
@@ -162,6 +171,113 @@ class AistAdminGuardMiddlewareTests(TestCase):
         request.user = user
         response = self.middleware(request)
         self.assertEqual(response.status_code, 200)
+
+    def test_allows_api_access_for_superuser_with_valid_token_when_request_user_anonymous(self):
+        user = get_user_model().objects.create_superuser(
+            username="admin_api_token",
+            password=_make_password(),
+            email="admin_api_token@example.com",
+        )
+        token = Token.objects.create(user=user)
+        request = self.factory.get(
+            "/aist-admin/api/v2/findings/",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        request.user = AnonymousUser()
+        request.session = {}
+        request.session = {}
+        response = self.middleware(request)
+        self.assertEqual(response.status_code, 200)
+
+    def test_blocks_api_access_for_non_superuser_with_valid_token_without_session(self):
+        user = get_user_model().objects.create_user(
+            username="client_api_token",
+            password=_make_password(),
+        )
+        token = Token.objects.create(user=user)
+        request = self.factory.get(
+            "/aist-admin/api/v2/findings/",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        request.user = AnonymousUser()
+        response = self.middleware(request)
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(
+        REST_FRAMEWORK={
+            **settings.REST_FRAMEWORK,
+            "DEFAULT_AUTHENTICATION_CLASSES": (
+                "aist.test.test_admin_guard_middleware.AlwaysFailAuthentication",
+                "rest_framework.authentication.TokenAuthentication",
+            ),
+        },
+    )
+    def test_allows_superuser_token_when_first_authenticator_fails(self):
+        user = get_user_model().objects.create_superuser(
+            username="admin_api_chain",
+            password=_make_password(),
+            email="admin_api_chain@example.com",
+        )
+        token = Token.objects.create(user=user)
+        request = self.factory.get(
+            "/aist-admin/api/v2/findings/",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        request.user = AnonymousUser()
+        response = self.middleware(request)
+        self.assertEqual(response.status_code, 200)
+
+    def test_superuser_token_is_attached_to_request_user_for_downstream_middlewares(self):
+        user = get_user_model().objects.create_superuser(
+            username="admin_api_downstream",
+            password=_make_password(),
+            email="admin_api_downstream@example.com",
+        )
+        token = Token.objects.create(user=user)
+        request = self.factory.get(
+            "/aist-admin/api/v2/findings/",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        request.user = AnonymousUser()
+
+        middleware = AistAdminGuardMiddleware(
+            lambda req: HttpResponse("ok" if req.user.is_authenticated else "redirect", status=200 if req.user.is_authenticated else 302),
+        )
+
+        response = middleware(request)
+        self.assertEqual(response.status_code, 200)
+
+    def test_superuser_token_populates_request_user_and_cache(self):
+        user = get_user_model().objects.create_superuser(
+            username="admin_api_cache",
+            password=_make_password(),
+            email="admin_api_cache@example.com",
+        )
+        token = Token.objects.create(user=user)
+        request = self.factory.get(
+            "/aist-admin/api/v2/findings/",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        request.user = AnonymousUser()
+        request.session = {}
+
+        captured = {}
+
+        def _view(req):
+            captured["user"] = req.user
+            captured["cached_user"] = getattr(req, "_cached_user", None)
+            return HttpResponse("ok")
+
+        middleware = AistAdminGuardMiddleware(_view)
+        response = middleware(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(captured["user"].is_authenticated)
+        self.assertTrue(captured["user"].is_superuser)
+        self.assertEqual(captured["user"].pk, user.pk)
+        self.assertIsNotNone(captured["cached_user"])
+        self.assertTrue(captured["cached_user"].is_superuser)
+        self.assertEqual(captured["cached_user"].pk, user.pk)
 
     def test_allows_admin_static_for_anonymous(self):
         request = self.factory.get("/aist-admin/static/admin.css")

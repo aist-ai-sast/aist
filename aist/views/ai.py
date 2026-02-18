@@ -2,7 +2,6 @@ import json
 from operator import itemgetter
 
 from django.contrib.auth.decorators import login_required
-from django.db import transaction
 from django.db.models import Case, IntegerField, Q, Value, When
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -12,18 +11,11 @@ from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding, Test
 from dojo.product.queries import get_authorized_products
-from rest_framework import status
-from rest_framework.authentication import TokenAuthentication
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
 
 from aist.ai_filter import get_ai_filter_reference, validate_and_normalize_filter
 from aist.api.ai import delete_ai_response_for_pipeline, send_request_to_ai_for_pipeline
-from aist.logging_transport import install_pipeline_logging
-from aist.models import AISTAIResponse, AISTPipeline
+from aist.models import AISTPipeline
 from aist.queries import get_authorized_aist_pipelines
-from aist.utils.pipeline import finish_pipeline
 
 
 def _severity_rank_case():
@@ -204,34 +196,6 @@ def delete_ai_response(request, pipeline_id: str, response_id: int):
     user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
     delete_ai_response_for_pipeline(pipeline, response_id)
     return redirect("aist:pipeline_detail", pipeline_id=pipeline.id)
-
-
-@api_view(["POST"])
-@authentication_classes([TokenAuthentication])
-@permission_classes([IsAuthenticated])
-def pipeline_callback(request, pipeline_id: str):
-    try:
-        get_object_or_404(AISTPipeline, id=pipeline_id)
-        response_from_ai = request.data
-    except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-    errors = response_from_ai.pop("errors", None)
-    logger = install_pipeline_logging(pipeline_id)
-    if errors:
-        logger.error(errors)
-
-    with transaction.atomic():
-        pipeline = (
-            AISTPipeline.objects
-            .select_for_update()
-            .get(id=pipeline_id)
-        )
-        AISTAIResponse.objects.create(pipeline=pipeline, payload=response_from_ai)
-        finish_pipeline(pipeline)
-
-    return Response({"ok": True})
-
 
 @require_GET
 @login_required

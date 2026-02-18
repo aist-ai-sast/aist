@@ -1,6 +1,7 @@
 export type RiskState = "risk_accepted" | "under_review" | "mitigated";
 export type Severity = "Critical" | "High" | "Medium" | "Low" | "Info";
 export type AIVerdict = "true_positive" | "false_positive" | "uncertain";
+export type ProjectVersionType = "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH";
 
 export type FindingFilters = {
   productId?: number;
@@ -44,6 +45,7 @@ export type Finding = {
   riskStates?: RiskState[];
   projectVersionId?: number;
   projectVersion?: string;
+  projectVersionType?: ProjectVersionType;
   sourceFileLink?: string;
 };
 

@@ -59,5 +59,5 @@ def get_public_base_url() -> str:
 
 def build_callback_url(pipeline_id: str) -> str:
     base = get_public_base_url()
-    path = reverse("aist:pipeline_callback", kwargs={"pipeline_id": str(pipeline_id)})
+    path = reverse("aist_api:pipeline_callback", kwargs={"pipeline_id": str(pipeline_id)})
     return urljoin(base + "/", path.lstrip("/"))

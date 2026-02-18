@@ -10,15 +10,16 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers
+from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.logging_transport import install_pipeline_logging
-from aist.models import AISTPipeline, AISTStatus
+from aist.models import AISTAIResponse, AISTPipeline, AISTStatus
 from aist.queries import get_authorized_aist_pipelines
 from aist.tasks import push_request_to_ai
-from aist.utils.pipeline import set_pipeline_status
+from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 
 
 def send_request_to_ai_for_pipeline(request: HttpRequest, pipeline: AISTPipeline) -> JsonResponse:
@@ -77,6 +78,11 @@ class AISendRequestSerializer(serializers.Serializer):
     filters = serializers.JSONField(required=False)
 
 
+class AIPipelineCallbackSerializer(serializers.Serializer):
+    errors = serializers.JSONField(required=False)
+    results = serializers.JSONField(required=False)
+
+
 class AISendRequestAPI(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -105,3 +111,32 @@ class AIDeleteResponseAPI(APIView):
         user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
         delete_ai_response_for_pipeline(pipeline, response_id)
         return Response(status=204)
+
+
+class AIPipelineCallbackAPI(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=AIPipelineCallbackSerializer,
+        responses={200: OpenApiResponse(description="Callback accepted")},
+    )
+    def post(self, request, pipeline_id: str):
+        pipeline = get_object_or_404(AISTPipeline, id=pipeline_id)
+        response_from_ai = dict(request.data)
+
+        errors = response_from_ai.pop("errors", None)
+        logger = install_pipeline_logging(pipeline_id)
+        if errors:
+            logger.error(errors)
+
+        with transaction.atomic():
+            locked = (
+                AISTPipeline.objects
+                .select_for_update()
+                .get(id=pipeline_id)
+            )
+            AISTAIResponse.objects.create(pipeline=locked, payload=response_from_ai)
+            finish_pipeline(locked)
+
+        return Response({"ok": True})

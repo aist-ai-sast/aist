@@ -38,20 +38,21 @@ def _parse_csv_values(request, param_name: str) -> list[str]:
     return values
 
 
-def _pick_project_version_label(finding) -> str | None:
+def _pick_project_version_info(finding) -> tuple[str | None, str | None]:
     versions_rel = getattr(finding, "aist_project_versions", None)
     if versions_rel is None:
-        return None
+        return None, None
     versions = list(versions_rel.all())
     if not versions:
-        return None
+        return None, None
     hash_version = next((v for v in versions if v.version_type == VersionType.GIT_HASH), None)
     if hash_version:
-        return hash_version.version
+        return hash_version.version, hash_version.version_type
     branch_version = next((v for v in versions if v.version_type == VersionType.GIT_BRANCH), None)
     if branch_version:
-        return branch_version.version
-    return versions[0].version
+        return branch_version.version, branch_version.version_type
+    first = versions[0]
+    return first.version, first.version_type
 
 
 class AISTFindingListAPI(APIView):
@@ -123,7 +124,9 @@ class AISTFindingListAPI(APIView):
         serializer = dojo_serializers.FindingSerializer(page, many=True, context={"request": request})
         payload = list(serializer.data)
         for row, finding in zip(payload, page, strict=True):
-            row["project_version"] = _pick_project_version_label(finding)
+            project_version, project_version_type = _pick_project_version_info(finding)
+            row["project_version"] = project_version
+            row["project_version_type"] = project_version_type
             created = getattr(finding, "date", None) or getattr(finding, "created", None)
             row["created"] = created.isoformat() if created else None
         return paginator.get_paginated_response(payload)

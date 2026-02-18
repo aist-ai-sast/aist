@@ -13,6 +13,7 @@ type FindingApi = {
   date?: string;
   created?: string;
   project_version?: string | null;
+  project_version_type?: "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH" | null;
   file_path?: string | null;
   line?: number | null;
   description?: string | null;
@@ -215,6 +216,7 @@ export function useFindingsPage(filters: FindingFilters) {
         date: item.date,
         createdAt: item.created ?? item.date,
         projectVersion: item.project_version ?? undefined,
+        projectVersionType: item.project_version_type ?? undefined,
         filePath: item.file_path ?? "",
         line: item.line ?? 0,
         tool: "",
@@ -286,6 +288,7 @@ export function useFindingsWithFilters(filters: FindingFilters) {
         date: item.date,
         createdAt: item.created ?? item.date,
         projectVersion: item.project_version ?? undefined,
+        projectVersionType: item.project_version_type ?? undefined,
         filePath: item.file_path ?? "",
         line: item.line ?? 0,
         tool: "",
@@ -335,6 +338,7 @@ export function useFinding(findingId?: number) {
         date: item.date,
         createdAt: item.created ?? item.date,
         projectVersion: item.project_version ?? undefined,
+        projectVersionType: item.project_version_type ?? undefined,
         filePath: item.file_path ?? "",
         line: item.line ?? 0,
         tool: "",
@@ -366,7 +370,11 @@ export function useFindingProjectVersion(findingId?: number) {
         `${getRoute("findings_list_url")}?${params.toString()}`,
       );
       const item = normalizeList(payload)[0];
-      return item?.project_version ?? undefined;
+      if (!item?.project_version) return undefined;
+      return {
+        version: item.project_version,
+        versionType: item.project_version_type ?? undefined,
+      };
     },
     enabled: Boolean(findingId),
   });

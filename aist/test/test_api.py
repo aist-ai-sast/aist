@@ -21,9 +21,10 @@ from dojo.models import (
     Test_Type,
 )
 from drf_spectacular.generators import SchemaGenerator
+from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
-from aist.models import AISTPipeline, AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, AISTStatus, VersionType
+from aist.models import AISTAIResponse, AISTPipeline, AISTProject, AISTProjectLaunchConfig, AISTProjectVersion, AISTStatus, VersionType
 from aist.utils.secrets import MASKED_VALUE
 
 
@@ -136,6 +137,56 @@ class PipelineStartAPITests(AISTApiBase):
 
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.data, {"ai_filter": "ai_filter is required for AUTO_DEFAULT"})
+
+
+class PipelineCallbackAPITests(AISTApiBase):
+    def test_pipeline_callback_accepts_token_on_api_url(self):
+        superuser = get_user_model().objects.create_superuser(
+            username="callback_admin",
+            email="callback_admin@example.com",
+            password="pass",  # noqa: S106
+        )
+        token = Token.objects.create(user=superuser)
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-callback-api",
+            project=self.project,
+            status=AISTStatus.WAITING_RESULT_FROM_AI,
+        )
+
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        resp = client.post(
+            reverse("aist_api:pipeline_callback", kwargs={"pipeline_id": pipeline.id}),
+            data={"results": {"true_positives": []}},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data, {"ok": True})
+        self.assertTrue(AISTAIResponse.objects.filter(pipeline=pipeline).exists())
+
+    def test_old_ui_callback_url_is_not_available(self):
+        superuser = get_user_model().objects.create_superuser(
+            username="callback_admin_old_url",
+            email="callback_admin_old@example.com",
+            password="pass",  # noqa: S106
+        )
+        token = Token.objects.create(user=superuser)
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-callback-old-url",
+            project=self.project,
+            status=AISTStatus.WAITING_RESULT_FROM_AI,
+        )
+
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        resp = client.post(
+            f"/aist-admin/aist/pipelines/{pipeline.id}/callback/",
+            data={"results": {"true_positives": []}},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 404)
 
 
 class AISTAuthorizationTests(AISTApiBase):
@@ -332,6 +383,7 @@ class AISTFindingTagsTests(AISTApiBase):
         rows = {row["id"]: row for row in resp.data.get("results", [])}
         row = rows[self.finding.id]
         self.assertEqual(row.get("project_version"), pv_hash.version)
+        self.assertEqual(row.get("project_version_type"), VersionType.GIT_HASH)
         self.assertIn("created", row)
 
     def test_finding_list_filters_by_multiple_severities(self):

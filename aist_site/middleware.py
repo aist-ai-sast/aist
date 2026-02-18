@@ -5,6 +5,10 @@ from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.shortcuts import render
+from rest_framework import exceptions
+from rest_framework.authentication import get_authorization_header
+from rest_framework.request import Request
+from rest_framework.settings import api_settings
 
 from aist.utils.secrets import mask_sensitive_data
 
@@ -55,6 +59,7 @@ class AistAdminGuardMiddleware:
     - `/aist-admin/static/*` is always allowed.
     - `/aist-admin/api/*`:
       - superuser: always allowed.
+      - superuser authenticated via API auth header (Token/Bearer/etc): allowed.
       - non-superuser: allowed only for authenticated UI-session requests.
       - non-superuser token-style requests (`Authorization` header) are denied.
     - Other `/aist-admin/*` UI pages:
@@ -106,10 +111,18 @@ class AistAdminGuardMiddleware:
         if user.is_authenticated and user.is_superuser:
             return self.get_response(request)
 
-        if not self._is_ui_session_user(request):
+        api_user = self._authenticate_api_header_user(request)
+        if api_user is not None:
+            if api_user.is_superuser:
+                request.user = api_user
+                request._cached_user = api_user
+                return self.get_response(request)
             return self._deny_forbidden(request)
 
         if self._has_explicit_api_auth_header(request):
+            return self._deny_forbidden(request)
+
+        if not self._is_ui_session_user(request):
             return self._deny_forbidden(request)
 
         return self.get_response(request)
@@ -133,6 +146,21 @@ class AistAdminGuardMiddleware:
         return bool(request.COOKIES.get(settings.SESSION_COOKIE_NAME))
 
     def _has_explicit_api_auth_header(self, request) -> bool:
-        # Token/Bearer-style auth is intentionally not accepted here for
-        # non-superusers; `/aist-admin/api/*` is reserved for UI-session flow.
-        return bool(request.headers.get("Authorization"))
+        return bool(get_authorization_header(request))
+
+    def _authenticate_api_header_user(self, request):
+        if not self._has_explicit_api_auth_header(request):
+            return None
+
+        drf_request = Request(request)
+        for auth_cls in api_settings.DEFAULT_AUTHENTICATION_CLASSES:
+            authenticator = auth_cls()
+            try:
+                auth_result = authenticator.authenticate(drf_request)
+            except exceptions.APIException:
+                continue
+            if auth_result is None:
+                continue
+            user, _ = auth_result
+            return user
+        return None

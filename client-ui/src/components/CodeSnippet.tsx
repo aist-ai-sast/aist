@@ -125,8 +125,14 @@ export default function CodeSnippet({
   return (
     <div className="rounded-xl border border-night-500 bg-night-900 overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-night-500 px-3 py-2 text-xs text-slate-400">
-        <span className="min-w-0 flex-1 truncate" title={filePath ?? ""}>
-          {filePath ?? "File"}
+        <span className="min-w-0 flex flex-1 items-center gap-1 truncate" title={filePath ?? ""}>
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm7 1.5V7h3.5L13 3.5ZM6 4v16h10V8h-4a1 1 0 0 1-1-1V4H6Z"
+            />
+          </svg>
+          <span className="truncate">{filePath ?? "File"}</span>
         </span>
         <div className="flex flex-wrap items-center gap-2">
           <button

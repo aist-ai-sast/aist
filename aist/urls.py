@@ -22,7 +22,6 @@ urlpatterns = [
     path("products/<int:product_id>/analyzers.json", ai.product_analyzers_json, name="product_analyzers_json"),
     path("findings/search.json", ai.search_findings_json, name="search_findings_json"),
     path("pipelines/<str:pipeline_id>/send_request_to_ai/", ai.send_request_to_ai, name="send_request_to_ai"),
-    path("pipelines/<str:pipeline_id>/callback/", ai.pipeline_callback, name="pipeline_callback"),
     path("pipelines/<str:pipeline_id>/ai-response/<int:response_id>/delete/",
          ai.delete_ai_response,
          name="delete_ai_response"),
