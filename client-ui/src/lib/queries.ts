@@ -9,7 +9,8 @@ type FindingApi = {
   title: string;
   severity: "Critical" | "High" | "Medium" | "Low" | "Info";
   active: boolean;
-  product: number;
+  product?: number | null;
+  project_id?: number | null;
   date?: string;
   created?: string;
   project_version?: string | null;
@@ -176,8 +177,8 @@ export function useProductSummaries() {
   });
 }
 
-export function useFindings(productId?: number) {
-  const filters: FindingFilters = productId ? { productId } : {};
+export function useFindings(projectId?: number) {
+  const filters: FindingFilters = projectId ? { projectId } : {};
   return useFindingsWithFilters(filters);
 }
 
@@ -190,7 +191,7 @@ export function useFindingsPage(filters: FindingFilters) {
       const params = new URLSearchParams({
         limit: String(limit),
         offset: String(offset),
-        ...(filters.productId ? { test__engagement__product: String(filters.productId) } : {}),
+        ...(filters.projectId ? { project_id: String(filters.projectId) } : {}),
         ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
         ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
         ...(filters.file ? { file: filters.file } : {}),
@@ -228,8 +229,8 @@ export function useFindingsPage(filters: FindingFilters) {
         falsePositive: item.false_p ?? false,
         outOfScope: item.out_of_scope ?? false,
         duplicate: item.duplicate ?? false,
-        product: String(item.product),
-        productId: item.product,
+        product: String(item.product ?? ""),
+        projectId: item.project_id ?? undefined,
         date: item.date,
         createdAt: item.created ?? item.date,
         projectVersion: item.project_version ?? undefined,
@@ -263,7 +264,7 @@ export function useFindingsWithFilters(filters: FindingFilters) {
       const params = new URLSearchParams({
         limit: String(limit),
         offset: String(pageParam),
-        ...(filters.productId ? { test__engagement__product: String(filters.productId) } : {}),
+        ...(filters.projectId ? { project_id: String(filters.projectId) } : {}),
         ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
         ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
         ...(filters.file ? { file: filters.file } : {}),
@@ -301,8 +302,8 @@ export function useFindingsWithFilters(filters: FindingFilters) {
         falsePositive: item.false_p ?? false,
         outOfScope: item.out_of_scope ?? false,
         duplicate: item.duplicate ?? false,
-        product: String(item.product),
-        productId: item.product,
+        product: String(item.product ?? ""),
+        projectId: item.project_id ?? undefined,
         date: item.date,
         createdAt: item.created ?? item.date,
         projectVersion: item.project_version ?? undefined,
@@ -352,7 +353,7 @@ export function useFinding(findingId?: number) {
         outOfScope: item.out_of_scope ?? false,
         duplicate: item.duplicate ?? false,
         product: String(item.product ?? ""),
-        productId: item.product,
+        projectId: item.project_id ?? undefined,
         date: item.date,
         createdAt: item.created ?? item.date,
         projectVersion: item.project_version ?? undefined,
@@ -390,6 +391,7 @@ export function useFindingProjectVersion(findingId?: number) {
       const item = normalizeList(payload)[0];
       if (!item?.project_version) return undefined;
       return {
+        projectId: item.project_id ?? undefined,
         version: item.project_version,
         versionType: item.project_version_type ?? undefined,
       };
@@ -535,7 +537,7 @@ export function useAiFindingResponses(
 }
 
 type PipelineSummaryFilters = {
-  productId?: number;
+  projectId?: number;
   status?: string;
   createdGte?: string;
   createdLte?: string;
@@ -550,7 +552,7 @@ export function usePipelineSummaries(filters: PipelineSummaryFilters) {
     queryKey: ["pipelines-summary", filters],
     queryFn: async () => {
       const params = new URLSearchParams({
-        ...(filters.productId ? { product_id: String(filters.productId) } : {}),
+        ...(filters.projectId ? { project_id: String(filters.projectId) } : {}),
         ...(filters.status ? { status: filters.status } : {}),
         ...(filters.createdGte ? { created_gte: filters.createdGte } : {}),
         ...(filters.createdLte ? { created_lte: filters.createdLte } : {}),
@@ -595,11 +597,11 @@ export function useFindingTags() {
   });
 }
 
-export function useFindingTagsByProduct(productId?: number) {
+export function useFindingTagsByProject(projectId?: number) {
   return useQuery({
-    queryKey: ["finding-tags", productId ?? "all"],
+    queryKey: ["finding-tags", projectId ?? "all"],
     queryFn: async () => {
-      const params = productId ? `?product_id=${productId}` : "";
+      const params = projectId ? `?project_id=${projectId}` : "";
       const payload = await fetchJson<{ tags: string[] }>(`${getRoute("finding_tags_url")}${params}`);
       const cleaned = (payload.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
       return Array.from(new Set(cleaned));

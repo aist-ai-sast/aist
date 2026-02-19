@@ -4,7 +4,7 @@ export type AIVerdict = "true_positive" | "false_positive" | "uncertain";
 export type ProjectVersionType = "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH";
 
 export type FindingFilters = {
-  productId?: number;
+  projectId?: number;
   pipelineId?: string;
   projectVersion?: string;
   file?: string;
@@ -31,7 +31,7 @@ export type Finding = {
   outOfScope?: boolean;
   duplicate?: boolean;
   product: string;
-  productId?: number;
+  projectId?: number;
   date?: string;
   createdAt?: string;
   filePath: string;

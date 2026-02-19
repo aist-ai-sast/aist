@@ -40,7 +40,7 @@ class AISTPipelineSummaryAPI(APIView):
         tags=["aist"],
         summary="List pipeline summaries",
         parameters=[
-            OpenApiParameter(name="product_id", required=False, type=int),
+            OpenApiParameter(name="project_id", required=False, type=int),
             OpenApiParameter(name="status", required=False, type=str),
             OpenApiParameter(name="created_gte", required=False, type=str),
             OpenApiParameter(name="created_lte", required=False, type=str),
@@ -59,15 +59,15 @@ class AISTPipelineSummaryAPI(APIView):
         )
         qp = request.query_params
 
-        product_id = qp.get("product_id")
+        project_id = qp.get("project_id")
         status = qp.get("status")
         created_gte = qp.get("created_gte")
         created_lte = qp.get("created_lte")
         search = (qp.get("search") or "").strip()
         ordering = qp.get("ordering")
 
-        if product_id:
-            qs = qs.filter(project__product_id=product_id)
+        if project_id:
+            qs = qs.filter(project_id=project_id)
         if status:
             qs = qs.filter(status=status)
         if created_gte:

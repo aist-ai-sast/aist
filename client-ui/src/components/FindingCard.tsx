@@ -5,8 +5,6 @@ import FindingSnippetPreview from "./FindingSnippetPreview";
 
 type FindingCardProps = {
   finding: Finding;
-  projectId?: number;
-  projectVersionId?: number;
   onSelect: (finding: Finding) => void;
   isOpen?: boolean;
   expandedContent?: React.ReactNode;
@@ -24,8 +22,6 @@ const severityStyles: Record<Finding["severity"], string> = {
 
 export default function FindingCard({
   finding,
-  projectId,
-  projectVersionId,
   onSelect,
   isOpen = false,
   expandedContent,
@@ -182,8 +178,6 @@ export default function FindingCard({
           </div>
         ) : (
           <FindingSnippetPreview
-            projectId={projectId}
-            projectVersionId={projectVersionId}
             filePath={finding.filePath}
             sourceFileLink={finding.sourceFileLink}
             line={finding.line}

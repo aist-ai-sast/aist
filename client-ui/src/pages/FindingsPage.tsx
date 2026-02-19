@@ -7,9 +7,8 @@ import SegmentedSortControl from "../components/SegmentedSortControl";
 import type { Finding } from "../types";
 import {
   useAiFindingResponses,
-  useFindingTagsByProduct,
+  useFindingTagsByProject,
   useFindingsPage,
-  useProjectMeta,
   useProjects,
 } from "../lib/queries";
 import { useToast } from "../components/ToastProvider";
@@ -17,7 +16,7 @@ import PaginationBar from "../components/PaginationBar";
 import { buildFindingsOrdering, FINDINGS_SORT_OPTIONS, type FindingsSortKey } from "../lib/findingsSort";
 
 export default function FindingsPage() {
-  const [selectedProductId, setSelectedProductId] = useState<number | undefined>();
+  const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>();
   const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
   const [selectedStatus, setSelectedStatus] = useState<string>("All");
   const [selectedRisk, setSelectedRisk] = useState<string[]>([]);
@@ -38,7 +37,7 @@ export default function FindingsPage() {
   const ordering = buildFindingsOrdering(selectedSort, selectedSortDirection);
 
   const findingsQuery = useFindingsPage({
-    productId: selectedProductId,
+    projectId: selectedProjectId,
     pipelineId: selectedPipelineId,
     aiResponse: selectedAiResponse === "All" ? undefined : (selectedAiResponse as "has_ai" | "no_ai"),
     projectVersion: selectedProjectVersion || undefined,
@@ -54,12 +53,7 @@ export default function FindingsPage() {
   });
 
   const projects = projectsQuery.data ?? [];
-  const projectIdByProduct = useMemo(
-    () => new Map(projects.map((project) => [project.productId, project.id])),
-    [projects],
-  );
-  const aistProjectForFilters = projects.find((project) => project.productId === selectedProductId);
-  const filterMetaQuery = useProjectMeta(aistProjectForFilters?.id);
+  const aistProjectForFilters = projects.find((project) => project.id === selectedProjectId);
   const findingIds = useMemo(
     () => (findingsQuery.data?.items ?? []).map((finding) => finding.id),
     [findingsQuery.data],
@@ -69,9 +63,6 @@ export default function FindingsPage() {
     selectedPipelineId,
     findingIds,
   );
-  const filterProjectVersionId = filterMetaQuery.data?.versions?.length
-    ? Number(filterMetaQuery.data.versions[filterMetaQuery.data.versions.length - 1].id)
-    : undefined;
 
   const aiVerdictMap = useMemo(() => {
     const map = new Map<number, string>();
@@ -82,28 +73,31 @@ export default function FindingsPage() {
     }
     return map;
   }, [aiResponsesQuery.data]);
+  const projectsById = useMemo(
+    () => new Map(projects.map((project) => [project.id, project])),
+    [projects],
+  );
 
   const findings = useMemo(() => {
     const raw = findingsQuery.data?.items ?? [];
-    const productMap = new Map(projects.map((project) => [project.productId, project.name]));
     return raw.map((finding) => {
       const override = findingOverrides[finding.id] ?? {};
       return {
         ...finding,
         ...override,
-        product: productMap.get(finding.productId ?? 0) ?? finding.product,
+        product: projectsById.get(finding.projectId ?? 0)?.name ?? finding.product,
         aiVerdict: aiVerdictMap.get(finding.id) as any,
       };
     });
-  }, [findingsQuery.data, projects, aiVerdictMap, findingOverrides]);
+  }, [findingsQuery.data, projectsById, aiVerdictMap, findingOverrides]);
 
-  const tagsQuery = useFindingTagsByProduct(selectedProductId);
+  const tagsQuery = useFindingTagsByProject(selectedProjectId);
   const availableTags = tagsQuery.data ?? [];
   const [expandedIds, setExpandedIds] = useState<number[]>([]);
 
   useEffect(() => {
     setSelectedTags([]);
-  }, [selectedProductId]);
+  }, [selectedProjectId]);
 
   useEffect(() => {
     setSelectedTags((current) => current.filter((tag) => availableTags.includes(tag)));
@@ -115,14 +109,9 @@ export default function FindingsPage() {
     setExpandedIds((current) => current.filter((id) => allowed.has(id)));
   }, [findings, expandedIds.length]);
 
-  const metaQuery = useProjectMeta(aistProjectForFilters?.id);
-  const projectVersionId = metaQuery.data?.versions?.length
-    ? Number(metaQuery.data.versions[metaQuery.data.versions.length - 1].id)
-    : undefined;
-
   useEffect(() => {
     setPageIndex(0);
-  }, [selectedProductId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiResponse, selectedPipelineId, selectedFile, selectedProjectVersion, ordering, pageSize]);
+  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiResponse, selectedPipelineId, selectedFile, selectedProjectVersion, ordering, pageSize]);
 
   const applyCloseState = (
     findingId: number,
@@ -156,26 +145,32 @@ export default function FindingsPage() {
   };
 
   useEffect(() => {
-    const productParam = searchParams.get("product");
+    const projectParam = searchParams.get("project");
     const pipelineParam = searchParams.get("pipeline");
     const projectVersionParam = searchParams.get("project_version");
     const fileParam = searchParams.get("file");
+    const aiResponseParam = searchParams.get("ai_response");
 
-    if (productParam) {
-      const parsed = Number(productParam);
+    if (projectParam) {
+      const parsed = Number(projectParam);
       if (!Number.isNaN(parsed)) {
-        setSelectedProductId(parsed);
+        setSelectedProjectId(parsed);
       }
     } else {
-      setSelectedProductId(undefined);
+      setSelectedProjectId(undefined);
     }
     setSelectedPipelineId(pipelineParam || undefined);
     setSelectedProjectVersion(projectVersionParam ?? "");
     setSelectedFile(fileParam ?? "");
+    if (aiResponseParam === "has_ai" || aiResponseParam === "no_ai") {
+      setSelectedAiResponse(aiResponseParam);
+    } else {
+      setSelectedAiResponse("All");
+    }
   }, [searchParams]);
 
-  const handleProductChange = (productId?: number) => {
-    setSelectedProductId(productId);
+  const handleProjectChange = (projectId?: number) => {
+    setSelectedProjectId(projectId);
     setSelectedProjectVersion("");
   };
 
@@ -216,8 +211,8 @@ export default function FindingsPage() {
       <div className="aist-scrollbar lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
         <FilterPanel
           products={projects}
-          selectedProductId={selectedProductId}
-          onProductChange={handleProductChange}
+          selectedProjectId={selectedProjectId}
+          onProjectChange={handleProjectChange}
           selectedSeverities={selectedSeverities}
           onSeveritiesChange={setSelectedSeverities}
           selectedFile={selectedFile}
@@ -285,26 +280,19 @@ export default function FindingsPage() {
                     <div key={finding.id} className="space-y-3">
                       <FindingCard
                         finding={finding}
-                        projectId={projectIdByProduct.get(finding.productId ?? 0)}
-                        projectVersionId={selectedProductId ? filterProjectVersionId : undefined}
                         isOpen={expandedIds.includes(finding.id)}
                         onSelectProjectVersion={(projectVersion) => {
                           setSelectedProjectVersion(projectVersion);
-                          if (finding.productId) {
-                            setSelectedProductId(finding.productId);
+                          if (finding.projectId) {
+                            setSelectedProjectId(finding.projectId);
                           }
                         }}
                         onSelectFile={setSelectedFile}
                         expandedContent={
                           expandedIds.includes(finding.id) ? (
                             <DetailPanel
-                              finding={{
-                                ...finding,
-                                projectVersionId:
-                                  selectedProductId && selectedProductId === finding.productId
-                                    ? filterProjectVersionId
-                                    : projectVersionId,
-                              }}
+                              finding={finding}
+                              permissionProductId={projectsById.get(finding.projectId ?? 0)?.productId}
                               aiResponse={aiResponse}
                               pipelineId={aiResponse?.pipelineId}
                               selectedTags={selectedTags}

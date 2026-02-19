@@ -5,7 +5,6 @@ import { useFileSnippet } from "../lib/snippetCache";
 const MonacoEditor = lazy(() => import("@monaco-editor/react"));
 
 type CodeSnippetProps = {
-  projectVersionId?: number;
   filePath?: string;
   sourceFileLink?: string;
   line?: number;
@@ -13,15 +12,12 @@ type CodeSnippetProps = {
 };
 
 export default function CodeSnippet({
-  projectVersionId,
   filePath,
   sourceFileLink,
   line,
   fallback,
 }: CodeSnippetProps) {
   const { snippet, isLoading, isError } = useFileSnippet({
-    projectVersionId,
-    filePath,
     sourceFileLink,
     line,
   });
@@ -90,7 +86,7 @@ export default function CodeSnippet({
     applyHighlight();
   }, [editorReady, highlightLine, snippetText]);
 
-  if ((!filePath && !sourceFileLink) || !line) {
+  if (!sourceFileLink || !line) {
     return (
       <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-xs text-slate-400">
         Code snippet unavailable.

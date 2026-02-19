@@ -4,29 +4,21 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchFileContent } from "./api";
 
 type SnippetParams = {
-  projectVersionId?: number;
-  filePath?: string;
   sourceFileLink?: string;
   line?: number;
   context?: number;
 };
 
-export function useFileSnippet({
-  projectVersionId,
-  filePath,
-  sourceFileLink,
-  line,
-  context = 3,
-}: SnippetParams) {
-  const enabled = Boolean(sourceFileLink || (projectVersionId && filePath));
+export function useFileSnippet({ sourceFileLink, line, context = 3 }: SnippetParams) {
+  const enabled = Boolean(sourceFileLink);
 
   const query = useQuery({
-    queryKey: ["file", sourceFileLink ?? projectVersionId, filePath],
-    queryFn: () =>
-      sourceFileLink ? fetchFileContent(sourceFileLink) : fetchFileContent(projectVersionId!, filePath!),
+    queryKey: ["file", sourceFileLink],
+    queryFn: () => fetchFileContent(sourceFileLink!),
     enabled,
     retry: 2,
     retryDelay: 500,
+    refetchOnMount: "always",
     refetchOnWindowFocus: false,
   });
 

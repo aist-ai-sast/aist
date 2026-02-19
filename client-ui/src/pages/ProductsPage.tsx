@@ -126,7 +126,7 @@ export default function ProductsPage() {
   if (summariesQuery.isLoading) {
     return (
       <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-        Loading products...
+        Loading projects...
       </div>
     );
   }
@@ -135,9 +135,9 @@ export default function ProductsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Products</div>
+          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Projects</div>
           <div className="mt-2 text-2xl font-semibold text-white">
-            {filtered.length} products
+            {filtered.length} projects
           </div>
           <div className="mt-1 text-xs text-slate-400">Last sync: {lastSync}</div>
         </div>
@@ -152,7 +152,7 @@ export default function ProductsPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <input
             className="flex-1 rounded-xl border border-night-500 bg-night-600 px-4 py-2 text-sm text-white placeholder:text-slate-400"
-            placeholder="Search products..."
+            placeholder="Search projects..."
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -180,7 +180,7 @@ export default function ProductsPage() {
       <div className="flex min-h-[calc(100vh-280px)] flex-col">
         {filtered.length === 0 ? (
           <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-            No products match the current filters.
+            No projects match the current filters.
           </div>
         ) : (
           <div className="space-y-4">
@@ -194,14 +194,14 @@ export default function ProductsPage() {
                   aria-label={`Open findings for ${summary.name}`}
                   onClick={() =>
                     navigate(
-                      `${getRoute("ui_findings_path")}?${new URLSearchParams({ product: String(summary.productId) }).toString()}`,
+                      `${getRoute("ui_findings_path")}?${new URLSearchParams({ project: String(summary.projectId) }).toString()}`,
                     )
                   }
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       navigate(
-                        `${getRoute("ui_findings_path")}?${new URLSearchParams({ product: String(summary.productId) }).toString()}`,
+                        `${getRoute("ui_findings_path")}?${new URLSearchParams({ project: String(summary.projectId) }).toString()}`,
                       );
                     }
                   }}
@@ -223,14 +223,14 @@ export default function ProductsPage() {
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <Link
-                      to={`${getRoute("ui_findings_path")}?${new URLSearchParams({ product: String(summary.productId) }).toString()}`}
+                      to={`${getRoute("ui_findings_path")}?${new URLSearchParams({ project: String(summary.projectId) }).toString()}`}
                       className="rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
                       onClick={(event) => event.stopPropagation()}
                     >
                       View findings
                     </Link>
                     <Link
-                      to={`${getRoute("ui_pipelines_path")}?${new URLSearchParams({ product: String(summary.productId) }).toString()}`}
+                      to={`${getRoute("ui_pipelines_path")}?${new URLSearchParams({ project: String(summary.projectId) }).toString()}`}
                       className="rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
                       onClick={(event) => event.stopPropagation()}
                     >
@@ -245,7 +245,7 @@ export default function ProductsPage() {
         <div className="mt-auto">
           <PaginationBar
             count={filtered.length}
-            noun="products"
+            noun="projects"
             pageIndex={pageIndex}
             pageSize={pageSize}
             onPageIndexChange={setPageIndex}

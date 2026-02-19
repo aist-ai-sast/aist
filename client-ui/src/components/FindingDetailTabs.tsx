@@ -11,6 +11,7 @@ import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
 
 type FindingDetailTabsProps = {
   finding: Finding;
+  permissionProductId?: number;
   aiResponse?: AIResponse | null;
   embedded?: boolean;
   selectedTags?: string[];
@@ -56,6 +57,7 @@ function formatConfidence(uncertaintyLevel?: number) {
 
 export default function FindingDetailTabs({
   finding,
+  permissionProductId,
   aiResponse,
   embedded = false,
   selectedTags = [],
@@ -245,7 +247,6 @@ export default function FindingDetailTabs({
       {tab === "code" ? (
         <div className="mt-4">
           <CodeSnippet
-            projectVersionId={finding.projectVersionId}
             filePath={finding.filePath}
             sourceFileLink={finding.sourceFileLink}
             line={finding.line}
@@ -255,7 +256,7 @@ export default function FindingDetailTabs({
 
       {tab === "notes" ? (
         <div className="mt-4 space-y-3">
-          <PermissionGate action="comment" productId={finding?.productId}>
+          <PermissionGate action="comment" productId={permissionProductId}>
             <div className="space-y-2">
               <textarea
                 className="w-full rounded-xl border border-night-500 bg-night-900 px-3 py-2 text-xs text-slate-200 outline-none focus-visible:outline-none focus-visible:ring-0 focus-visible:border-brand-600"

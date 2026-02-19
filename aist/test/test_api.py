@@ -618,9 +618,9 @@ class AISTFindingTagsTests(AISTApiBase):
         self.assertIn("domxss", tags)
         self.assertIn("other", tags)
 
-    def test_finding_tags_filters_by_product(self):
+    def test_finding_tags_filters_by_project(self):
         url = reverse("aist_api:finding_tags")
-        resp = self.client.get(url, data={"product_id": self.product.id})
+        resp = self.client.get(url, data={"project_id": self.project.id})
         self.assertEqual(resp.status_code, 200)
         tags = resp.data.get("tags", [])
         self.assertIn("security", tags)
@@ -686,6 +686,29 @@ class AISTFindingTagsTests(AISTApiBase):
         self.assertIn(self.finding.id, ids)
         self.assertNotIn(self.other_finding.id, ids)
 
+    def test_finding_list_filters_by_project_id(self):
+        pv_main = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="1111111111111111111111111111111111111111",
+        )
+        pv_other = AISTProjectVersion.objects.create(
+            project=self.other_project,
+            version_type=VersionType.GIT_HASH,
+            version="2222222222222222222222222222222222222222",
+        )
+        pv_main.findings.add(self.finding)
+        pv_other.findings.add(self.other_finding)
+
+        url = reverse("aist_api:finding_list")
+        resp = self.client.get(url, data={"project_id": self.project.id})
+        self.assertEqual(resp.status_code, 200)
+
+        results = resp.data.get("results", [])
+        ids = {row["id"] for row in results}
+        self.assertIn(self.finding.id, ids)
+        self.assertNotIn(self.other_finding.id, ids)
+
     def test_finding_list_includes_project_version_and_created(self):
         pv_hash = AISTProjectVersion.objects.create(
             project=self.project,
@@ -700,6 +723,7 @@ class AISTFindingTagsTests(AISTApiBase):
 
         rows = {row["id"]: row for row in resp.data.get("results", [])}
         row = rows[self.finding.id]
+        self.assertEqual(row.get("project_id"), self.project.id)
         self.assertEqual(row.get("project_version"), pv_hash.version)
         self.assertEqual(row.get("project_version_type"), VersionType.GIT_HASH)
         self.assertIn("created", row)
@@ -866,6 +890,27 @@ class AISTPipelineSummaryTests(AISTApiBase):
         self.assertEqual(row["branch"], "release/main")
         self.assertEqual(row["commit"], "deadbeef123")
         self.assertEqual(row["findings"], 1)
+
+    def test_pipeline_summary_filters_by_project_id(self):
+        other_project = AISTProject.objects.create(
+            product=self.product,
+            supported_languages=["python"],
+            script_path="scripts/build.sh",
+            compilable=False,
+            profile={},
+        )
+        other_pipeline = AISTPipeline.objects.create(
+            id="pipe-sum-other",
+            project=other_project,
+            status=AISTStatus.FINISHED,
+        )
+
+        resp = self.client.get(reverse("aist_api:pipeline_summary"), data={"project_id": self.project.id})
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data.get("results", [])
+        ids = {item["id"] for item in results}
+        self.assertIn(self.pipeline.id, ids)
+        self.assertNotIn(other_pipeline.id, ids)
 
     def test_pipeline_filter_findings(self):
         url = reverse("aist_api:finding_list")

@@ -38,7 +38,7 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
         <section className="rounded-2xl border border-night-500 bg-night-900/80 p-6">
           <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Sign in</div>
           <p className="mt-2 text-sm text-slate-300">
-            Use your DefectDojo credentials to access the client UI.
+            Use your organization credentials to access the client UI.
           </p>
 
           <form

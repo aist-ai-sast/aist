@@ -5,12 +5,10 @@ import AiVerdictBadge from "../components/AiVerdictBadge";
 import {
   useAiFindingResponses,
   useAiResponse,
-  useEngagementProduct,
   useFinding,
   useFindingProjectVersion,
   useProjectMeta,
   useProjects,
-  useTestEngagement,
 } from "../lib/queries";
 import { useExportAiResults } from "../lib/mutations";
 import { useToast } from "../components/ToastProvider";
@@ -30,11 +28,9 @@ export default function FindingDetailPage() {
   const toast = useToast();
 
   const projects = projectsQuery.data ?? [];
-  const testEngagementQuery = useTestEngagement(finding?.testId ?? null);
-  const engagementProductQuery = useEngagementProduct(testEngagementQuery.data ?? null);
-  const resolvedProductId = finding?.productId ?? engagementProductQuery.data ?? undefined;
-  const aistProject = projects.find((project) => project.productId === resolvedProductId);
-  const productName = projects.find((project) => project.productId === resolvedProductId)?.name;
+  const resolvedProjectId = finding?.projectId ?? findingProjectVersionQuery.data?.projectId ?? undefined;
+  const aistProject = projects.find((project) => project.id === resolvedProjectId);
+  const projectName = aistProject?.name;
   const aiResponsesQuery = useAiFindingResponses(
     aistProject?.id,
     undefined,
@@ -42,9 +38,6 @@ export default function FindingDetailPage() {
   );
   const aiResponse = useAiResponse(aiResponsesQuery.data ?? new Map(), finding?.id);
   const metaQuery = useProjectMeta(aistProject?.id);
-  const projectVersionId = metaQuery.data?.versions?.length
-    ? Number(metaQuery.data.versions[metaQuery.data.versions.length - 1].id)
-    : undefined;
   const latestMetaVersion = metaQuery.data?.versions?.length
     ? metaQuery.data.versions[metaQuery.data.versions.length - 1]
     : undefined;
@@ -66,7 +59,7 @@ export default function FindingDetailPage() {
     file?: string;
   }) => {
     const params = new URLSearchParams();
-    if (resolvedProductId) params.set("product", String(resolvedProductId));
+    if (resolvedProjectId) params.set("project", String(resolvedProjectId));
     if (projectVersion) params.set("project_version", projectVersion);
     if (file) params.set("file", file);
     const query = params.toString();
@@ -106,7 +99,7 @@ export default function FindingDetailPage() {
                 <path d="M4 7.5V16.5L12 21" />
                 <path d="M20 7.5V16.5L12 21" />
               </svg>
-              Product: {productName ?? finding.product}
+              Project: {projectName ?? "Unknown"}
             </span>
             {finding.cwe ? (
               <span className="inline-flex items-center gap-1">
@@ -207,6 +200,7 @@ export default function FindingDetailPage() {
         <div className="flex items-end gap-3">
           <FindingStatusActions
             finding={finding}
+            permissionProductId={aistProject?.productId}
             onApplied={(reason) => {
               setLocalFindingOverride({
                 active: false,
@@ -261,7 +255,8 @@ export default function FindingDetailPage() {
 
       <section className="rounded-2xl border border-night-500 bg-night-700 p-5 shadow-panel">
         <FindingDetailTabs
-          finding={{ ...finding, projectVersionId }}
+          finding={finding}
+          permissionProductId={aistProject?.productId}
           aiResponse={aiResponse}
         />
       </section>

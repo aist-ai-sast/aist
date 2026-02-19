@@ -8,6 +8,7 @@ import { getRoute } from "../lib/routes";
 
 type DetailPanelProps = {
   finding?: Finding;
+  permissionProductId?: number;
   aiResponse?: AIResponse | null;
   pipelineId?: string;
   embedded?: boolean;
@@ -21,6 +22,7 @@ type DetailPanelProps = {
 
 export default function DetailPanel({
   finding,
+  permissionProductId,
   aiResponse,
   pipelineId,
   embedded = false,
@@ -103,6 +105,7 @@ export default function DetailPanel({
       <div className="mt-4">
         <FindingDetailTabs
           finding={finding}
+          permissionProductId={permissionProductId}
           aiResponse={aiResponse}
           embedded={embedded}
           selectedTags={selectedTags}
@@ -114,6 +117,7 @@ export default function DetailPanel({
       <div className="mt-4 flex items-center justify-between gap-3">
         <FindingStatusActions
           finding={finding}
+          permissionProductId={permissionProductId}
           onApplied={(reason) => onCloseApplied?.(finding.id, reason)}
           onReopened={() => onReopened?.(finding.id)}
         />

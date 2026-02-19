@@ -17,11 +17,17 @@ const reasonOptions: { value: CloseReason; label: string }[] = [
 
 type FindingStatusActionsProps = {
   finding: Finding;
+  permissionProductId?: number;
   onApplied?: (reason: CloseReason) => void;
   onReopened?: () => void;
 };
 
-export default function FindingStatusActions({ finding, onApplied, onReopened }: FindingStatusActionsProps) {
+export default function FindingStatusActions({
+  finding,
+  permissionProductId,
+  onApplied,
+  onReopened,
+}: FindingStatusActionsProps) {
   const toast = useToast();
   const closeFinding = useCloseFinding();
   const updateFindingStatus = useUpdateFindingStatus();
@@ -29,7 +35,7 @@ export default function FindingStatusActions({ finding, onApplied, onReopened }:
 
   return (
     <div className="mt-4">
-      <PermissionGate action="enable" productId={finding.productId}>
+      <PermissionGate action="enable" productId={permissionProductId}>
         <div className="flex flex-wrap items-end gap-2">
           {finding.active ? (
             <div className="w-56">

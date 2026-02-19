@@ -35,21 +35,21 @@ def _parse_csv_values(request, param_name: str) -> list[str]:
     return values
 
 
-def _pick_project_version_info(finding) -> tuple[str | None, str | None]:
+def _pick_project_version_info(finding) -> tuple[str | None, str | None, int | None]:
     versions_rel = getattr(finding, "aist_project_versions", None)
     if versions_rel is None:
-        return None, None
+        return None, None, None
     versions = list(versions_rel.all())
     if not versions:
-        return None, None
+        return None, None, None
     hash_version = next((v for v in versions if v.version_type == VersionType.GIT_HASH), None)
     if hash_version:
-        return hash_version.version, hash_version.version_type
+        return hash_version.version, hash_version.version_type, hash_version.project_id
     branch_version = next((v for v in versions if v.version_type == VersionType.GIT_BRANCH), None)
     if branch_version:
-        return branch_version.version, branch_version.version_type
+        return branch_version.version, branch_version.version_type, branch_version.project_id
     first = versions[0]
-    return first.version, first.version_type
+    return first.version, first.version_type, first.project_id
 
 
 class AISTFindingListAPI(APIView):
@@ -62,6 +62,7 @@ class AISTFindingListAPI(APIView):
             OpenApiParameter(name="pipeline_id", required=False, type=str),
             OpenApiParameter(name="tags", required=False, type=str, many=True),
             OpenApiParameter(name="severity", required=False, type=str, many=True),
+            OpenApiParameter(name="project_id", required=False, type=int),
             OpenApiParameter(name="project_version", required=False, type=str),
             OpenApiParameter(name="file", required=False, type=str),
             OpenApiParameter(name="ai_response", required=False, type=str, description="All | has_ai | no_ai"),
@@ -72,8 +73,10 @@ class AISTFindingListAPI(APIView):
         responses={200: dojo_serializers.FindingSerializer(many=True)},
     )
     def get(self, request, *args, **kwargs) -> Response:
-        queryset = get_authorized_findings(Permissions.Finding_View, user=request.user).prefetch_related(
-            "tags", "aist_project_versions",
+        queryset = (
+            get_authorized_findings(Permissions.Finding_View, user=request.user)
+            .select_related("test__engagement")
+            .prefetch_related("tags", "aist_project_versions")
         )
         pipeline_id = request.query_params.get("pipeline_id")
         pipeline = None
@@ -106,6 +109,10 @@ class AISTFindingListAPI(APIView):
         if severities:
             queryset = queryset.filter(severity__in=severities).distinct()
 
+        project_id = (request.query_params.get("project_id") or "").strip()
+        if project_id:
+            queryset = queryset.filter(aist_project_versions__project_id=project_id).distinct()
+
         project_version = (request.query_params.get("project_version") or "").strip()
         if project_version:
             queryset = queryset.filter(aist_project_versions__version=project_version).distinct()
@@ -119,6 +126,8 @@ class AISTFindingListAPI(APIView):
             params.pop("tags")
         if "pipeline_id" in params:
             params.pop("pipeline_id")
+        if "project_id" in params:
+            params.pop("project_id")
         if "project_version" in params:
             params.pop("project_version")
         if "file" in params:
@@ -139,9 +148,10 @@ class AISTFindingListAPI(APIView):
         serializer = dojo_serializers.FindingSerializer(page, many=True, context={"request": request})
         payload = list(serializer.data)
         for row, finding in zip(payload, page, strict=True):
-            project_version, project_version_type = _pick_project_version_info(finding)
+            project_version, project_version_type, aist_project_id = _pick_project_version_info(finding)
             row["project_version"] = project_version
             row["project_version_type"] = project_version_type
+            row["project_id"] = aist_project_id
             created = getattr(finding, "date", None) or getattr(finding, "created", None)
             row["created"] = created.isoformat() if created else None
         return paginator.get_paginated_response(payload)

@@ -7,9 +7,9 @@ type Option = {
 };
 
 type PipelineFilterPanelProps = {
-  productOptions: Option[];
-  selectedProductId?: number;
-  onProductChange: (value?: number) => void;
+  projectOptions: Option[];
+  selectedProjectId?: number;
+  onProjectChange: (value?: number) => void;
   status: string;
   onStatusChange: (value: string) => void;
   search: string;
@@ -22,9 +22,9 @@ type PipelineFilterPanelProps = {
 };
 
 export default function PipelineFilterPanel({
-  productOptions,
-  selectedProductId,
-  onProductChange,
+  projectOptions,
+  selectedProjectId,
+  onProjectChange,
   status,
   onStatusChange,
   search,
@@ -40,11 +40,11 @@ export default function PipelineFilterPanel({
       <div className="text-xs uppercase tracking-[0.2em] text-slate-400 mb-4">Filters</div>
       <div className="space-y-4">
         <SelectField
-          label="Product"
-          value={selectedProductId ? String(selectedProductId) : ""}
-          onChange={(value) => onProductChange(value ? Number(value) : undefined)}
-          placeholder="All products"
-          options={productOptions}
+          label="Project"
+          value={selectedProjectId ? String(selectedProjectId) : ""}
+          onChange={(value) => onProjectChange(value ? Number(value) : undefined)}
+          placeholder="All projects"
+          options={projectOptions}
         />
         <SelectField label="Status" value={status} onChange={onStatusChange} options={statusOptions} />
         <div>

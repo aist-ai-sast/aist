@@ -2,33 +2,20 @@ import { useMemo } from "react";
 import hljs from "highlight.js";
 
 import { useFileSnippet } from "../lib/snippetCache";
-import { useProjectMeta } from "../lib/queries";
 
 type FindingSnippetPreviewProps = {
-  projectId?: number;
-  projectVersionId?: number;
   filePath?: string;
   sourceFileLink?: string;
   line?: number;
 };
 
 export default function FindingSnippetPreview({
-  projectId,
-  projectVersionId,
   filePath,
   sourceFileLink,
   line,
 }: FindingSnippetPreviewProps) {
-
-  const metaQuery = useProjectMeta(projectId);
-  const resolvedProjectVersionId =
-    projectVersionId ??
-    (metaQuery.data?.versions?.length
-      ? Number(metaQuery.data.versions[metaQuery.data.versions.length - 1].id)
-      : undefined);
-  const { snippet, isLoading } = useFileSnippet({
-    projectVersionId: resolvedProjectVersionId,
-    filePath,
+  void filePath;
+  const { snippet, isLoading, isError } = useFileSnippet({
     sourceFileLink,
     line,
   });
@@ -43,7 +30,7 @@ export default function FindingSnippetPreview({
     return hljs.highlightAuto(previewText).value;
   }, [previewText]);
 
-  if ((!filePath && !sourceFileLink) || (!resolvedProjectVersionId && !sourceFileLink)) {
+  if (!sourceFileLink || !line) {
     return (
       <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 font-mono text-xs text-slate-400">
         Snippet preview unavailable
@@ -55,6 +42,14 @@ export default function FindingSnippetPreview({
     return (
       <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-xs text-slate-400">
         Loading snippet...
+      </div>
+    );
+  }
+
+  if (isError || !snippet) {
+    return (
+      <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 font-mono text-xs text-slate-400">
+        Snippet preview unavailable
       </div>
     );
   }

@@ -4,8 +4,8 @@ import SelectField from "./SelectField";
 
 type FilterPanelProps = {
   products: Project[];
-  selectedProductId?: number;
-  onProductChange: (productId?: number) => void;
+  selectedProjectId?: number;
+  onProjectChange: (projectId?: number) => void;
   selectedSeverities: string[];
   onSeveritiesChange: (value: string[]) => void;
   selectedFile: string;
@@ -27,8 +27,8 @@ type FilterPanelProps = {
 
 export default function FilterPanel({
   products,
-  selectedProductId,
-  onProductChange,
+  selectedProjectId,
+  onProjectChange,
   selectedSeverities,
   onSeveritiesChange,
   selectedFile,
@@ -54,13 +54,13 @@ export default function FilterPanel({
       </div>
       <div className="space-y-4">
         <SelectField
-          label="Product"
-          value={selectedProductId ? String(selectedProductId) : ""}
-          onChange={(value) => onProductChange(value ? Number(value) : undefined)}
-          placeholder="All products"
+          label="Project"
+          value={selectedProjectId ? String(selectedProjectId) : ""}
+          onChange={(value) => onProjectChange(value ? Number(value) : undefined)}
+          placeholder="All projects"
           options={[
             ...products.map((product) => ({
-              value: String(product.productId),
+              value: String(product.id),
               label: product.name,
             })),
           ]}

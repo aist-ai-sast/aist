@@ -41,12 +41,12 @@ function statusBadge(status: string) {
 }
 
 function findingsPath(params: {
-  product?: number;
+  project?: number;
   pipeline?: string;
   project_version?: string;
 }) {
   const search = new URLSearchParams();
-  if (params.product) search.set("product", String(params.product));
+  if (params.project) search.set("project", String(params.project));
   if (params.pipeline) search.set("pipeline", params.pipeline);
   if (params.project_version) search.set("project_version", params.project_version);
   const query = search.toString();
@@ -87,7 +87,7 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
             <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Branch</span>
             {pipeline.branch ? (
               <Link
-                to={findingsPath({ product: pipeline.productId, project_version: pipeline.branch })}
+                to={findingsPath({ project: pipeline.projectId, project_version: pipeline.branch })}
                 className="aist-clickable-text"
                 title={pipeline.branch}
               >
@@ -101,7 +101,7 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
             <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Commit</span>
             {pipeline.commit ? (
               <Link
-                to={findingsPath({ product: pipeline.productId, project_version: pipeline.commit })}
+                to={findingsPath({ project: pipeline.projectId, project_version: pipeline.commit })}
                 className="aist-clickable-text font-mono"
                 title={pipeline.commit}
               >
@@ -122,7 +122,7 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
       </div>
 
       <Link
-        to={findingsPath({ pipeline: pipeline.id, product: pipeline.productId })}
+        to={findingsPath({ pipeline: pipeline.id, project: pipeline.projectId })}
         className="inline-flex rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
       >
         Open Findings
@@ -134,8 +134,8 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
 export default function PipelinesPage() {
   const navigate = useNavigate();
   const projectsQuery = useProjects();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedProductId, setSelectedProductId] = useState<number | undefined>();
+  const [searchParams] = useSearchParams();
+  const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>();
   const [status, setStatus] = useState("all");
   const [search, setSearch] = useState("");
   const [createdFrom, setCreatedFrom] = useState("");
@@ -146,31 +146,24 @@ export default function PipelinesPage() {
 
   const projects = projectsQuery.data ?? [];
   useEffect(() => {
-    if (!selectedProductId) return;
-    const exists = projects.some((project) => project.productId === selectedProductId);
+    if (!selectedProjectId) return;
+    const exists = projects.some((project) => project.id === selectedProjectId);
     if (!exists) {
-      setSelectedProductId(undefined);
+      setSelectedProjectId(undefined);
     }
-  }, [projects, selectedProductId]);
+  }, [projects, selectedProjectId]);
 
   useEffect(() => {
-    const productParam = searchParams.get("product");
-    if (!productParam) return;
-    const parsed = Number(productParam);
+    const projectParam = searchParams.get("project");
+    if (!projectParam) return;
+    const parsed = Number(projectParam);
     if (!Number.isNaN(parsed)) {
-      setSelectedProductId(parsed);
+      setSelectedProjectId(parsed);
     }
-    setSearchParams(
-      (params) => {
-        params.delete("product");
-        return params;
-      },
-      { replace: true },
-    );
-  }, [searchParams, setSearchParams]);
+  }, [searchParams]);
 
   const pipelinesQuery = usePipelineSummaries({
-    productId: selectedProductId,
+    projectId: selectedProjectId,
     status: status !== "all" ? status : undefined,
     createdGte: createdFrom || undefined,
     createdLte: createdTo || undefined,
@@ -186,10 +179,10 @@ export default function PipelinesPage() {
     setExpandedPipelineId(null);
   }, [pipelines, expandedPipelineId]);
 
-  const productOptions = useMemo(
+  const projectOptions = useMemo(
     () =>
       projects.map((project) => ({
-        value: String(project.productId),
+        value: String(project.id),
         label: project.name,
       })),
     [projects],
@@ -216,15 +209,15 @@ export default function PipelinesPage() {
 
   useEffect(() => {
     setPageIndex(0);
-  }, [selectedProductId, status, search, createdFrom, createdTo, pageSize]);
+  }, [selectedProjectId, status, search, createdFrom, createdTo, pageSize]);
 
   return (
     <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_1fr]">
       <div className="aist-scrollbar lg:sticky lg:top-24 self-start lg:max-h-[calc(100vh-140px)] lg:overflow-auto">
         <PipelineFilterPanel
-          productOptions={productOptions}
-          selectedProductId={selectedProductId}
-          onProductChange={setSelectedProductId}
+          projectOptions={projectOptions}
+          selectedProjectId={selectedProjectId}
+          onProjectChange={setSelectedProjectId}
           status={status}
           onStatusChange={setStatus}
           search={search}
@@ -311,7 +304,7 @@ export default function PipelinesPage() {
                         className="aist-clickable-text"
                         onClick={(event) => {
                           event.stopPropagation();
-                          navigate(findingsPath({ product: pipeline.productId }));
+                          navigate(findingsPath({ project: pipeline.projectId }));
                         }}
                       >
                         {pipeline.productName}
@@ -346,7 +339,7 @@ export default function PipelinesPage() {
                       <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Branch</div>
                       {pipeline.branch ? (
                         <Link
-                          to={findingsPath({ product: pipeline.productId, project_version: pipeline.branch })}
+                          to={findingsPath({ project: pipeline.projectId, project_version: pipeline.branch })}
                           className="aist-clickable-text"
                           title={pipeline.branch}
                           onClick={(event) => event.stopPropagation()}
@@ -361,7 +354,7 @@ export default function PipelinesPage() {
                       <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Commit</div>
                       {pipeline.commit ? (
                         <Link
-                          to={findingsPath({ product: pipeline.productId, project_version: pipeline.commit })}
+                          to={findingsPath({ project: pipeline.projectId, project_version: pipeline.commit })}
                           className="aist-clickable-text font-mono"
                           title={pipeline.commit}
                           onClick={(event) => event.stopPropagation()}
@@ -378,7 +371,7 @@ export default function PipelinesPage() {
                   </div>
                   <div className="mt-4 flex gap-2">
                     <Link
-                      to={findingsPath({ pipeline: pipeline.id, product: pipeline.productId })}
+                      to={findingsPath({ pipeline: pipeline.id, project: pipeline.projectId })}
                       className="rounded-xl border border-night-500 px-3 py-2 text-xs text-slate-200"
                     >
                       Open Findings
