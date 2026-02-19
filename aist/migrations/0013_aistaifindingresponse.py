@@ -34,9 +34,7 @@ def _iter_payload_entries(payload: dict) -> list[tuple[str, dict]]:
             items = results.get(key)
             if not isinstance(items, list):
                 continue
-            for item in items:
-                if isinstance(item, dict):
-                    entries.append((verdict, item))
+            entries.extend((verdict, item) for item in items if isinstance(item, dict))
     return entries
 
 

@@ -6,7 +6,7 @@
         {% include "aist/_status_finding_postprocessing.html" %}
     {% elif pipeline.status == "WAITING_RESULT_FROM_AI" %}
         {% include "aist/_status_waiting_ai.html" %}
-    {% elif pipeline.status == "FINISHED" %}
+    {% elif pipeline.status == "FINISHED" or pipeline.status == "FINISHED_WITH_WARNINGS" %}
         {% include "aist/_status_finished.html" %}
     {% elif pipeline.status == "WAITING_CONFIRMATION_TO_PUSH_TO_AI" %}
         {% include "aist/_confirm_push_to_ai.html" %}

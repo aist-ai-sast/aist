@@ -57,6 +57,7 @@ def send_request_to_ai_for_pipeline(request: HttpRequest, pipeline: AISTPipeline
             )
             if locked.status != AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI:
                 logger.error("Attempt to push to AI before receiving confirmation")
+                finish_pipeline(locked, degraded=True)
                 return JsonResponse(
                     {"error": "Attempt to push to AI before receiving confirmation"},
                     status=400,
@@ -129,6 +130,7 @@ class AIPipelineCallbackAPI(APIView):
 
         errors = response_from_ai.pop("errors", None)
         logger = install_pipeline_logging(pipeline_id)
+        has_errors = bool(errors)
         if errors:
             logger.error(errors)
 
@@ -151,7 +153,7 @@ class AIPipelineCallbackAPI(APIView):
                     "Dropped %s AI findings that could not be matched to existing findings.",
                     sync_stats.dropped,
                 )
-            finish_pipeline(locked)
+            finish_pipeline(locked, degraded=has_errors)
 
         return Response({"ok": True})
 

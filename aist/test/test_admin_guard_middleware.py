@@ -21,7 +21,8 @@ def _make_password() -> str:
 
 class AlwaysFailAuthentication(BaseAuthentication):
     def authenticate(self, request):
-        raise AuthenticationFailed("forced failure")
+        msg = "forced failure"
+        raise AuthenticationFailed(msg)
 
 
 class AistAdminGuardMiddlewareTests(TestCase):

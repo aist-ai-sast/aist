@@ -334,7 +334,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
 
             def _finding_filter(*args, **kwargs):
                 if "test_id__in" in kwargs:
-                    return SimpleNamespace(values_list=lambda *a, **k: [finding.id, missing_finding_id])
+                    return SimpleNamespace(values_list=lambda *_args, **_kwargs: [finding.id, missing_finding_id])
                 return original_finding_filter(*args, **kwargs)
 
             mock_finding_filter.side_effect = _finding_filter

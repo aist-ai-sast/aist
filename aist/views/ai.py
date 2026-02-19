@@ -197,6 +197,7 @@ def delete_ai_response(request, pipeline_id: str, response_id: int):
     delete_ai_response_for_pipeline(pipeline, response_id)
     return redirect("aist:pipeline_detail", pipeline_id=pipeline.id)
 
+
 @require_GET
 @login_required
 def ai_filter_reference(request):

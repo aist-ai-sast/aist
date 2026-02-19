@@ -23,7 +23,13 @@ from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_proj
 from aist.tasks import run_sast_pipeline
 from aist.utils.action_config import encrypt_action_secret_config
 from aist.utils.http import _fmt_duration, _qs_without
-from aist.utils.pipeline import create_pipeline_object, set_pipeline_status, stop_pipeline
+from aist.utils.pipeline import (
+    create_pipeline_object,
+    get_terminal_pipeline_statuses,
+    is_terminal_pipeline_status,
+    set_pipeline_status,
+    stop_pipeline,
+)
 from aist.views._common import ERR_PIPELINE_NOT_FOUND
 
 FINDINGS_PAGE_SIZES = [25, 50, 100, 200]
@@ -113,7 +119,7 @@ def _build_findings_context(request: HttpRequest, pipeline: AISTPipeline) -> dic
         "findings_limit": None,
     }
 
-    if pipeline.status != AISTStatus.FINISHED:
+    if not is_terminal_pipeline_status(pipeline.status):
         return base_context
 
     tests_qs = pipeline.tests.all()
@@ -283,7 +289,7 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
 
     history_qs = (
         get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
-        .filter(status=AISTStatus.FINISHED)
+        .filter(status__in=get_terminal_pipeline_statuses())
         .select_related("project__product")
     )
     if project_id:
@@ -425,7 +431,7 @@ def pipeline_list(request):
     )
 
     if status == "FINISHED":
-        qs = qs.filter(status=AISTStatus.FINISHED)
+        qs = qs.filter(status__in=get_terminal_pipeline_statuses())
 
     if project_id:
         qs = qs.filter(project_id=project_id)
@@ -447,7 +453,7 @@ def pipeline_list(request):
         "status": p.status,
         "duration": _fmt_duration(p.created, p.updated),
         # Active = anything that is not FINISHED
-        "is_active": p.status != AISTStatus.FINISHED,
+        "is_active": not is_terminal_pipeline_status(p.status),
     } for p in page_obj.object_list]
 
     qs_str = _qs_without(request, "page")

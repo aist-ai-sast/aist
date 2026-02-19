@@ -18,7 +18,7 @@ from aist.models import (
     TestDeduplicationProgress,
 )
 from aist.tasks.ai import auto_push_to_ai_if_configured
-from aist.utils.pipeline import finish_pipeline, set_pipeline_status
+from aist.utils.pipeline import finish_pipeline, is_terminal_pipeline_status, set_pipeline_status
 
 DEDUP_POLL_SLEEP_S = getattr(settings, "AIST_DEDUP_POLL_SLEEP_S", 3)
 DEDUP_STALE_TIMEOUT_S = getattr(settings, "AIST_DEDUP_STALE_TIMEOUT_S", 600)
@@ -96,7 +96,7 @@ def watch_deduplication(self, pipeline_id: str, log_level) -> None:
 
     logger = install_pipeline_logging(pipeline_id, log_level)
     if not pipeline.tests.exists():
-        finish_pipeline(pipeline)
+        finish_pipeline(pipeline, degraded=True)
         logger.warning("No tests to wait")
         return
 
@@ -133,7 +133,7 @@ def watch_deduplication(self, pipeline_id: str, log_level) -> None:
             # Reload pipeline to capture any manual status change
             pipeline.refresh_from_db()
             # Exit early if user or another task finished the pipeline
-            if pipeline.status == AISTStatus.FINISHED:
+            if is_terminal_pipeline_status(pipeline.status):
                 return
             # Query for tests still undergoing deduplication
             remaining = AISTTestMeta.objects.filter(
@@ -215,6 +215,7 @@ def watch_deduplication(self, pipeline_id: str, log_level) -> None:
 
     except Exception as exc:
         logger.error("Exception while waiting for deduplication to finish: %s", exc)
+        finish_pipeline(pipeline, degraded=True)
 
 
 @shared_task(

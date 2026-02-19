@@ -9,8 +9,14 @@ from aist.logging_transport import get_redis, install_pipeline_logging
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionType
 from aist.pipeline_args import PipelineArguments
 from aist.tasks.enrich import make_enrich_chord
-from aist.utils.pipeline import finish_pipeline, get_project_build_path, set_pipeline_status
+from aist.utils.pipeline import (
+    finish_pipeline,
+    get_project_build_path,
+    is_terminal_pipeline_status,
+    set_pipeline_status,
+)
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
+from aist.utils.reconciliation import safe_attach_findings_to_version
 
 # --------------------------------------------------------------------
 # Ensure external "pipeline" package is importable before importing it
@@ -82,7 +88,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
             )
 
             # protection from secondary launch
-            if pipeline.status != AISTStatus.FINISHED:
+            if not is_terminal_pipeline_status(pipeline.status):
                 logger.info("Pipeline already in progress; skipping duplicate start.")
                 return
 
@@ -206,28 +212,38 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         )
 
         test_ids = [t.id for t in tests]
+        with transaction.atomic():
+            pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+            pipeline.tests.set(tests, clear=True)
+            launch_data = pipeline.launch_data or {}
+            launch_data["imported_test_ids"] = test_ids
+            pipeline.launch_data = launch_data
+            pipeline.save(update_fields=["launch_data", "updated"])
+
         if test_ids and pipeline and pipeline.project_version_id:
             with transaction.atomic():
                 pv = AISTProjectVersion.objects.select_for_update().get(id=pipeline.project_version_id)
-                locked_findings = Finding.objects.select_for_update().filter(id__in=finding_ids)
-                valid_finding_ids = list(locked_findings.values_list("id", flat=True))
-                dropped_findings_count = len(finding_ids) - len(valid_finding_ids)
-                if dropped_findings_count > 0:
-                    logger.info(
-                        "Dropped %s missing finding IDs before attaching to project version",
-                        dropped_findings_count,
-                    )
+                valid_finding_ids = list(Finding.objects.filter(id__in=finding_ids).values_list("id", flat=True))
                 finding_ids = valid_finding_ids
                 if finding_ids:
-                    pv.findings.add(*finding_ids)
+                    pv_stats = safe_attach_findings_to_version(
+                        pv=pv,
+                        finding_ids=finding_ids,
+                        logger=logger,
+                    )
+                    pv_stats.log(logger=logger, pv_id=pv.id, label="PV")
                     if pv.version_type == VersionType.GIT_HASH and pv.resolved_from_branch_id:
                         parent = AISTProjectVersion.objects.select_for_update().get(id=pv.resolved_from_branch_id)
-                        parent.findings.add(*finding_ids)
+                        parent_stats = safe_attach_findings_to_version(
+                            pv=parent,
+                            finding_ids=finding_ids,
+                            logger=logger,
+                        )
+                        parent_stats.log(logger=logger, pv_id=parent.id, label="Parent PV")
 
         if not finding_ids:
             with transaction.atomic():
                 pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-                pipeline.tests.set(tests, clear=True)
                 logger.info("No findings to enrich; Finishing pipeline")
                 finish_pipeline(pipeline)
         else:
@@ -243,7 +259,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
         if pipeline is not None:
             try:
                 with transaction.atomic():
-                    finish_pipeline(pipeline)
+                    finish_pipeline(pipeline, degraded=True)
             except Exception:
                 logger.exception("Failed to mark pipeline as FINISHED after exception.")
         raise

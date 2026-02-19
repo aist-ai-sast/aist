@@ -100,6 +100,11 @@ CELERY_BEAT_SCHEDULE.update(  # noqa: F405
             "task": "aist.tasks.pipeline_dispatcher.dispatch_queued_pipelines",
             "schedule": timedelta(minutes=1),
         },
+        "aist-reconcile-orphans-safety-net": {
+            "task": "aist.tasks.reconciliation.reconcile_recent_orphans",
+            "schedule": timedelta(minutes=10),
+            "kwargs": {"hours": 24, "batch_size": 200, "dry_run": False},
+        },
     },
 )
 

@@ -57,7 +57,7 @@
             <label class="form-label small mb-1">Status</label>
             <select class="form-select form-select-sm" name="status">
               <option value="ALL" {% if status == "ALL" %}selected{% endif %}>All statuses</option>
-              <option value="FINISHED" {% if status == "FINISHED" %}selected{% endif %}>Finished only</option>
+              <option value="FINISHED" {% if status == "FINISHED" %}selected{% endif %}>Finished only (incl warnings)</option>
             </select>
           </div>
 
@@ -136,6 +136,8 @@
               <td>
                 {% if r.status == "FINISHED" %}
                   <span class="badge bg-success">FINISHED</span>
+                {% elif r.status == "FINISHED_WITH_WARNINGS" %}
+                  <span class="badge bg-warning text-dark">FINISHED_WITH_WARNINGS</span>
                 {% else %}
                   <span class="badge bg-secondary">{{ r.status }}</span>
                 {% endif %}

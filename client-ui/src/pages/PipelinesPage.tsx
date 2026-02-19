@@ -17,6 +17,7 @@ const statusOptions = [
   { value: "PUSH_TO_AI", label: "Push to AI" },
   { value: "WAITING_RESULT_FROM_AI", label: "Waiting AI Result" },
   { value: "FINISHED", label: "Finished" },
+  { value: "FINISHED_WITH_WARNINGS", label: "Finished With Warnings" },
 ];
 
 function formatDate(value?: string | null) {
@@ -35,6 +36,7 @@ function truncateText(value: string | null | undefined, max = 32) {
 function statusBadge(status: string) {
   const upper = status.toUpperCase();
   if (upper.includes("FAIL")) return "border-danger-500/50 text-danger-500 bg-danger-500/10";
+  if (upper.includes("WARNING")) return "border-amber-400/50 text-amber-300 bg-amber-400/10";
   if (upper.includes("FINISH")) return "border-brand-600/50 text-brand-500 bg-brand-600/10";
   if (upper.includes("START")) return "border-brand-600/50 text-brand-500 bg-brand-600/10";
   return "border-slate-500/40 text-slate-300 bg-night-700";
@@ -195,7 +197,7 @@ export default function PipelinesPage() {
     });
     return {
       total: pipelines.length,
-      finished: byStatus.FINISHED ?? 0,
+      finished: (byStatus.FINISHED ?? 0) + (byStatus.FINISHED_WITH_WARNINGS ?? 0),
       inProgress:
         (byStatus.SAST_LAUNCHED ?? 0) +
         (byStatus.UPLOADING_RESULTS ?? 0) +

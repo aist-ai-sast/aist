@@ -1,10 +1,17 @@
 {# aist/_status_finished.html #}
 {% load aist_extras %}
 
-<div class="alert alert-info d-flex align-items-center mb-4" role="alert">
-    <i class="fa fa-info-circle me-2" aria-hidden="true"></i>
-    <span><strong>Pipeline finished.</strong></span>
-</div>
+{% if pipeline.status == "FINISHED_WITH_WARNINGS" %}
+    <div class="alert alert-warning d-flex align-items-center mb-4" role="alert">
+        <i class="fa fa-exclamation-triangle me-2" aria-hidden="true"></i>
+        <span><strong>Pipeline finished with warnings.</strong> Reconciliation found remaining orphan inconsistencies.</span>
+    </div>
+{% else %}
+    <div class="alert alert-info d-flex align-items-center mb-4" role="alert">
+        <i class="fa fa-info-circle me-2" aria-hidden="true"></i>
+        <span><strong>Pipeline finished.</strong></span>
+    </div>
+{% endif %}
 
 <div class="card shadow-sm mb-4">
     <div class="card-body">

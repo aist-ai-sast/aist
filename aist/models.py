@@ -256,6 +256,7 @@ class AISTStatus(models.TextChoices):
     PUSH_TO_AI = "PUSH_TO_AI", "Push to AI"
     WAITING_RESULT_FROM_AI = "WAITING_RESULT_FROM_AI", "Waiting Result From AI"
     FINISHED = "FINISHED", "Finished"
+    FINISHED_WITH_WARNINGS = "FINISHED_WITH_WARNINGS", "Finished With Warnings"
 
 
 class Organization(models.Model):

@@ -118,10 +118,9 @@ class WatchDeduplicationTests(TestCase):
         tests_mgr.values_list.return_value = []
         pipeline = _mk_pipeline(status="WAITING_DEDUPLICATION_TO_FINISH", tests=tests_mgr)
 
-        _call_watch_dedup(pipeline=pipeline)
-
-        self.assertEqual(pipeline.status, "FINISHED")
-        pipeline.save.assert_any_call(update_fields=["status", "updated"])
+        with patch("aist.tasks.dedup.finish_pipeline") as mock_finish:
+            _call_watch_dedup(pipeline=pipeline)
+        mock_finish.assert_called_once_with(pipeline, degraded=True)
 
     def test_complete_dedup_sets_waiting_confirmation(self):
         tests_mgr = MagicMock()
@@ -163,7 +162,6 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.update = MagicMock()
 
         _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
-
         self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
 
     @patch("aist.tasks.dedup.auto_push_to_ai_if_configured")
@@ -199,7 +197,6 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.update = MagicMock()
 
         _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
-
         self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
         mock_auto_push.delay.assert_called_once_with(pipeline.id)
 
@@ -236,7 +233,6 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.update = MagicMock()
 
         _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
-
         self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
         mock_auto_push.delay.assert_called_once_with(pipeline.id)
 
@@ -255,7 +251,7 @@ class PushRequestToAITests(TestCase):
             _push_request_to_ai.run(pipeline_id=pipeline.id, finding_ids=[1, 2], filters={}, log_level="INFO")
 
             mock_post.assert_not_called()
-            mock_finish.assert_called_once_with(pipeline)
+            mock_finish.assert_called_once_with(pipeline, degraded=True)
 
     def test_push_success_transitions_to_waiting_result(self):
         with patch("aist.tasks.ai.requests.post") as mock_post, \

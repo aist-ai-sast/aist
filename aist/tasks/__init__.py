@@ -10,6 +10,7 @@ from aist.tasks.launch_schedule import process_launch_schedules
 from aist.tasks.logs import flush_logs_once
 from aist.tasks.pipeline import run_sast_pipeline
 from aist.tasks.pipeline_dispatcher import dispatch_queued_pipelines
+from aist.tasks.reconciliation import reconcile_pipeline_orphans_task, reconcile_recent_orphans_task
 
 __all__ = [
     "after_upload_enrich_and_watch",
@@ -20,6 +21,8 @@ __all__ = [
     "process_launch_schedules",
     "push_request_to_ai",
     "reconcile_deduplication",
+    "reconcile_pipeline_orphans_task",
+    "reconcile_recent_orphans_task",
     "report_enrich_done",
     "run_sast_pipeline",
     "watch_deduplication",

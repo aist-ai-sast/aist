@@ -29,7 +29,12 @@ from aist.pipeline_args import PipelineArguments
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_project_versions
 from aist.tasks import run_sast_pipeline
 from aist.utils.export import _build_ai_export_rows
-from aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline, stop_pipeline
+from aist.utils.pipeline import (
+    create_pipeline_object,
+    has_unfinished_pipeline,
+    is_terminal_pipeline_status,
+    stop_pipeline,
+)
 
 
 class PipelineStartRequestSerializer(serializers.Serializer):
@@ -247,7 +252,7 @@ class PipelineAPI(APIView):
             id=pipeline_id,
         )
         user_has_permission_or_403(request.user, p.project.product, Permissions.Product_Edit)
-        if p.status != AISTStatus.FINISHED:
+        if not is_terminal_pipeline_status(p.status):
             return Response(status=status.HTTP_400_BAD_REQUEST)
         p.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -430,8 +435,8 @@ def stream_logs_sse_response(pipeline: AISTPipeline) -> StreamingHttpResponse:
                 chunk = data[last_len:]
                 last_len = len(data)
                 yield f"data: {chunk}\n\n"
-            if p.status == AISTStatus.FINISHED:
-                yield "event: done\ndata: FINISHED\n\n"
+            if is_terminal_pipeline_status(p.status):
+                yield f"event: done\ndata: {p.status}\n\n"
                 break
             time.sleep(0.3)
 
@@ -526,7 +531,11 @@ def pipeline_status_stream_response(pipeline_id: str) -> StreamingHttpResponse:
                     last_status = obj.status
                     last_updated = obj.updated
                     yield f"event: status\ndata: {last_status}\n\n"
-                    if last_status in {AISTStatus.FINISHED, getattr(AISTStatus, "FAILED", "FAILED")}:
+                    if last_status in {
+                        AISTStatus.FINISHED,
+                        AISTStatus.FINISHED_WITH_WARNINGS,
+                        getattr(AISTStatus, "FAILED", "FAILED"),
+                    }:
                         done_at = time.time() + 6
                 elif last_status is not None and obj.updated != last_updated:
                     last_updated = obj.updated

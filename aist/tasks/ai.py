@@ -51,7 +51,7 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
 
             if pipeline.status != AISTStatus.PUSH_TO_AI:
                 log.error("Attempt to push to AI before pipeline ready to Push it")
-                finish_pipeline(pipeline)
+                finish_pipeline(pipeline, degraded=True)
                 return
 
             project = pipeline.project
@@ -82,7 +82,7 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
             resp.raise_for_status()
         except Exception as exc:
             log.error("AI triage POST exception: %s", exc)
-            finish_pipeline(pipeline)
+            finish_pipeline(pipeline, degraded=True)
             return
 
         set_pipeline_status(pipeline, AISTStatus.WAITING_RESULT_FROM_AI)
@@ -104,7 +104,7 @@ def auto_push_to_ai_if_configured(pipeline_id: str):
 
         if pipeline.status != AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI:
             logger.error("Attempt to collect findings for AI before pipeline ready to Push it")
-            finish_pipeline(pipeline)
+            finish_pipeline(pipeline, degraded=True)
             return
 
         ai = (pipeline.launch_data or {}).get("ai") or {}
@@ -112,7 +112,7 @@ def auto_push_to_ai_if_configured(pipeline_id: str):
 
         if not snap or not ai:
             logger.warning("AUTO_DEFAULT: Filter snapshot not configured")
-            finish_pipeline(pipeline)
+            finish_pipeline(pipeline, degraded=True)
             return
 
         qs = Finding.objects.filter(test__in=pipeline.tests.all(), active=True)
@@ -122,7 +122,7 @@ def auto_push_to_ai_if_configured(pipeline_id: str):
 
         if limit is None:
             logger.warning("AUTO_DEFAULT: Filter limit is None")
-            finish_pipeline(pipeline)
+            finish_pipeline(pipeline, degraded=True)
             return
 
         finding_ids = list(qs.values_list("id", flat=True)[:limit])

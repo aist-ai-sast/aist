@@ -13,15 +13,24 @@ from aist.logging_transport import uninstall_pipeline_file_logging
 from aist.models import AISTPipeline, AISTStatus
 from aist.signals import pipeline_finished, pipeline_status_changed
 from aist.utils.pipeline_imports import cleanup_pipeline_containers
+from aist.utils.reconciliation import reconcile_pipeline_orphans
 
 _logger = logging.getLogger(__name__)
 BUILD_DIR_WARNING = "AIST_PROJECTS_BUILD_DIR is not set"
 
 
+def get_terminal_pipeline_statuses() -> set[str]:
+    return {AISTStatus.FINISHED, AISTStatus.FINISHED_WITH_WARNINGS}
+
+
+def is_terminal_pipeline_status(status: str) -> bool:
+    return status in get_terminal_pipeline_statuses()
+
+
 def has_unfinished_pipeline(project_version) -> bool:
     return (
         AISTPipeline.objects.filter(project_version=project_version)
-        .exclude(status=AISTStatus.FINISHED)
+        .exclude(status__in=get_terminal_pipeline_statuses())
         .exists()
     )
 
@@ -61,8 +70,18 @@ def set_pipeline_status(
     return True
 
 
-def finish_pipeline(pipeline) -> None:
-    set_pipeline_status(pipeline, AISTStatus.FINISHED)
+def finish_pipeline(pipeline, *, degraded: bool = False) -> None:
+    try:
+        reconcile_stats = reconcile_pipeline_orphans(pipeline_id=pipeline.id, dry_run=False, logger=_logger)
+    except Exception:
+        _logger.exception("Pipeline reconciliation failed (pipeline_id=%s)", pipeline.id)
+        reconcile_stats = {"remaining_violations": 1}
+    target_status = (
+        AISTStatus.FINISHED_WITH_WARNINGS
+        if degraded or (reconcile_stats.get("remaining_violations") or 0) > 0
+        else AISTStatus.FINISHED
+    )
+    set_pipeline_status(pipeline, target_status)
     transaction.on_commit(lambda: pipeline_finished.send(
         sender=type(pipeline), pipeline_id=pipeline.id,
     ))
