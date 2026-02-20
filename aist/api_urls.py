@@ -51,7 +51,11 @@ from aist.api.pipelines import (
     PipelineStatusStreamAPI,
     PipelineStopAPI,
 )
-from aist.api.projects import AISTDefaultAnalyzersAPI, AISTProjectMetaAPI, AISTProjectUpdateAPI
+from aist.api.projects import (
+    AISTDefaultAnalyzersAPI,
+    AISTProjectMetaAPI,
+    AISTProjectUpdateAPI,
+)
 from aist.api.tags import AvailableFindingTagsAPI
 
 app_name = "aist_api"

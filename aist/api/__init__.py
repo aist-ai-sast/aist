@@ -51,7 +51,11 @@ from aist.api.pipelines import (
 )
 from aist.api.product_summaries import AISTProductSummaryAPI
 from aist.api.project_versions import AISTProjectVersionCreateSerializer, ProjectVersionCreateAPI
-from aist.api.projects import AISTProjectDetailAPI, AISTProjectListAPI, AISTProjectSerializer
+from aist.api.projects import (
+    AISTProjectDetailAPI,
+    AISTProjectListAPI,
+    AISTProjectSerializer,
+)
 from aist.api.queue import (
     PipelineLaunchQueueClearDispatchedAPI,
     PipelineLaunchQueueClearSerializer,

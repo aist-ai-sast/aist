@@ -35,10 +35,15 @@ class AistResponseMaskingMiddleware:
         content_type = (response.get("Content-Type") or "").lower()
         if "application/json" not in content_type:
             return response
+        if "application/vnd.oai.openapi+json" in content_type:
+            return response
 
         try:
             payload = json.loads(response.content.decode("utf-8"))
         except Exception:
+            return response
+
+        if isinstance(payload, dict) and "openapi" in payload and "paths" in payload and "info" in payload:
             return response
 
         masked = mask_sensitive_data(payload)

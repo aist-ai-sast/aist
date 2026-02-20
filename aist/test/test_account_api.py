@@ -4,14 +4,16 @@ from unittest.mock import patch
 
 from django.test import Client
 from django.urls import reverse
+from rest_framework.test import APIClient
 
+from aist.models import Organization
 from aist.test.test_api import AISTApiBase
 
 
 class AISTAccountAPITests(AISTApiBase):
     def test_auth_login_returns_204_for_valid_credentials(self):
-        self.client.logout()
-        response = self.client.post(
+        client = APIClient()
+        response = client.post(
             reverse("aist_api:auth_login"),
             data={"username": self.user.username, "password": "pass"},
             format="json",
@@ -19,8 +21,8 @@ class AISTAccountAPITests(AISTApiBase):
         self.assertEqual(response.status_code, 204)
 
     def test_auth_login_rejects_invalid_credentials(self):
-        self.client.logout()
-        response = self.client.post(
+        client = APIClient()
+        response = client.post(
             reverse("aist_api:auth_login"),
             data={"username": self.user.username, "password": "wrong"},
             format="json",
@@ -49,12 +51,20 @@ class AISTAccountAPITests(AISTApiBase):
         self.assertEqual(response.status_code, 204)
 
     def test_me_get_returns_profile(self):
+        organization = Organization.objects.create(name="Access Org")
+        self.project.organization = organization
+        self.project.save(update_fields=["organization"])
+
         with patch("aist.api.account.get_system_setting", return_value=True):
             response = self.client.get(reverse("aist_api:me"))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["username"], self.user.username)
         self.assertIn("can_edit_profile", response.data)
         self.assertIn("can_edit_username", response.data)
+        memberships = response.data.get("organization_memberships", [])
+        self.assertEqual(len(memberships), 1)
+        self.assertEqual(memberships[0]["organization_name"], "Access Org")
+        self.assertEqual(memberships[0]["role_name"], "Maintainer")
 
     def test_me_patch_updates_profile(self):
         with patch("aist.api.account.get_system_setting", return_value=True):

@@ -2,11 +2,10 @@
 import gitlab
 from django.shortcuts import get_object_or_404
 from dojo.authorization.authorization import (
-    user_has_global_permission_or_403,
     user_has_permission_or_403,
 )
 from dojo.authorization.roles_permissions import Permissions
-from dojo.models import DojoMeta, Product, Product_Type
+from dojo.models import DojoMeta, Product
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -31,7 +30,7 @@ class ImportGitlabRequestSerializer(serializers.Serializer):
     gitlab_api_token = serializers.CharField(write_only=True, trim_whitespace=True)
     # Optional for self-hosted GitLab like https://gitlab.company.tld
     base_url = serializers.URLField(required=False, default="https://gitlab.com")
-    organization_id = OptionalIntField(required=False, allow_null=True)
+    organization_id = OptionalIntField(required=True, allow_null=False)
 
 
 class ImportGitlabResponseSerializer(serializers.Serializer):
@@ -102,10 +101,11 @@ class ImportProjectFromGitlabAPI(APIView):
             return Response({"detail": "Analyzers config not loaded"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         langs = cfg.convert_languages(langs_raw)
 
-        # 3) Create Product Type and Product
-        product_type, created_product_type = Product_Type.objects.get_or_create(name="Gitlab Imported")
-        if created_product_type:
-            user_has_global_permission_or_403(request.user, Permissions.Product_Type_Add)
+        organization_id = serializer.validated_data.get("organization_id")
+        organization = get_object_or_404(Organization, pk=organization_id)
+        product_type = organization.ensure_product_type()
+
+        # 3) Create Product in resolved Product Type
         user_has_permission_or_403(request.user, product_type, Permissions.Product_Type_Add_Product)
         product, created_product = Product.objects.get_or_create(
             name=path_with_ns,
@@ -113,6 +113,12 @@ class ImportProjectFromGitlabAPI(APIView):
         )
         if not created_product:
             user_has_permission_or_403(request.user, product, Permissions.Product_Edit)
+            if product.prod_type_id != product_type.id:
+                msg = (
+                    "Product already exists under another product type. "
+                    "Move it first or choose another organization."
+                )
+                return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)
 
         DojoMeta.objects.update_or_create(
             product=product,
@@ -134,12 +140,7 @@ class ImportProjectFromGitlabAPI(APIView):
             binding.personal_access_token = token
             binding.save(update_fields=["personal_access_token"])
 
-        organization_id = serializer.validated_data.get("organization_id")
-        organization = None
-        if organization_id is not None:
-            organization = get_object_or_404(Organization, pk=organization_id)
-
-        aist_project, _ = AISTProject.objects.get_or_create(
+        aist_project, project_created = AISTProject.objects.get_or_create(
             product=product,
             defaults={
                 "supported_languages": langs,
@@ -150,6 +151,13 @@ class ImportProjectFromGitlabAPI(APIView):
                 "organization": organization,
             },
         )
+        if not project_created:
+            if aist_project.organization_id and aist_project.organization_id != organization.id:
+                msg = "Project is already linked to another organization."
+                return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)
+            if aist_project.organization_id is None:
+                aist_project.organization = organization
+                aist_project.save(update_fields=["organization"])
 
         out = ImportGitlabResponseSerializer({
             "product_id": product.id,

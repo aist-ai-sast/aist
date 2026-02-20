@@ -10,13 +10,15 @@ from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.models import AISTProject, Organization
-from aist.queries import get_authorized_aist_projects
+from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 
 class AISTProjectSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source="product.name", read_only=True)
     product_id = serializers.IntegerField(source="product.id", read_only=True)
+    organization_id = serializers.IntegerField(read_only=True)
+    organization_name = serializers.CharField(source="organization.name", read_only=True, allow_null=True)
 
     class Meta:
         model = AISTProject
@@ -26,6 +28,8 @@ class AISTProjectSerializer(serializers.ModelSerializer):
             "product_name",
             "supported_languages",
             "compilable",
+            "organization_id",
+            "organization_name",
             "created",
             "updated",
             "repository",
@@ -44,6 +48,16 @@ class ProjectUpdateRequestSerializer(serializers.Serializer):
     compilable = serializers.BooleanField(required=False, default=False)
     profile = serializers.JSONField(required=False, default=dict)
     organization = serializers.PrimaryKeyRelatedField(queryset=Organization.objects.all(), required=False, allow_null=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        if not request:
+            return
+        self.fields["organization"].queryset = get_authorized_aist_organizations(
+            Permissions.Product_View,
+            user=request.user,
+        )
 
     def to_internal_value(self, data):
         mutable = data.copy()
@@ -162,7 +176,7 @@ def update_project_from_payload(*, project: AISTProject, payload: dict):
     compilable = bool(payload.get("compilable"))
     supported_languages_raw = payload.get("supported_languages") or []
     profile = payload.get("profile") or {}
-    organization = payload.get("organization")
+    organization = payload.get("organization") if "organization" in payload else project.organization
 
     cfg = _load_analyzers_config()
     if not cfg:
@@ -173,6 +187,13 @@ def update_project_from_payload(*, project: AISTProject, payload: dict):
     project.compilable = compilable
     project.supported_languages = languages
     project.profile = profile or {}
+    if organization is not None:
+        if not organization.product_type_id:
+            organization.ensure_product_type()
+        if project.product.prod_type_id != organization.product_type_id:
+            return None, {
+                "organization": "Organization product type does not match project product type.",
+            }
     project.organization = organization
     project.save(
         update_fields=[
@@ -262,7 +283,7 @@ class AISTProjectUpdateAPI(AuthorizedQuerySetMixin, APIView):
             id=project_id,
         )
         user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
-        serializer = ProjectUpdateRequestSerializer(data=request.data)
+        serializer = ProjectUpdateRequestSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         payload, errors = update_project_from_payload(project=project, payload=serializer.validated_data)
         if errors:

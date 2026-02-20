@@ -10,6 +10,12 @@ export type AccountProfile = {
   email: string;
   can_edit_profile: boolean;
   can_edit_username: boolean;
+  organization_memberships: Array<{
+    organization_id: number;
+    organization_name: string;
+    role_id: number | null;
+    role_name: string;
+  }>;
 };
 
 export function useAccountProfile() {

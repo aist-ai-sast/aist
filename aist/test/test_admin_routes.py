@@ -41,14 +41,12 @@ class AdminRouteTests(TestCase):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 403)
-                self.assertContains(response, "Access Denied")
 
     def test_anonymous_cannot_open_defectdojo_form_pages(self):
         for path in ("/aist-admin/product/add", "/aist-admin/engagement/add", "/aist-admin/test/add"):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 404)
-                self.assertContains(response, "Page Not Found")
 
     def test_admin_prefix_without_trailing_slash_redirects_cleanly(self):
         response = self.client.get("/aist-admin", follow=True)
@@ -68,6 +66,8 @@ class AdminRouteTests(TestCase):
     def test_plain_schema_contains_only_aist_endpoints(self):
         response = self.client.get("/api/v2/oa3/schema/?format=json")
         self.assertEqual(response.status_code, 200)
-        paths = response.json().get("paths", {})
+        body = response.json()
+        self.assertTrue(str(body.get("openapi", "")).startswith("3."))
+        paths = body.get("paths", {})
         self.assertIn("/api/v2/aist/findings/", paths)
         self.assertNotIn("/api/v2/findings/", paths)

@@ -33,6 +33,7 @@ from aist.models import (
     AISTProjectLaunchConfig,
     AISTProjectVersion,
     AISTStatus,
+    Organization,
     VersionType,
 )
 from aist.utils.ai_response import sync_ai_finding_responses
@@ -1086,6 +1087,94 @@ class AISTUIApiTests(AISTApiBase):
         self.assertEqual(resp.status_code, 200)
         self.project.refresh_from_db()
         self.assertEqual(self.project.script_path, "scripts/new.sh")
+
+    def test_project_update_keeps_organization_when_not_provided(self):
+        org = Organization.objects.create(name="Org Keep")
+        org_pt = org.ensure_product_type()
+        self.product.prod_type = org_pt
+        self.product.save(update_fields=["prod_type"])
+        self.project.organization = org
+        self.project.save(update_fields=["organization"])
+
+        url = reverse("aist_api:project_update", kwargs={"project_id": self.project.id})
+        resp = self.client.post(
+            url,
+            data={
+                "script_path": "scripts/new.sh",
+                "supported_languages": "python",
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.organization_id, org.id)
+
+    def test_project_update_rejects_organization_with_mismatched_product_type(self):
+        mismatch_org = Organization.objects.create(name="Org Mismatch")
+        mismatch_pt = Product_Type.objects.create(name="Mismatch PT")
+        mismatch_org.product_type = mismatch_pt
+        mismatch_org.save(update_fields=["product_type"])
+        mismatch_product = Product.objects.create(
+            name="Mismatch Access Product",
+            description="desc",
+            prod_type=mismatch_pt,
+            sla_configuration_id=self.sla.id,
+        )
+        Product_Member.objects.create(
+            product=mismatch_product,
+            user=self.user,
+            role=self.role_maintainer,
+        )
+        AISTProject.objects.create(
+            product=mismatch_product,
+            supported_languages=["python"],
+            script_path="scripts/build.sh",
+            compilable=False,
+            profile={},
+            organization=mismatch_org,
+        )
+
+        url = reverse("aist_api:project_update", kwargs={"project_id": self.project.id})
+        resp = self.client.post(
+            url,
+            data={
+                "script_path": "scripts/new.sh",
+                "supported_languages": "python",
+                "organization": mismatch_org.id,
+            },
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("ok", resp.data)
+        self.assertFalse(resp.data["ok"])
+        self.assertIn("organization", resp.data["errors"])
+
+    def test_project_update_rejects_unauthorized_organization(self):
+        hidden_org = Organization.objects.create(name="Org Hidden")
+        hidden_product = Product.objects.create(
+            name="Hidden Product",
+            description="desc",
+            prod_type=self.prod_type,
+            sla_configuration_id=self.sla.id,
+        )
+        AISTProject.objects.create(
+            product=hidden_product,
+            supported_languages=["python"],
+            script_path="scripts/build.sh",
+            compilable=False,
+            profile={},
+            organization=hidden_org,
+        )
+
+        url = reverse("aist_api:project_update", kwargs={"project_id": self.project.id})
+        resp = self.client.post(
+            url,
+            data={
+                "script_path": "scripts/new.sh",
+                "supported_languages": "python",
+                "organization": hidden_org.id,
+            },
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("organization", resp.data)
 
     def test_pipeline_stop_api(self):
         pipeline = AISTPipeline.objects.create(

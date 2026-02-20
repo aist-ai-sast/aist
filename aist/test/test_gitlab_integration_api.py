@@ -68,6 +68,9 @@ class GitlabIntegrationAPITests(TestCase):
         aist_project = AISTProject.objects.get(id=resp.data["aist_project_id"])
         self.assertEqual(aist_project.organization_id, org.id)
         self.assertEqual(aist_project.repository.type, ScmType.GITLAB)
+        org.refresh_from_db()
+        self.assertIsNotNone(org.product_type_id)
+        self.assertEqual(aist_project.product.prod_type_id, org.product_type_id)
 
         repo = RepositoryInfo.objects.get(id=resp.data["repository_id"])
         binding = ScmGitlabBinding.objects.get(scm=repo)
@@ -75,6 +78,7 @@ class GitlabIntegrationAPITests(TestCase):
 
     @patch("aist.api.gitlab_integration.gitlab.Gitlab")
     def test_import_gitlab_project_returns_404(self, mock_gitlab):
+        org = Organization.objects.create(name="Org 404")
         mock_gitlab.return_value.projects.get.side_effect = gitlab.exceptions.GitlabGetError(
             error_message="Not Found",
             response_code=404,
@@ -87,6 +91,7 @@ class GitlabIntegrationAPITests(TestCase):
                 "project_id": 999,
                 "gitlab_api_token": "token",
                 "base_url": "https://gitlab.example.com",
+                "organization_id": org.id,
             },
             format="json",
         )
@@ -95,6 +100,7 @@ class GitlabIntegrationAPITests(TestCase):
 
     @patch("aist.api.gitlab_integration.gitlab.Gitlab")
     def test_import_gitlab_project_masks_token_in_error_detail(self, mock_gitlab):
+        org = Organization.objects.create(name="Org 502")
         mock_gitlab.return_value.projects.get.side_effect = gitlab.exceptions.GitlabGetError(
             error_message="upstream failed for glpat-abcdef12345678",
             response_code=500,
@@ -107,6 +113,7 @@ class GitlabIntegrationAPITests(TestCase):
                 "project_id": 999,
                 "gitlab_api_token": "glpat-abcdef12345678",
                 "base_url": "https://gitlab.example.com",
+                "organization_id": org.id,
             },
             format="json",
         )
@@ -116,18 +123,54 @@ class GitlabIntegrationAPITests(TestCase):
         self.assertIn("GitLab API error:", resp.data.get("detail", ""))
         self.assertIn(MASKED_VALUE, resp.data.get("detail", ""))
 
+    def test_import_gitlab_project_requires_organization(self):
+        resp = self.client.post(
+            self._url(),
+            data={
+                "project_id": 123,
+                "gitlab_api_token": "token",
+                "base_url": "https://gitlab.example.com",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("organization_id", resp.data)
+
+    def test_import_gitlab_project_requires_token(self):
+        org = Organization.objects.create(name="Org Token Required")
+        resp = self.client.post(
+            self._url(),
+            data={
+                "project_id": 123,
+                "gitlab_api_token": "",
+                "base_url": "https://gitlab.example.com",
+                "organization_id": org.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+
     @patch("aist.api.gitlab_integration._load_analyzers_config")
     @patch("aist.api.gitlab_integration.gitlab.Gitlab")
-    def test_import_gitlab_project_allows_empty_organization(self, mock_gitlab, mock_cfg):
-        mock_cfg.return_value = Mock(convert_languages=Mock(return_value=["python"]))
+    def test_import_gitlab_project_conflicts_on_existing_product_type_mismatch(self, mock_gitlab, mock_cfg):
+        org = Organization.objects.create(name="Org A")
+        other_pt = Product_Type.objects.create(name="Other PT")
+        Product.objects.create(
+            name="group/my-repo",
+            description="desc",
+            prod_type=other_pt,
+            sla_configuration_id=1,
+        )
 
-        langs_payload = {"Python": 80.0, "Go": 20.0}
+        mock_cfg.return_value = Mock(convert_languages=Mock(return_value=["python"]))
         mock_project = Mock(
             path_with_namespace="group/my-repo",
             description="desc",
             web_url="https://gitlab.example.com/group/my-repo",
         )
-        mock_project.languages.return_value = langs_payload
+        mock_project.languages.return_value = {"Python": 100.0}
         mock_gitlab.return_value.projects.get.return_value = mock_project
 
         resp = self.client.post(
@@ -136,27 +179,12 @@ class GitlabIntegrationAPITests(TestCase):
                 "project_id": 123,
                 "gitlab_api_token": "token",
                 "base_url": "https://gitlab.example.com",
-                "organization_id": "",
+                "organization_id": org.id,
             },
             format="json",
         )
 
-        self.assertEqual(resp.status_code, 201)
-        aist_project = AISTProject.objects.get(id=resp.data["aist_project_id"])
-        self.assertIsNone(aist_project.organization_id)
-
-    def test_import_gitlab_project_requires_token(self):
-        resp = self.client.post(
-            self._url(),
-            data={
-                "project_id": 123,
-                "gitlab_api_token": "",
-                "base_url": "https://gitlab.example.com",
-            },
-            format="json",
-        )
-
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 409)
 
     def test_update_gitlab_token_happy_path(self):
         product_type = Product_Type.objects.create(name="Gitlab Imported")

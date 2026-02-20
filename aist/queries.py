@@ -79,5 +79,7 @@ def get_authorized_aist_organizations(permission, user=None):
     user = _resolve_user(user)
     if user is None:
         return Organization.objects.none()
+    if user.is_superuser:
+        return Organization.objects.all()
     products = get_authorized_products(permission, user=user)
     return Organization.objects.filter(projects__product__in=products).distinct()

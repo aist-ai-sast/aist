@@ -23,7 +23,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from django_github_app.models import Installation
 from django_github_app.routing import GitHubRouter
-from dojo.models import Finding, Product, Test
+from dojo.models import Finding, Product, Product_Type, Test
 from encrypted_model_fields.fields import EncryptedCharField
 
 _repo_part_validator = RegexValidator(
@@ -271,6 +271,14 @@ class Organization(models.Model):
 
     name = models.CharField(max_length=255, unique=True)
     description = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    product_type = models.OneToOneField(
+        Product_Type,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="aist_organization",
+    )
 
     ai_default_filter = models.JSONField(null=True, blank=True, default=None)
 
@@ -279,6 +287,14 @@ class Organization(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+    def ensure_product_type(self) -> Product_Type:
+        if self.product_type_id:
+            return self.product_type
+        product_type, _ = Product_Type.objects.get_or_create(name=self.name)
+        self.product_type = product_type
+        self.save(update_fields=["product_type"])
+        return product_type
 
 
 class AISTProject(models.Model):

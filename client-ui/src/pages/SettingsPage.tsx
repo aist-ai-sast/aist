@@ -1,18 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import PageErrorState from "../components/PageErrorState";
 import { logoutSession, useAuthStatus } from "../lib/auth";
 import { logoutAllDevices, useAccountProfile, useChangePassword, useUpdateAccountProfile } from "../lib/account";
 import { toUserMessage } from "../lib/api";
+import { getRoleBadgeClass, getRoleIcon } from "../lib/roleBadge";
 import { getDisplayName, getRoleLabel, getUsername } from "../lib/userProfile";
 import { usePermissions } from "../lib/permissions";
 import { useToast } from "../components/ToastProvider";
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
+function Card({ title, icon, children }: { title: string; icon?: ReactNode; children: React.ReactNode }) {
   return (
     <section className="aist-card border-night-500/80 p-0">
       <div className="border-b border-night-500/70 px-5 py-4">
-        <div className="text-xs uppercase tracking-[0.2em] text-slate-400">{title}</div>
+        <div className="inline-flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-slate-300">
+          {icon ? <span className="text-brand-200">{icon}</span> : null}
+          <span>{title}</span>
+        </div>
       </div>
       <div className="px-5 py-4">{children}</div>
     </section>
@@ -80,6 +84,7 @@ export default function SettingsPage() {
   const displayName = getDisplayName(auth.data);
   const username = getUsername(auth.data);
   const role = getRoleLabel(auth.data);
+  const memberships = accountQuery.data.organization_memberships ?? [];
   const canManageProfile = permissions.canWrite || permissions.canManageAccess;
   const canEditProfile = canManageProfile && accountQuery.data.can_edit_profile;
   const canEditUsername = canManageProfile && accountQuery.data.can_edit_username;
@@ -94,7 +99,14 @@ export default function SettingsPage() {
 
       <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
         <section id="account">
-          <Card title="Account">
+          <Card
+            title="Account"
+            icon={(
+              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                <path fill="currentColor" d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5Zm0 2c-4.42 0-8 1.79-8 4v2h16v-2c0-2.21-3.58-4-8-4Z" />
+              </svg>
+            )}
+          >
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-xs text-slate-400">
                 First name
@@ -181,7 +193,14 @@ export default function SettingsPage() {
 
         <div className="space-y-4">
           <section id="security">
-            <Card title="Session & Security">
+            <Card
+              title="Session & Security"
+              icon={(
+                <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                  <path fill="currentColor" d="M12 2 4 6v6c0 5.5 3.8 9.9 8 11 4.2-1.1 8-5.5 8-11V6l-8-4Zm0 2.2 6 3v4.8c0 4.3-2.8 7.9-6 9-3.2-1.1-6-4.7-6-9V7.2l6-3Z" />
+                </svg>
+              )}
+            >
               <div className="space-y-4 text-sm text-slate-200">
                 <div className="grid gap-3">
                 <label className="text-xs text-slate-400">
@@ -307,12 +326,52 @@ export default function SettingsPage() {
             </Card>
           </section>
 
-          <Card title="Access">
+          <Card
+            title="Access"
+            icon={(
+              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                <path fill="currentColor" d="M3 6.5 12 2l9 4.5V17a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6.5Zm2 1.2V17a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V7.7L12 4.2 5 7.7Z" />
+              </svg>
+            )}
+          >
             <div className="space-y-3 text-sm text-slate-200">
-              <p>Your resource access is managed by your organization administrators.</p>
-              <p className="text-xs text-slate-400">
-                To request additional access, contact your security or platform administrator.
-              </p>
+              {memberships.length ? (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-[minmax(0,1fr)_8.5rem] items-center gap-3 px-3.5 text-[11px] uppercase tracking-[0.08em] text-slate-400">
+                    <span>Organization</span>
+                    <span>Role</span>
+                  </div>
+                  {memberships.map((membership) => (
+                    <div
+                      key={membership.organization_id}
+                      className="rounded-2xl border border-night-500/80 bg-night-800/75 px-3.5 py-3"
+                    >
+                      <div className="grid grid-cols-[minmax(0,1fr)_8.5rem] items-center gap-3">
+                        <div className="min-w-0 inline-flex items-center gap-2 text-sm font-medium text-slate-100">
+                          <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-brand-200" aria-hidden="true">
+                            <path
+                              d="M3 6.5 12 2l9 4.5V17a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6.5Zm2 1.2V17a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V7.7L12 4.2 5 7.7Zm3.5 2.3h2v2h-2v-2Zm4.5 0h2v2h-2v-2Z"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.6"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                          <span className="truncate">{membership.organization_name}</span>
+                        </div>
+                        <div className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${getRoleBadgeClass(membership.role_name)}`}>
+                          {getRoleIcon(membership.role_name)}
+                          <span>{membership.role_name}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400">No organization memberships assigned.</p>
+              )}
+              <p className="text-xs text-slate-400">Access is governed by your organization administrators.</p>
             </div>
           </Card>
         </div>
