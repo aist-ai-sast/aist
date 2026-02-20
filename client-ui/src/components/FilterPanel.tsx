@@ -55,10 +55,11 @@ export default function FilterPanel({
       <div className="space-y-4">
         <SelectField
           label="Project"
-          value={selectedProjectId ? String(selectedProjectId) : ""}
-          onChange={(value) => onProjectChange(value ? Number(value) : undefined)}
+          value={selectedProjectId ? String(selectedProjectId) : "all"}
+          onChange={(value) => onProjectChange(value && value !== "all" ? Number(value) : undefined)}
           placeholder="All projects"
           options={[
+            { value: "all", label: "All projects" },
             ...products.map((product) => ({
               value: String(product.id),
               label: product.name,
@@ -132,13 +133,16 @@ export default function FilterPanel({
           visibleCount={10}
         />
         <SelectField
-          label="AI Response"
+          label="AI Status"
           value={selectedAiResponse}
           onChange={onAiResponseChange}
           options={[
             { value: "All", label: "All" },
             { value: "has_ai", label: "Has AI Response" },
             { value: "no_ai", label: "No AI Response" },
+            { value: "ai_tp", label: "AI TP" },
+            { value: "ai_fp", label: "AI FP" },
+            { value: "ai_u", label: "AI U" },
           ]}
         />
       </div>

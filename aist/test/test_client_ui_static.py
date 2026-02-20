@@ -35,6 +35,8 @@ class ClientPortalRouteTests(SimpleTestCase):
         self.assertEqual(routes["logout_url"], "/auth/logout/")
         self.assertIn("{id}", routes["finding_detail_url"])
         self.assertIn("{id}", routes["finding_close_url"])
+        self.assertIn("{finding_id}", routes["finding_notes_url"])
+        self.assertIn("{finding_id}", routes["finding_export_url"])
         self.assertIn("{pipeline_id}", routes["pipeline_export_url"])
         self.assertEqual(routes["ai_finding_responses_url"], "/api/v2/aist/ai-finding-responses/")
         self.assertIn("{project_version_id}", routes["project_version_file_url"])

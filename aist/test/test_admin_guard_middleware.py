@@ -112,6 +112,25 @@ class AistAdminGuardMiddlewareTests(TestCase):
         response = self.middleware(request)
         self.assertEqual(response.status_code, 403)
 
+    def test_blocks_admin_swagger_for_non_superuser_even_with_session(self):
+        user = get_user_model().objects.create_user(username="client_api_swagger", password=_make_password())
+        request = self.factory.get("/aist-admin/api/v2/oa3/swagger-ui/")
+        request.user = user
+        request.COOKIES[settings.SESSION_COOKIE_NAME] = "session"
+        response = self.middleware(request)
+        self.assertEqual(response.status_code, 403)
+
+    def test_allows_admin_swagger_for_superuser(self):
+        user = get_user_model().objects.create_superuser(
+            username="admin_api_swagger",
+            password=_make_password(),
+            email="admin_api_swagger@example.com",
+        )
+        request = self.factory.get("/aist-admin/api/v2/oa3/swagger-ui/")
+        request.user = user
+        response = self.middleware(request)
+        self.assertEqual(response.status_code, 200)
+
     def test_blocks_api_access_for_non_superuser_with_token_header(self):
         user = get_user_model().objects.create_user(username="client_api_3", password=_make_password())
         request = self.factory.get(

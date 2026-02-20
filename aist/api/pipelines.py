@@ -5,6 +5,7 @@ import json
 import pathlib
 import time
 from contextlib import suppress
+from dataclasses import dataclass
 from io import BytesIO, StringIO
 
 from django.db import close_old_connections, transaction
@@ -34,6 +35,18 @@ from aist.utils.pipeline import (
     has_unfinished_pipeline,
     is_terminal_pipeline_status,
     stop_pipeline,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineApiChoices:
+    status: list[str]
+    ordering: list[str]
+
+
+PIPELINE_API_CHOICES = PipelineApiChoices(
+    status=[status for status, _label in AISTStatus.choices],
+    ordering=["created", "-created", "updated", "-updated"],
 )
 
 
@@ -170,10 +183,10 @@ class PipelineListAPI(generics.ListAPIView):
         ),
         parameters=[
             OpenApiParameter(name="project_id", location=OpenApiParameter.QUERY, description="Filter by AISTProject id", required=False, type=int),
-            OpenApiParameter(name="status", location=OpenApiParameter.QUERY, description="Filter by status (string/choice)", required=False, type=str),
+            OpenApiParameter(name="status", location=OpenApiParameter.QUERY, required=False, type=str, enum=PIPELINE_API_CHOICES.status),
             OpenApiParameter(name="created_gte", location=OpenApiParameter.QUERY, description="Created >= (ISO8601)", required=False, type=str),
             OpenApiParameter(name="created_lte", location=OpenApiParameter.QUERY, description="Created <= (ISO8601)", required=False, type=str),
-            OpenApiParameter(name="ordering", location=OpenApiParameter.QUERY, description="created | -created | updated | -updated", required=False, type=str),
+            OpenApiParameter(name="ordering", location=OpenApiParameter.QUERY, required=False, type=str, enum=PIPELINE_API_CHOICES.ordering),
             # Pagination params from LimitOffsetPagination:
             OpenApiParameter(name="limit", location=OpenApiParameter.QUERY, required=False, type=int),
             OpenApiParameter(name="offset", location=OpenApiParameter.QUERY, required=False, type=int),
@@ -205,7 +218,7 @@ class PipelineListAPI(generics.ListAPIView):
             qs = qs.filter(created__gte=created_gte)
         if created_lte:
             qs = qs.filter(created__lte=created_lte)
-        if ordering in {"created", "-created", "updated", "-updated"}:
+        if ordering in set(PIPELINE_API_CHOICES.ordering):
             qs = qs.order_by(ordering)
 
         return qs

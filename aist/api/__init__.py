@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.files import ProjectVersionFileBlobAPI
-from aist.api.findings import AISTFindingListAPI
+from aist.api.findings import AISTFindingExportAPI, AISTFindingListAPI, AISTFindingNotesAPI
 from aist.api.gitlab_integration import ImportProjectFromGitlabAPI, ProjectGitlabTokenUpdateAPI
 from aist.api.launch_configs import (
     EmailActionCreateSerializer,
@@ -53,7 +53,9 @@ from aist.api.queue import (
 )
 
 __all__ = [
+    "AISTFindingExportAPI",
     "AISTFindingListAPI",
+    "AISTFindingNotesAPI",
     "AISTOrganizationSerializer",
     "AISTPipelineSummaryAPI",
     "AISTProductSummaryAPI",

@@ -39,3 +39,15 @@ class AdminRouteTests(TestCase):
         response = self.client.get("/auth/login/?next=/aist-admin/aist/projects/", follow=True)
         self._assert_no_8443_in_redirects(response)
         self.assertEqual(response.status_code, 200)
+
+    def test_plain_swagger_url_serves_aist_swagger(self):
+        response = self.client.get("/api/v2/oa3/swagger-ui/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "SwaggerUIBundle")
+
+    def test_plain_schema_contains_only_aist_endpoints(self):
+        response = self.client.get("/api/v2/oa3/schema/?format=json")
+        self.assertEqual(response.status_code, 200)
+        paths = response.json().get("paths", {})
+        self.assertIn("/api/v2/aist/findings/", paths)
+        self.assertNotIn("/api/v2/findings/", paths)

@@ -1,4 +1,4 @@
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useState } from "react";
 import FindingDetailTabs from "../components/FindingDetailTabs";
 import AiVerdictBadge from "../components/AiVerdictBadge";
@@ -10,7 +10,7 @@ import {
   useProjectMeta,
   useProjects,
 } from "../lib/queries";
-import { useExportAiResults } from "../lib/mutations";
+import { useExportFinding } from "../lib/mutations";
 import { useToast } from "../components/ToastProvider";
 import FindingStatusActions from "../components/FindingStatusActions";
 import { formatProjectVersionText } from "../lib/projectVersion";
@@ -18,13 +18,15 @@ import { getRoute } from "../lib/routes";
 
 export default function FindingDetailPage() {
   const params = useParams();
+  const [searchParams] = useSearchParams();
+  const pipelineFromQuery = searchParams.get("pipeline") || undefined;
   const findingId = params.id ? Number(params.id) : undefined;
   const findingQuery = useFinding(findingId);
   const projectsQuery = useProjects();
   const [localFindingOverride, setLocalFindingOverride] = useState<Partial<NonNullable<typeof findingQuery.data>>>({});
   const finding = findingQuery.data ? { ...findingQuery.data, ...localFindingOverride } : undefined;
   const findingProjectVersionQuery = useFindingProjectVersion(findingId);
-  const exportAi = useExportAiResults();
+  const exportFinding = useExportFinding();
   const toast = useToast();
 
   const projects = projectsQuery.data ?? [];
@@ -60,6 +62,7 @@ export default function FindingDetailPage() {
   }) => {
     const params = new URLSearchParams();
     if (resolvedProjectId) params.set("project", String(resolvedProjectId));
+    if (pipelineFromQuery) params.set("pipeline", pipelineFromQuery);
     if (projectVersion) params.set("project_version", projectVersion);
     if (file) params.set("file", file);
     const query = params.toString();
@@ -223,12 +226,12 @@ export default function FindingDetailPage() {
           <button
             className="aist-icon-button h-10 disabled:opacity-50"
             onClick={() => {
-              if (!aiResponse?.pipelineId) {
-                toast.push("AI results are not available for export.", "error");
+              if (!finding?.id) {
+                toast.push("Finding export is unavailable.", "error");
                 return;
               }
-              exportAi.mutate(
-                { pipelineId: aiResponse.pipelineId },
+              exportFinding.mutate(
+                { findingId: finding.id },
                 {
                   onSuccess: () => {
                     toast.push("Export started.", "success");
@@ -240,7 +243,7 @@ export default function FindingDetailPage() {
                 },
               );
             }}
-            disabled={!aiResponse?.pipelineId}
+            disabled={!finding?.id}
           >
             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
               <path

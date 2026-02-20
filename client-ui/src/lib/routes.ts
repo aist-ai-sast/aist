@@ -6,6 +6,7 @@ type RouteMap = {
   finding_detail_url: string;
   finding_notes_url: string;
   finding_close_url: string;
+  finding_export_url: string;
   projects_list_url: string;
   product_summary_url: string;
   project_meta_url: string;

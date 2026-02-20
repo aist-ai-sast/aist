@@ -12,6 +12,7 @@ from dojo.authorization.roles_permissions import Roles
 from dojo.models import (
     Engagement,
     Finding,
+    Notes,
     Product,
     Product_Member,
     Product_Type,
@@ -431,6 +432,51 @@ class AIFindingResponseAPITests(AISTApiBase):
         self.assertEqual(item["reasoning"], "AI reasoning")
         self.assertNotIn("job_id", item)
 
+    def test_keeps_reference_urls_as_received(self):
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-ai-reference-normalize",
+            project=self.project,
+            status=AISTStatus.FINISHED,
+        )
+        engagement = Engagement.objects.create(
+            name="Engage AI refs",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep ai refs")
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Finding for refs",
+            severity="Low",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        ai_response = AISTAIResponse.objects.create(pipeline=pipeline, payload={"results": {}})
+        AISTAIFindingResponse.objects.create(
+            pipeline=pipeline,
+            source_response=ai_response,
+            finding=finding,
+            verdict=AISTAIFindingResponse.Verdict.UNCERTAIN,
+            title="refs",
+            summary="refs",
+            references=["example.com/path", "https://already.valid"],
+        )
+
+        resp = self.client.get(
+            reverse("aist_api:ai_finding_responses"),
+            data={"project_id": self.project.id, "finding_ids": str(finding.id)},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data[0]["references"], ["example.com/path", "https://already.valid"])
+
     def test_sync_ai_finding_responses_ignores_entries_without_original_finding_id(self):
         pipeline = AISTPipeline.objects.create(
             id="pipe-ai-sync",
@@ -525,7 +571,7 @@ class AISTFindingAIFilterTests(AISTApiBase):
     def test_finding_list_filters_has_ai_response(self):
         resp = self.client.get(
             reverse("aist_api:finding_list"),
-            data={"test__engagement__product": self.product.id, "ai_response": "has_ai"},
+            data={"test__engagement__product": self.product.id, "ai_status": "has_ai"},
         )
 
         self.assertEqual(resp.status_code, 200)
@@ -537,7 +583,7 @@ class AISTFindingAIFilterTests(AISTApiBase):
     def test_finding_list_filters_no_ai_response(self):
         resp = self.client.get(
             reverse("aist_api:finding_list"),
-            data={"test__engagement__product": self.product.id, "ai_response": "no_ai"},
+            data={"test__engagement__product": self.product.id, "ai_status": "no_ai"},
         )
 
         self.assertEqual(resp.status_code, 200)
@@ -549,9 +595,28 @@ class AISTFindingAIFilterTests(AISTApiBase):
     def test_finding_list_rejects_invalid_ai_response_filter(self):
         resp = self.client.get(
             reverse("aist_api:finding_list"),
-            data={"test__engagement__product": self.product.id, "ai_response": "invalid"},
+            data={"test__engagement__product": self.product.id, "ai_status": "invalid"},
         )
         self.assertEqual(resp.status_code, 400)
+
+    def test_finding_list_filters_by_ai_tp_status(self):
+        resp = self.client.get(
+            reverse("aist_api:finding_list"),
+            data={"test__engagement__product": self.product.id, "ai_status": "ai_tp"},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        ids = [row["id"] for row in resp.data["results"]]
+        self.assertEqual(ids, [self.finding_with_ai.id])
+
+    def test_finding_list_filters_by_ai_fp_status(self):
+        resp = self.client.get(
+            reverse("aist_api:finding_list"),
+            data={"test__engagement__product": self.product.id, "ai_status": "ai_fp"},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 0)
 
 
 class AISTFindingTagsTests(AISTApiBase):
@@ -960,6 +1025,127 @@ class AISTUIApiTests(AISTApiBase):
         resp = self.client.post(url, data={"finding_ids": []}, format="json")
         self.assertEqual(resp.status_code, 400)
 
+    def test_finding_notes_api_returns_author_name_and_creates_note(self):
+        engagement = Engagement.objects.create(
+            name="Engage Notes API",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep notes api")
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Finding for notes API",
+            severity="Low",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+
+        create_resp = self.client.post(
+            reverse("aist_api:finding_notes", kwargs={"finding_id": finding.id}),
+            data={"entry": "new note"},
+            format="json",
+        )
+        self.assertEqual(create_resp.status_code, 201)
+        self.assertEqual(create_resp.data["entry"], "new note")
+        self.assertEqual(create_resp.data["user_display"], self.user.username)
+
+        list_resp = self.client.get(reverse("aist_api:finding_notes", kwargs={"finding_id": finding.id}))
+        self.assertEqual(list_resp.status_code, 200)
+        self.assertEqual(len(list_resp.data), 1)
+        self.assertEqual(list_resp.data[0]["user_display"], self.user.username)
+        self.assertTrue(Notes.objects.filter(id=create_resp.data["id"]).exists())
+
+    def test_finding_export_api_exports_single_finding(self):
+        engagement = Engagement.objects.create(
+            name="Engage Finding Export",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep finding export")
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Finding for export API",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+            file_path="src/app.py",
+            line=9,
+            description="Description before snippet\n```python\nprint('poc')\n```\nDescription after snippet",
+        )
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-export-single-finding",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINISHED,
+        )
+        ai_response = AISTAIResponse.objects.create(pipeline=pipeline, payload={"results": {}})
+        AISTAIFindingResponse.objects.create(
+            pipeline=pipeline,
+            source_response=ai_response,
+            finding=finding,
+            verdict=AISTAIFindingResponse.Verdict.TRUE_POSITIVE,
+            title="AI title export",
+            summary="AI reasoning export",
+            references=["example.com/advisory"],
+        )
+
+        resp = self.client.post(reverse("aist_api:finding_export", kwargs={"finding_id": finding.id}), data={})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "text/csv; charset=utf-8")
+        self.assertIn(f"aist_finding_{finding.id}.csv", resp["Content-Disposition"])
+        body = resp.content.decode("utf-8")
+        self.assertIn("finding for export api", body.lower())
+        self.assertIn("codeSnippet", body)
+        self.assertIn("print('poc')", body)
+        self.assertIn("AI TP", body)
+        self.assertIn("https://example.com/advisory", body)
+
+    def test_finding_export_api_rejects_unsupported_format(self):
+        engagement = Engagement.objects.create(
+            name="Engage Finding Export Invalid",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep finding export invalid")
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Finding for export invalid format",
+            severity="Low",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+
+        resp = self.client.post(
+            reverse("aist_api:finding_export", kwargs={"finding_id": finding.id}),
+            data={"format": "pdf"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("format", resp.data)
+
 
 class AISTSchemaTests(AISTApiBase):
     def test_openapi_includes_custom_aist_api_views(self):
@@ -968,6 +1154,8 @@ class AISTSchemaTests(AISTApiBase):
 
         required_operations = {
             "/api/v2/aist/findings/": "get",
+            "/api/v2/aist/findings/{finding_id}/notes/": "get",
+            "/api/v2/aist/findings/{finding_id}/export/": "post",
             "/api/v2/aist/findings/tags/": "get",
             "/api/v2/aist/pipelines/summary/": "get",
             "/api/v2/aist/products/summary/": "get",

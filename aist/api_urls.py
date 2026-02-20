@@ -1,7 +1,9 @@
 from django.urls import path
 
 from aist.api import (
+    AISTFindingExportAPI,
     AISTFindingListAPI,
+    AISTFindingNotesAPI,
     AISTPipelineSummaryAPI,
     AISTProductSummaryAPI,
     AISTProjectDetailAPI,
@@ -119,6 +121,8 @@ urlpatterns = [
         name="organization_create",
     ),
     path("findings/", AISTFindingListAPI.as_view(), name="finding_list"),
+    path("findings/<int:finding_id>/notes/", AISTFindingNotesAPI.as_view(), name="finding_notes"),
+    path("findings/<int:finding_id>/export/", AISTFindingExportAPI.as_view(), name="finding_export"),
     path(
         "projects_version/<int:project_version_id>/files/blob/<path:subpath>",
         ProjectVersionFileBlobAPI.as_view(),

@@ -195,7 +195,7 @@ export function useFindingsPage(filters: FindingFilters) {
         ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
         ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
         ...(filters.file ? { file: filters.file } : {}),
-        ...(filters.aiResponse ? { ai_response: filters.aiResponse } : {}),
+        ...(filters.aiStatus ? { ai_status: filters.aiStatus } : {}),
         ...(filters.severities?.length
           ? { severity: filters.severities.join(",") }
           : {}),
@@ -268,7 +268,7 @@ export function useFindingsWithFilters(filters: FindingFilters) {
         ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
         ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
         ...(filters.file ? { file: filters.file } : {}),
-        ...(filters.aiResponse ? { ai_response: filters.aiResponse } : {}),
+        ...(filters.aiStatus ? { ai_status: filters.aiStatus } : {}),
         ...(filters.severities?.length
           ? { severity: filters.severities.join(",") }
           : {}),
@@ -442,20 +442,15 @@ export function useEngagementProduct(engagementId?: number | null) {
   });
 }
 
-type NotesResponse = {
-  finding_id: number;
-  notes: Note[];
-};
-
 export function useFindingNotes(findingId?: number) {
   return useQuery({
     queryKey: ["finding-notes", findingId],
     queryFn: async () => {
       if (!findingId) return [];
-      const payload = await fetchJson<NotesResponse>(
-        getRoute("finding_notes_url", { id: findingId }),
+      const payload = await fetchJson<Note[]>(
+        getRoute("finding_notes_url", { finding_id: findingId }),
       );
-      return payload.notes ?? [];
+      return payload ?? [];
     },
     enabled: Boolean(findingId),
   });

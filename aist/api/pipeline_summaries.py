@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from django.db.models import Count, Q
@@ -11,11 +12,24 @@ from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
+from aist.models import AISTStatus
 from aist.queries import get_authorized_aist_pipelines
 from aist.utils.project_version_refs import resolve_project_version_git_refs
 
 if TYPE_CHECKING:
     from rest_framework.response import Response
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineSummaryApiChoices:
+    status: list[str]
+    ordering: list[str]
+
+
+PIPELINE_SUMMARY_API_CHOICES = PipelineSummaryApiChoices(
+    status=[status for status, _label in AISTStatus.choices],
+    ordering=["created", "-created", "updated", "-updated"],
+)
 
 
 class AISTPipelineSummaryRowSerializer(serializers.Serializer):
@@ -41,11 +55,11 @@ class AISTPipelineSummaryAPI(APIView):
         summary="List pipeline summaries",
         parameters=[
             OpenApiParameter(name="project_id", required=False, type=int),
-            OpenApiParameter(name="status", required=False, type=str),
+            OpenApiParameter(name="status", required=False, type=str, enum=PIPELINE_SUMMARY_API_CHOICES.status),
             OpenApiParameter(name="created_gte", required=False, type=str),
             OpenApiParameter(name="created_lte", required=False, type=str),
             OpenApiParameter(name="search", required=False, type=str),
-            OpenApiParameter(name="ordering", required=False, type=str),
+            OpenApiParameter(name="ordering", required=False, type=str, enum=PIPELINE_SUMMARY_API_CHOICES.ordering),
             OpenApiParameter(name="limit", required=False, type=int),
             OpenApiParameter(name="offset", required=False, type=int),
         ],
@@ -82,7 +96,7 @@ class AISTPipelineSummaryAPI(APIView):
 
         qs = qs.distinct()
 
-        if ordering in {"created", "-created", "updated", "-updated"}:
+        if ordering in set(PIPELINE_SUMMARY_API_CHOICES.ordering):
             qs = qs.order_by(ordering)
 
         paginator = LimitOffsetPagination()

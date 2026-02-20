@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import render
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 
 def _is_api_request(request: HttpRequest) -> bool:
@@ -43,3 +44,20 @@ def aist_server_error(request: HttpRequest) -> HttpResponse:
         {"title": "Something went wrong", "message": "An unexpected error occurred. Please try again later."},
         status=500,
     )
+
+
+def aist_only_preprocessing_hook(endpoints):
+    filtered = []
+    for endpoint in endpoints:
+        path, path_regex, method, callback = endpoint
+        if path.startswith(("/api/v2/aist/", "/projects_version/")):
+            filtered.append((path, path_regex, method, callback))
+    return filtered
+
+
+class AistOnlySpectacularAPIView(SpectacularAPIView):
+    pass
+
+
+class AistOnlySpectacularSwaggerView(SpectacularSwaggerView):
+    pass

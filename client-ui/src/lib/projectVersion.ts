@@ -6,7 +6,7 @@ export function formatProjectVersionLabel(
   hashLength = 8,
 ): string {
   if (!value) return "";
-  if (versionType !== "GIT_HASH") return value;
+  if (versionType !== "GIT_HASH" && versionType !== "FILE_HASH") return value;
   return value.slice(0, hashLength);
 }
 

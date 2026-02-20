@@ -66,7 +66,7 @@ export function useAddFindingNote() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, entry }: { id: number; entry: string }) => {
-      return fetchJson(getRoute("finding_notes_url", { id }), {
+      return fetchJson(getRoute("finding_notes_url", { finding_id: id }), {
         method: "POST",
         body: JSON.stringify({ entry, private: false }),
       });
@@ -88,6 +88,27 @@ export function useExportAiResults() {
   return useMutation({
     mutationFn: async ({ pipelineId }: { pipelineId: string }) => {
       const resp = await fetchBlob(getRoute("pipeline_export_url", { pipeline_id: pipelineId }), {
+        method: "POST",
+      });
+      const blob = await resp.blob();
+      const filename = getFilenameFromDisposition(resp.headers.get("Content-Disposition"));
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+      return filename;
+    },
+  });
+}
+
+export function useExportFinding() {
+  return useMutation({
+    mutationFn: async ({ findingId }: { findingId: number }) => {
+      const resp = await fetchBlob(getRoute("finding_export_url", { finding_id: findingId }), {
         method: "POST",
       });
       const blob = await resp.blob();

@@ -71,6 +71,7 @@ class AistAdminGuardMiddleware:
 
     admin_prefix = "/aist-admin/"
     admin_api_prefix = "/aist-admin/api/"
+    admin_swagger_prefixes = ("/aist-admin/api/v2/oa3/schema/", "/aist-admin/api/v2/oa3/swagger-ui/")
     admin_static_prefix = "/aist-admin/static/"
     login_paths = {"/aist-admin/login/", "/aist-admin/logout/"}
 
@@ -107,6 +108,9 @@ class AistAdminGuardMiddleware:
         )
 
     def _handle_admin_api(self, request):
+        if request.path_info.startswith(self.admin_swagger_prefixes):
+            return self._handle_admin_swagger(request)
+
         user = request.user
         if user.is_authenticated and user.is_superuser:
             return self.get_response(request)
@@ -126,6 +130,19 @@ class AistAdminGuardMiddleware:
             return self._deny_forbidden(request)
 
         return self.get_response(request)
+
+    def _handle_admin_swagger(self, request):
+        user = request.user
+        if user.is_authenticated and user.is_superuser:
+            return self.get_response(request)
+
+        api_user = self._authenticate_api_header_user(request)
+        if api_user is not None and api_user.is_superuser:
+            request.user = api_user
+            request._cached_user = api_user
+            return self.get_response(request)
+
+        return self._deny_forbidden(request)
 
     def _handle_admin_ui(self, request):
         user = request.user

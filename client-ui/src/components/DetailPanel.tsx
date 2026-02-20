@@ -1,5 +1,5 @@
 import type { AIResponse, Finding } from "../types";
-import { useExportAiResults } from "../lib/mutations";
+import { useExportFinding } from "../lib/mutations";
 import { useToast } from "./ToastProvider";
 import FindingStatusActions from "./FindingStatusActions";
 import FindingDetailTabs from "./FindingDetailTabs";
@@ -33,7 +33,7 @@ export default function DetailPanel({
   onCloseApplied,
   onReopened,
 }: DetailPanelProps) {
-  const exportAi = useExportAiResults();
+  const exportFinding = useExportFinding();
   const toast = useToast();
   if (!finding) {
     if (embedded) return null;
@@ -45,17 +45,17 @@ export default function DetailPanel({
   }
 
   const resolvedPipelineId = pipelineId ?? aiResponse?.pipelineId;
-  const exportDisabled = !resolvedPipelineId || !aiResponse;
+  const exportDisabled = !finding?.id;
   const headerAction = (
     <button
       className="aist-icon-button h-10 disabled:opacity-50"
       onClick={() => {
-        if (exportDisabled) {
-          toast.push("AI results are not available for export.", "error");
+        if (!finding?.id) {
+          toast.push("Finding export is unavailable.", "error");
           return;
         }
-        exportAi.mutate(
-          { pipelineId: resolvedPipelineId! },
+        exportFinding.mutate(
+          { findingId: finding.id },
           {
             onSuccess: () => {
               toast.push("Export started.", "success");
@@ -68,7 +68,7 @@ export default function DetailPanel({
         );
       }}
       disabled={exportDisabled}
-      title="Export AI results"
+      title="Export finding"
     >
       <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
         <path
@@ -122,7 +122,14 @@ export default function DetailPanel({
           onReopened={() => onReopened?.(finding.id)}
         />
       </div>
-      <Link to={getRoute("ui_finding_detail_path", { id: finding.id })} className="mt-4 inline-flex text-sm text-brand-500">
+      <Link
+        to={
+          resolvedPipelineId
+            ? `${getRoute("ui_finding_detail_path", { id: finding.id })}?pipeline=${encodeURIComponent(resolvedPipelineId)}`
+            : getRoute("ui_finding_detail_path", { id: finding.id })
+        }
+        className="mt-4 inline-flex text-sm text-brand-500"
+      >
         Open full detail →
       </Link>
     </>

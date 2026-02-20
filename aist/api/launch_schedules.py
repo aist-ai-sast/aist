@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime  # noqa: TC003
 
 from croniter import croniter
@@ -19,6 +20,25 @@ from aist.models import AISTProject, AISTProjectLaunchConfig, LaunchSchedule, Pi
 from aist.queries import (
     get_authorized_aist_launch_schedules,
     get_authorized_aist_projects,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchScheduleApiChoices:
+    ordering: list[str]
+
+
+LAUNCH_SCHEDULE_API_CHOICES = LaunchScheduleApiChoices(
+    ordering=[
+        "id",
+        "-id",
+        "enabled",
+        "-enabled",
+        "max_concurrent_per_worker",
+        "-max_concurrent_per_worker",
+        "next_tick",
+        "-next_tick",
+    ],
 )
 
 
@@ -305,7 +325,7 @@ class LaunchScheduleListAPI(APIView):
             OpenApiParameter(name="launch_config_id", type=int, required=False),
             OpenApiParameter(name="enabled", type=bool, required=False),
             OpenApiParameter(name="search", type=str, required=False, description="Search in cron_expression"),
-            OpenApiParameter(name="ordering", type=str, required=False, description="id,-id,enabled,-enabled"),
+            OpenApiParameter(name="ordering", type=str, required=False, enum=LAUNCH_SCHEDULE_API_CHOICES.ordering),
             OpenApiParameter(name="limit", type=int, required=False),
             OpenApiParameter(name="offset", type=int, required=False),
         ],
@@ -352,12 +372,7 @@ class LaunchScheduleListAPI(APIView):
 
         # ---- ordering ----
         ordering = (request.query_params.get("ordering") or "-id").strip()
-        allowed = {
-            "id", "-id",
-            "enabled", "-enabled",
-            "max_concurrent_per_worker", "-max_concurrent_per_worker",
-            "next_tick", "-next_tick",
-        }
+        allowed = set(LAUNCH_SCHEDULE_API_CHOICES.ordering)
         if ordering not in allowed:
             return Response(
                 {"ordering": f"Invalid ordering. Allowed: {', '.join(sorted(allowed))}"},

@@ -11,7 +11,7 @@ export type FindingFilters = {
   severities?: Severity[];
   status?: "enabled" | "disabled";
   riskStates?: RiskState[];
-  aiResponse?: "has_ai" | "no_ai";
+  aiStatus?: "has_ai" | "no_ai" | "ai_tp" | "ai_fp" | "ai_u";
   aiVerdict?: AIVerdict;
   cwe?: string;
   tags?: string[];
@@ -67,6 +67,8 @@ export type AIResponse = {
 export type Note = {
   id: number;
   entry: string;
+  user_display?: string;
+  author_name?: string;
   author?: {
     username?: string;
     first_name?: string;

@@ -39,7 +39,10 @@ export default function FindingsPage() {
   const findingsQuery = useFindingsPage({
     projectId: selectedProjectId,
     pipelineId: selectedPipelineId,
-    aiResponse: selectedAiResponse === "All" ? undefined : (selectedAiResponse as "has_ai" | "no_ai"),
+    aiStatus:
+      selectedAiResponse === "All"
+        ? undefined
+        : (selectedAiResponse as "has_ai" | "no_ai" | "ai_tp" | "ai_fp" | "ai_u"),
     projectVersion: selectedProjectVersion || undefined,
     file: selectedFile || undefined,
     severities: selectedSeverities.length ? (selectedSeverities as any) : undefined,
@@ -149,7 +152,7 @@ export default function FindingsPage() {
     const pipelineParam = searchParams.get("pipeline");
     const projectVersionParam = searchParams.get("project_version");
     const fileParam = searchParams.get("file");
-    const aiResponseParam = searchParams.get("ai_response");
+    const aiResponseParam = searchParams.get("ai_status");
 
     if (projectParam) {
       const parsed = Number(projectParam);
@@ -162,7 +165,13 @@ export default function FindingsPage() {
     setSelectedPipelineId(pipelineParam || undefined);
     setSelectedProjectVersion(projectVersionParam ?? "");
     setSelectedFile(fileParam ?? "");
-    if (aiResponseParam === "has_ai" || aiResponseParam === "no_ai") {
+    if (
+      aiResponseParam === "has_ai"
+      || aiResponseParam === "no_ai"
+      || aiResponseParam === "ai_tp"
+      || aiResponseParam === "ai_fp"
+      || aiResponseParam === "ai_u"
+    ) {
       setSelectedAiResponse(aiResponseParam);
     } else {
       setSelectedAiResponse("All");
@@ -287,6 +296,10 @@ export default function FindingsPage() {
                             setSelectedProjectId(finding.projectId);
                           }
                         }}
+                        onSelectProject={(projectId) => {
+                          setSelectedProjectId(projectId);
+                          setSelectedPipelineId(undefined);
+                        }}
                         onSelectFile={setSelectedFile}
                         expandedContent={
                           expandedIds.includes(finding.id) ? (
@@ -294,7 +307,7 @@ export default function FindingsPage() {
                               finding={finding}
                               permissionProductId={projectsById.get(finding.projectId ?? 0)?.productId}
                               aiResponse={aiResponse}
-                              pipelineId={aiResponse?.pipelineId}
+                              pipelineId={selectedPipelineId ?? aiResponse?.pipelineId}
                               selectedTags={selectedTags}
                               onToggleTag={(tag) =>
                                 setSelectedTags((current) =>

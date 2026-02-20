@@ -9,6 +9,7 @@ type FindingCardProps = {
   isOpen?: boolean;
   expandedContent?: React.ReactNode;
   onSelectProjectVersion?: (projectVersion: string) => void;
+  onSelectProject?: (projectId: number) => void;
   onSelectFile?: (filePath: string) => void;
 };
 
@@ -26,6 +27,7 @@ export default function FindingCard({
   isOpen = false,
   expandedContent,
   onSelectProjectVersion,
+  onSelectProject,
   onSelectFile,
 }: FindingCardProps) {
   const createdLabel = finding.createdAt
@@ -153,6 +155,24 @@ export default function FindingCard({
               />
             </svg>
             {formatProjectVersionText(finding.projectVersion, finding.projectVersionType)}
+          </button>
+        ) : null}
+        {finding.projectId ? (
+          <button
+            type="button"
+            className="aist-clickable-text inline-flex items-center gap-1"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelectProject?.(finding.projectId!);
+            }}
+            title={finding.product || String(finding.projectId)}
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3 4 7.5 12 12l8-4.5L12 3Z" />
+              <path d="M4 7.5V16.5L12 21" />
+              <path d="M20 7.5V16.5L12 21" />
+            </svg>
+            <span>{finding.product || `Project ${finding.projectId}`}</span>
           </button>
         ) : null}
         {createdLabel ? (
