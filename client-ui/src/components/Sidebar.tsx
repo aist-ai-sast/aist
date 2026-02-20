@@ -1,6 +1,4 @@
 import { NavLink } from "react-router-dom";
-import { logoutSession } from "../lib/auth";
-import { useToast } from "./ToastProvider";
 import { getRoute } from "../lib/routes";
 
 const Icons = {
@@ -44,12 +42,11 @@ type SidebarProps = {
 };
 
 export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
-  const toast = useToast();
   const links = [
     { to: getRoute("ui_findings_path"), label: "Findings", icon: Icons.findings },
     { to: getRoute("ui_products_path"), label: "Projects", icon: Icons.projects },
     { to: getRoute("ui_pipelines_path"), label: "Pipelines", icon: Icons.pipelines },
-    { to: getRoute("ui_settings_path"), label: "Settings", icon: Icons.settings },
+    { to: getRoute("ui_settings_path"), label: "My Account", icon: Icons.settings },
   ];
   return (
     <aside
@@ -127,28 +124,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
             {collapsed ? null : <span className="hidden lg:inline">{link.label}</span>}
           </NavLink>
         ))}
-        <button
-          className={[
-            "rounded-xl border border-night-500 bg-night-700 px-3 py-2 text-xs text-slate-200 inline-flex items-center justify-center gap-2",
-            collapsed
-              ? "lg:w-10 lg:px-0 lg:justify-center lg:mt-auto"
-              : "lg:mt-auto lg:px-3 lg:py-3 lg:justify-start lg:text-left lg:w-full",
-          ].join(" ")}
-          onClick={async () => {
-            await logoutSession();
-            toast.push("Signed out.", "success");
-            window.location.reload();
-          }}
-          title={collapsed ? "Sign out" : undefined}
-        >
-          <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M10 5H5v14h5v2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5v2Zm4.5 2.5L19 12l-4.5 4.5-1.4-1.4L15.2 13H9v-2h6.2l-2.1-2.1 1.4-1.4Z"
-            />
-          </svg>
-          {collapsed ? null : <span className="hidden lg:inline">Sign out</span>}
-        </button>
+        <div className="mt-auto" />
       </nav>
     </aside>
   );

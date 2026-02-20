@@ -20,8 +20,12 @@ def _replace_str_placeholder(url: str, token: str, name: str) -> str:
 def _build_routes() -> dict[str, Any]:
     return {
         "login_url": reverse("client_login"),
-        "logout_url": reverse("client_logout"),
+        "login_api_url": reverse("aist_api:auth_login"),
+        "logout_url": reverse("aist_api:auth_logout"),
+        "logout_all_devices_url": reverse("aist_api:auth_logout_all"),
         "user_profile_url": reverse("user_profile"),
+        "me_url": reverse("aist_api:me"),
+        "me_change_password_url": reverse("aist_api:me_change_password"),
         "findings_list_url": reverse("aist_api:finding_list"),
         "finding_detail_url": _replace_int_placeholder(reverse("finding-detail", args=[0]), "id"),
         "finding_notes_url": _replace_int_placeholder(

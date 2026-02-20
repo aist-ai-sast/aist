@@ -60,6 +60,8 @@ AIST_AI_TRIAGE_WEBHOOK_URL = env(  # noqa: F405
 AIST_AI_TRIAGE_SECRET = ""
 
 REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] += ("rest_framework.permissions.IsAuthenticated",)  # noqa: F405
+AIST_AUTH_LOGIN_THROTTLE_RATE = env("DD_AIST_AUTH_LOGIN_THROTTLE_RATE", default="10/min")  # noqa: F405
+REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {})["aist_auth_login"] = AIST_AUTH_LOGIN_THROTTLE_RATE  # noqa: F405
 
 GITHUB_APP = {
     "WEBHOOK_SECRET": env("WEBHOOK_SECRET", default=""),  # noqa: F405
@@ -120,3 +122,9 @@ LOGGING["loggers"].setdefault(  # noqa: F405
 
 # Ensure cloud banner is disabled by default in the product.
 CREATE_CLOUD_BANNER = env.bool("DD_CREATE_CLOUD_BANNER", False)  # noqa: F405
+
+# Allow concurrent sessions for the same user across devices/browsers.
+SINGLE_USER_SESSION = env.bool("DD_SINGLE_USER_SESSION", False)  # noqa: F405
+
+# Keep regular logout local to the current browser session.
+LOGOUT_ALL_SESSIONS = env.bool("DD_LOGOUT_ALL_SESSIONS", False)  # noqa: F405

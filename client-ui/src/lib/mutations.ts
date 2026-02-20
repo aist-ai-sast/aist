@@ -90,8 +90,8 @@ export function useExportAiResults() {
       const resp = await fetchBlob(getRoute("pipeline_export_url", { pipeline_id: pipelineId }), {
         method: "POST",
       });
-      const blob = await resp.blob();
-      const filename = getFilenameFromDisposition(resp.headers.get("Content-Disposition"));
+      const blob = resp.data;
+      const filename = getFilenameFromDisposition(resp.headers["content-disposition"] ?? null);
       const url = window.URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -111,8 +111,8 @@ export function useExportFinding() {
       const resp = await fetchBlob(getRoute("finding_export_url", { finding_id: findingId }), {
         method: "POST",
       });
-      const blob = await resp.blob();
-      const filename = getFilenameFromDisposition(resp.headers.get("Content-Disposition"));
+      const blob = resp.data;
+      const filename = getFilenameFromDisposition(resp.headers["content-disposition"] ?? null);
       const url = window.URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;

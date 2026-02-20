@@ -30,6 +30,26 @@ class AdminRouteTests(TestCase):
         response = self.client.get(reverse("aist:aist_project_list"))
         self.assertNotEqual(response.status_code, 404)
 
+    def test_non_superuser_cannot_open_defectdojo_form_pages(self):
+        user = get_user_model().objects.create_user(
+            username="client_routes",
+            password="pass",  # noqa: S106
+            email="client_routes@example.com",
+        )
+        self.client.force_login(user)
+        for path in ("/aist-admin/product/add", "/aist-admin/engagement/add", "/aist-admin/test/add"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 403)
+                self.assertContains(response, "Access Denied")
+
+    def test_anonymous_cannot_open_defectdojo_form_pages(self):
+        for path in ("/aist-admin/product/add", "/aist-admin/engagement/add", "/aist-admin/test/add"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 404)
+                self.assertContains(response, "Page Not Found")
+
     def test_admin_prefix_without_trailing_slash_redirects_cleanly(self):
         response = self.client.get("/aist-admin", follow=True)
         self._assert_no_8443_in_redirects(response)

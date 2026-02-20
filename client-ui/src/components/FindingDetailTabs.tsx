@@ -220,7 +220,7 @@ export default function FindingDetailTabs({
                         <a
                           href={ref}
                           target="_blank"
-                          rel="noreferrer"
+                          rel="noopener noreferrer"
                           className="text-brand-200 underline-offset-2 transition hover:text-brand-100 hover:underline"
                           title={ref}
                         >

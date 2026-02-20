@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchJson, getCookie, getCsrfToken } from "./api";
+import { ApiError, fetchJson, fetchText } from "./api";
 import { getRoute } from "./routes";
 
 export type UserProfile = {
@@ -21,37 +21,26 @@ export type UserProfile = {
 };
 
 export async function loginWithSession(username: string, password: string) {
-  const loginUrl = getRoute("login_url");
-  await fetch(loginUrl, { credentials: "include" });
-  const csrf = getCookie("csrftoken");
-  const body = new URLSearchParams({
-    username,
-    password,
-    csrfmiddlewaretoken: csrf ?? getCsrfToken() ?? "",
-    next: getRoute("ui_findings_path"),
-  });
+  // Refresh CSRF token/cookie for anonymous session before login attempt.
+  await fetchText(getRoute("login_url"));
 
-  const resp = await fetch(loginUrl, {
+  const doLogin = () => fetchText(getRoute("login_api_url"), {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      ...(csrf || getCsrfToken() ? { "X-CSRFToken": csrf ?? getCsrfToken() ?? "" } : {}),
-    },
-    body,
-    credentials: "include",
+    body: JSON.stringify({ username, password }),
   });
 
-  if (!resp.ok) {
-    let message = `Login failed: ${resp.status}`;
-    try {
-      const payload = (await resp.json()) as { detail?: string };
-      if (payload.detail) {
-        message = payload.detail;
-      }
-    } catch {
-      // ignore parse errors
+  try {
+    await doLogin();
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 403) {
+      // Retry once with freshly issued CSRF token.
+      await fetchText(getRoute("login_url"));
+      await doLogin();
+    } else if (error instanceof ApiError && (error.status === 400 || error.status === 401)) {
+      throw new Error("Invalid username or password.");
+    } else {
+      throw error;
     }
-    throw new Error(message);
   }
 
   try {
@@ -62,15 +51,17 @@ export async function loginWithSession(username: string, password: string) {
 }
 
 export async function logoutSession() {
-  await fetch(getRoute("logout_url"), { credentials: "include" });
+  await fetchText(getRoute("logout_url"), { method: "POST" });
 }
 
-export function useAuthStatus() {
+export function useAuthStatus(enabled = true) {
   return useQuery({
     queryKey: ["auth-status"],
     queryFn: () => fetchJson<UserProfile>(getRoute("user_profile_url")),
-    retry: 2,
-    retryDelay: 500,
-    refetchOnWindowFocus: false,
+    enabled,
+    staleTime: 60 * 1000,
+    retry: false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 }

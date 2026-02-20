@@ -16,6 +16,7 @@ import FindingStatusActions from "../components/FindingStatusActions";
 import { formatProjectVersionText } from "../lib/projectVersion";
 import { getRoute } from "../lib/routes";
 import { formatDateForUI } from "../lib/dateDisplay";
+import PageErrorState from "../components/PageErrorState";
 
 export default function FindingDetailPage() {
   const params = useParams();
@@ -49,6 +50,12 @@ export default function FindingDetailPage() {
     finding?.projectVersionType ?? findingProjectVersionQuery.data?.versionType;
   const resolvedProjectVersion =
     finding?.projectVersion ?? findingProjectVersionQuery.data?.version ?? normalizedMetaVersion;
+  const pageError =
+    findingQuery.error
+    ?? projectsQuery.error
+    ?? findingProjectVersionQuery.error
+    ?? aiResponsesQuery.error
+    ?? metaQuery.error;
   const createdLabel = formatDateForUI(finding?.createdAt) ?? formatDateForUI(finding?.date);
   const findingsFilterLink = ({
     projectVersion,
@@ -72,6 +79,10 @@ export default function FindingDetailPage() {
         Loading finding...
       </div>
     );
+  }
+
+  if (pageError) {
+    return <PageErrorState error={pageError} fallbackTitle="Failed to load finding" />;
   }
 
   if (!finding) {

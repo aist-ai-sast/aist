@@ -68,7 +68,7 @@ type ProjectMetaApi = {
 type PipelineApi = {
   id: string;
   status: string;
-  response_from_ai: any;
+  response_from_ai: unknown;
   created: string;
   updated: string;
 };
@@ -110,6 +110,64 @@ type PipelineSummaryApi = {
 };
 
 type ListResponse<T> = { results?: T[]; count?: number; next?: string | null; previous?: string | null };
+
+function buildFindingsParams(
+  filters: FindingFilters,
+  pagination?: { limit?: number; offset?: number },
+): URLSearchParams {
+  return new URLSearchParams({
+    ...(pagination?.limit !== undefined ? { limit: String(pagination.limit) } : {}),
+    ...(pagination?.offset !== undefined ? { offset: String(pagination.offset) } : {}),
+    ...(filters.projectId ? { project_id: String(filters.projectId) } : {}),
+    ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
+    ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
+    ...(filters.file ? { file: filters.file } : {}),
+    ...(filters.aiStatus ? { ai_status: filters.aiStatus } : {}),
+    ...(filters.severities?.length ? { severity: filters.severities.join(",") } : {}),
+    ...(filters.status ? { active: filters.status === "enabled" ? "true" : "false" } : {}),
+    ...(filters.riskStates?.includes("risk_accepted") ? { risk_accepted: "true" } : {}),
+    ...(filters.riskStates?.includes("under_review") ? { under_review: "true" } : {}),
+    ...(filters.riskStates?.includes("mitigated") ? { is_mitigated: "true" } : {}),
+    ...(filters.cwe ? { cwe: filters.cwe } : {}),
+    ...(filters.tags?.length
+      ? { tags: filters.tags.map((tag) => tag.trim()).filter(Boolean).join(",") }
+      : {}),
+    ...(filters.ordering ? { ordering: filters.ordering } : {}),
+  });
+}
+
+function mapFindingApiToUi(item: FindingApi): Finding {
+  return {
+    sourceFileLink: item.finding_meta?.find((meta) => meta.name === "sourcefile_link")?.value,
+    id: item.id,
+    title: item.title,
+    severity: item.severity,
+    active: item.active,
+    isMitigated: item.is_mitigated ?? false,
+    riskAccepted: item.risk_accepted ?? false,
+    falsePositive: item.false_p ?? false,
+    outOfScope: item.out_of_scope ?? false,
+    duplicate: item.duplicate ?? false,
+    product: String(item.product ?? ""),
+    projectId: item.project_id ?? undefined,
+    date: item.date,
+    createdAt: item.created ?? item.date,
+    projectVersion: item.project_version ?? undefined,
+    projectVersionType: item.project_version_type ?? undefined,
+    filePath: item.file_path ?? "",
+    line: item.line ?? 0,
+    tool: "",
+    description: item.description ?? undefined,
+    cwe: item.cwe ?? null,
+    tags: normalizeTags(item.tags),
+    testId: item.test ?? null,
+    riskStates: [
+      item.risk_accepted ? "risk_accepted" : null,
+      item.under_review ? "under_review" : null,
+      item.is_mitigated ? "mitigated" : null,
+    ].filter(Boolean) as Finding["riskStates"],
+  };
+}
 
 function normalizeTags(raw?: FindingApi["tags"]) {
   if (!raw) return [];
@@ -188,66 +246,11 @@ export function useFindingsPage(filters: FindingFilters) {
   return useQuery({
     queryKey: ["findings-page", filters],
     queryFn: async () => {
-      const params = new URLSearchParams({
-        limit: String(limit),
-        offset: String(offset),
-        ...(filters.projectId ? { project_id: String(filters.projectId) } : {}),
-        ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
-        ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
-        ...(filters.file ? { file: filters.file } : {}),
-        ...(filters.aiStatus ? { ai_status: filters.aiStatus } : {}),
-        ...(filters.severities?.length
-          ? { severity: filters.severities.join(",") }
-          : {}),
-        ...(filters.status
-          ? { active: filters.status === "enabled" ? "true" : "false" }
-          : {}),
-        ...(filters.riskStates?.includes("risk_accepted")
-          ? { risk_accepted: "true" }
-          : {}),
-        ...(filters.riskStates?.includes("under_review") ? { under_review: "true" } : {}),
-        ...(filters.riskStates?.includes("mitigated") ? { is_mitigated: "true" } : {}),
-        ...(filters.cwe ? { cwe: filters.cwe } : {}),
-        ...(filters.tags?.length
-          ? {
-              tags: filters.tags.map((tag) => tag.trim()).filter(Boolean).join(","),
-            }
-          : {}),
-        ...(filters.ordering ? { ordering: filters.ordering } : {}),
-      });
+      const params = buildFindingsParams(filters, { limit, offset });
       const payload = await fetchJson<ListResponse<FindingApi>>(
         `${getRoute("findings_list_url")}?${params.toString()}`,
       );
-      const items = normalizeList(payload).map((item): Finding => ({
-        sourceFileLink: item.finding_meta?.find((meta) => meta.name === "sourcefile_link")?.value,
-        id: item.id,
-        title: item.title,
-        severity: item.severity,
-        active: item.active,
-        isMitigated: item.is_mitigated ?? false,
-        riskAccepted: item.risk_accepted ?? false,
-        falsePositive: item.false_p ?? false,
-        outOfScope: item.out_of_scope ?? false,
-        duplicate: item.duplicate ?? false,
-        product: String(item.product ?? ""),
-        projectId: item.project_id ?? undefined,
-        date: item.date,
-        createdAt: item.created ?? item.date,
-        projectVersion: item.project_version ?? undefined,
-        projectVersionType: item.project_version_type ?? undefined,
-        filePath: item.file_path ?? "",
-        line: item.line ?? 0,
-        tool: "",
-        description: item.description ?? undefined,
-        cwe: item.cwe ?? null,
-        tags: normalizeTags(item.tags),
-        testId: item.test ?? null,
-        riskStates: [
-          item.risk_accepted ? "risk_accepted" : null,
-          item.under_review ? "under_review" : null,
-          item.is_mitigated ? "mitigated" : null,
-        ].filter(Boolean) as Finding["riskStates"],
-      }));
+      const items = normalizeList(payload).map(mapFindingApiToUi);
       return {
         items,
         count: payload.count ?? items.length,
@@ -261,66 +264,11 @@ export function useFindingsWithFilters(filters: FindingFilters) {
   return useInfiniteQuery({
     queryKey: ["findings", filters],
     queryFn: async ({ pageParam = 0 }) => {
-      const params = new URLSearchParams({
-        limit: String(limit),
-        offset: String(pageParam),
-        ...(filters.projectId ? { project_id: String(filters.projectId) } : {}),
-        ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
-        ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
-        ...(filters.file ? { file: filters.file } : {}),
-        ...(filters.aiStatus ? { ai_status: filters.aiStatus } : {}),
-        ...(filters.severities?.length
-          ? { severity: filters.severities.join(",") }
-          : {}),
-        ...(filters.status
-          ? { active: filters.status === "enabled" ? "true" : "false" }
-          : {}),
-        ...(filters.riskStates?.includes("risk_accepted")
-          ? { risk_accepted: "true" }
-          : {}),
-        ...(filters.riskStates?.includes("under_review") ? { under_review: "true" } : {}),
-        ...(filters.riskStates?.includes("mitigated") ? { is_mitigated: "true" } : {}),
-        ...(filters.cwe ? { cwe: filters.cwe } : {}),
-        ...(filters.tags?.length
-          ? {
-              tags: filters.tags.map((tag) => tag.trim()).filter(Boolean).join(","),
-            }
-          : {}),
-        ...(filters.ordering ? { ordering: filters.ordering } : {}),
-      });
+      const params = buildFindingsParams(filters, { limit, offset: pageParam });
       const payload = await fetchJson<ListResponse<FindingApi>>(
         `${getRoute("findings_list_url")}?${params.toString()}`,
       );
-      const items = normalizeList(payload).map((item): Finding => ({
-        sourceFileLink: item.finding_meta?.find((meta) => meta.name === "sourcefile_link")?.value,
-        id: item.id,
-        title: item.title,
-        severity: item.severity,
-        active: item.active,
-        isMitigated: item.is_mitigated ?? false,
-        riskAccepted: item.risk_accepted ?? false,
-        falsePositive: item.false_p ?? false,
-        outOfScope: item.out_of_scope ?? false,
-        duplicate: item.duplicate ?? false,
-        product: String(item.product ?? ""),
-        projectId: item.project_id ?? undefined,
-        date: item.date,
-        createdAt: item.created ?? item.date,
-        projectVersion: item.project_version ?? undefined,
-        projectVersionType: item.project_version_type ?? undefined,
-        filePath: item.file_path ?? "",
-        line: item.line ?? 0,
-        tool: "",
-        description: item.description ?? undefined,
-        cwe: item.cwe ?? null,
-        tags: normalizeTags(item.tags),
-        testId: item.test ?? null,
-        riskStates: [
-          item.risk_accepted ? "risk_accepted" : null,
-          item.under_review ? "under_review" : null,
-          item.is_mitigated ? "mitigated" : null,
-        ].filter(Boolean) as Finding["riskStates"],
-      }));
+      const items = normalizeList(payload).map(mapFindingApiToUi);
       return {
         items,
         count: payload.count ?? items.length,
@@ -341,36 +289,7 @@ export function useFinding(findingId?: number) {
       const item = await fetchJson<FindingApi>(
         getRoute("finding_detail_url", { id: findingId }),
       );
-      return {
-        id: item.id,
-        sourceFileLink: item.finding_meta?.find((meta) => meta.name === "sourcefile_link")?.value,
-        title: item.title,
-        severity: item.severity,
-        active: item.active,
-        isMitigated: item.is_mitigated ?? false,
-        riskAccepted: item.risk_accepted ?? false,
-        falsePositive: item.false_p ?? false,
-        outOfScope: item.out_of_scope ?? false,
-        duplicate: item.duplicate ?? false,
-        product: String(item.product ?? ""),
-        projectId: item.project_id ?? undefined,
-        date: item.date,
-        createdAt: item.created ?? item.date,
-        projectVersion: item.project_version ?? undefined,
-        projectVersionType: item.project_version_type ?? undefined,
-        filePath: item.file_path ?? "",
-        line: item.line ?? 0,
-        tool: "",
-        description: item.description ?? undefined,
-        cwe: item.cwe ?? null,
-        tags: normalizeTags(item.tags),
-        testId: item.test ?? null,
-        riskStates: [
-          item.risk_accepted ? "risk_accepted" : null,
-          item.under_review ? "under_review" : null,
-          item.is_mitigated ? "mitigated" : null,
-        ].filter(Boolean) as Finding["riskStates"],
-      } satisfies Finding;
+      return mapFindingApiToUi(item) satisfies Finding;
     },
     enabled: Boolean(findingId),
   });

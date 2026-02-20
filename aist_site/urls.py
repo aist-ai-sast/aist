@@ -1,9 +1,10 @@
 from django.urls import include, path, re_path
 from django.views.generic import RedirectView
-from dojo.user.views import login_view, logout_view
+from dojo.user.views import logout_view
 from dojo.utils import get_system_setting
 from drf_spectacular.settings import spectacular_settings
 
+from aist.views.auth import logout_all_devices_view
 from aist.views.client_portal import client_portal_index
 from aist_site import views as aist_site_views
 
@@ -27,8 +28,9 @@ urlpatterns = [
         include(("aist.api_urls", "aist_api")),
         name="aist_api",
     ),
-    path("auth/login/", login_view, name="client_login"),
+    path("auth/login/", client_portal_index, name="client_login"),
     path("auth/logout/", logout_view, name="client_logout"),
+    path("auth/logout-all/", logout_all_devices_view, name="client_logout_all_devices"),
     path("aist-admin/", include("dojo.urls")),
     path(
         "api/v2/oa3/schema/",

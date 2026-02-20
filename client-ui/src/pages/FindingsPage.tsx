@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import FilterPanel from "../components/FilterPanel";
 import FindingCard from "../components/FindingCard";
-import DetailPanel from "../components/DetailPanel";
 import SegmentedSortControl from "../components/SegmentedSortControl";
-import type { Finding } from "../types";
+import type { Finding, RiskState, Severity } from "../types";
 import {
   useAiFindingResponses,
   useFindingTagsByProject,
@@ -14,12 +13,15 @@ import {
 import { useToast } from "../components/ToastProvider";
 import PaginationBar from "../components/PaginationBar";
 import { buildFindingsOrdering, FINDINGS_SORT_OPTIONS, type FindingsSortKey } from "../lib/findingsSort";
+import PageErrorState from "../components/PageErrorState";
+
+const DetailPanel = lazy(() => import("../components/DetailPanel"));
 
 export default function FindingsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>();
-  const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
+  const [selectedSeverities, setSelectedSeverities] = useState<Severity[]>([]);
   const [selectedStatus, setSelectedStatus] = useState<string>("All");
-  const [selectedRisk, setSelectedRisk] = useState<string[]>([]);
+  const [selectedRisk, setSelectedRisk] = useState<RiskState[]>([]);
   const [selectedAiResponse, setSelectedAiResponse] = useState<string>("All");
   const [selectedSort, setSelectedSort] = useState<FindingsSortKey>("severity");
   const [selectedSortDirection, setSelectedSortDirection] = useState<"asc" | "desc">("desc");
@@ -45,9 +47,9 @@ export default function FindingsPage() {
         : (selectedAiResponse as "has_ai" | "no_ai" | "ai_tp" | "ai_fp" | "ai_u"),
     projectVersion: selectedProjectVersion || undefined,
     file: selectedFile || undefined,
-    severities: selectedSeverities.length ? (selectedSeverities as any) : undefined,
+    severities: selectedSeverities.length ? selectedSeverities : undefined,
     status: selectedStatus === "Active" ? "enabled" : selectedStatus === "Non-Active" ? "disabled" : undefined,
-    riskStates: selectedRisk.length ? (selectedRisk as any) : undefined,
+    riskStates: selectedRisk.length ? selectedRisk : undefined,
     cwe: selectedCwe ? selectedCwe : undefined,
     tags: selectedTags.length ? selectedTags : undefined,
     limit: pageSize,
@@ -89,7 +91,7 @@ export default function FindingsPage() {
         ...finding,
         ...override,
         product: projectsById.get(finding.projectId ?? 0)?.name ?? finding.product,
-        aiVerdict: aiVerdictMap.get(finding.id) as any,
+        aiVerdict: aiVerdictMap.get(finding.id),
       };
     });
   }, [findingsQuery.data, projectsById, aiVerdictMap, findingOverrides]);
@@ -97,6 +99,7 @@ export default function FindingsPage() {
   const tagsQuery = useFindingTagsByProject(selectedProjectId);
   const availableTags = tagsQuery.data ?? [];
   const [expandedIds, setExpandedIds] = useState<number[]>([]);
+  const pageError = projectsQuery.error ?? findingsQuery.error ?? tagsQuery.error;
 
   useEffect(() => {
     if (!tagsQuery.isSuccess) return;
@@ -158,7 +161,7 @@ export default function FindingsPage() {
     const severities = (searchParams.get("severity") ?? "")
       .split(",")
       .map((item) => item.trim())
-      .filter(Boolean);
+      .filter(Boolean) as Severity[];
     setSelectedSeverities(severities);
 
     const tags = (searchParams.get("tags") ?? "")
@@ -183,7 +186,7 @@ export default function FindingsPage() {
       }
     }
 
-    const nextRisk: string[] = [];
+    const nextRisk: RiskState[] = [];
     const riskAccepted = (searchParams.get("risk_accepted") ?? "").toLowerCase();
     const underReview = (searchParams.get("under_review") ?? "").toLowerCase();
     const isMitigated = (searchParams.get("is_mitigated") ?? "").toLowerCase();
@@ -231,6 +234,18 @@ export default function FindingsPage() {
     window.URL.revokeObjectURL(url);
     toast.push("Exported current view.", "success");
   };
+
+  if (projectsQuery.isLoading) {
+    return (
+      <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
+        Loading findings...
+      </div>
+    );
+  }
+
+  if (pageError) {
+    return <PageErrorState error={pageError} fallbackTitle="Failed to load findings" />;
+  }
 
   return (
     <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
@@ -320,27 +335,35 @@ export default function FindingsPage() {
                         onSelectFile={setSelectedFile}
                         expandedContent={
                           expandedIds.includes(finding.id) ? (
-                            <DetailPanel
-                              finding={finding}
-                              permissionProductId={projectsById.get(finding.projectId ?? 0)?.productId}
-                              aiResponse={aiResponse}
-                              pipelineId={selectedPipelineId ?? aiResponse?.pipelineId}
-                              selectedTags={selectedTags}
-                              onToggleTag={(tag) =>
-                                setSelectedTags((current) =>
-                                  current.includes(tag)
-                                    ? current.filter((item) => item !== tag)
-                                    : [...current, tag],
-                                )
-                              }
-                              selectedCwe={selectedCwe}
-                              onToggleCwe={(cwe) =>
-                                setSelectedCwe((current) => (current === cwe ? "" : cwe))
-                              }
-                              onCloseApplied={applyCloseState}
-                              onReopened={applyReopenState}
-                              embedded
-                            />
+                            <Suspense
+                              fallback={(
+                                <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-sm text-slate-400">
+                                  Loading detail...
+                                </div>
+                              )}
+                            >
+                              <DetailPanel
+                                finding={finding}
+                                permissionProductId={projectsById.get(finding.projectId ?? 0)?.productId}
+                                aiResponse={aiResponse}
+                                pipelineId={selectedPipelineId ?? aiResponse?.pipelineId}
+                                selectedTags={selectedTags}
+                                onToggleTag={(tag) =>
+                                  setSelectedTags((current) =>
+                                    current.includes(tag)
+                                      ? current.filter((item) => item !== tag)
+                                      : [...current, tag],
+                                  )
+                                }
+                                selectedCwe={selectedCwe}
+                                onToggleCwe={(cwe) =>
+                                  setSelectedCwe((current) => (current === cwe ? "" : cwe))
+                                }
+                                onCloseApplied={applyCloseState}
+                                onReopened={applyReopenState}
+                                embedded
+                              />
+                            </Suspense>
                           ) : null
                         }
                         onSelect={() =>

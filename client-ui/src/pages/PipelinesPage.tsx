@@ -6,6 +6,7 @@ import type { PipelineSummary } from "../types";
 import PipelineFilterPanel from "../components/PipelineFilterPanel";
 import PaginationBar from "../components/PaginationBar";
 import { getRoute } from "../lib/routes";
+import PageErrorState from "../components/PageErrorState";
 
 const statusOptions = [
   { value: "all", label: "All statuses" },
@@ -142,7 +143,7 @@ export default function PipelinesPage() {
   const [search, setSearch] = useState("");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
-  const [pageSize, setPageSize] = useState<number>(25);
+  const [pageSize, setPageSize] = useState<number>(50);
   const [pageIndex, setPageIndex] = useState<number>(0);
   const [expandedPipelineId, setExpandedPipelineId] = useState<string | null>(null);
 
@@ -176,6 +177,7 @@ export default function PipelinesPage() {
   });
 
   const pipelines = pipelinesQuery.data?.items ?? [];
+  const pageError = projectsQuery.error ?? pipelinesQuery.error;
   useEffect(() => {
     if (!expandedPipelineId || pipelines.find((item) => item.id === expandedPipelineId)) return;
     setExpandedPipelineId(null);
@@ -212,6 +214,18 @@ export default function PipelinesPage() {
   useEffect(() => {
     setPageIndex(0);
   }, [selectedProjectId, status, search, createdFrom, createdTo, pageSize]);
+
+  if (projectsQuery.isLoading) {
+    return (
+      <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
+        Loading pipelines...
+      </div>
+    );
+  }
+
+  if (pageError) {
+    return <PageErrorState error={pageError} fallbackTitle="Failed to load pipelines" />;
+  }
 
   return (
     <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_1fr]">

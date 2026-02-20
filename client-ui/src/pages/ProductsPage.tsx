@@ -8,6 +8,7 @@ import MultiSelectChips from "../components/MultiSelectChips";
 import SelectField from "../components/SelectField";
 import PermissionGate from "../components/PermissionGate";
 import PaginationBar from "../components/PaginationBar";
+import PageErrorState from "../components/PageErrorState";
 
 const statusOptions = [
   { value: "all", label: "All statuses" },
@@ -78,7 +79,7 @@ export default function ProductsPage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [pageSize, setPageSize] = useState<number>(12);
+  const [pageSize, setPageSize] = useState<number>(50);
   const [pageIndex, setPageIndex] = useState<number>(0);
 
   const summaries = summariesQuery.data ?? [];
@@ -129,6 +130,10 @@ export default function ProductsPage() {
         Loading projects...
       </div>
     );
+  }
+
+  if (summariesQuery.isError) {
+    return <PageErrorState error={summariesQuery.error} fallbackTitle="Failed to load projects" />;
   }
 
   return (

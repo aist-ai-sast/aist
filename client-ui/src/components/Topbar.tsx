@@ -1,3 +1,5 @@
+import UserProfileMenu from "./UserProfileMenu";
+
 export default function Topbar() {
   return (
     <header className="sticky top-0 z-20 flex items-center justify-between border-b border-night-500 bg-night-900/90 px-4 py-3 lg:px-6 lg:py-4">
@@ -8,6 +10,9 @@ export default function Topbar() {
         <div className="text-xs uppercase tracking-[0.3em] text-slate-400 leading-none">
           Client Portal
         </div>
+      </div>
+      <div>
+        <UserProfileMenu compact />
       </div>
     </header>
   );

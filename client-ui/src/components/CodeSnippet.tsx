@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import type { editor as MonacoEditorApi } from "monaco-editor";
 
 import { useFileSnippet } from "../lib/snippetCache";
 
@@ -24,8 +25,8 @@ export default function CodeSnippet({
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editorReady, setEditorReady] = useState(false);
-  const editorRef = useRef<any>(null);
-  const monacoRef = useRef<any>(null);
+  const editorRef = useRef<MonacoEditorApi.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<(typeof import("monaco-editor")) | null>(null);
   const decorationIds = useRef<string[]>([]);
 
   const language = useMemo(() => "plaintext", []);
@@ -139,10 +140,14 @@ export default function CodeSnippet({
           </button>
           <button
             className="rounded-lg border border-night-500 bg-night-700 px-2 py-1 text-xs text-slate-200"
-            onClick={() => {
-              navigator.clipboard.writeText(snippetText);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(snippetText);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              } catch {
+                setCopied(false);
+              }
             }}
           >
             {copied ? "Copied" : "Copy"}

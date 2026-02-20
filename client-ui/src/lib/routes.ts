@@ -1,12 +1,19 @@
 type RouteMap = {
   login_url: string;
+  login_api_url: string;
   logout_url: string;
+  logout_all_devices_url: string;
   user_profile_url: string;
+  me_url: string;
+  me_change_password_url: string;
   findings_list_url: string;
   finding_detail_url: string;
   finding_notes_url: string;
   finding_close_url: string;
   finding_export_url: string;
+  finding_tags_url: string;
+  test_detail_url: string;
+  engagement_detail_url: string;
   projects_list_url: string;
   product_summary_url: string;
   project_meta_url: string;
@@ -23,6 +30,10 @@ type RouteMap = {
   ui_settings_path: string;
 };
 
+type RouteUrlKey = {
+  [K in keyof RouteMap]: RouteMap[K] extends string ? K : never;
+}[keyof RouteMap];
+
 declare global {
   interface Window {
     __AIST_ROUTES__?: RouteMap;
@@ -31,11 +42,11 @@ declare global {
 
 const routes = window.__AIST_ROUTES__;
 
-export function getRoute(name: keyof RouteMap, params?: Record<string, string | number>) {
+export function getRoute(name: RouteUrlKey, params?: Record<string, string | number>) {
   if (!routes) {
     throw new Error("Routes are not available.");
   }
-  let url = routes[name];
+  let url = routes[name] as string;
   if (params) {
     Object.entries(params).forEach(([key, value]) => {
       url = url.replace(`{${key}}`, encodeURIComponent(String(value)));

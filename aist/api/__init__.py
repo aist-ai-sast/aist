@@ -1,6 +1,13 @@
 # aist/api.py
 from __future__ import annotations
 
+from aist.api.account import (
+    AISTAuthLoginAPI,
+    AISTAuthLogoutAllAPI,
+    AISTAuthLogoutAPI,
+    AISTMeAPI,
+    AISTMeChangePasswordAPI,
+)
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.files import ProjectVersionFileBlobAPI
 from aist.api.findings import AISTFindingExportAPI, AISTFindingListAPI, AISTFindingNotesAPI
@@ -53,9 +60,14 @@ from aist.api.queue import (
 )
 
 __all__ = [
+    "AISTAuthLoginAPI",
+    "AISTAuthLogoutAPI",
+    "AISTAuthLogoutAllAPI",
     "AISTFindingExportAPI",
     "AISTFindingListAPI",
     "AISTFindingNotesAPI",
+    "AISTMeAPI",
+    "AISTMeChangePasswordAPI",
     "AISTOrganizationSerializer",
     "AISTPipelineSummaryAPI",
     "AISTProductSummaryAPI",

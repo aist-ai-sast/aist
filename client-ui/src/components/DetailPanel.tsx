@@ -1,10 +1,12 @@
+import { Suspense, lazy } from "react";
 import type { AIResponse, Finding } from "../types";
 import { useExportFinding } from "../lib/mutations";
 import { useToast } from "./ToastProvider";
 import FindingStatusActions from "./FindingStatusActions";
-import FindingDetailTabs from "./FindingDetailTabs";
 import { Link } from "react-router-dom";
 import { getRoute } from "../lib/routes";
+
+const FindingDetailTabs = lazy(() => import("./FindingDetailTabs"));
 
 type DetailPanelProps = {
   finding?: Finding;
@@ -103,16 +105,24 @@ export default function DetailPanel({
       ) : null}
       <div className="mt-3" />
       <div className="mt-4">
-        <FindingDetailTabs
-          finding={finding}
-          permissionProductId={permissionProductId}
-          aiResponse={aiResponse}
-          embedded={embedded}
-          selectedTags={selectedTags}
-          onToggleTag={onToggleTag}
-          selectedCwe={selectedCwe}
-          onToggleCwe={onToggleCwe}
-        />
+        <Suspense
+          fallback={(
+            <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-sm text-slate-400">
+              Loading detail...
+            </div>
+          )}
+        >
+          <FindingDetailTabs
+            finding={finding}
+            permissionProductId={permissionProductId}
+            aiResponse={aiResponse}
+            embedded={embedded}
+            selectedTags={selectedTags}
+            onToggleTag={onToggleTag}
+            selectedCwe={selectedCwe}
+            onToggleCwe={onToggleCwe}
+          />
+        </Suspense>
       </div>
       <div className="mt-4 flex items-center justify-between gap-3">
         <FindingStatusActions

@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import hljs from "highlight.js";
+import DOMPurify from "dompurify";
 
 import { useFileSnippet } from "../lib/snippetCache";
 
@@ -27,7 +28,7 @@ export default function FindingSnippetPreview({
 
   const highlighted = useMemo(() => {
     if (!previewText) return "";
-    return hljs.highlightAuto(previewText).value;
+    return DOMPurify.sanitize(hljs.highlightAuto(previewText).value);
   }, [previewText]);
 
   if (!sourceFileLink || !line) {

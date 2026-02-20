@@ -1,9 +1,14 @@
 from django.urls import path
 
 from aist.api import (
+    AISTAuthLoginAPI,
+    AISTAuthLogoutAllAPI,
+    AISTAuthLogoutAPI,
     AISTFindingExportAPI,
     AISTFindingListAPI,
     AISTFindingNotesAPI,
+    AISTMeAPI,
+    AISTMeChangePasswordAPI,
     AISTPipelineSummaryAPI,
     AISTProductSummaryAPI,
     AISTProjectDetailAPI,
@@ -51,6 +56,11 @@ from aist.api.tags import AvailableFindingTagsAPI
 
 app_name = "aist_api"
 urlpatterns = [
+    path("auth/login/", AISTAuthLoginAPI.as_view(), name="auth_login"),
+    path("me/", AISTMeAPI.as_view(), name="me"),
+    path("me/change-password/", AISTMeChangePasswordAPI.as_view(), name="me_change_password"),
+    path("auth/logout/", AISTAuthLogoutAPI.as_view(), name="auth_logout"),
+    path("auth/logout-all/", AISTAuthLogoutAllAPI.as_view(), name="auth_logout_all"),
     path("projects/", AISTProjectListAPI.as_view(), name="project_list"),
     path("products/summary/", AISTProductSummaryAPI.as_view(), name="product_summary"),
     path("projects/<int:project_id>/", AISTProjectDetailAPI.as_view(), name="project_detail"),
