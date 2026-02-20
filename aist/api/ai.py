@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 
 from django.db import transaction
-from django.http import HttpRequest, HttpResponseBadRequest, JsonResponse
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from django_filters import rest_framework as django_filters
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from dojo.finding.queries import get_authorized_findings
@@ -16,6 +17,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline, AISTStatus
 from aist.queries import get_authorized_aist_pipelines
@@ -24,17 +26,33 @@ from aist.utils.ai_response import sync_ai_finding_responses
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 
 
-def send_request_to_ai_for_pipeline(request: HttpRequest, pipeline: AISTPipeline) -> JsonResponse:
-    try:
-        data = json.loads(request.body.decode("utf-8") or "{}")
-    except Exception:
-        data = {}
+def send_request_to_ai_for_pipeline(
+    request=None,
+    pipeline: AISTPipeline | None = None,
+    *,
+    finding_ids: list[int] | None = None,
+    filters: dict | None = None,
+) -> JsonResponse:
+    if finding_ids is None:
+        payload = {}
+        if request is not None:
+            if hasattr(request, "data"):
+                payload = request.data
+            else:
+                try:
+                    payload = json.loads(request.body.decode("utf-8") or "{}")
+                except Exception:
+                    payload = {}
+        serializer = AISendRequestSerializer(data=payload)
+        if not serializer.is_valid():
+            return JsonResponse(serializer.errors, status=400)
+        finding_ids = serializer.validated_data["finding_ids"]
+        filters = serializer.validated_data.get("filters") or {}
 
-    ids = data.get("finding_ids") or []
-    if not isinstance(ids, list) or not all(str(x).isdigit() for x in ids):
-        return HttpResponseBadRequest("finding_ids must be a list of integers")
+    if pipeline is None:
+        return JsonResponse({"detail": "pipeline is required"}, status=400)
 
-    ids_int = [int(x) for x in ids]
+    ids_int = [int(value) for value in finding_ids]
     product = pipeline.project.product
 
     allowed_qs = Finding.objects.filter(
@@ -43,9 +61,8 @@ def send_request_to_ai_for_pipeline(request: HttpRequest, pipeline: AISTPipeline
     ).select_related("test__test_type")
     found_ids = list(allowed_qs.values_list("id", flat=True))
 
-    filters = data.get("filters") or {}
     if not found_ids:
-        return HttpResponseBadRequest("No valid findings for this pipeline/product")
+        return JsonResponse({"detail": "No valid findings for this pipeline/product"}, status=400)
 
     try:
         logger = install_pipeline_logging(pipeline.id)
@@ -78,7 +95,7 @@ def delete_ai_response_for_pipeline(pipeline: AISTPipeline, response_id: int) ->
 
 class AISendRequestSerializer(serializers.Serializer):
     finding_ids = serializers.ListField(child=serializers.IntegerField(), required=True)
-    filters = serializers.JSONField(required=False)
+    filters = serializers.JSONField(required=False, default=dict)
 
 
 class AIPipelineCallbackSerializer(serializers.Serializer):
@@ -86,31 +103,39 @@ class AIPipelineCallbackSerializer(serializers.Serializer):
     results = serializers.JSONField(required=False)
 
 
-class AISendRequestAPI(APIView):
+class AISendRequestAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         request=AISendRequestSerializer,
         responses={200: OpenApiResponse(description="AI request queued")},
     )
     def post(self, request, pipeline_id: str):
-        pipeline = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
-            id=pipeline_id,
-        )
+        pipeline = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
         user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
-        return send_request_to_ai_for_pipeline(request, pipeline)
+        serializer = AISendRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return send_request_to_ai_for_pipeline(
+            pipeline=pipeline,
+            finding_ids=serializer.validated_data["finding_ids"],
+            filters=serializer.validated_data["filters"],
+        )
 
 
-class AIDeleteResponseAPI(APIView):
+class AIDeleteResponseAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(responses={204: OpenApiResponse(description="Deleted")})
     def delete(self, request, pipeline_id: str, response_id: int):
-        pipeline = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
-            id=pipeline_id,
-        )
+        pipeline = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
         user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
         delete_ai_response_for_pipeline(pipeline, response_id)
         return Response(status=204)
@@ -174,58 +199,57 @@ class AIFindingResponseItemSerializer(serializers.Serializer):
     created = serializers.DateTimeField()
 
 
-class AIFindingResponseListAPI(APIView):
+class NumberInFilter(django_filters.BaseInFilter, django_filters.NumberFilter):
+    pass
+
+
+class AIFindingResponseListAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
+
+    class FilterSet(django_filters.FilterSet):
+        project_id = django_filters.NumberFilter(field_name="pipeline__project_id")
+        pipeline_id = django_filters.CharFilter(field_name="pipeline_id")
+        finding_ids = NumberInFilter(field_name="finding_id", lookup_expr="in")
+
+        class Meta:
+            model = AISTAIFindingResponse
+            fields = ("project_id", "pipeline_id", "finding_ids")
 
     @extend_schema(
         responses={200: AIFindingResponseItemSerializer(many=True)},
     )
     def get(self, request):
-        project_id = request.query_params.get("project_id")
-        pipeline_qs = get_authorized_aist_pipelines(
-            Permissions.Product_View,
-            user=request.user,
-        )
-        if project_id:
-            try:
-                project_id_int = int(project_id)
-            except (TypeError, ValueError):
-                return Response({"detail": "project_id must be an integer"}, status=400)
-            pipeline_qs = pipeline_qs.filter(project_id=project_id_int)
-        pipeline_id = request.query_params.get("pipeline_id")
-        if pipeline_id:
-            pipeline_qs = pipeline_qs.filter(id=pipeline_id)
-
-        finding_ids_param = (request.query_params.get("finding_ids") or "").strip()
-        finding_ids: list[int] = []
-        if finding_ids_param:
-            for raw_token in finding_ids_param.split(","):
-                token_value = raw_token.strip()
-                if not token_value:
-                    continue
-                try:
-                    finding_ids.append(int(token_value))
-                except ValueError:
-                    continue
-        finding_ids = list(dict.fromkeys([value for value in finding_ids if value > 0]))
-
-        if finding_ids:
-            allowed_finding_ids = set(
-                get_authorized_findings(Permissions.Finding_View, user=request.user)
-                .filter(id__in=finding_ids)
-                .values_list("id", flat=True),
-            )
-            if not allowed_finding_ids:
-                return Response([])
-        else:
-            allowed_finding_ids = set()
-
+        pipeline_qs = self.get_authorized_queryset()
         qs = (
             AISTAIFindingResponse.objects
             .filter(pipeline__in=pipeline_qs)
             .order_by("-pipeline__created", "-updated", "-id")
         )
-        if allowed_finding_ids:
+        filterset = self.FilterSet(data=request.query_params, queryset=qs, request=request)
+        if not filterset.is_valid():
+            return Response(filterset.errors, status=400)
+        qs = filterset.qs
+
+        cleaned = filterset.form.cleaned_data
+        pipeline_id = cleaned.get("pipeline_id")
+        finding_ids = cleaned.get("finding_ids")
+
+        if finding_ids:
+            unique_finding_ids = list(dict.fromkeys([value for value in finding_ids if value > 0]))
+            allowed_finding_ids = set(
+                self.get_authorized_queryset(
+                    getter=get_authorized_findings,
+                    permission=Permissions.Finding_View,
+                )
+                .filter(id__in=unique_finding_ids)
+                .values_list("id", flat=True),
+            )
+            if not allowed_finding_ids:
+                return Response([])
             qs = qs.filter(finding_id__in=allowed_finding_ids)
 
         rows: list[AISTAIFindingResponse] = []

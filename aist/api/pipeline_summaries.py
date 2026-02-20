@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from django.db.models import Count, Q
+from django_filters import rest_framework as django_filters
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from rest_framework import serializers
+from rest_framework import serializers, status
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from aist.models import AISTStatus
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.models import AISTPipeline, AISTStatus
 from aist.queries import get_authorized_aist_pipelines
 from aist.utils.project_version_refs import resolve_project_version_git_refs
-
-if TYPE_CHECKING:
-    from rest_framework.response import Response
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,8 +47,38 @@ class AISTPipelineSummaryRowSerializer(serializers.Serializer):
     actions = serializers.JSONField()
 
 
-class AISTPipelineSummaryAPI(APIView):
+class AISTPipelineSummaryAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
+
+    class FilterSet(django_filters.FilterSet):
+        project_id = django_filters.NumberFilter(field_name="project_id")
+        status = django_filters.ChoiceFilter(field_name="status", choices=AISTStatus.choices)
+        created_gte = django_filters.IsoDateTimeFilter(field_name="created", lookup_expr="gte")
+        created_lte = django_filters.IsoDateTimeFilter(field_name="created", lookup_expr="lte")
+        search = django_filters.CharFilter(method="filter_search")
+        ordering = django_filters.OrderingFilter(
+            fields=(
+                ("created", "created"),
+                ("updated", "updated"),
+            ),
+        )
+
+        class Meta:
+            model = AISTPipeline
+            fields = ("project_id", "status", "created_gte", "created_lte", "search", "ordering")
+
+        def filter_search(self, queryset, _name, value):
+            search = (value or "").strip()
+            if not search:
+                return queryset
+            return queryset.filter(
+                Q(project_version__version__icontains=search)
+                | Q(project_version__resolved_from_branch__version__icontains=search),
+            )
 
     @extend_schema(
         tags=["aist"],
@@ -66,38 +96,18 @@ class AISTPipelineSummaryAPI(APIView):
         responses={200: AISTPipelineSummaryRowSerializer(many=True)},
     )
     def get(self, request, *args, **kwargs) -> Response:
-        qs = (
-            get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
-            .select_related("project", "project__product", "project_version", "project_version__resolved_from_branch")
-            .order_by("-created")
+        filterset = self.FilterSet(
+            data=request.query_params,
+            queryset=(
+                self.get_authorized_queryset()
+                .select_related("project", "project__product", "project_version", "project_version__resolved_from_branch")
+                .order_by("-created")
+            ),
+            request=request,
         )
-        qp = request.query_params
-
-        project_id = qp.get("project_id")
-        status = qp.get("status")
-        created_gte = qp.get("created_gte")
-        created_lte = qp.get("created_lte")
-        search = (qp.get("search") or "").strip()
-        ordering = qp.get("ordering")
-
-        if project_id:
-            qs = qs.filter(project_id=project_id)
-        if status:
-            qs = qs.filter(status=status)
-        if created_gte:
-            qs = qs.filter(created__gte=created_gte)
-        if created_lte:
-            qs = qs.filter(created__lte=created_lte)
-        if search:
-            qs = qs.filter(
-                Q(project_version__version__icontains=search)
-                | Q(project_version__resolved_from_branch__version__icontains=search),
-            )
-
-        qs = qs.distinct()
-
-        if ordering in set(PIPELINE_SUMMARY_API_CHOICES.ordering):
-            qs = qs.order_by(ordering)
+        if not filterset.is_valid():
+            return Response(filterset.errors, status=status.HTTP_400_BAD_REQUEST)
+        qs = filterset.qs.distinct()
 
         paginator = LimitOffsetPagination()
         page = paginator.paginate_queryset(qs, request)

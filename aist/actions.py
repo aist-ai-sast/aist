@@ -5,6 +5,7 @@ import logging
 import uuid
 from urllib.parse import urlencode, urljoin
 
+from django.core.mail import EmailMessage
 from django.db.models import Count
 from django.urls import reverse
 from django.utils import timezone
@@ -29,14 +30,6 @@ class BaseAction:
         self.action = action
         self.config = action.config or {}
         self.secret_config = action.get_secret_config()
-
-    def _build_message(self, *, pipeline: AISTPipeline, new_status: str, csv_text: str, for_slack: bool) -> str:
-        header = self._build_simple_message(pipeline=pipeline, new_status=new_status)
-        if not csv_text:
-            return f"{header}\n\nNo AI report is available."
-        if for_slack:
-            return f"{header}\n\nAI report (CSV):\n```{csv_text}```"
-        return f"{header}\n\nAI report (CSV):\n{csv_text}"
 
     def _build_simple_message(self, *, pipeline: AISTPipeline, new_status: str) -> str:
         project_name = self._get_project_name(pipeline)
@@ -142,14 +135,32 @@ class BaseAction:
             return f"{minutes}m {secs}s"
         return f"{secs}s"
 
-    def _get_csv_text(self, pipeline: AISTPipeline) -> str:
-        return build_ai_export_csv_text(pipeline)
-
     def _include_ai_csv(self) -> bool:
         return bool(self.config.get("include_ai_csv"))
 
     def _include_common_summary(self) -> bool:
         return bool(self.config.get("include_common_summary"))
+
+    @staticmethod
+    def _build_csv_from_ai_response_or_raise(pipeline: AISTPipeline) -> str:
+        ai_response = pipeline.ai_responses.order_by("-created").first()
+        if not ai_response or not ai_response.payload:
+            msg = "AI response not available; CSV file not sent"
+            raise RuntimeError(msg)
+
+        payload = ai_response.payload
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                msg = "AI response payload is not valid JSON"
+                raise RuntimeError(msg) from exc
+
+        csv_text = build_ai_export_csv_text(pipeline, payload=payload, ignore_false_positives=True)
+        if not csv_text:
+            msg = "AI report has no rows to export; CSV file not sent"
+            raise RuntimeError(msg)
+        return csv_text
 
     def _validate_summary_mode(self) -> tuple[bool, bool]:
         include_ai_csv = self._include_ai_csv()
@@ -181,20 +192,11 @@ class SlackAction(BaseAction):
         pipeline: AISTPipeline,
         new_status: str,
         title: str,
-        include_ai_csv: bool,
         include_common_summary: bool,
-        csv_text: str | None,
     ) -> str:
         description = self.config.get("description")
         if not description:
-            if include_ai_csv:
-                description = self._build_message(
-                    pipeline=pipeline,
-                    new_status=new_status,
-                    csv_text=csv_text or "",
-                    for_slack=True,
-                )
-            elif include_common_summary:
+            if include_common_summary:
                 description = self._build_common_summary(
                     pipeline=pipeline,
                     new_status=new_status,
@@ -213,28 +215,7 @@ class SlackAction(BaseAction):
         )
 
     def _get_csv_or_raise(self, pipeline: AISTPipeline) -> str:
-        ai_response = (
-            pipeline.ai_responses
-            .order_by("-created")
-            .first()
-        )
-        if not ai_response or not ai_response.payload:
-            msg = "AI response not available; Slack file not sent"
-            raise RuntimeError(msg)
-
-        payload = ai_response.payload
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except json.JSONDecodeError as exc:
-                msg = "AI response payload is not valid JSON"
-                raise RuntimeError(msg) from exc
-
-        csv_text = build_ai_export_csv_text(pipeline, payload=payload, ignore_false_positives=True)
-        if not csv_text:
-            msg = "AI report has no rows to export; Slack file not sent"
-            raise RuntimeError(msg)
-        return csv_text
+        return self._build_csv_from_ai_response_or_raise(pipeline)
 
     def _send_channel_message(
         self,
@@ -287,9 +268,7 @@ class SlackAction(BaseAction):
             pipeline=pipeline,
             new_status=new_status,
             title=title,
-            include_ai_csv=include_ai_csv,
             include_common_summary=include_common_summary,
-            csv_text=csv_text,
         )
 
         had_error = False
@@ -330,22 +309,9 @@ class EmailAction(BaseAction):
             new_status=new_status,
         )
         include_ai_csv, include_common_summary = self._validate_summary_mode()
-        csv_text = ""
-        if include_ai_csv:
-            csv_text = self._get_csv_text(pipeline)
-            if not csv_text:
-                msg = "AI report has no rows to export; email not sent"
-                raise RuntimeError(msg)
 
         description = self.config.get("description") or (
-            self._build_message(
-                pipeline=pipeline,
-                new_status=new_status,
-                csv_text=csv_text,
-                for_slack=False,
-            )
-            if include_ai_csv
-            else self._build_common_summary(
+            self._build_common_summary(
                 pipeline=pipeline,
                 new_status=new_status,
                 for_slack=False,
@@ -358,15 +324,36 @@ class EmailAction(BaseAction):
         )
 
         mgr = EmailNotificationManger()
+        csv_text = self._build_csv_from_ai_response_or_raise(pipeline) if include_ai_csv else None
         for email in emails:
-            mgr.send_mail_notification(
-                event="other",
-                user=None,
-                recipient=email,
-                title=title,
-                description=description,
-                url="",
+            if not csv_text:
+                mgr.send_mail_notification(
+                    event="other",
+                    user=None,
+                    recipient=email,
+                    title=title,
+                    description=description,
+                    url="",
+                )
+                continue
+
+            notification_payload = {"title": title, "description": description, "url": ""}
+            body = mgr._create_notification_message("other", None, "mail", notification_payload)
+            subject = f"{mgr.system_settings.team_name} notification: {title}"
+            email_message = EmailMessage(
+                subject,
+                body,
+                mgr.system_settings.email_from,
+                [email],
+                headers={"From": f"{mgr.system_settings.email_from}"},
             )
+            email_message.content_subtype = "html"
+            email_message.attach(
+                filename=f"aist_ai_results_{pipeline.id}.csv",
+                content=csv_text,
+                mimetype="text/csv",
+            )
+            email_message.send(fail_silently=False)
 
 
 class WriteLogAction(BaseAction):
@@ -374,26 +361,10 @@ class WriteLogAction(BaseAction):
 
     def run(self, *, pipeline: AISTPipeline, new_status: str) -> None:
         level = str(self.config.get("level") or "INFO").upper()
-        include_ai_csv = self._include_ai_csv()
-        csv_text = ""
-        if include_ai_csv:
-            csv_text = self._get_csv_text(pipeline)
-            if not csv_text:
-                msg = "AI report has no rows to export; log not written"
-                raise RuntimeError(msg)
 
-        description = self.config.get("description") or (
-            self._build_message(
-                pipeline=pipeline,
-                new_status=new_status,
-                csv_text=csv_text,
-                for_slack=False,
-            )
-            if include_ai_csv
-            else self._build_simple_message(
-                pipeline=pipeline,
-                new_status=new_status,
-            )
+        description = self.config.get("description") or self._build_simple_message(
+            pipeline=pipeline,
+            new_status=new_status,
         )
 
         logger_inst = install_pipeline_logging(pipeline.id, level)

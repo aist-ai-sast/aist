@@ -7,6 +7,7 @@ from croniter import croniter
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django_filters import rest_framework as django_filters
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.types import OpenApiTypes
@@ -16,6 +17,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.models import AISTProject, AISTProjectLaunchConfig, LaunchSchedule, PipelineLaunchQueue
 from aist.queries import (
     get_authorized_aist_launch_schedules,
@@ -40,6 +42,16 @@ LAUNCH_SCHEDULE_API_CHOICES = LaunchScheduleApiChoices(
         "-next_tick",
     ],
 )
+
+
+def _coerce_strict_bool(raw: str) -> bool:
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    msg = "invalid boolean value"
+    raise ValueError(msg)
 
 
 class LaunchScheduleSerializer(serializers.ModelSerializer):
@@ -256,8 +268,12 @@ class LaunchScheduleUpsertSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class ProjectLaunchScheduleUpsertAPI(APIView):
+class ProjectLaunchScheduleUpsertAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -266,10 +282,7 @@ class ProjectLaunchScheduleUpsertAPI(APIView):
         responses={201: OpenApiResponse(description="Schedule created or updated")},
     )
     def post(self, request, project_id: int, *args, **kwargs):
-        project = get_object_or_404(
-            get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
-            id=project_id,
-        )
+        project = self.get_authorized_object(permission=Permissions.Product_Edit, id=project_id)
         user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
 
         s = LaunchScheduleUpsertSerializer(data=request.data, context={"project": project})
@@ -312,8 +325,32 @@ class ProjectLaunchScheduleUpsertAPI(APIView):
         )
 
 
-class LaunchScheduleListAPI(APIView):
+class LaunchScheduleListAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_launch_schedules,
+        permission=Permissions.Product_View,
+    )
+
+    class FilterSet(django_filters.FilterSet):
+        project_id = django_filters.NumberFilter(field_name="launch_config__project_id")
+        organization_id = django_filters.NumberFilter(field_name="launch_config__project__organization_id")
+        launch_config_id = django_filters.NumberFilter(field_name="launch_config_id")
+        enabled = django_filters.TypedChoiceFilter(
+            field_name="enabled",
+            choices=(("true", "true"), ("false", "false")),
+            coerce=_coerce_strict_bool,
+        )
+        search = django_filters.CharFilter(field_name="cron_expression", lookup_expr="icontains")
+
+        class Meta:
+            model = LaunchSchedule
+            fields = ("project_id", "organization_id", "launch_config_id", "enabled", "search")
+
+    class QuerySerializer(serializers.Serializer):
+        ordering = serializers.ChoiceField(required=False, choices=LAUNCH_SCHEDULE_API_CHOICES.ordering, default="-id")
+        limit = serializers.IntegerField(required=False, min_value=1, max_value=500, default=50)
+        offset = serializers.IntegerField(required=False, min_value=0, default=0)
 
     @extend_schema(
         operation_id="aist_launch_schedules_list",
@@ -332,74 +369,29 @@ class LaunchScheduleListAPI(APIView):
         responses={200: OpenApiResponse(description="Paginated list")},
     )
     def get(self, request, *args, **kwargs):
-        qs = get_authorized_aist_launch_schedules(Permissions.Product_View, user=request.user).select_related(
-            "launch_config",
-            "launch_config__project",
-            "launch_config__project__organization",
-            "launch_config__project__product",
+        filterset = self.FilterSet(
+            data=request.query_params,
+            queryset=self.get_authorized_queryset().select_related(
+                "launch_config",
+                "launch_config__project",
+                "launch_config__project__organization",
+                "launch_config__project__product",
+            ),
+            request=request,
         )
+        if not filterset.is_valid():
+            return Response(filterset.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        # ---- filters ----
-        project_id = request.query_params.get("project_id")
-        if project_id:
-            qs = qs.filter(launch_config__project_id=project_id)
+        query_serializer = self.QuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        query_data = query_serializer.validated_data
 
-        organization_id = request.query_params.get("organization_id")
-        if organization_id:
-            qs = qs.filter(launch_config__project__organization_id=organization_id)
+        qs = filterset.qs
 
-        launch_config_id = request.query_params.get("launch_config_id")
-        if launch_config_id:
-            qs = qs.filter(launch_config_id=launch_config_id)
-
-        enabled = request.query_params.get("enabled")
-        if enabled:
-            # accept: true/false/1/0
-            v = str(enabled).strip().lower()
-            if v in {"1", "true", "yes", "y", "on"}:
-                qs = qs.filter(enabled=True)
-            elif v in {"0", "false", "no", "n", "off"}:
-                qs = qs.filter(enabled=False)
-            else:
-                return Response(
-                    {"enabled": "Invalid boolean. Use true/false."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-        search = (request.query_params.get("search") or "").strip()
-        if search:
-            qs = qs.filter(cron_expression__icontains=search)
-
-        # ---- ordering ----
-        ordering = (request.query_params.get("ordering") or "-id").strip()
-        allowed = set(LAUNCH_SCHEDULE_API_CHOICES.ordering)
-        if ordering not in allowed:
-            return Response(
-                {"ordering": f"Invalid ordering. Allowed: {', '.join(sorted(allowed))}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        ordering = query_data["ordering"]
+        limit = query_data["limit"]
+        offset = query_data["offset"]
         qs = qs.order_by("id") if ordering in {"next_tick", "-next_tick"} else qs.order_by(ordering)
-
-        # ---- pagination (limit/offset) ----
-        try:
-            limit = int(request.query_params.get("limit") or 50)
-            offset = int(request.query_params.get("offset") or 0)
-        except ValueError:
-            return Response(
-                {"pagination": "limit/offset must be integers."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if limit < 1 or limit > 500:
-            return Response(
-                {"limit": "limit must be between 1 and 500."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if offset < 0:
-            return Response(
-                {"offset": "offset must be >= 0."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         page = qs[offset : offset + limit]
         results = LaunchScheduleSerializer(page, many=True).data
@@ -414,9 +406,13 @@ class LaunchScheduleListAPI(APIView):
         return Response(results, status=status.HTTP_200_OK)
 
 
-class LaunchScheduleDetailAPI(APIView):
+class LaunchScheduleDetailAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = LaunchScheduleSerializer
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_launch_schedules,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         operation_id="aist_launch_schedules_retrieve",
@@ -426,7 +422,7 @@ class LaunchScheduleDetailAPI(APIView):
     )
     def get(self, request, launch_schedule_id: int, *args, **kwargs):
         obj = get_object_or_404(
-            get_authorized_aist_launch_schedules(Permissions.Product_View, user=request.user)
+            self.get_authorized_queryset()
             .select_related(
                 "launch_config",
                 "launch_config__project",
@@ -443,10 +439,7 @@ class LaunchScheduleDetailAPI(APIView):
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
     def delete(self, request, launch_schedule_id: int, *args, **kwargs):
-        obj = get_object_or_404(
-            get_authorized_aist_launch_schedules(Permissions.Product_Edit, user=request.user),
-            id=launch_schedule_id,
-        )
+        obj = self.get_authorized_object(permission=Permissions.Product_Edit, id=launch_schedule_id)
         user_has_permission_or_403(request.user, obj.launch_config.project.product, Permissions.Product_Edit)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -457,7 +450,7 @@ class LaunchScheduleDetailAPI(APIView):
         Currently used by UI to toggle 'enabled' without resending the full schedule payload.
         """
         obj = get_object_or_404(
-            get_authorized_aist_launch_schedules(Permissions.Product_Edit, user=request.user)
+            self.get_authorized_queryset(permission=Permissions.Product_Edit)
             .select_related(
                 "launch_config",
                 "launch_config__project",
@@ -543,11 +536,15 @@ class LaunchScheduleBulkDisableSerializer(serializers.Serializer):
         return attrs
 
 
-class LaunchScheduleBulkDisableAPI(APIView):
+class LaunchScheduleBulkDisableAPI(AuthorizedQuerySetMixin, APIView):
 
     """Quick action: disable schedules for org and/or project."""
 
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_launch_schedules,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -562,7 +559,7 @@ class LaunchScheduleBulkDisableAPI(APIView):
         org_id = s.validated_data.get("organization_id")
         project_id = s.validated_data.get("project_id")
 
-        qs = get_authorized_aist_launch_schedules(Permissions.Product_Edit, user=request.user)
+        qs = self.get_authorized_queryset(permission=Permissions.Product_Edit)
         if org_id:
             qs = qs.filter(launch_config__project__organization_id=org_id)
         if project_id:
@@ -572,7 +569,7 @@ class LaunchScheduleBulkDisableAPI(APIView):
         return Response({"updated": updated}, status=status.HTTP_200_OK)
 
 
-class LaunchScheduleRunOnceAPI(APIView):
+class LaunchScheduleRunOnceAPI(AuthorizedQuerySetMixin, APIView):
 
     """
     UI helper: enqueue a single run for this schedule (does not touch cron/last_run_at).
@@ -581,6 +578,10 @@ class LaunchScheduleRunOnceAPI(APIView):
 
     permission_classes = [IsAuthenticated]
     serializer_class = serializers.Serializer
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_launch_schedules,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -589,7 +590,7 @@ class LaunchScheduleRunOnceAPI(APIView):
     )
     def post(self, request, launch_schedule_id: int, *args, **kwargs):
         obj = get_object_or_404(
-            get_authorized_aist_launch_schedules(Permissions.Product_Edit, user=request.user)
+            self.get_authorized_queryset(permission=Permissions.Product_Edit)
             .select_related(
                 "launch_config",
                 "launch_config__project",

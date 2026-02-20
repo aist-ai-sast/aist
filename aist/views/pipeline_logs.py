@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from django.contrib.auth.decorators import login_required
-from django.http import Http404, HttpRequest, HttpResponse
+from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from dojo.authorization.roles_permissions import Permissions
 
 from aist.api.pipelines import (
+    PipelineLogsProgressiveQuerySerializer,
     pipeline_logs_download_response,
     pipeline_logs_full_response,
     pipeline_logs_progressive_response,
@@ -35,7 +36,14 @@ def pipeline_logs_progressive(request, pipeline_id: str):
         get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
         id=pipeline_id,
     )
-    return pipeline_logs_progressive_response(request, pipeline)
+    serializer = PipelineLogsProgressiveQuerySerializer(data=request.GET)
+    if not serializer.is_valid():
+        return JsonResponse(serializer.errors, status=400)
+    return pipeline_logs_progressive_response(
+        pipeline=pipeline,
+        start=serializer.validated_data.get("start"),
+        tail=serializer.validated_data.get("tail"),
+    )
 
 
 @login_required

@@ -375,6 +375,87 @@ class AISTAuthorizationTests(AISTApiBase):
         resp = self.client.get(reverse("aist_api:pipeline_status", kwargs={"pipeline_id": "pipe-other"}))
         self.assertEqual(resp.status_code, 404)
 
+    def test_pipeline_status_stream_denies_other_product(self):
+        AISTPipeline.objects.create(
+            id="pipe-other-stream",
+            project=self.other_project,
+            status=AISTStatus.FINISHED,
+        )
+        resp = self.client.get(
+            reverse("aist_api:pipeline_status_stream", kwargs={"pipeline_id": "pipe-other-stream"}),
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_pipeline_logs_full_denies_other_product(self):
+        AISTPipeline.objects.create(
+            id="pipe-other-logs",
+            project=self.other_project,
+            status=AISTStatus.FINISHED,
+        )
+        resp = self.client.get(
+            reverse("aist_api:pipeline_logs_full", kwargs={"pipeline_id": "pipe-other-logs"}),
+        )
+        self.assertEqual(resp.status_code, 404)
+
+
+class AISTFindingAuthorizationTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.test_type = Test_Type.objects.create(name="Semgrep auth findings")
+
+        own_engagement = Engagement.objects.create(
+            name="Own engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        own_test = Test.objects.create(
+            engagement=own_engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=self.test_type,
+        )
+        self.own_finding = Finding.objects.create(
+            test=own_test,
+            title="Own finding",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+
+        other_engagement = Engagement.objects.create(
+            name="Other engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.other_product,
+        )
+        other_test = Test.objects.create(
+            engagement=other_engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=self.test_type,
+        )
+        self.other_finding = Finding.objects.create(
+            test=other_test,
+            title="Other finding",
+            severity="Low",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+
+    def test_finding_list_hides_other_product_findings(self):
+        resp = self.client.get(reverse("aist_api:finding_list"))
+        self.assertEqual(resp.status_code, 200)
+        ids = {row["id"] for row in resp.data.get("results", [])}
+        self.assertIn(self.own_finding.id, ids)
+        self.assertNotIn(self.other_finding.id, ids)
+
+    def test_finding_notes_denies_other_product_finding(self):
+        resp = self.client.get(
+            reverse("aist_api:finding_notes", kwargs={"finding_id": self.other_finding.id}),
+        )
+        self.assertEqual(resp.status_code, 404)
+
 
 class AIFindingResponseAPITests(AISTApiBase):
     def test_returns_sanitized_ai_finding_responses_without_job_id(self):
@@ -811,6 +892,12 @@ class AISTFindingTagsTests(AISTApiBase):
         self.assertIn(self.finding.id, ids)
         self.assertIn(self.other_finding.id, ids)
         self.assertNotIn(medium_finding.id, ids)
+
+    def test_finding_list_ordering_alias_accepts_single_value(self):
+        url = reverse("aist_api:finding_list")
+        resp = self.client.get(url, data={"ordering": "numerical_severity"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("results", resp.data)
 
     def test_finding_list_sql_injection_payloads_do_not_bypass_filters(self):
         pv_hash = AISTProjectVersion.objects.create(

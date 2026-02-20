@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import json
-
-from django.shortcuts import get_object_or_404
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiResponse, extend_schema
@@ -11,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.models import AISTProject, Organization
 from aist.queries import get_authorized_aist_projects
 from aist.utils.pipeline_imports import _load_analyzers_config
@@ -41,19 +39,42 @@ class DefaultAnalyzersRequestSerializer(serializers.Serializer):
 
 
 class ProjectUpdateRequestSerializer(serializers.Serializer):
-    script_path = serializers.CharField(required=True)
-    supported_languages = serializers.CharField(required=False)
-    compilable = serializers.BooleanField(required=False)
-    profile = serializers.JSONField(required=False)
-    organization = serializers.IntegerField(required=False, allow_null=True)
+    script_path = serializers.CharField(required=True, allow_blank=False, trim_whitespace=True)
+    supported_languages = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    compilable = serializers.BooleanField(required=False, default=False)
+    profile = serializers.JSONField(required=False, default=dict)
+    organization = serializers.PrimaryKeyRelatedField(queryset=Organization.objects.all(), required=False, allow_null=True)
+
+    def to_internal_value(self, data):
+        mutable = data.copy()
+        raw_languages = mutable.get("supported_languages")
+        if isinstance(raw_languages, str):
+            parsed_languages = [token.strip() for token in raw_languages.split(",") if token.strip()]
+            if hasattr(mutable, "setlist"):
+                mutable.setlist("supported_languages", parsed_languages)
+            else:
+                mutable["supported_languages"] = parsed_languages
+        return super().to_internal_value(mutable)
+
+    def validate_profile(self, value):
+        if value is None or not value:
+            return {}
+        if not isinstance(value, dict):
+            msg = 'Profile must be a JSON object (e.g. {"paths": {"exclude": []}}).'
+            raise serializers.ValidationError(msg)
+        return value
 
 
-class AISTProjectListAPI(generics.ListAPIView):
+class AISTProjectListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
 
     """List all current AISTProjects."""
 
     serializer_class = AISTProjectSerializer
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -65,16 +86,20 @@ class AISTProjectListAPI(generics.ListAPIView):
 
     def get_queryset(self):
         return (
-            get_authorized_aist_projects(Permissions.Product_View, user=self.request.user)
+            self.get_authorized_queryset()
             .select_related("product")
             .order_by("created")
         )
 
 
-class AISTProjectDetailAPI(generics.RetrieveDestroyAPIView):
+class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIView):
     serializer_class = AISTProjectSerializer
     permission_classes = [IsAuthenticated]
     lookup_field = "id"
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         responses={204: OpenApiResponse(description="AIST project deleted"), 404: OpenApiResponse(description="Not found")},
@@ -83,8 +108,8 @@ class AISTProjectDetailAPI(generics.RetrieveDestroyAPIView):
         description="Deletes the specified AISTProject by id.",
     )
     def delete(self, request, project_id: int, *args, **kwargs) -> Response:
-        p = get_object_or_404(
-            get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
+        p = self.get_authorized_object(
+            permission=Permissions.Product_Edit,
             id=project_id,
         )
         user_has_permission_or_403(request.user, p.product, Permissions.Product_Edit)
@@ -98,8 +123,7 @@ class AISTProjectDetailAPI(generics.RetrieveDestroyAPIView):
         description="Get the specified AISTProject by id.",
     )
     def get(self, request, project_id: int, *args, **kwargs) -> Response:
-        project = get_object_or_404(
-            get_authorized_aist_projects(Permissions.Product_View, user=request.user),
+        project = self.get_authorized_object(
             id=project_id,
         )
         serializer = AISTProjectSerializer(project)
@@ -112,17 +136,6 @@ def project_meta_payload(project: AISTProject) -> dict:
         "supported_languages": project.supported_languages or [],
         "versions": versions,
     }
-
-
-def _get_list(payload, key: str) -> list[str]:
-    if hasattr(payload, "getlist"):
-        return payload.getlist(key)
-    value = payload.get(key)
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
 
 
 def default_analyzers_payload(*, project: AISTProject | None, project_id: str | None, langs: list[str], time_class: str):
@@ -145,55 +158,16 @@ def default_analyzers_payload(*, project: AISTProject | None, project_id: str | 
 
 
 def update_project_from_payload(*, project: AISTProject, payload: dict):
-    script_path = (payload.get("script_path") or "").strip()
-    compilable = payload.get("compilable") in {"on", True, "true", "1"}
-    supported_languages_raw = payload.get("supported_languages")
-    profile_raw = payload.get("profile")
-    organization_raw = payload.get("organization")
-
-    errors: dict[str, str] = {}
-
-    if not script_path:
-        errors["script_path"] = "Script path is required."
+    script_path = payload["script_path"]
+    compilable = bool(payload.get("compilable"))
+    supported_languages_raw = payload.get("supported_languages") or []
+    profile = payload.get("profile") or {}
+    organization = payload.get("organization")
 
     cfg = _load_analyzers_config()
     if not cfg:
         return None, {"__all__": "config not loaded"}
-
-    if isinstance(supported_languages_raw, list):
-        languages = cfg.convert_languages(supported_languages_raw)
-    elif supported_languages_raw:
-        languages = cfg.convert_languages(
-            [x.strip() for x in str(supported_languages_raw).split(",") if x.strip()],
-        )
-    else:
-        languages = []
-
-    profile: dict | list | None
-    if profile_raw in {None, ""}:
-        profile = {}
-    elif isinstance(profile_raw, dict):
-        profile = profile_raw
-    else:
-        try:
-            profile = json.loads(profile_raw)
-        except Exception:
-            errors["profile"] = "Profile must be a valid JSON value."
-            profile = None
-
-    if profile is not None and not isinstance(profile, dict):
-        errors["profile"] = 'Profile must be a JSON object (e.g. {"paths": {"exclude": []}}).'
-
-    organization = None
-    if organization_raw not in {None, ""}:
-        try:
-            org_id = int(organization_raw)
-            organization = Organization.objects.get(id=org_id)
-        except (ValueError, Organization.DoesNotExist):
-            errors["organization"] = "Selected organization does not exist."
-
-    if errors:
-        return None, errors
+    languages = cfg.convert_languages(supported_languages_raw)
 
     project.script_path = script_path
     project.compilable = compilable
@@ -223,35 +197,40 @@ def update_project_from_payload(*, project: AISTProject, payload: dict):
     }, None
 
 
-class AISTProjectMetaAPI(APIView):
+class AISTProjectMetaAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(responses={200: OpenApiResponse(description="Project meta")})
     def get(self, request, project_id: int):
-        project = get_object_or_404(
-            get_authorized_aist_projects(Permissions.Product_View, user=request.user),
+        project = self.get_authorized_object(
             id=project_id,
         )
         return Response(project_meta_payload(project))
 
 
-class AISTDefaultAnalyzersAPI(APIView):
+class AISTDefaultAnalyzersAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         request=DefaultAnalyzersRequestSerializer,
         responses={200: OpenApiResponse(description="Default analyzers")},
     )
     def post(self, request):
-        project_id = request.data.get("project")
-        time_class = request.data.get("time_class_level") or "slow"
-        langs = _get_list(request.data, "languages")
+        serializer = DefaultAnalyzersRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        project_id = serializer.validated_data.get("project")
+        time_class = serializer.validated_data.get("time_class_level") or "slow"
+        langs = serializer.validated_data.get("languages", [])
 
-        project = (
-            get_authorized_aist_projects(Permissions.Product_View, user=request.user)
-            .filter(id=project_id)
-            .first()
-        )
+        project = self.get_authorized_queryset().filter(id=project_id).first()
         if not project:
             return Response({"detail": "Project not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -266,20 +245,26 @@ class AISTDefaultAnalyzersAPI(APIView):
         return Response(payload)
 
 
-class AISTProjectUpdateAPI(APIView):
+class AISTProjectUpdateAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         request=ProjectUpdateRequestSerializer,
         responses={200: OpenApiResponse(description="Project updated")},
     )
     def post(self, request, project_id: int):
-        project = get_object_or_404(
-            get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
+        project = self.get_authorized_object(
+            permission=Permissions.Product_Edit,
             id=project_id,
         )
         user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
-        payload, errors = update_project_from_payload(project=project, payload=request.data)
+        serializer = ProjectUpdateRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload, errors = update_project_from_payload(project=project, payload=serializer.validated_data)
         if errors:
             return Response({"ok": False, "errors": errors}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"ok": True, "project": payload})

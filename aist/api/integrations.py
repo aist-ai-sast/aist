@@ -72,7 +72,10 @@ class GitlabProjectsListAPI(APIView):
         responses={200: OpenApiResponse(description="GitLab projects list")},
     )
     def post(self, request):
-        gitlab_url = (request.data.get("gitlab_url") or "").strip()
-        gitlab_token = (request.data.get("gitlab_token") or "").strip()
-        payload, status = gitlab_projects_list_payload(gitlab_url, gitlab_token)
+        serializer = self.RequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload, status = gitlab_projects_list_payload(
+            serializer.validated_data["gitlab_url"].strip(),
+            serializer.validated_data["gitlab_token"].strip(),
+        )
         return Response(payload, status=status)

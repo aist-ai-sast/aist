@@ -186,3 +186,27 @@ class ProjectVersionsAPITests(AISTApiBase):
 
         called_url = mock_get.call_args.args[0]
         self.assertIn("/raw/main/src/app.py", called_url)
+
+    def test_create_version_denies_other_product_project(self):
+        url = reverse("aist_api:project_version_create", kwargs={"project_id": self.other_project.id})
+        resp = self.client.post(
+            url,
+            data={"version_type": VersionType.GIT_HASH, "version": "cafebabecafebabecafebabecafebabecafebabe"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_file_blob_denies_other_product_version(self):
+        archive_bytes = self._zip_with_file("main.py", "print('other')\n")
+        upload = SimpleUploadedFile("other.zip", archive_bytes, content_type="application/zip")
+        other_version = AISTProjectVersion.objects.create(
+            project=self.other_project,
+            version_type=VersionType.FILE_HASH,
+            source_archive=upload,
+        )
+        blob_url = reverse(
+            "aist_api:project_version_file_blob",
+            kwargs={"project_version_id": other_version.id, "subpath": "main.py"},
+        )
+        resp = self.client.get(blob_url)
+        self.assertEqual(resp.status_code, 404)

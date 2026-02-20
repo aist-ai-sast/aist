@@ -146,6 +146,7 @@ class ActionsTests(TestCase):
         self.assertTrue(mock_send_file.called)
         args = mock_send_file.call_args.kwargs
         self.assertTrue(args.get("file_content"))
+        self.assertNotIn("AI report (CSV)", args.get("message", ""))
 
     def test_slack_action_fails_without_ai_response_when_csv_requested(self):
         action = self._make_action(
@@ -265,15 +266,20 @@ class ActionsTests(TestCase):
         self.assertIn("Commit:* abcdef1234567890", message)
         self.assertNotIn("Duration:* 0s", message)
 
+    @patch("aist.actions.EmailMessage.attach")
+    @patch("aist.actions.EmailMessage.send")
     @patch("aist.actions.EmailNotificationManger.send_mail_notification")
-    def test_email_action_requires_ai_response_when_csv_requested(self, mock_send):
+    def test_email_action_with_csv_flag_sends_csv_attachment(self, mock_send_mail, mock_send_email, mock_attach):
+        self._create_ai_response()
         action = self._make_action(
             AISTLaunchConfigAction.ActionType.SEND_EMAIL,
             {"emails": ["a@example.com"], "include_ai_csv": True},
         )
-        with self.assertRaises(RuntimeError):
-            EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
-        self.assertFalse(mock_send.called)
+        EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+        self.assertFalse(mock_send_mail.called)
+        self.assertTrue(mock_send_email.called)
+        self.assertTrue(mock_attach.called)
+        self.assertEqual(mock_attach.call_args.kwargs["filename"], f"aist_ai_results_{self.pipeline.id}.csv")
 
     @patch("aist.actions.EmailNotificationManger.send_mail_notification")
     def test_email_action_sends_without_csv(self, mock_send):
@@ -283,6 +289,14 @@ class ActionsTests(TestCase):
         )
         EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
         self.assertTrue(mock_send.called)
+
+    def test_email_action_fails_without_ai_response_when_csv_requested(self):
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.SEND_EMAIL,
+            {"emails": ["a@example.com"], "include_ai_csv": True},
+        )
+        with self.assertRaises(RuntimeError):
+            EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
 
     @override_settings(SITE_URL="https://aist.itsec-europe.com")
     @patch("aist.actions.EmailNotificationManger.send_mail_notification")
@@ -334,14 +348,13 @@ class ActionsTests(TestCase):
         self.assertIn("Severity: Critical: 1 | High: 1 | Medium: 0 | Low: 1 | Info: 0", kwargs["description"])
 
     @patch("aist.actions.install_pipeline_logging")
-    def test_write_log_action_requires_ai_response_when_csv_requested(self, mock_install):
+    def test_write_log_action_with_csv_flag_logs_simple_message(self, mock_install):
         mock_install.return_value = SimpleNamespace(info=lambda *_a, **_k: None)
         action = self._make_action(
             AISTLaunchConfigAction.ActionType.WRITE_LOG,
             {"level": "INFO", "include_ai_csv": True},
         )
-        with self.assertRaises(RuntimeError):
-            WriteLogAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+        WriteLogAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
 
     @patch("aist.actions.install_pipeline_logging")
     def test_write_log_action_logs_without_csv(self, mock_install):

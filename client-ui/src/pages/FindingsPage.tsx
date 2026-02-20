@@ -99,12 +99,9 @@ export default function FindingsPage() {
   const [expandedIds, setExpandedIds] = useState<number[]>([]);
 
   useEffect(() => {
-    setSelectedTags([]);
-  }, [selectedProjectId]);
-
-  useEffect(() => {
+    if (!tagsQuery.isSuccess) return;
     setSelectedTags((current) => current.filter((tag) => availableTags.includes(tag)));
-  }, [availableTags]);
+  }, [availableTags, tagsQuery.isSuccess]);
 
   useEffect(() => {
     if (!expandedIds.length) return;
@@ -148,34 +145,54 @@ export default function FindingsPage() {
   };
 
   useEffect(() => {
-    const projectParam = searchParams.get("project");
-    const pipelineParam = searchParams.get("pipeline");
-    const projectVersionParam = searchParams.get("project_version");
-    const fileParam = searchParams.get("file");
-    const aiResponseParam = searchParams.get("ai_status");
+    const projectRaw = searchParams.get("project") ?? searchParams.get("project_id");
+    const projectParsed = projectRaw ? Number(projectRaw) : NaN;
+    setSelectedProjectId(Number.isFinite(projectParsed) ? projectParsed : undefined);
 
-    if (projectParam) {
-      const parsed = Number(projectParam);
-      if (!Number.isNaN(parsed)) {
-        setSelectedProjectId(parsed);
+    const pipeline = searchParams.get("pipeline") ?? searchParams.get("pipeline_id");
+    setSelectedPipelineId(pipeline || undefined);
+    setSelectedProjectVersion(searchParams.get("project_version") ?? "");
+    setSelectedFile(searchParams.get("file") ?? "");
+    setSelectedCwe(searchParams.get("cwe") ?? "");
+
+    const severities = (searchParams.get("severity") ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    setSelectedSeverities(severities);
+
+    const tags = (searchParams.get("tags") ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    setSelectedTags(tags);
+
+    const active = (searchParams.get("active") ?? "").toLowerCase();
+    if (active === "true" || active === "1") {
+      setSelectedStatus("Active");
+    } else if (active === "false" || active === "0") {
+      setSelectedStatus("Non-Active");
+    } else {
+      const status = (searchParams.get("status") ?? "").toLowerCase();
+      if (status === "active" || status === "enabled") {
+        setSelectedStatus("Active");
+      } else if (status === "non-active" || status === "disabled") {
+        setSelectedStatus("Non-Active");
+      } else {
+        setSelectedStatus("All");
       }
-    } else {
-      setSelectedProjectId(undefined);
     }
-    setSelectedPipelineId(pipelineParam || undefined);
-    setSelectedProjectVersion(projectVersionParam ?? "");
-    setSelectedFile(fileParam ?? "");
-    if (
-      aiResponseParam === "has_ai"
-      || aiResponseParam === "no_ai"
-      || aiResponseParam === "ai_tp"
-      || aiResponseParam === "ai_fp"
-      || aiResponseParam === "ai_u"
-    ) {
-      setSelectedAiResponse(aiResponseParam);
-    } else {
-      setSelectedAiResponse("All");
-    }
+
+    const nextRisk: string[] = [];
+    const riskAccepted = (searchParams.get("risk_accepted") ?? "").toLowerCase();
+    const underReview = (searchParams.get("under_review") ?? "").toLowerCase();
+    const isMitigated = (searchParams.get("is_mitigated") ?? "").toLowerCase();
+    if (riskAccepted === "true" || riskAccepted === "1") nextRisk.push("risk_accepted");
+    if (underReview === "true" || underReview === "1") nextRisk.push("under_review");
+    if (isMitigated === "true" || isMitigated === "1") nextRisk.push("mitigated");
+    setSelectedRisk(nextRisk);
+
+    setSelectedAiResponse(searchParams.get("ai_status") || "All");
   }, [searchParams]);
 
   const handleProjectChange = (projectId?: number) => {

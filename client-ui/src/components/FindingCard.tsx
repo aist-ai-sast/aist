@@ -1,4 +1,5 @@
 import type { Finding } from "../types";
+import { formatDateForUI } from "../lib/dateDisplay";
 import { formatProjectVersionText } from "../lib/projectVersion";
 import AiVerdictBadge from "./AiVerdictBadge";
 import FindingSnippetPreview from "./FindingSnippetPreview";
@@ -30,11 +31,7 @@ export default function FindingCard({
   onSelectProject,
   onSelectFile,
 }: FindingCardProps) {
-  const createdLabel = finding.createdAt
-    ? new Date(finding.createdAt).toLocaleString()
-    : finding.date
-      ? new Date(finding.date).toLocaleString()
-      : null;
+  const createdLabel = formatDateForUI(finding.createdAt) ?? formatDateForUI(finding.date);
   return (
     <article
       className={[
@@ -172,7 +169,7 @@ export default function FindingCard({
               <path d="M4 7.5V16.5L12 21" />
               <path d="M20 7.5V16.5L12 21" />
             </svg>
-            <span>{finding.product || `Project ${finding.projectId}`}</span>
+            <span>Project: {finding.product || `Project ${finding.projectId}`}</span>
           </button>
         ) : null}
         {createdLabel ? (

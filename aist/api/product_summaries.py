@@ -11,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.models import AISTPipeline
 from aist.queries import get_authorized_aist_projects
 
@@ -29,8 +30,12 @@ class AISTProductSummaryRowSerializer(serializers.Serializer):
     last_sync = serializers.DateTimeField(allow_null=True)
 
 
-class AISTProductSummaryAPI(APIView):
+class AISTProductSummaryAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -39,7 +44,7 @@ class AISTProductSummaryAPI(APIView):
     )
     def get(self, request, *args, **kwargs) -> Response:
         projects = (
-            get_authorized_aist_projects(Permissions.Product_View, user=request.user)
+            self.get_authorized_queryset()
             .select_related("product")
             .prefetch_related("product__tags")
             .order_by("product__name")
@@ -47,7 +52,10 @@ class AISTProductSummaryAPI(APIView):
 
         product_ids = [project.product_id for project in projects]
 
-        findings = get_authorized_findings(Permissions.Finding_View, user=request.user).filter(
+        findings = self.get_authorized_queryset(
+            getter=get_authorized_findings,
+            permission=Permissions.Finding_View,
+        ).filter(
             test__engagement__product_id__in=product_ids,
         )
         findings = findings.order_by()

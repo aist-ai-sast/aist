@@ -182,7 +182,6 @@ def send_request_to_ai(request, pipeline_id: str):
     except AISTPipeline.DoesNotExist:
         return HttpResponseBadRequest("Unknown pipeline")
     user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
-
     return send_request_to_ai_for_pipeline(request, pipeline)
 
 

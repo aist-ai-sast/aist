@@ -9,11 +9,19 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from aist.models import AISTProject
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.queries import get_authorized_aist_projects
 
 
-class AvailableFindingTagsAPI(APIView):
+class AvailableFindingTagsAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
+
+    class QuerySerializer(serializers.Serializer):
+        project_id = serializers.IntegerField(required=False)
 
     @extend_schema(
         tags=["aist"],
@@ -27,15 +35,20 @@ class AvailableFindingTagsAPI(APIView):
         },
     )
     def get(self, request):
-        project_id = request.query_params.get("project_id")
+        query_serializer = self.QuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        project_id = query_serializer.validated_data.get("project_id")
         cache_key = f"aist_findings_tags_{request.user.id}_{project_id or 'all'}"
         cached = cache.get(cache_key)
         if cached is not None:
             return Response({"tags": cached})
 
-        findings = get_authorized_findings(Permissions.Finding_View, user=request.user)
+        findings = self.get_authorized_queryset(
+            getter=get_authorized_findings,
+            permission=Permissions.Finding_View,
+        )
         if project_id:
-            project = AISTProject.objects.filter(id=project_id).first()
+            project = self.get_authorized_queryset().filter(id=project_id).first()
             findings = findings.filter(test__engagement__product_id=project.product_id) if project else findings.none()
         tags = (
             findings.values_list("tags__name", flat=True)

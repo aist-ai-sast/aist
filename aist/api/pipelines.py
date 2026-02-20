@@ -11,12 +11,13 @@ from io import BytesIO, StringIO
 from django.db import close_old_connections, transaction
 from django.db.models import Count
 from django.http import HttpResponse, HttpResponseBadRequest, StreamingHttpResponse
-from django.shortcuts import get_object_or_404
+from django_filters import rest_framework as django_filters
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from openpyxl import Workbook
 from rest_framework import generics, serializers, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
@@ -24,6 +25,7 @@ from rest_framework.views import APIView
 
 from aist.ai_filter import validate_and_normalize_filter
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.logging_transport import BACKLOG_COUNT, PUBSUB_CHANNEL_TPL, STREAM_KEY, get_pipeline_log_path, get_redis
 from aist.models import AISTPipeline, AISTStatus, TestDeduplicationProgress
 from aist.pipeline_args import PipelineArguments
@@ -70,13 +72,39 @@ class PipelineStopResponseSerializer(serializers.Serializer):
 class ExportAIResultsRequestSerializer(serializers.Serializer):
     format = serializers.ChoiceField(choices=["csv", "xlsx"], required=False)
     columns = serializers.ListField(child=serializers.CharField(), required=False)
+    ignore_false_positives = serializers.BooleanField(required=False, default=True)
+    export_all = serializers.BooleanField(required=False, default=False)
+    max_findings = serializers.IntegerField(required=False, min_value=1, allow_null=True)
+
+    def to_internal_value(self, data):
+        mutable = data.copy() if hasattr(data, "copy") else dict(data)
+        if hasattr(mutable, "getlist"):
+            list_columns = [token.strip() for token in mutable.getlist("columns") if token.strip()]
+            if len(list_columns) > 1:
+                mutable.setlist("columns", list_columns)
+            elif len(list_columns) == 1 and "," in list_columns[0]:
+                mutable.setlist("columns", [token.strip() for token in list_columns[0].split(",") if token.strip()])
+        else:
+            columns = mutable.get("columns")
+            if isinstance(columns, str):
+                mutable["columns"] = [token.strip() for token in columns.split(",") if token.strip()]
+        return super().to_internal_value(mutable)
 
 
-class PipelineStartAPI(APIView):
+class PipelineLogsProgressiveQuerySerializer(serializers.Serializer):
+    start = serializers.IntegerField(required=False, min_value=0)
+    tail = serializers.IntegerField(required=False, min_value=0)
+
+
+class PipelineStartAPI(AuthorizedQuerySetMixin, APIView):
 
     """Start a new AIST pipeline."""
 
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_project_versions,
+        permission=Permissions.Product_Edit,
+    )
 
     @extend_schema(
         request=PipelineStartRequestSerializer,
@@ -113,10 +141,7 @@ class PipelineStartAPI(APIView):
 
         pv_id = serializer.validated_data["project_version_id"]
         # we take project from version to avoid double inputs
-        project_version = get_object_or_404(
-            get_authorized_aist_project_versions(Permissions.Product_Edit, user=request.user),
-            pk=pv_id,
-        )
+        project_version = self.get_authorized_object(pk=pv_id)
         project = project_version.project
         user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
         provided_ai_filter = serializer.validated_data.get("ai_filter", None)
@@ -166,12 +191,32 @@ class PipelineStartAPI(APIView):
         return Response(out.data, status=status.HTTP_201_CREATED)
 
 
-class PipelineListAPI(generics.ListAPIView):
+class PipelineListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
 
     """Paginated list of pipelines with simple filtering."""
 
     permission_classes = [IsAuthenticated]
     serializer_class = PipelineResponseSerializer
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
+
+    class FilterSet(django_filters.FilterSet):
+        project_id = django_filters.NumberFilter(field_name="project_id")
+        status = django_filters.ChoiceFilter(field_name="status", choices=AISTStatus.choices)
+        created_gte = django_filters.IsoDateTimeFilter(field_name="created", lookup_expr="gte")
+        created_lte = django_filters.IsoDateTimeFilter(field_name="created", lookup_expr="lte")
+        ordering = django_filters.OrderingFilter(
+            fields=(
+                ("created", "created"),
+                ("updated", "updated"),
+            ),
+        )
+
+        class Meta:
+            model = AISTPipeline
+            fields = ("project_id", "status", "created_gte", "created_lte", "ordering")
 
     @extend_schema(
         tags=["aist"],
@@ -197,38 +242,29 @@ class PipelineListAPI(generics.ListAPIView):
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
-        qs = (
-            get_authorized_aist_pipelines(Permissions.Product_View, user=self.request.user)
-            .select_related("project", "project_version")
-            .order_by("-created")
+        filterset = self.FilterSet(
+            data=self.request.query_params,
+            queryset=(
+                self.get_authorized_queryset()
+                .select_related("project", "project_version")
+                .order_by("-created")
+            ),
+            request=self.request,
         )
-        qp = self.request.query_params
-
-        project_id = qp.get("project_id")
-        status = qp.get("status")
-        created_gte = qp.get("created_gte")
-        created_lte = qp.get("created_lte")
-        ordering = qp.get("ordering")
-
-        if project_id:
-            qs = qs.filter(project_id=project_id)
-        if status:
-            qs = qs.filter(status=status)
-        if created_gte:
-            qs = qs.filter(created__gte=created_gte)
-        if created_lte:
-            qs = qs.filter(created__lte=created_lte)
-        if ordering in set(PIPELINE_API_CHOICES.ordering):
-            qs = qs.order_by(ordering)
-
-        return qs
+        if not filterset.is_valid():
+            raise ValidationError(filterset.errors)
+        return filterset.qs
 
 
-class PipelineAPI(APIView):
+class PipelineAPI(AuthorizedQuerySetMixin, APIView):
 
     """Retrieve or delete a pipeline by id."""
 
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         responses={200: PipelineResponseSerializer, 404: OpenApiResponse(description="Not found")},
@@ -237,10 +273,7 @@ class PipelineAPI(APIView):
         description="Returns pipeline status and AI response.",
     )
     def get(self, request, pipeline_id: str, *args, **kwargs) -> Response:
-        p = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
-            id=pipeline_id,
-        )
+        p = self.get_authorized_object(id=pipeline_id)
         data = {
             "id": p.id,
             "status": p.status,
@@ -260,10 +293,7 @@ class PipelineAPI(APIView):
         description="Deletes the specified AISTPipeline by id.",
     )
     def delete(self, request, pipeline_id: str, *args, **kwargs) -> Response:
-        p = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
-            id=pipeline_id,
-        )
+        p = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
         user_has_permission_or_403(request.user, p.project.product, Permissions.Product_Edit)
         if not is_terminal_pipeline_status(p.status):
             return Response(status=status.HTTP_400_BAD_REQUEST)
@@ -271,20 +301,14 @@ class PipelineAPI(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-def export_ai_results_response(request, pipeline: AISTPipeline) -> HttpResponse:
+def export_ai_results_response(*, pipeline: AISTPipeline, params: dict) -> HttpResponse:
     ai_response = pipeline.ai_responses.order_by("-created").first()
     if not ai_response or not ai_response.payload:
         return HttpResponseBadRequest("No AI responses available for export.")
 
     payload = ai_response.payload or {}
-    data = getattr(request, "data", None)
-    fmt = ((data.get("format") if data is not None else None) or (request.POST.get("format") if hasattr(request, "POST") else None) or "csv").lower()
-
-    selected_columns = []
-    if data is not None and hasattr(data, "getlist"):
-        selected_columns = data.getlist("columns")
-    if not selected_columns:
-        selected_columns = request.POST.getlist("columns") if hasattr(request, "POST") else []
+    fmt = (params.get("format") or "csv").lower()
+    selected_columns = list(params.get("columns") or [])
     if not selected_columns:
         selected_columns = [
             "title",
@@ -296,25 +320,9 @@ def export_ai_results_response(request, pipeline: AISTPipeline) -> HttpResponse:
             "code_snippet",
         ]
 
-    ignore_fp = ((data.get("ignore_false_positives") if data is not None else None) or (request.POST.get("ignore_false_positives") if hasattr(request, "POST") else None) or "1").lower() in {
-        "1",
-        "on",
-        "true",
-        "yes",
-    }
-    export_all = ((data.get("export_all") if data is not None else None) or (request.POST.get("export_all") if hasattr(request, "POST") else None) or "").lower() in {
-        "1",
-        "on",
-        "true",
-        "yes",
-    }
-
-    max_findings_raw = ((data.get("max_findings") if data is not None else None) or (request.POST.get("max_findings") if hasattr(request, "POST") else None) or "").strip()
-    try:
-        max_findings_val = int(max_findings_raw) if max_findings_raw else None
-        max_findings = max_findings_val if max_findings_val and max_findings_val > 0 else None
-    except ValueError:
-        max_findings = None
+    ignore_fp = bool(params.get("ignore_false_positives", True))
+    export_all = bool(params.get("export_all"))
+    max_findings = params.get("max_findings")
 
     rows = _build_ai_export_rows(pipeline, payload, ignore_false_positives=ignore_fp)
     if not rows:
@@ -387,22 +395,10 @@ def export_ai_results_response(request, pipeline: AISTPipeline) -> HttpResponse:
     return resp
 
 
-def pipeline_logs_progressive_response(request, pipeline: AISTPipeline) -> HttpResponse:
+def pipeline_logs_progressive_response(*, pipeline: AISTPipeline, start: int | None, tail: int | None) -> HttpResponse:
     path = get_pipeline_log_path(pipeline.id)
     data = ""
     size = 0
-    start = request.GET.get("start")
-    tail = request.GET.get("tail")
-
-    try:
-        start = int(start) if start is not None else None
-    except ValueError:
-        start = None
-    try:
-        tail = max(0, int(tail)) if tail is not None else None
-    except ValueError:
-        tail = None
-
     if pathlib.Path(path).exists():
         size = pathlib.Path(path).stat().st_size
         if tail:
@@ -664,25 +660,30 @@ def pipeline_enrich_progress_response(pipeline_id: str) -> StreamingHttpResponse
     return resp
 
 
-class PipelineStopAPI(APIView):
+class PipelineStopAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         request=None,
         responses={200: PipelineStopResponseSerializer},
     )
     def post(self, request, pipeline_id: str):
-        pipeline = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
-            id=pipeline_id,
-        )
+        pipeline = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
         user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
         stop_pipeline(pipeline)
         return Response({"ok": True})
 
 
-class ExportAIResultsAPI(APIView):
+class ExportAIResultsAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         request=ExportAIResultsRequestSerializer,
@@ -692,101 +693,124 @@ class ExportAIResultsAPI(APIView):
         },
     )
     def post(self, request, pipeline_id: str):
-        pipeline = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
-            id=pipeline_id,
+        pipeline = self.get_authorized_object(id=pipeline_id)
+        serializer = ExportAIResultsRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return export_ai_results_response(
+            pipeline=pipeline,
+            params=serializer.validated_data,
         )
-        return export_ai_results_response(request, pipeline)
 
 
-class PipelineLogsProgressiveAPI(APIView):
+class PipelineLogsProgressiveAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(responses={200: OpenApiResponse(description="Log chunk")})
     def get(self, request, pipeline_id: str):
-        pipeline = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
-            id=pipeline_id,
+        pipeline = self.get_authorized_object(id=pipeline_id)
+        serializer = PipelineLogsProgressiveQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        return pipeline_logs_progressive_response(
+            pipeline=pipeline,
+            start=serializer.validated_data.get("start"),
+            tail=serializer.validated_data.get("tail"),
         )
-        return pipeline_logs_progressive_response(request, pipeline)
 
 
-class PipelineLogsFullAPI(APIView):
+class PipelineLogsFullAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(responses={200: OpenApiResponse(description="Full log")})
     def get(self, request, pipeline_id: str):
-        pipeline = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
-            id=pipeline_id,
-        )
+        pipeline = self.get_authorized_object(id=pipeline_id)
         return pipeline_logs_full_response(pipeline)
 
 
-class PipelineLogsDownloadAPI(APIView):
+class PipelineLogsDownloadAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(responses={200: OpenApiResponse(description="Log download")})
     def get(self, request, pipeline_id: str):
-        pipeline = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
-            id=pipeline_id,
-        )
+        pipeline = self.get_authorized_object(id=pipeline_id)
         return pipeline_logs_download_response(pipeline)
 
 
-class PipelineLogsStreamAPI(APIView):
+class PipelineLogsStreamAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(responses={200: OpenApiResponse(description="SSE stream")})
     def get(self, request, pipeline_id: str):
-        pipeline = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
-            id=pipeline_id,
-        )
+        pipeline = self.get_authorized_object(id=pipeline_id)
         return stream_logs_sse_response(pipeline)
 
 
-class PipelineLogsStreamRedisAPI(APIView):
+class PipelineLogsStreamRedisAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(responses={200: OpenApiResponse(description="SSE stream (redis)")})
     def get(self, request, pipeline_id: str):
-        pipeline = get_authorized_aist_pipelines(Permissions.Product_View, user=request.user).only("id").filter(
-            id=pipeline_id,
-        ).first()
+        pipeline = self.get_authorized_queryset().only("id").filter(id=pipeline_id).first()
         if not pipeline:
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
         return stream_logs_sse_redis_response(pipeline)
 
 
-class PipelineStatusStreamAPI(APIView):
+class PipelineStatusStreamAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(responses={200: OpenApiResponse(description="Status SSE stream")})
     def get(self, request, pipeline_id: str):
-        if not get_authorized_aist_pipelines(Permissions.Product_View, user=request.user).filter(id=pipeline_id).exists():
+        if not self.get_authorized_queryset().filter(id=pipeline_id).exists():
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
         return pipeline_status_stream_response(pipeline_id)
 
 
-class PipelineDeduplicationProgressAPI(APIView):
+class PipelineDeduplicationProgressAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(responses={200: OpenApiResponse(description="Deduplication progress")})
     def get(self, request, pipeline_id: str):
-        pipeline = get_object_or_404(
-            get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
-            id=pipeline_id,
-        )
+        pipeline = self.get_authorized_object(id=pipeline_id)
         return Response(deduplication_progress_payload(pipeline))
 
 
-class PipelineEnrichProgressAPI(APIView):
+class PipelineEnrichProgressAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_pipelines,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(responses={200: OpenApiResponse(description="Enrichment SSE stream")})
     def get(self, request, pipeline_id: str):
-        if not get_authorized_aist_pipelines(Permissions.Product_View, user=request.user).filter(id=pipeline_id).exists():
+        if not self.get_authorized_queryset().filter(id=pipeline_id).exists():
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
         return pipeline_enrich_progress_response(pipeline_id)

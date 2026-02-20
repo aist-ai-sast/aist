@@ -299,7 +299,10 @@ export default function FindingDetailTabs({
               displayNotes.map((item) => (
                 <div key={item.id} className="rounded-lg border border-night-500 bg-night-900 px-3 py-2">
                   <div className="text-slate-400">
-                    {item.user_display ?? item.author_name ?? item.author?.username ?? [item.author?.first_name, item.author?.last_name].filter(Boolean).join(" ") || "Unknown"} ·{" "}
+                    {item.user_display ??
+                      item.author_name ??
+                      item.author?.username ??
+                      ([item.author?.first_name, item.author?.last_name].filter(Boolean).join(" ") || "Unknown")} ·{" "}
                     {item.date ? new Date(item.date).toLocaleString() : ""}
                   </div>
                   <div className="mt-1 text-slate-200">{item.entry}</div>

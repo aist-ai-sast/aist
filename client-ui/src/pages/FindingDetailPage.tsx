@@ -15,6 +15,7 @@ import { useToast } from "../components/ToastProvider";
 import FindingStatusActions from "../components/FindingStatusActions";
 import { formatProjectVersionText } from "../lib/projectVersion";
 import { getRoute } from "../lib/routes";
+import { formatDateForUI } from "../lib/dateDisplay";
 
 export default function FindingDetailPage() {
   const params = useParams();
@@ -48,11 +49,7 @@ export default function FindingDetailPage() {
     finding?.projectVersionType ?? findingProjectVersionQuery.data?.versionType;
   const resolvedProjectVersion =
     finding?.projectVersion ?? findingProjectVersionQuery.data?.version ?? normalizedMetaVersion;
-  const createdLabel = finding?.createdAt
-    ? new Date(finding.createdAt).toLocaleString()
-    : finding?.date
-      ? new Date(finding.date).toLocaleString()
-      : null;
+  const createdLabel = formatDateForUI(finding?.createdAt) ?? formatDateForUI(finding?.date);
   const findingsFilterLink = ({
     projectVersion,
     file,

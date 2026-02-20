@@ -23,6 +23,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.models import AISTAIFindingResponse, VersionType
 from aist.queries import get_authorized_aist_pipelines
 
@@ -32,12 +33,14 @@ class FindingApiChoices:
     ai_status: list[str]
     severity: list[str]
     export_format: list[str]
+    ordering: list[str]
 
 
 FINDING_API_CHOICES = FindingApiChoices(
     ai_status=["has_ai", "no_ai", "ai_tp", "ai_fp", "ai_u"],
     severity=[value for value, _label in SEVERITY_CHOICES],
     export_format=["csv", "xlsx"],
+    ordering=list(getattr(ApiFindingFilter.base_filters.get("o"), "param_map", {}).keys()),
 )
 
 
@@ -118,7 +121,12 @@ class AISTFindingFilter(ApiFindingFilter):
         method="filter_ai_status",
         choices=[(value, value) for value in FINDING_API_CHOICES.ai_status],
     )
-    ordering = django_filters.CharFilter(method="filter_ordering_alias")
+    ordering = django_filters.OrderingFilter(
+        fields=tuple(
+            (field_name, param_name)
+            for param_name, field_name in getattr(ApiFindingFilter.base_filters.get("o"), "param_map", {}).items()
+        ),
+    )
 
     def filter_pipeline_id(self, queryset, name, value):
         pipeline_id = (value or "").strip()
@@ -154,15 +162,13 @@ class AISTFindingFilter(ApiFindingFilter):
             return queryset.filter(id__in=ai_finding_ids)
         return queryset.exclude(id__in=ai_finding_ids)
 
-    def filter_ordering_alias(self, queryset, name, value):
-        ordering_value = (value or "").strip()
-        if not ordering_value:
-            return queryset
-        return self.filters["o"].filter(queryset, ordering_value)
 
-
-class AISTFindingListAPI(APIView):
+class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_findings,
+        permission=Permissions.Finding_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -180,7 +186,7 @@ class AISTFindingListAPI(APIView):
             OpenApiParameter(name="project_id", required=False, type=int),
             OpenApiParameter(name="project_version", required=False, type=str),
             OpenApiParameter(name="file", required=False, type=str),
-            OpenApiParameter(name="ordering", required=False, type=str),
+            OpenApiParameter(name="ordering", required=False, type=str, enum=FINDING_API_CHOICES.ordering),
             OpenApiParameter(name="limit", required=False, type=int),
             OpenApiParameter(name="offset", required=False, type=int),
         ],
@@ -188,16 +194,11 @@ class AISTFindingListAPI(APIView):
     )
     def get(self, request, *args, **kwargs) -> Response:
         queryset = (
-            get_authorized_findings(Permissions.Finding_View, user=request.user)
+            self.get_authorized_queryset()
             .select_related("test__engagement")
             .prefetch_related("tags", "aist_project_versions")
         )
-        params = request.query_params.copy()
-        ordering = (params.get("ordering") or "").strip()
-        if ordering and not (params.get("o") or "").strip():
-            params["o"] = ordering
-
-        filterset = AISTFindingFilter(data=params, queryset=queryset, request=request)
+        filterset = AISTFindingFilter(data=request.query_params, queryset=queryset, request=request)
         if not filterset.is_valid():
             return Response(filterset.errors, status=status.HTTP_400_BAD_REQUEST)
         queryset = filterset.qs.distinct()
@@ -232,9 +233,13 @@ class AISTFindingCreateNoteSerializer(serializers.Serializer):
         return normalized
 
 
-class AISTFindingNotesAPI(APIView):
+class AISTFindingNotesAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = AISTFindingNoteSerializer
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_findings,
+        permission=Permissions.Finding_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -242,10 +247,7 @@ class AISTFindingNotesAPI(APIView):
         responses={200: AISTFindingNoteSerializer(many=True)},
     )
     def get(self, request, finding_id: int):
-        finding = get_object_or_404(
-            get_authorized_findings(Permissions.Finding_View, user=request.user),
-            id=finding_id,
-        )
+        finding = self.get_authorized_object(id=finding_id)
         notes = finding.notes.select_related("author").all().order_by("-date")
         out = AISTFindingNoteSerializer(notes, many=True)
         return Response(out.data, status=status.HTTP_200_OK)
@@ -257,10 +259,7 @@ class AISTFindingNotesAPI(APIView):
         responses={201: AISTFindingNoteSerializer},
     )
     def post(self, request, finding_id: int):
-        finding = get_object_or_404(
-            get_authorized_findings(Permissions.Finding_Edit, user=request.user),
-            id=finding_id,
-        )
+        finding = self.get_authorized_object(permission=Permissions.Finding_Edit, id=finding_id)
         input_serializer = AISTFindingCreateNoteSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
 
@@ -281,9 +280,13 @@ class AISTFindingExportRequestSerializer(serializers.Serializer):
     format = serializers.ChoiceField(choices=FINDING_API_CHOICES.export_format, required=False, default="csv")
 
 
-class AISTFindingExportAPI(APIView):
+class AISTFindingExportAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = AISTFindingExportRequestSerializer
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_findings,
+        permission=Permissions.Finding_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -296,13 +299,17 @@ class AISTFindingExportAPI(APIView):
         },
     )
     def post(self, request, finding_id: int):
-        fmt_raw = request.data.get("format") or request.query_params.get("format")
-        params_serializer = self.serializer_class(data={"format": fmt_raw or "csv"})
-        params_serializer.is_valid(raise_exception=True)
-        fmt = params_serializer.validated_data["format"]
+        body_serializer = self.serializer_class(data=request.data)
+        body_serializer.is_valid(raise_exception=True)
+        query_serializer = self.serializer_class(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+
+        body_format = body_serializer.validated_data.get("format")
+        query_format = query_serializer.validated_data.get("format")
+        fmt = body_format or query_format or "csv"
 
         finding = get_object_or_404(
-            get_authorized_findings(Permissions.Finding_View, user=request.user)
+            self.get_authorized_queryset()
             .select_related("test__engagement__product")
             .prefetch_related("tags", "aist_project_versions"),
             id=finding_id,
@@ -310,7 +317,10 @@ class AISTFindingExportAPI(APIView):
         project_version, project_version_type, _project_id = _pick_project_version_info(finding)
         created = getattr(finding, "date", None) or getattr(finding, "created", None)
 
-        pipeline_qs = get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
+        pipeline_qs = self.get_authorized_queryset(
+            getter=get_authorized_aist_pipelines,
+            permission=Permissions.Product_View,
+        )
         ai = (
             AISTAIFindingResponse.objects.filter(finding_id=finding.id, pipeline__in=pipeline_qs)
             .select_related("pipeline")

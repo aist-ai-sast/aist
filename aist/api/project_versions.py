@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from django.shortcuts import get_object_or_404
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
@@ -8,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.models import AISTProjectVersion, VersionType
 from aist.queries import get_authorized_aist_projects
 
@@ -71,11 +71,15 @@ class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
         return AISTProjectVersion.objects.create(**validated_data)
 
 
-class ProjectVersionCreateAPI(APIView):
+class ProjectVersionCreateAPI(AuthorizedQuerySetMixin, APIView):
 
     """API endpoint for creating AISTProjectVersion instances."""
 
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         methods=["post"],
@@ -94,10 +98,7 @@ class ProjectVersionCreateAPI(APIView):
         },
     )
     def post(self, request, project_id):
-        project = get_object_or_404(
-            get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
-            pk=project_id,
-        )
+        project = self.get_authorized_object(permission=Permissions.Product_Edit, pk=project_id)
 
         serializer = AISTProjectVersionCreateSerializer(
             data=request.data,

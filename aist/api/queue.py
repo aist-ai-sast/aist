@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from django.db.models import Q
-from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
@@ -11,14 +10,23 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.queries import get_authorized_aist_queue_items
 
 
-class PipelineLaunchQueueListAPI(APIView):
+class PipelineLaunchQueueListAPI(AuthorizedQuerySetMixin, APIView):
 
     """Backend list for UI Queue tab. Supports only_pending and limit."""
 
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_queue_items,
+        permission=Permissions.Product_View,
+    )
+
+    class QuerySerializer(serializers.Serializer):
+        only_pending = serializers.BooleanField(required=False, default=False)
+        limit = serializers.IntegerField(required=False, min_value=1, max_value=2000, default=200)
 
     @extend_schema(
         tags=["aist"],
@@ -30,15 +38,13 @@ class PipelineLaunchQueueListAPI(APIView):
         responses={200: OpenApiResponse(description="List")},
     )
     def get(self, request, *args, **kwargs):
-        only_pending = (request.query_params.get("only_pending") or "").lower() in {"1", "true", "yes"}
-        try:
-            limit = int(request.query_params.get("limit") or 200)
-        except ValueError:
-            limit = 200
-        limit = max(1, min(limit, 2000))
+        query_serializer = self.QuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        only_pending = query_serializer.validated_data["only_pending"]
+        limit = query_serializer.validated_data["limit"]
 
         qs = (
-            get_authorized_aist_queue_items(Permissions.Product_View, user=request.user)
+            self.get_authorized_queryset()
             .select_related("project__product", "schedule", "launch_config", "pipeline")
             .order_by("-created")
         )
@@ -72,11 +78,15 @@ class PipelineLaunchQueueClearSerializer(serializers.Serializer):
     days = serializers.IntegerField(min_value=1, max_value=365)
 
 
-class PipelineLaunchQueueClearDispatchedAPI(APIView):
+class PipelineLaunchQueueClearDispatchedAPI(AuthorizedQuerySetMixin, APIView):
 
     """Safe maintenance endpoint: delete dispatched queue items older than X days."""
 
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_queue_items,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -92,7 +102,7 @@ class PipelineLaunchQueueClearDispatchedAPI(APIView):
         cutoff = timezone.now() - timezone.timedelta(days=days)
 
         deleted, _ = (
-            get_authorized_aist_queue_items(Permissions.Product_Edit, user=request.user)
+            self.get_authorized_queryset(permission=Permissions.Product_Edit)
             .filter(dispatched=True)
             .filter(
                 Q(dispatched_at__lt=cutoff)
@@ -103,8 +113,12 @@ class PipelineLaunchQueueClearDispatchedAPI(APIView):
         return Response({"deleted": deleted, "days": days}, status=status.HTTP_200_OK)
 
 
-class PipelineLaunchQueueDetailAPI(APIView):
+class PipelineLaunchQueueDetailAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_queue_items,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -112,10 +126,7 @@ class PipelineLaunchQueueDetailAPI(APIView):
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
     def delete(self, request, queue_id: int, *args, **kwargs):
-        obj = get_object_or_404(
-            get_authorized_aist_queue_items(Permissions.Product_Edit, user=request.user),
-            id=queue_id,
-        )
+        obj = self.get_authorized_object(permission=Permissions.Product_Edit, id=queue_id)
         user_has_permission_or_403(request.user, obj.project.product, Permissions.Product_Edit)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import requests
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseServerError
-from django.shortcuts import get_object_or_404
 from django.utils.encoding import iri_to_uri
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.types import OpenApiTypes
@@ -15,6 +14,7 @@ from rest_framework import generics, serializers
 from rest_framework.permissions import IsAuthenticated
 
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
+from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.link_builder import LinkBuilder
 from aist.models import VersionType
 from aist.queries import get_authorized_aist_project_versions
@@ -33,7 +33,7 @@ class _NoBodySerializer(serializers.Serializer):
     """Empty serializer used to satisfy schema generation for APIView-like endpoints."""
 
 
-class ProjectVersionFileBlobAPI(generics.GenericAPIView):
+class ProjectVersionFileBlobAPI(AuthorizedQuerySetMixin, generics.GenericAPIView):
 
     """
     GET /projects_version/<id>/files/blob/<path:subpath>
@@ -42,6 +42,10 @@ class ProjectVersionFileBlobAPI(generics.GenericAPIView):
 
     permission_classes = [IsAuthenticated]
     serializer_class = _NoBodySerializer
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_project_versions,
+        permission=Permissions.Product_View,
+    )
 
     @extend_schema(
         tags=["aist"],
@@ -108,10 +112,7 @@ class ProjectVersionFileBlobAPI(generics.GenericAPIView):
         return resp
 
     def get(self, request, project_version_id: int, subpath: str, *args, **kwargs):
-        project_version = get_object_or_404(
-            get_authorized_aist_project_versions(Permissions.Product_View, user=request.user),
-            pk=project_version_id,
-        )
+        project_version = self.get_authorized_object(pk=project_version_id)
 
         # --- Case 1: Local FILE_HASH (from extracted archive) ---
         if project_version.version_type == VersionType.FILE_HASH:
