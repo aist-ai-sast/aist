@@ -1,6 +1,7 @@
 import { useRef } from "react";
 
 import SelectField from "./SelectField";
+import TextInput from "./TextInput";
 import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
 
 type PaginationBarProps = {
@@ -92,9 +93,10 @@ export default function PaginationBar({
           Next
         </button>
         <div className="flex items-center gap-2">
-          <input
+          <TextInput
             ref={inputRef}
-            className="h-9 w-16 rounded-xl border border-night-500 bg-night-800 px-2 text-xs text-slate-200"
+            variant="compact"
+            className="w-16"
             inputMode="numeric"
             placeholder="Page"
             onKeyDown={(event) => {

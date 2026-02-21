@@ -1,6 +1,7 @@
 import type { Project } from "../types";
 import MultiSelectChips from "./MultiSelectChips";
 import SelectField from "./SelectField";
+import TextInput from "./TextInput";
 
 type FilterPanelProps = {
   products: Project[];
@@ -74,8 +75,8 @@ export default function FilterPanel({
         />
         <div>
           <label className="text-xs text-slate-400">Project Version</label>
-          <input
-            className="mt-2 w-full rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white placeholder:text-slate-400"
+          <TextInput
+            className="mt-2"
             value={selectedProjectVersion}
             onChange={(event) => onProjectVersionChange(event.target.value)}
             placeholder="e.g. master or commit hash"
@@ -83,8 +84,8 @@ export default function FilterPanel({
         </div>
         <div>
           <label className="text-xs text-slate-400">File</label>
-          <input
-            className="mt-2 w-full rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white placeholder:text-slate-400"
+          <TextInput
+            className="mt-2"
             value={selectedFile}
             onChange={(event) => onFileChange(event.target.value)}
             placeholder="e.g. src/app/main.py"
@@ -117,8 +118,8 @@ export default function FilterPanel({
         />
         <div>
           <label className="text-xs text-slate-400">CWE (comma-separated)</label>
-          <input
-            className="mt-2 w-full rounded-xl border border-night-500 bg-night-600 px-3 py-2 text-sm text-white placeholder:text-slate-400"
+          <TextInput
+            className="mt-2"
             value={selectedCwe}
             onChange={(event) => onCweChange(event.target.value)}
             placeholder="e.g. 79, 89"

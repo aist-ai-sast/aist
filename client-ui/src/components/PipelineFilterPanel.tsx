@@ -1,5 +1,6 @@
 import SelectField from "./SelectField";
 import DateField from "./DateField";
+import TextInput from "./TextInput";
 
 type Option = {
   value: string;
@@ -49,8 +50,8 @@ export default function PipelineFilterPanel({
         <SelectField label="Status" value={status} onChange={onStatusChange} options={statusOptions} />
         <div>
           <label className="text-xs text-slate-400">Branch / Commit</label>
-          <input
-            className="mt-2 h-10 w-full rounded-xl border border-night-500 bg-night-600 px-4 text-sm text-white placeholder:text-slate-400 outline-none focus-visible:border-brand-600 focus-visible:ring-2 focus-visible:ring-brand-600/60"
+          <TextInput
+            className="mt-2 px-4"
             placeholder="Search branch or commit..."
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}

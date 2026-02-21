@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import TextInput from "../components/TextInput";
 import { loginWithSession } from "../lib/auth";
 import { useToast } from "../components/ToastProvider";
 
@@ -60,8 +61,9 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
           >
             <div>
               <label className="text-xs text-slate-400">Username</label>
-              <input
-                className="mt-2 w-full rounded-xl border border-night-500 bg-night-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-600"
+              <TextInput
+                variant="default"
+                className="mt-2 bg-night-900 placeholder:text-slate-500"
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
                 placeholder="username"
@@ -71,8 +73,9 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
             </div>
             <div>
               <label className="text-xs text-slate-400">Password</label>
-              <input
-                className="mt-2 w-full rounded-xl border border-night-500 bg-night-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-600"
+              <TextInput
+                variant="password"
+                className="mt-2 bg-night-900 placeholder:text-slate-500 shadow-none"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder="password"

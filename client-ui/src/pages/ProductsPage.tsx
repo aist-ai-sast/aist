@@ -6,6 +6,7 @@ import { useProductSummaries } from "../lib/queries";
 import { getRoute } from "../lib/routes";
 import MultiSelectChips from "../components/MultiSelectChips";
 import SelectField from "../components/SelectField";
+import TextInput from "../components/TextInput";
 import PermissionGate from "../components/PermissionGate";
 import PaginationBar from "../components/PaginationBar";
 import PageErrorState from "../components/PageErrorState";
@@ -155,8 +156,8 @@ export default function ProductsPage() {
 
       <div className="p-4 aist-card">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <input
-            className="flex-1 rounded-xl border border-night-500 bg-night-600 px-4 py-2 text-sm text-white placeholder:text-slate-400"
+          <TextInput
+            className="flex-1 px-4"
             placeholder="Search projects..."
             value={search}
             onChange={(event) => setSearch(event.target.value)}

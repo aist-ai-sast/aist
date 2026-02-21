@@ -7,6 +7,7 @@ import { toUserMessage } from "../lib/api";
 import { getRoleBadgeClass, getRoleIcon } from "../lib/roleBadge";
 import { getDisplayName, getRoleLabel, getUsername } from "../lib/userProfile";
 import { usePermissions } from "../lib/permissions";
+import TextInput from "../components/TextInput";
 import { useToast } from "../components/ToastProvider";
 
 function Card({ title, icon, children }: { title: string; icon?: ReactNode; children: React.ReactNode }) {
@@ -22,9 +23,6 @@ function Card({ title, icon, children }: { title: string; icon?: ReactNode; chil
     </section>
   );
 }
-
-const accountInputClass =
-  "mt-1 w-full rounded-xl border border-night-500 bg-night-800/90 px-3 py-2 text-sm text-slate-100 shadow-inner shadow-night-900/30 outline-none transition disabled:opacity-60 focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/30 focus-visible:outline-none";
 
 export default function SettingsPage() {
   const auth = useAuthStatus();
@@ -110,8 +108,9 @@ export default function SettingsPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-xs text-slate-400">
                 First name
-                <input
-                  className={accountInputClass}
+                <TextInput
+                  variant="password"
+                  className="mt-1 disabled:opacity-60"
                   value={profileForm.first_name}
                   disabled={!canEditProfile || updateAccount.isPending}
                   onChange={(event) => setProfileForm((prev) => ({ ...prev, first_name: event.target.value }))}
@@ -119,8 +118,9 @@ export default function SettingsPage() {
               </label>
               <label className="text-xs text-slate-400">
                 Last name
-                <input
-                  className={accountInputClass}
+                <TextInput
+                  variant="password"
+                  className="mt-1 disabled:opacity-60"
                   value={profileForm.last_name}
                   disabled={!canEditProfile || updateAccount.isPending}
                   onChange={(event) => setProfileForm((prev) => ({ ...prev, last_name: event.target.value }))}
@@ -128,11 +128,12 @@ export default function SettingsPage() {
               </label>
               <label className="text-xs text-slate-400 sm:col-span-2">
                 Email
-                <input
+                <TextInput
+                  variant="password"
                   type="text"
                   inputMode="email"
                   autoComplete="email"
-                  className={accountInputClass}
+                  className="mt-1 disabled:opacity-60"
                   value={profileForm.email}
                   disabled={!canEditProfile || updateAccount.isPending}
                   onChange={(event) => setProfileForm((prev) => ({ ...prev, email: event.target.value }))}
@@ -140,8 +141,9 @@ export default function SettingsPage() {
               </label>
               <label className="text-xs text-slate-400 sm:col-span-2">
                 Username
-                <input
-                  className={accountInputClass}
+                <TextInput
+                  variant="password"
+                  className="mt-1 disabled:opacity-60"
                   value={profileForm.username}
                   disabled={!canEditUsername || updateAccount.isPending}
                   onChange={(event) => setProfileForm((prev) => ({ ...prev, username: event.target.value }))}
@@ -206,10 +208,11 @@ export default function SettingsPage() {
                 <label className="text-xs text-slate-400">
                   Current password
                   <div className="relative">
-                    <input
+                    <TextInput
+                      variant="password"
                       type={showCurrentPassword ? "text" : "password"}
                       autoComplete="current-password"
-                      className={`${accountInputClass} pr-12`}
+                      className="mt-1 pr-12"
                       value={passwordForm.current_password}
                       onChange={(event) => setPasswordForm((prev) => ({ ...prev, current_password: event.target.value }))}
                     />
@@ -225,10 +228,11 @@ export default function SettingsPage() {
                 <label className="text-xs text-slate-400">
                   New password
                   <div className="relative">
-                    <input
+                    <TextInput
+                      variant="password"
                       type={showNewPassword ? "text" : "password"}
                       autoComplete="new-password"
-                      className={`${accountInputClass} pr-12`}
+                      className="mt-1 pr-12"
                       value={passwordForm.new_password}
                       onChange={(event) => setPasswordForm((prev) => ({ ...prev, new_password: event.target.value }))}
                     />
@@ -244,10 +248,11 @@ export default function SettingsPage() {
                 <label className="text-xs text-slate-400">
                   Confirm new password
                   <div className="relative">
-                    <input
+                    <TextInput
+                      variant="password"
                       type={showConfirmPassword ? "text" : "password"}
                       autoComplete="new-password"
-                      className={`${accountInputClass} pr-12`}
+                      className="mt-1 pr-12"
                       value={passwordForm.new_password_confirm}
                       onChange={(event) => setPasswordForm((prev) => ({ ...prev, new_password_confirm: event.target.value }))}
                     />
