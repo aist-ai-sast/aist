@@ -56,6 +56,8 @@ class AISTAccountAPITests(AISTApiBase):
 
     def test_me_get_returns_profile(self):
         organization = Organization.objects.create(name="Access Org")
+        organization.product_type = self.prod_type
+        organization.save(update_fields=["product_type"])
         self.project.organization = organization
         self.project.save(update_fields=["organization"])
 

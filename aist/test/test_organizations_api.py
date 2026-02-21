@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Product, Product_Member, Product_Type, Role, SLA_Configuration
+from dojo.models import Product, Product_Type, Product_Type_Member, Role, SLA_Configuration
 from rest_framework.test import APIClient
 
 from aist.models import AISTProject, Organization
@@ -75,7 +75,7 @@ class OrganizationCreateAPITests(TestCase):
             prod_type=pt,
             sla_configuration=sla,
         )
-        Product_Member.objects.create(product=product, user=regular_user, role=role_maintainer)
+        Product_Type_Member.objects.create(product_type=pt, user=regular_user, role=role_maintainer)
 
         visible_org = Organization.objects.create(name="Visible Org")
         hidden_org = Organization.objects.create(name="Hidden Org")

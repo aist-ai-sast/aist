@@ -8,7 +8,6 @@ from django.shortcuts import get_object_or_404
 from django_filters import rest_framework as django_filters
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
-from dojo.finding.queries import get_authorized_findings
 from dojo.models import Finding
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers
@@ -20,7 +19,7 @@ from rest_framework.views import APIView
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline, AISTStatus
-from aist.queries import get_authorized_aist_pipelines
+from aist.queries import get_authorized_aist_pipelines, get_authorized_findings
 from aist.tasks import push_request_to_ai
 from aist.utils.ai_response import sync_ai_finding_responses
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status

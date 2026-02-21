@@ -9,13 +9,12 @@ from django.utils.text import slugify
 from django.views.decorators.http import require_GET, require_POST
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
-from dojo.models import Finding, Test
-from dojo.product.queries import get_authorized_products
+from dojo.models import Test
 
 from aist.ai_filter import get_ai_filter_reference, validate_and_normalize_filter
 from aist.api.ai import delete_ai_response_for_pipeline, send_request_to_ai_for_pipeline
 from aist.models import AISTPipeline
-from aist.queries import get_authorized_aist_pipelines
+from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_products, get_authorized_findings
 
 
 def _severity_rank_case():
@@ -43,11 +42,11 @@ def product_analyzers_json(request, product_id: int):
     This is grounded in core's models via Finding -> Test -> Test_Type.
     """
     # Limit to analyzers that actually have findings for this product.
-    product_qs = get_authorized_products(Permissions.Product_View, user=request.user).filter(id=product_id)
+    product_qs = get_authorized_aist_products(Permissions.Product_View, user=request.user).filter(id=product_id)
     if not product_qs.exists():
         return HttpResponseBadRequest("product not found")
 
-    names_qs = (Finding.objects
+    names_qs = (get_authorized_findings(Permissions.Finding_View, user=request.user)
                 .filter(test__engagement__product_id=product_id)
                 .select_related("test__test_type")
                 .values_list("test__test_type__name", flat=True)
@@ -86,11 +85,11 @@ def search_findings_json(request):
     except ValueError:
         return HttpResponseBadRequest("product must be int")
 
-    product_qs = get_authorized_products(Permissions.Product_View, user=request.user).filter(id=product_id)
+    product_qs = get_authorized_aist_products(Permissions.Product_View, user=request.user).filter(id=product_id)
     if not product_qs.exists():
         return HttpResponseBadRequest("product not found")
 
-    qs = (Finding.objects
+    qs = (get_authorized_findings(Permissions.Finding_View, user=request.user)
           .filter(test__engagement__product_id=product_id, active=True)
           .select_related("test__test_type"))
 

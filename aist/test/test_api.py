@@ -16,6 +16,7 @@ from dojo.models import (
     Product,
     Product_Member,
     Product_Type,
+    Product_Type_Member,
     Role,
     SLA_Configuration,
     Test,
@@ -62,8 +63,8 @@ class AISTApiBase(TestCase):
             prod_type=self.prod_type,
             sla_configuration_id=self.sla.id,
         )
-        Product_Member.objects.create(
-            product=self.product,
+        Product_Type_Member.objects.create(
+            product_type=self.prod_type,
             user=self.user,
             role=self.role_maintainer,
         )
@@ -82,10 +83,11 @@ class AISTApiBase(TestCase):
             version="main",
         )
 
+        self.other_prod_type = Product_Type.objects.create(name="PT Other")
         self.other_product = Product.objects.create(
             name="Other Product",
             description="desc",
-            prod_type=self.prod_type,
+            prod_type=self.other_prod_type,
             sla_configuration_id=self.sla.id,
         )
         self.other_project = AISTProject.objects.create(
@@ -331,6 +333,40 @@ class PipelineCallbackAPITests(AISTApiBase):
 
 
 class AISTAuthorizationTests(AISTApiBase):
+    def test_project_list_does_not_grant_access_via_product_member_only(self):
+        isolated_type = Product_Type.objects.create(name="Isolated PT")
+        isolated_product = Product.objects.create(
+            name="Isolated Product",
+            description="desc",
+            prod_type=isolated_type,
+            sla_configuration_id=self.sla.id,
+        )
+        isolated_project = AISTProject.objects.create(
+            product=isolated_product,
+            supported_languages=["python"],
+            script_path="scripts/build.sh",
+            compilable=False,
+            profile={},
+        )
+
+        limited_user = get_user_model().objects.create_user(
+            username="product_member_only_user",
+            email="product-member-only@example.com",
+            password="pass",  # noqa: S106
+        )
+        Product_Member.objects.create(
+            product=isolated_product,
+            user=limited_user,
+            role=self.role_maintainer,
+        )
+
+        self.client.force_authenticate(user=limited_user)
+        resp = self.client.get(reverse("aist_api:project_list"))
+        self.assertEqual(resp.status_code, 200)
+        rows = resp.data.get("results", resp.data)
+        ids = {row["id"] for row in rows}
+        self.assertNotIn(isolated_project.id, ids)
+
     def test_project_list_filters_to_authorized_products(self):
         resp = self.client.get(reverse("aist_api:project_list"))
         self.assertEqual(resp.status_code, 200)
@@ -456,6 +492,64 @@ class AISTFindingAuthorizationTests(AISTApiBase):
             reverse("aist_api:finding_notes", kwargs={"finding_id": self.other_finding.id}),
         )
         self.assertEqual(resp.status_code, 404)
+
+    def test_finding_list_does_not_grant_access_via_product_member_only(self):
+        isolated_type = Product_Type.objects.create(name="Isolated Finding PT")
+        isolated_product = Product.objects.create(
+            name="Isolated Finding Product",
+            description="desc",
+            prod_type=isolated_type,
+            sla_configuration_id=self.sla.id,
+        )
+        isolated_project = AISTProject.objects.create(
+            product=isolated_product,
+            supported_languages=["python"],
+            script_path="scripts/build.sh",
+            compilable=False,
+            profile={},
+        )
+        isolated_engagement = Engagement.objects.create(
+            name="Isolated engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=isolated_product,
+        )
+        isolated_test = Test.objects.create(
+            engagement=isolated_engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=self.test_type,
+        )
+        isolated_finding = Finding.objects.create(
+            test=isolated_test,
+            title="Isolated finding",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+        )
+        pv = AISTProjectVersion.objects.create(
+            project=isolated_project,
+            version_type=VersionType.GIT_HASH,
+            version="isolated",
+        )
+        pv.findings.add(isolated_finding)
+
+        limited_user = get_user_model().objects.create_user(
+            username="product_member_only_finding_user",
+            email="product-member-only-finding@example.com",
+            password="pass",  # noqa: S106
+        )
+        Product_Member.objects.create(
+            product=isolated_product,
+            user=limited_user,
+            role=self.role_maintainer,
+        )
+
+        self.client.force_authenticate(user=limited_user)
+        resp = self.client.get(reverse("aist_api:finding_list"))
+        self.assertEqual(resp.status_code, 200)
+        ids = {row["id"] for row in resp.data.get("results", [])}
+        self.assertNotIn(isolated_finding.id, ids)
 
 
 class AIFindingResponseAPITests(AISTApiBase):
@@ -705,6 +799,19 @@ class AISTFindingTagsTests(AISTApiBase):
     def setUp(self):
         super().setUp()
         self.client.force_login(self.user)
+        self.extra_product = Product.objects.create(
+            name="Extra Product",
+            description="desc",
+            prod_type=self.prod_type,
+            sla_configuration_id=self.sla.id,
+        )
+        self.extra_project = AISTProject.objects.create(
+            product=self.extra_product,
+            supported_languages=["python"],
+            script_path="scripts/build.sh",
+            compilable=False,
+            profile={},
+        )
         self.engagement = Engagement.objects.create(
             name="Engage",
             target_start=timezone.now(),
@@ -715,7 +822,7 @@ class AISTFindingTagsTests(AISTApiBase):
             name="Engage Other",
             target_start=timezone.now(),
             target_end=timezone.now(),
-            product=self.other_product,
+            product=self.extra_product,
         )
         self.test_type = Test_Type.objects.create(name="Semgrep")
         self.test = Test.objects.create(
@@ -730,12 +837,6 @@ class AISTFindingTagsTests(AISTApiBase):
             target_end=timezone.now(),
             test_type=self.test_type,
         )
-        Product_Member.objects.create(
-            product=self.other_product,
-            user=self.user,
-            role=self.role_maintainer,
-        )
-
         self.finding = Finding.objects.create(
             test=self.test,
             title="Finding A",
@@ -840,7 +941,7 @@ class AISTFindingTagsTests(AISTApiBase):
             version="1111111111111111111111111111111111111111",
         )
         pv_other = AISTProjectVersion.objects.create(
-            project=self.other_project,
+            project=self.extra_project,
             version_type=VersionType.GIT_HASH,
             version="2222222222222222222222222222222222222222",
         )
@@ -1093,6 +1194,11 @@ class AISTUIApiTests(AISTApiBase):
         org_pt = org.ensure_product_type()
         self.product.prod_type = org_pt
         self.product.save(update_fields=["prod_type"])
+        Product_Type_Member.objects.create(
+            product_type=org_pt,
+            user=self.user,
+            role=self.role_maintainer,
+        )
         self.project.organization = org
         self.project.save(update_fields=["organization"])
 
@@ -1119,8 +1225,8 @@ class AISTUIApiTests(AISTApiBase):
             prod_type=mismatch_pt,
             sla_configuration_id=self.sla.id,
         )
-        Product_Member.objects.create(
-            product=mismatch_product,
+        Product_Type_Member.objects.create(
+            product_type=mismatch_pt,
             user=self.user,
             role=self.role_maintainer,
         )
@@ -1149,10 +1255,11 @@ class AISTUIApiTests(AISTApiBase):
 
     def test_project_update_rejects_unauthorized_organization(self):
         hidden_org = Organization.objects.create(name="Org Hidden")
+        hidden_pt = Product_Type.objects.create(name="Hidden PT")
         hidden_product = Product.objects.create(
             name="Hidden Product",
             description="desc",
-            prod_type=self.prod_type,
+            prod_type=hidden_pt,
             sla_configuration_id=self.sla.id,
         )
         AISTProject.objects.create(
@@ -1174,7 +1281,9 @@ class AISTUIApiTests(AISTApiBase):
             },
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("organization", resp.data)
+        self.assertTrue(
+            "organization" in resp.data.get("errors", {}) or "organization" in resp.data,
+        )
 
     def test_pipeline_stop_api(self):
         pipeline = AISTPipeline.objects.create(

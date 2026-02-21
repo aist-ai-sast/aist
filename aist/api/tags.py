@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from django.core.cache import cache
 from dojo.authorization.roles_permissions import Permissions
-from dojo.finding.queries import get_authorized_findings
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers
 from rest_framework.permissions import IsAuthenticated
@@ -10,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
-from aist.queries import get_authorized_aist_projects
+from aist.queries import get_authorized_aist_projects, get_authorized_findings
 
 
 class AvailableFindingTagsAPI(AuthorizedQuerySetMixin, APIView):

@@ -4,7 +4,6 @@ from typing import Any
 
 from django.db.models import Count, DateTimeField, OuterRef, Q, Subquery
 from dojo.authorization.roles_permissions import Permissions
-from dojo.finding.queries import get_authorized_findings
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
 from rest_framework.permissions import IsAuthenticated
@@ -13,7 +12,7 @@ from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.models import AISTPipeline
-from aist.queries import get_authorized_aist_projects
+from aist.queries import get_authorized_aist_projects, get_authorized_findings
 
 
 class AISTProductSummaryRowSerializer(serializers.Serializer):

@@ -7,6 +7,7 @@ FROM python:3.13.11-slim-trixie@sha256:1f3781f578e17958f55ada96c0a827bf279a11e10
 WORKDIR /app
 RUN \
   apt-get -y update && \
+  apt-get -y upgrade && \
   apt-get -y install \
     git \
     wget \
@@ -21,6 +22,7 @@ RUN \
     xvfb \
     && \
   apt-get clean && \
+  rm -rf /var/lib/apt/lists && \
   true
 
 RUN pip install --no-cache-dir selenium==4.9.0 requests

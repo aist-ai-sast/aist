@@ -63,17 +63,16 @@ def _get_organization_memberships(user: User) -> list[OrganizationMembership]:
             product_type__aist_organization__isnull=False,
         )
         .values(
-            "product_type__aist_organization_id",
+            "product_type__aist_organization",
             "product_type__aist_organization__name",
             "role_id",
             "role__name",
         )
         .distinct()
     )
-
     by_org: dict[int, OrganizationMembership] = {}
     for row in rows:
-        organization_id = row["product_type__aist_organization_id"]
+        organization_id = row["product_type__aist_organization"]
         if not organization_id:
             continue
         candidate = OrganizationMembership(
