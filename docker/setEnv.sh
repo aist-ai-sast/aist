@@ -4,10 +4,8 @@
 # Here: in parent directory.
 target_dir="${0%/*}/.."
 override_link='docker-compose.override.yml'
-override_file_dev='docker-compose.override.dev.yml'
-override_file_unit_tests='docker-compose.override.unit_tests.yml'
-override_file_unit_tests_cicd='docker-compose.override.unit_tests_cicd.yml'
-override_file_integration_tests='docker-compose.override.integration_tests.yml'
+override_file_tests='docker-compose.tests.yml'
+override_file_integration='docker-compose.integration.yml'
 
 
 # Get the current environment and tells what are the options
@@ -31,7 +29,13 @@ function get_current {
             symlink=$(readlink -f docker-compose.override.yml)
         fi
         basename_symlink=$(basename "$symlink")
-        current_env=$(expr "$basename_symlink" : "^docker-compose.override.\(.*\).yml$")
+        if [ "$basename_symlink" = "$override_file_tests" ]; then
+            current_env=tests
+        elif [ "$basename_symlink" = "$override_file_integration" ]; then
+            current_env=integration
+        else
+            current_env=unknown
+        fi
     else
         current_env=release
     fi
@@ -40,7 +44,7 @@ function get_current {
 # Tell to which environments we can switch
 function say_switch {
     echo "Using '${current_env}' configuration."
-    for one_env in dev unit_tests integration_tests release
+    for one_env in tests integration release
     do
         if [ "${current_env}" != ${one_env} ]; then
             echo "-> You can switch to '${one_env}' with '${0} ${one_env}'"
@@ -63,62 +67,36 @@ function set_release {
 }
 
 
-function set_dev {
+function set_tests {
     get_current
-    if [ "${current_env}" != dev ]
+    if [ "${current_env}" != tests ]
     then
         docker compose down
         rm -f ${override_link}
-        ln -s ${override_file_dev} ${override_link}
-        echo "Now using 'dev' configuration."
+        ln -s ${override_file_tests} ${override_link}
+        echo "Now using 'tests' configuration."
     else
-        echo "Already using 'dev' configuration."
+        echo "Already using 'tests' configuration."
     fi
 }
 
-function set_unit_tests {
+function set_integration {
     get_current
-    if [ "${current_env}" != unit_tests ]
+    if [ "${current_env}" != integration ]
     then
         docker compose down
         rm -f ${override_link}
-        ln -s ${override_file_unit_tests} ${override_link}
-        echo "Now using 'unit_tests' configuration."
+        ln -s ${override_file_integration} ${override_link}
+        echo "Now using 'integration' configuration."
     else
-        echo "Already using 'unit_tests' configuration."
-    fi
-}
-
-function set_unit_tests_cicd {
-    get_current
-    if [ "${current_env}" != unit_tests_cicd ]
-    then
-        docker compose down
-        rm -f ${override_link}
-        ln -s ${override_file_unit_tests_cicd} ${override_link}
-        echo "Now using 'unit_tests_cicd' configuration."
-    else
-        echo "Already using 'unit_tests_cicd' configuration."
-    fi
-}
-
-function set_integration_tests {
-    get_current
-    if [ "${current_env}" != integration_tests ]
-    then
-        docker compose down
-        rm -f ${override_link}
-        ln -s ${override_file_integration_tests} ${override_link}
-        echo "Now using 'integration_tests' configuration."
-    else
-        echo "Already using 'integration_tests' configuration."
+        echo "Already using 'integration' configuration."
     fi
 }
 
 # Change directory to allow working with relative paths.
 cd "${target_dir}" || exit
 
-if [ ${#} -eq 1 ] && [[ 'dev unit_tests unit_tests_cicd integration_tests release' =~ ${1} ]]
+if [ ${#} -eq 1 ] && [[ 'tests integration release' =~ ${1} ]]
 then
     set_"${1}"
 else

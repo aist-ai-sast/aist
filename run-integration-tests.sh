@@ -41,18 +41,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "Running docker compose unit tests and test case $TEST_CASE ..."
+echo "Running docker compose integration tests and test case $TEST_CASE ..."
 
 # Compose V2 integrates compose functions into the Docker platform,
 # continuing to support most of the previous docker-compose features
 # and flags. You can run Compose V2 by replacing the hyphen (-) with
 # a space, using docker compose, instead of docker-compose.
 echo "Building images..."
-./docker/setEnv.sh integration_tests
-docker compose build
+docker compose -f docker-compose.yml -f docker-compose.integration.yml build
 echo "Setting up DefectDojo"
-DD_INTEGRATION_TEST_FILENAME="$TEST_CASE" docker compose -d postgres nginx celerybeat celeryworker mailhog uwsgi valkey
+DD_INTEGRATION_TEST_FILENAME="$TEST_CASE" docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d postgres nginx celerybeat celeryworker mailhog uwsgi valkey
 echo "Initializing DefectDojo..."
-DD_INTEGRATION_TEST_FILENAME="$TEST_CASE" docker compose --exit-code-from initializer initializer
+DD_INTEGRATION_TEST_FILENAME="$TEST_CASE" docker compose -f docker-compose.yml -f docker-compose.integration.yml up --exit-code-from initializer initializer
 echo "Running the integration tests..."
-DD_INTEGRATION_TEST_FILENAME="$TEST_CASE" docker compose --exit-code-from integration-tests integration-tests
+DD_INTEGRATION_TEST_FILENAME="$TEST_CASE" docker compose -f docker-compose.yml -f docker-compose.integration.yml up --exit-code-from integration-tests integration-tests

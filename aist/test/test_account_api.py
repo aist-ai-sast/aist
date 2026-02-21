@@ -21,13 +21,17 @@ class AISTAccountAPITests(AISTApiBase):
         self.assertEqual(response.status_code, 204)
 
     def test_auth_login_rejects_invalid_credentials(self):
-        client = APIClient()
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_token = client.cookies["csrftoken"].value
         response = client.post(
             reverse("aist_api:auth_login"),
             data={"username": self.user.username, "password": "wrong"},
-            format="json",
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
         )
         self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json().get("detail"), "Invalid username or password.")
 
     def test_auth_login_rejects_without_csrf_token(self):
         client = Client(enforce_csrf_checks=True)

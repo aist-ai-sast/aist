@@ -5,7 +5,7 @@ on:
 
 env:
   COMPOSE_FILES: |
-    -f docker-compose.yml -f docker-compose.override.aist_cd.yml -f docker-compose.override.integration_tests.yml
+    -f docker-compose.yml -f docker-compose.integration.yml
 
 jobs:
   integration_tests:

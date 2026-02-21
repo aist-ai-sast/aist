@@ -45,7 +45,7 @@ http://localhost:8080
 ```
 If TLS is enabled in your environment, use:
 ```bash
-https://localhost:8443
+https://localhost:443
 ```
 
 **Tests**
@@ -70,6 +70,19 @@ GitHub Actions runs unit tests and linting on `master`. See workflows in `.githu
 **Configuration**
 - Environment variables are loaded via `docker-compose.yml` and `.env`.
 - Local settings can be mounted via `docker/extra_settings`.
+- To keep Postgres data stable across restarts, set in `.env`:
+```bash
+COMPOSE_PROJECT_NAME=aist
+AIST_POSTGRES_DATA_DIR=/absolute/path/to/postgres-data
+```
+- Important: `docker compose down` keeps DB data, but `docker compose down -v` removes named volumes.
+- Optional operator tooling (`pgadmin`) is available via profile:
+```bash
+docker compose --profile ops up -d pgadmin
+```
+- CI test stacks use:
+  - `docker-compose.tests.yml` for REST/unit style test runs
+  - `docker-compose.integration.yml` for integration test runs
 
 **Troubleshooting**
 - Check service logs:

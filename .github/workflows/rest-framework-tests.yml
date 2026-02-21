@@ -9,7 +9,7 @@ on:
 
 env:
   COMPOSE_FILES: |
-    -f docker-compose.yml -f docker-compose.override.aist_cd.yml -f docker-compose.override.unit_tests_cicd.yml
+    -f docker-compose.yml -f docker-compose.tests.yml
 jobs:
   unit_tests:
     name: Unit Tests (${{ matrix.suite }}, ${{ matrix.os }})

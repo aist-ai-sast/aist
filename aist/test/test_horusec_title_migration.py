@@ -49,12 +49,12 @@ class HorusecTitleMigrationTests(AISTApiBase):
         dry_stdout = StringIO()
         call_command("migrate_horusec_titles", "--dry-run", stdout=dry_stdout)
         horusec_finding.refresh_from_db()
-        self.assertEqual(horusec_finding.title, "(12/33) * Possible Vulnerability Detected: Hardcoded secret")
+        self.assertEqual(horusec_finding.title, "(12/33) * Possible Vulnerability Detected: Hardcoded Secret")
 
         run_stdout = StringIO()
         call_command("migrate_horusec_titles", stdout=run_stdout)
         horusec_finding.refresh_from_db()
         other_finding.refresh_from_db()
 
-        self.assertEqual(horusec_finding.title, "Hardcoded secret")
+        self.assertEqual(horusec_finding.title, "Hardcoded Secret")
         self.assertEqual(other_finding.title, "Detected Private Key")

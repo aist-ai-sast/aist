@@ -13,8 +13,18 @@ services:
       NGINX_METRICS_ENABLED: "${NGINX_METRICS_ENABLED:-false}"
       DD_UWSGI_HOST: "${DD_UWSGI_HOST:-uwsgi}"
       DD_UWSGI_PORT: "${DD_UWSGI_PORT:-3031}"
+      AIST_DOMAIN: "${AIST_DOMAIN:-_}"
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
+      GENERATE_TLS_CERTIFICATE: "${GENERATE_TLS_CERTIFICATE:-true}"
+      USE_TLS: "${USE_TLS:-true}"
     volumes:
       - defectdojo_media:/usr/share/nginx/html/media
+      - type: bind
+        source: ./docker/nginx/client_ui.conf
+        target: /etc/nginx/nginx.conf
+      - type: bind
+        source: ./docker/nginx/client_ui_tls.conf
+        target: /etc/nginx/nginx_TLS.conf
     ports:
       - target: 8080
         published: ${DD_PORT:-8080}
@@ -38,12 +48,23 @@ services:
       valkey:
         condition: service_started
     entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '-t', '30', '--', '/entrypoint-uwsgi.sh']
+    user: 0:0
     environment:
       DD_DEBUG: 'False'
       DD_DJANGO_METRICS_ENABLED: "${DD_DJANGO_METRICS_ENABLED:-False}"
       DD_ALLOWED_HOSTS: "${DD_ALLOWED_HOSTS:-*}"
       DD_SITE_URL: "${DD_SITE_URL:-http://localhost:8080}"
       DD_CSRF_TRUSTED_ORIGINS: "${DD_CSRF_TRUSTED_ORIGINS:-[]}"
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
+      DD_SESSION_COOKIE_SECURE: "${DD_SESSION_COOKIE_SECURE:-True}"
+      DD_CSRF_COOKIE_SECURE: "${DD_CSRF_COOKIE_SECURE:-True}"
+      DD_LOGOUT_ALL_SESSIONS: "${DD_LOGOUT_ALL_SESSIONS:-False}"
+      WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
+      GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
+      CLIENT_ID: "${CLIENT_ID:-}"
+      NAME: "${NAME:-}"
+      WEBHOOK_TYPE: "${WEBHOOK_TYPE:-}"
+      PRIVATE_KEY: "${PRIVATE_KEY:-}"
       DD_DATABASE_URL: ${DD_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/defectdojo}
       DD_CELERY_BROKER_URL: ${DD_CELERY_BROKER_URL:-redis://valkey:6379/0}
       DD_SECRET_KEY: "${DD_SECRET_KEY:-hhZCp@D28z!n@NED*yB!ROMt+WzsY*iq}"
@@ -65,6 +86,7 @@ services:
         condition: service_started
     entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '-t', '30', '--', '/entrypoint-celery-beat.sh']
     environment:
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
       DD_DATABASE_URL: ${DD_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/defectdojo}
       DD_CELERY_BROKER_URL: ${DD_CELERY_BROKER_URL:-redis://valkey:6379/0}
       DD_SECRET_KEY: "${DD_SECRET_KEY:-hhZCp@D28z!n@NED*yB!ROMt+WzsY*iq}"
@@ -86,7 +108,18 @@ services:
       valkey:
         condition: service_started
     entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '-t', '30', '--', '/entrypoint-celery-worker.sh']
+    user: 0:0
     environment:
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
+      C_FORCE_ROOT: '1'
+      DOCKER_HOST: unix:///var/run/docker.sock
+      DOCKER_BUILDKIT: 1
+      DD_CELERY_WORKER_POOL_TYPE: "${DD_CELERY_WORKER_POOL_TYPE:-prefork}"
+      DD_CELERY_WORKER_CONCURRENCY: "${DD_CELERY_WORKER_CONCURRENCY:-6}"
+      DD_CELERY_WORKER_AUTOSCALE_MAX: "${DD_CELERY_WORKER_AUTOSCALE_MAX:-8}"
+      DD_CELERY_WORKER_AUTOSCALE_MIN: "${DD_CELERY_WORKER_AUTOSCALE_MIN:-2}"
+      DD_CELERY_WORKER_PREFETCH_MULTIPLIER: "${DD_CELERY_WORKER_PREFETCH_MULTIPLIER:-1}"
+      DD_CELERY_LOG_LEVEL: "${DD_CELERY_LOG_LEVEL:-INFO}"
       DD_DATABASE_URL: ${DD_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/defectdojo}
       DD_CELERY_BROKER_URL: ${DD_CELERY_BROKER_URL:-redis://valkey:6379/0}
       DD_SECRET_KEY: "${DD_SECRET_KEY:-hhZCp@D28z!n@NED*yB!ROMt+WzsY*iq}"
@@ -99,6 +132,10 @@ services:
           source: ./docker/extra_settings
           target: /app/docker/extra_settings
         - "defectdojo_media:${DD_MEDIA_ROOT:-/app/media}"
+        - /var/run/docker.sock:/var/run/docker.sock
+        - type: bind
+          source: ${AIST_TMP_DIR:-/tmp/aist}
+          target: /tmp/aist
   initializer:
     image: "aist/aist-django:${DJANGO_VERSION:-latest}"
     depends_on:
@@ -106,6 +143,13 @@ services:
         condition: service_started
     entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '--', '/entrypoint-initializer.sh']
     environment:
+      FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
+      WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
+      GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
+      CLIENT_ID: "${CLIENT_ID:-}"
+      NAME: "${NAME:-}"
+      WEBHOOK_TYPE: "${WEBHOOK_TYPE:-}"
+      PRIVATE_KEY: "${PRIVATE_KEY:-}"
       DD_DATABASE_URL: ${DD_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/defectdojo}
       DD_ADMIN_USER: "${DD_ADMIN_USER:-admin}"
       DD_ADMIN_MAIL: "${DD_ADMIN_USER:-admin@defectdojo.local}"
@@ -129,6 +173,19 @@ services:
       POSTGRES_PASSWORD: ${DD_DATABASE_PASSWORD:-defectdojo}
     volumes:
       - defectdojo_postgres:/var/lib/postgresql/data
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    profiles: ["ops"]
+    depends_on:
+      postgres:
+        condition: service_started
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_DEFAULT_EMAIL:-}"
+      PGADMIN_DEFAULT_PASSWORD: "${PGADMIN_DEFAULT_PASSWORD:-}"
+    ports:
+      - "5050:80"
+    volumes:
+      - ${AIST_PGADMIN_DATA_VOLUME:-pgadmin_data}:/var/lib/pgadmin
   valkey:
     image: valkey/valkey:7.2.11-alpine@sha256:9e483e0fe4c98b631b166b41d530c7ff1b8009a44f261bff28e9d1e2e27db58d
     volumes:
@@ -136,6 +193,12 @@ services:
       # would require steps during downtime or complex commands in the intializer
       - defectdojo_redis:/data
 volumes:
-  defectdojo_postgres: {}
+  defectdojo_postgres:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${AIST_POSTGRES_DATA_DIR:-/tmp/aist/postgres}
   defectdojo_media: {}
   defectdojo_redis: {}
+  pgadmin_data: {}

@@ -7,11 +7,10 @@ from django.contrib.auth.forms import PasswordChangeForm
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Product_Member
+from dojo.models import Product_Type_Member
 from dojo.utils import get_system_setting
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -59,13 +58,13 @@ def _get_organization_memberships(user: User) -> list[OrganizationMembership]:
         ]
 
     rows = (
-        Product_Member.objects.filter(
+        Product_Type_Member.objects.filter(
             user=user,
-            product__aistproject__organization__isnull=False,
+            product_type__aist_organization__isnull=False,
         )
         .values(
-            "product__aistproject__organization_id",
-            "product__aistproject__organization__name",
+            "product_type__aist_organization_id",
+            "product_type__aist_organization__name",
             "role_id",
             "role__name",
         )
@@ -74,12 +73,12 @@ def _get_organization_memberships(user: User) -> list[OrganizationMembership]:
 
     by_org: dict[int, OrganizationMembership] = {}
     for row in rows:
-        organization_id = row["product__aistproject__organization_id"]
+        organization_id = row["product_type__aist_organization_id"]
         if not organization_id:
             continue
         candidate = OrganizationMembership(
             organization_id=organization_id,
-            organization_name=row["product__aistproject__organization__name"] or "",
+            organization_name=row["product_type__aist_organization__name"] or "",
             role_id=row["role_id"],
             role_name=row["role__name"] or "Reader",
         )
@@ -176,22 +175,6 @@ class AISTAuthLoginSerializer(serializers.Serializer):
     username = serializers.CharField(trim_whitespace=True)
     password = serializers.CharField(trim_whitespace=False, write_only=True)
 
-    def validate(self, attrs):
-        request = self.context["request"]
-        user = authenticate(
-            request=request,
-            username=attrs["username"],
-            password=attrs["password"],
-        )
-        if user is None:
-            msg = "Invalid username or password."
-            raise AuthenticationFailed(msg)
-        if not user.is_active:
-            msg = "User account is disabled."
-            raise AuthenticationFailed(msg)
-        attrs["user"] = user
-        return attrs
-
 
 class AISTMeAPI(APIView):
     permission_classes = [IsAuthenticated]
@@ -254,7 +237,16 @@ class AISTAuthLoginAPI(APIView):
     def post(self, request):
         serializer = AISTAuthLoginSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        login(request, serializer.validated_data["user"])
+        user = authenticate(
+            request=request,
+            username=serializer.validated_data["username"],
+            password=serializer.validated_data["password"],
+        )
+        if user is None:
+            return Response({"detail": "Invalid username or password."}, status=status.HTTP_401_UNAUTHORIZED)
+        if not user.is_active:
+            return Response({"detail": "User account is disabled."}, status=status.HTTP_401_UNAUTHORIZED)
+        login(request, user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -268,7 +260,9 @@ class AISTAuthLogoutAPI(APIView):
         responses={204: OpenApiResponse(description="Logged out")},
     )
     def post(self, request):
-        logout(request)
+        raw_request = getattr(request, "_request", request)
+        if hasattr(raw_request, "session"):
+            logout(raw_request)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -283,6 +277,8 @@ class AISTAuthLogoutAllAPI(APIView):
     )
     def post(self, request):
         user = request.user
-        remove_all_sessions(sender=type(user), user=user, request=request)
-        logout(request)
+        raw_request = getattr(request, "_request", request)
+        remove_all_sessions(sender=type(user), user=user, request=raw_request)
+        if hasattr(raw_request, "session"):
+            logout(raw_request)
         return Response(status=status.HTTP_204_NO_CONTENT)

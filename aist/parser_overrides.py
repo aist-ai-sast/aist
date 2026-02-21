@@ -25,7 +25,7 @@ HORUSEC_TITLE_PREFIX_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 BEARER_TITLE_LOCATION_SUFFIX_PATTERN = re.compile(
-    r"\s+in\s+[^:\n]+:\d+\s*$",
+    r"\s+in\s+[\w./-]+:\d+\s*$",
     flags=re.IGNORECASE,
 )
 

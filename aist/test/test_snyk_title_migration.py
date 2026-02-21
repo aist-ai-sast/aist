@@ -18,7 +18,7 @@ class SnykTitleMigrationTests(AISTApiBase):
             target_end=timezone.now(),
             product=self.product,
         )
-        test_type = Test_Type.objects.create(name=test_type_name)
+        test_type, _ = Test_Type.objects.get_or_create(name=test_type_name)
         test = Test.objects.create(
             engagement=engagement,
             target_start=timezone.now(),
@@ -95,4 +95,4 @@ class SnykTitleMigrationTests(AISTApiBase):
         other_finding.refresh_from_db()
 
         self.assertEqual(snyk_finding.title, "Buffer Overflow")
-        self.assertEqual(other_finding.title, "Semgrep legacy title")
+        self.assertEqual(other_finding.title, "Semgrep Legacy Title")

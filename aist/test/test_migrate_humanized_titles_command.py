@@ -107,7 +107,7 @@ class MigrateHumanizedTitlesCommandTests(AISTApiBase):
         horusec_finding.refresh_from_db()
         semgrep_finding.refresh_from_db()
 
-        self.assertEqual(horusec_finding.title, "Hardcoded secret")
+        self.assertEqual(horusec_finding.title, "Hardcoded Secret")
         self.assertEqual(semgrep_finding.title, "generic.secrets.security.detected-private-key.detected-private-key")
 
     def test_command_scan_type_bearer_updates_only_bearer(self):
