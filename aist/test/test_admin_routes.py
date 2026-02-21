@@ -58,12 +58,44 @@ class AdminRouteTests(TestCase):
         self._assert_no_8443_in_redirects(response)
         self.assertEqual(response.status_code, 200)
 
-    def test_plain_swagger_url_serves_aist_swagger(self):
+    def test_plain_swagger_url_is_forbidden_for_anonymous(self):
+        response = self.client.get("/api/v2/oa3/swagger-ui/")
+        self.assertEqual(response.status_code, 403)
+
+    def test_plain_schema_url_is_forbidden_for_anonymous(self):
+        response = self.client.get("/api/v2/oa3/schema/?format=json")
+        self.assertEqual(response.status_code, 403)
+
+    def test_plain_swagger_and_schema_are_forbidden_for_non_superuser(self):
+        user = get_user_model().objects.create_user(
+            username="client_plain_swagger",
+            password="pass",  # noqa: S106
+            email="client_plain_swagger@example.com",
+        )
+        self.client.force_login(user)
+        swagger = self.client.get("/api/v2/oa3/swagger-ui/")
+        schema = self.client.get("/api/v2/oa3/schema/?format=json")
+        self.assertEqual(swagger.status_code, 403)
+        self.assertEqual(schema.status_code, 403)
+
+    def test_plain_swagger_url_is_available_for_superuser(self):
+        user = get_user_model().objects.create_superuser(
+            username="admin_plain_swagger",
+            password="pass",  # noqa: S106
+            email="admin_plain_swagger@example.com",
+        )
+        self.client.force_login(user)
         response = self.client.get("/api/v2/oa3/swagger-ui/")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "SwaggerUIBundle")
 
-    def test_plain_schema_contains_only_aist_endpoints(self):
+    def test_plain_schema_contains_only_aist_endpoints_for_superuser(self):
+        user = get_user_model().objects.create_superuser(
+            username="admin_plain_schema",
+            password="pass",  # noqa: S106
+            email="admin_plain_schema@example.com",
+        )
+        self.client.force_login(user)
         response = self.client.get("/api/v2/oa3/schema/?format=json")
         self.assertEqual(response.status_code, 200)
         body = response.json()

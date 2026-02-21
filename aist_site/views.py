@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import render
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+from rest_framework.permissions import BasePermission
 
 
 def _is_api_request(request: HttpRequest) -> bool:
@@ -55,9 +56,15 @@ def aist_only_preprocessing_hook(endpoints):
     return filtered
 
 
+class IsSuperuserOnly(BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and user.is_superuser)
+
+
 class AistOnlySpectacularAPIView(SpectacularAPIView):
-    pass
+    permission_classes = [IsSuperuserOnly]
 
 
 class AistOnlySpectacularSwaggerView(SpectacularSwaggerView):
-    pass
+    permission_classes = [IsSuperuserOnly]
