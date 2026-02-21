@@ -14,7 +14,7 @@ from aist.utils.pipeline import set_pipeline_status
 
 
 @shared_task(bind=True)
-def report_enrich_done(self, result: int, pipeline_id: str):
+def report_enrich_done(self, result: int, pipeline_id: str, async_user=None):
     redis = get_redis()
     key = f"aist:progress:{pipeline_id}:enrich"
     redis.hincrby(key, "done", 1)
@@ -25,7 +25,8 @@ def report_enrich_done(self, result: int, pipeline_id: str):
 def after_upload_enrich_and_watch(results: list[int],
                                   pipeline_id: str,
                                   test_ids: list[int],
-                                  log_level) -> None:
+                                  log_level,
+                                  async_user=None) -> None:
     logger = install_pipeline_logging(pipeline_id, log_level)
     enriched = sum(int(v or 0) for v in results)
 
@@ -51,6 +52,7 @@ def enrich_finding_task(
     finding_id: int,
     trim_path: str,
     project_version_descriptor: dict[str, Any],
+    async_user=None,
 ) -> int:
     """Enrich a single finding by trimming its file path and attaching a source link."""
     try:
@@ -89,6 +91,7 @@ def enrich_finding_batch(
     finding_ids: list[int],
     trim_path: str,
     project_version_descriptor: dict[str, Any],
+    async_user=None,
 ) -> int:
     processed = 0
     for fid in finding_ids:

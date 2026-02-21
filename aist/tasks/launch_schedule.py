@@ -9,7 +9,7 @@ logger = logging.getLogger("aist")
 
 
 @shared_task(name="aist.tasks.launch_schedule.process_launch_schedules")
-def process_launch_schedules():
+def process_launch_schedules(async_user=None):
     now = timezone.now()
 
     schedules = (

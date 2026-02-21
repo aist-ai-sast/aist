@@ -113,6 +113,42 @@ class OneOffActionsTests(TestCase):
         self.assertTrue(stored.get("secret_config"))
         self.assertNotEqual(stored["secret_config"].get("slack_token"), "xoxb-test")
 
+    @patch("celery.app.task.Task.apply_async")
+    def test_start_pipeline_passes_request_user_to_celery_task(self, mock_apply_async):
+        mock_apply_async.return_value = SimpleNamespace(id="celery-apply-1")
+
+        with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):
+            url = reverse("aist:start_pipeline")
+            payload = {
+                "project": self.project.id,
+                "project_version": self.pv.id,
+                "log_level": "INFO",
+                "time_class_level": "slow",
+                "ai_mode": "MANUAL",
+                "one_off_actions": "[]",
+            }
+
+            resp = self.client.post(url, data=payload)
+            self.assertEqual(resp.status_code, 302)
+
+        self.assertTrue(mock_apply_async.called)
+        task_args = mock_apply_async.call_args.kwargs.get("args", ())
+        task_kwargs = mock_apply_async.call_args.kwargs.get("kwargs", {})
+        self.assertGreaterEqual(len(task_args), 2)
+        self.assertIn("async_user", task_kwargs)
+        self.assertEqual(task_kwargs["async_user"], self.user)
+
+        pipeline = AISTPipeline.objects.order_by("-created").first()
+        self.assertIsNotNone(pipeline)
+        self.assertEqual(pipeline.run_task_id, "celery-apply-1")
+        self.assertEqual(str(task_args[0]), str(pipeline.id))
+
+        expected_location = reverse("aist:pipeline_detail", kwargs={"pipeline_id": pipeline.id})
+        self.assertEqual(resp.headers.get("Location"), expected_location)
+
+        detail_resp = self.client.get(expected_location)
+        self.assertEqual(detail_resp.status_code, 200)
+
     @patch("aist.celery_signals.get_action_handler")
     def test_one_off_action_runs_once(self, mock_get_handler):
         class DummyHandler:

@@ -61,7 +61,7 @@ def postprocess_findings(
 
 
 @shared_task(bind=True)
-def run_sast_pipeline(self, pipeline_id: str, params: dict) -> None:
+def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> None:
     """
     Execute a SAST pipeline asynchronously.
 

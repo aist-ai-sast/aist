@@ -51,6 +51,7 @@ class Command(BaseCommand):
             default=False,
             help="Do not modify superuser username/password.",
         )
+
     @transaction.atomic
     def handle(self, *args, **options):
         password = options["password"]

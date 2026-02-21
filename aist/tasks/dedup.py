@@ -81,7 +81,7 @@ def _requeue_missing_findings(*, test_id: int, batch_size: int, logger) -> int:
 
 
 @shared_task(bind=True)
-def watch_deduplication(self, pipeline_id: str, log_level) -> None:
+def watch_deduplication(self, pipeline_id: str, log_level, async_user=None) -> None:
     """
     Monitor deduplication progress and finalise the pipeline.
 
@@ -229,6 +229,7 @@ def watch_deduplication(self, pipeline_id: str, log_level) -> None:
 def reconcile_deduplication(
     batch_size: int = 200,
     max_runtime_s: int = 50,
+    async_user=None,
     *,
     test_ids: list[int] | None = None,
     stale_only: bool = True,

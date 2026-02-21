@@ -13,7 +13,7 @@ logger = logging.getLogger("aist")
 
 
 @shared_task(name="aist.tasks.pipeline_dispatcher.dispatch_queued_pipelines")
-def dispatch_queued_pipelines():
+def dispatch_queued_pipelines(async_user=None):
     """
     Dispatch queued pipeline launches while respecting per-worker concurrency limits.
 

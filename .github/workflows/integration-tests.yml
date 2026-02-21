@@ -74,6 +74,10 @@ jobs:
              docker load -i built-docker-image/integration-tests-debian-linux-amd64_img
              docker images
 
+      - name: Set field encryption key
+        run: |
+          echo "FIELD_ENCRYPTION_KEY=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
+
       - name: Start Dojo
         run: docker compose $COMPOSE_FILES up --no-deps -d postgres nginx celerybeat celeryworker mailhog uwsgi valkey
         env:

@@ -22,7 +22,7 @@ def _ensure_group(r):
 
 
 @shared_task(bind=True, name="aist.flush_logs_once")
-def flush_logs_once(self, max_read: int = 500) -> int:
+def flush_logs_once(self, max_read: int = 500, async_user=None) -> int:
     """
     Flush a batch of log entries from Redis Stream to the database.
 

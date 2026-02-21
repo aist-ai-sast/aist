@@ -29,7 +29,7 @@ def _csv(items: Iterable[Any]) -> str:
 
 
 @shared_task(bind=True)
-def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="INFO") -> None:
+def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="INFO", async_user=None) -> None:
     log = install_pipeline_logging(pipeline_id, log_level)
     webhook_url = getattr(
         settings,
@@ -91,7 +91,7 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
 
 
 @shared_task(name="aist.auto_push_to_ai_if_configured")
-def auto_push_to_ai_if_configured(pipeline_id: str):
+def auto_push_to_ai_if_configured(pipeline_id: str, async_user=None):
     logger = install_pipeline_logging(pipeline_id)
 
     with transaction.atomic():
