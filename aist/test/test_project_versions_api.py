@@ -5,6 +5,7 @@ import json
 import zipfile
 from unittest.mock import patch
 
+from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
@@ -97,6 +98,34 @@ class ProjectVersionsAPITests(AISTApiBase):
         )
         blob_resp = self.client.get(blob_url)
         self.assertEqual(blob_resp.status_code, 404)
+
+    def test_file_blob_returns_404_when_source_archive_is_missing_in_storage(self):
+        url = reverse("aist_api:project_version_create", kwargs={"project_id": self.project.id})
+        archive_bytes = self._zip_with_file("src/only.py", "print('ok')\n")
+        upload = SimpleUploadedFile("src.zip", archive_bytes, content_type="application/zip")
+
+        resp = self.client.post(
+            url,
+            data={"version_type": VersionType.FILE_HASH, "source_archive": upload},
+            format="multipart",
+        )
+        self.assertEqual(resp.status_code, 201)
+        version_id = self._json(resp)["id"]
+
+        version = AISTProjectVersion.objects.get(id=version_id)
+        archive_name = version.source_archive.name
+        self.assertTrue(default_storage.exists(archive_name))
+        default_storage.delete(archive_name)
+        self.assertFalse(default_storage.exists(archive_name))
+
+        blob_url = reverse(
+            "aist_api:project_version_file_blob",
+            kwargs={"project_version_id": version_id, "subpath": "src/only.py"},
+        )
+        blob_resp = self.client.get(blob_url)
+
+        self.assertEqual(blob_resp.status_code, 404)
+        self.assertEqual(blob_resp.json(), {"detail": "File not found in version archive"})
 
     @patch("aist.api.files.requests.get")
     def test_git_branch_blob_uses_last_resolved_commit(self, mock_get):

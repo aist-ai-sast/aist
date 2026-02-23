@@ -96,7 +96,10 @@ class ProjectVersionFileBlobAPI(AuthorizedQuerySetMixin, generics.GenericAPIView
 
     @staticmethod
     def _return_local_file(project_version, subpath):
-        root = project_version.ensure_extracted()
+        try:
+            root = project_version.ensure_extracted()
+        except FileNotFoundError as exc:
+            raise Http404(ERR_FILE_NOT_FOUND_IN_ARCHIVE) from exc
         if root is None:
             raise Http404(ERR_FILE_NOT_FOUND_IN_ARCHIVE)
 
