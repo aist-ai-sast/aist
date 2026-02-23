@@ -11,6 +11,8 @@ from dojo.tools.sarif.parser import SarifParser
 from dojo.tools.semgrep.parser import SemgrepParser
 from dojo.tools.snyk_code.parser import SnykCodeParser
 
+from aist.dedupe.canonical import cwe_for_family, infer_canonical_family, normalize_rule_key
+
 logger = logging.getLogger(__name__)
 
 SNYK_CODE_SCAN_TYPE = "Snyk Code Scan"
@@ -28,6 +30,18 @@ BEARER_TITLE_LOCATION_SUFFIX_PATTERN = re.compile(
     r"\s+in\s+[\w./-]+:\d+\s*$",
     flags=re.IGNORECASE,
 )
+
+
+def _stabilize_dedupe_fields(finding, *, rule_hint: str | None = None):  # type: ignore[no-untyped-def]
+    source_rule = rule_hint or str(getattr(finding, "vuln_id_from_tool", "") or getattr(finding, "title", "") or "")
+    normalized_rule = normalize_rule_key(source_rule)
+    if normalized_rule:
+        finding.vuln_id_from_tool = normalized_rule
+    family = infer_canonical_family(vuln_id=source_rule, title=str(getattr(finding, "title", "") or ""))
+    family_cwe = cwe_for_family(family)
+    current_cwe = getattr(finding, "cwe", None)
+    if not current_cwe and family_cwe:
+        finding.cwe = family_cwe
 
 
 class HumanizedSnykCodeParser(SnykCodeParser):
@@ -76,6 +90,11 @@ class HumanizedSnykCodeParser(SnykCodeParser):
     def get_finding_title(self, result: dict, rule: dict | None, location) -> str:  # type: ignore[no-untyped-def]
         return self._build_short_title(result, rule)
 
+    def customize_finding(self, finding, result, rule, location):  # type: ignore[no-untyped-def]
+        super().customize_finding(finding, result, rule, location)
+        rule_id = str(result.get("ruleId", "") or "")
+        _stabilize_dedupe_fields(finding, rule_hint=rule_id)
+
 
 def install_snyk_code_parser_override() -> None:
     current_parser = factory.PARSERS.get(SNYK_CODE_SCAN_TYPE)
@@ -115,6 +134,7 @@ class HumanizedSemgrepParser(SemgrepParser):
                 file_path=finding.file_path,
                 line=finding.line,
             )
+            _stabilize_dedupe_fields(finding, rule_hint=check_id)
         return findings
 
 
@@ -140,6 +160,7 @@ class HumanizedHorusecParser(HorusecParser):
     def _get_finding(self, data, date):  # type: ignore[no-untyped-def]
         finding = super()._get_finding(data, date)
         finding.title = normalize_horusec_title(finding.title)
+        _stabilize_dedupe_fields(finding, rule_hint=finding.title)
         return finding
 
 
@@ -166,6 +187,7 @@ class HumanizedBearerParser(BearerCLIParser):
         findings = super().get_findings(file, test)
         for finding in findings:
             finding.title = normalize_bearer_title(finding.title)
+            _stabilize_dedupe_fields(finding, rule_hint=str(finding.vuln_id_from_tool or finding.title or ""))
         return findings
 
 

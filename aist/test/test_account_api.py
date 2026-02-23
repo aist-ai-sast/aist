@@ -6,7 +6,7 @@ from django.contrib.auth.models import Group
 from django.test import Client
 from django.urls import reverse
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Product_Type_Group, Role
+from dojo.models import Dojo_Group, Dojo_Group_Member, Product_Type_Group, Role
 from rest_framework.test import APIClient
 
 from aist.models import Organization
@@ -90,9 +90,11 @@ class AISTAccountAPITests(AISTApiBase):
         self.project.organization = organization
         self.project.save(update_fields=["organization"])
 
-        group = Group.objects.create(name="aist-group")
-        user.groups.add(group)
+        auth_group = Group.objects.create(name="aist-group")
+        group = Dojo_Group.objects.create(name="aist-group", auth_group=auth_group)
+        user.groups.add(auth_group)
         role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        Dojo_Group_Member.objects.create(group=group, user=user, role=role_reader)
         Product_Type_Group.objects.create(product_type=self.prod_type, group=group, role=role_reader)
 
         with patch("aist.api.account.get_system_setting", return_value=True):

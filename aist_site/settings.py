@@ -128,3 +128,23 @@ SINGLE_USER_SESSION = env.bool("DD_SINGLE_USER_SESSION", False)  # noqa: F405
 
 # Keep regular logout local to the current browser session.
 LOGOUT_ALL_SESSIONS = env.bool("DD_LOGOUT_ALL_SESSIONS", False)  # noqa: F405
+
+AIST_CANONICAL_DEDUPE_SCAN_TYPES = (
+    "Snyk Code Scan",
+    "SnykCode Scan (Snyk Code Scan)",
+    "Semgrep JSON Report",
+    "Horusec Scan",
+    "Bearer CLI",
+)
+AIST_CANONICAL_HASH_FIELDS = ["vuln_id_from_tool", "file_path", "line", "cwe"]
+
+DEDUPLICATION_ALGORITHM_PER_PARSER = dict(globals().get("DEDUPLICATION_ALGORITHM_PER_PARSER", {}))
+for _scan_type in AIST_CANONICAL_DEDUPE_SCAN_TYPES:
+    DEDUPLICATION_ALGORITHM_PER_PARSER[_scan_type] = "unique_id_from_tool_or_hash_code"
+
+HASHCODE_FIELDS_PER_SCANNER = dict(globals().get("HASHCODE_FIELDS_PER_SCANNER", {}))
+for _scan_type in AIST_CANONICAL_DEDUPE_SCAN_TYPES:
+    HASHCODE_FIELDS_PER_SCANNER[_scan_type] = AIST_CANONICAL_HASH_FIELDS
+
+HASHCODE_ALLOWS_NULL_CWE = dict(globals().get("HASHCODE_ALLOWS_NULL_CWE", {}))
+HASHCODE_ALLOWS_NULL_CWE["Horusec Scan"] = True

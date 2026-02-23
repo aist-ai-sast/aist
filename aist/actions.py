@@ -51,7 +51,8 @@ class BaseAction:
     def _build_common_summary(self, *, pipeline: AISTPipeline, new_status: str, for_slack: bool) -> str:
         findings_qs = Finding.objects.filter(test__aist_pipelines=pipeline)
         total_findings = findings_qs.count()
-        severity_counts_raw = findings_qs.values("severity").annotate(total=Count("id"))
+        false_positive_findings = findings_qs.filter(false_p=True).count()
+        severity_counts_raw = findings_qs.order_by().values("severity").annotate(total=Count("id"))
         severity_counts = {str(item["severity"] or "Info"): int(item["total"]) for item in severity_counts_raw}
 
         severity_order = ["Critical", "High", "Medium", "Low", "Info"]
@@ -75,6 +76,7 @@ class BaseAction:
                 f"*Commit:* {self._get_commit(pipeline)}\n"
                 f"*Duration:* {duration}\n"
                 f"*Findings total:* {total_findings}\n"
+                f"*False positives:* {false_positive_findings}\n"
                 f"*Severity:* {severity_text}\n"
                 f"*Findings:* {findings_url}"
             )
@@ -87,6 +89,7 @@ class BaseAction:
             f"Commit: {self._get_commit(pipeline)}\n"
             f"Duration: {duration}\n"
             f"Findings total: {total_findings}\n"
+            f"False positives: {false_positive_findings}\n"
             f"Severity: {severity_text}\n"
             f"Findings: {findings_url}"
         )

@@ -112,6 +112,7 @@ class ActionsTests(TestCase):
             test=dd_test,
             title="Critical finding",
             severity="Critical",
+            false_p=False,
             date=timezone.now(),
             reporter=self.reporter,
         )
@@ -119,6 +120,7 @@ class ActionsTests(TestCase):
             test=dd_test,
             title="High finding",
             severity="High",
+            false_p=False,
             date=timezone.now(),
             reporter=self.reporter,
         )
@@ -126,6 +128,8 @@ class ActionsTests(TestCase):
             test=dd_test,
             title="Low finding",
             severity="Low",
+            active=False,
+            false_p=True,
             date=timezone.now(),
             reporter=self.reporter,
         )
@@ -214,8 +218,72 @@ class ActionsTests(TestCase):
         message = mock_post.call_args.kwargs["message"]
         self.assertIn("AIST Pipeline Summary", message)
         self.assertIn("Findings total:* 3", message)
+        self.assertIn("False positives:* 1", message)
         self.assertIn("Project version:* GIT_HASH:main", message)
         self.assertIn("Severity:* Critical: 1 | High: 1 | Medium: 0 | Low: 1 | Info: 0", message)
+
+    @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
+    def test_slack_action_common_summary_severity_aggregation_uses_real_counts(self, mock_post):
+        engagement = Engagement.objects.create(
+            name="Engage duplicates",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test_type = Test_Type.objects.create(name="Semgrep duplicates")
+        dd_test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        Finding.objects.create(
+            test=dd_test,
+            title="High finding 1",
+            severity="High",
+            false_p=False,
+            date=timezone.now(),
+            reporter=self.reporter,
+        )
+        Finding.objects.create(
+            test=dd_test,
+            title="High finding 2",
+            severity="High",
+            active=False,
+            false_p=True,
+            date=timezone.now(),
+            reporter=self.reporter,
+        )
+        Finding.objects.create(
+            test=dd_test,
+            title="High finding 3",
+            severity="High",
+            false_p=False,
+            date=timezone.now(),
+            reporter=self.reporter,
+        )
+        Finding.objects.create(
+            test=dd_test,
+            title="Low finding",
+            severity="Low",
+            false_p=False,
+            date=timezone.now(),
+            reporter=self.reporter,
+        )
+        self.pipeline.tests.add(dd_test)
+
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.PUSH_TO_SLACK,
+            {"channels": ["#alerts"], "include_common_summary": True},
+            {"slack_token": "xoxb-test"},
+        )
+
+        SlackAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+
+        message = mock_post.call_args.kwargs["message"]
+        self.assertIn("Findings total:* 4", message)
+        self.assertIn("False positives:* 1", message)
+        self.assertIn("Severity:* Critical: 0 | High: 3 | Medium: 0 | Low: 1 | Info: 0", message)
 
     @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
     def test_slack_common_summary_uses_project_version_branch_commit_and_created_duration_fallback(self, mock_post):
@@ -344,6 +412,7 @@ class ActionsTests(TestCase):
         kwargs = mock_send.call_args.kwargs
         self.assertIn("AIST Pipeline Summary", kwargs["description"])
         self.assertIn("Findings total: 3", kwargs["description"])
+        self.assertIn("False positives: 1", kwargs["description"])
         self.assertIn("Project version: GIT_HASH:main", kwargs["description"])
         self.assertIn("Severity: Critical: 1 | High: 1 | Medium: 0 | Low: 1 | Info: 0", kwargs["description"])
 
