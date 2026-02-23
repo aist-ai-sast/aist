@@ -48,6 +48,12 @@ class AistAdminGuardMiddlewareTests(TestCase):
         response = self.middleware(request)
         self.assertEqual(response.status_code, 404)
 
+    def test_allows_public_github_hook_for_anonymous(self):
+        request = self.factory.post("/aist-admin/aist/github_hook/")
+        request.user = AnonymousUser()
+        response = self.middleware(request)
+        self.assertEqual(response.status_code, 200)
+
     def test_blocks_non_login_admin_path_for_anonymous(self):
         request = self.factory.get("/aist-admin/some-private-page/")
         request.user = AnonymousUser()

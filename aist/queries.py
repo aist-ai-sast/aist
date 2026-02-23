@@ -112,7 +112,23 @@ def get_authorized_aist_organizations(permission, user=None):
     user = _resolve_user(user)
     if user is None:
         return Organization.objects.none()
-    if user.is_superuser:
+    if user.is_superuser or user_has_global_permission(user, permission):
         return Organization.objects.all()
+
+    roles = get_roles_for_permission(permission)
+    authorized_product_type_roles = Product_Type_Member.objects.filter(
+        user=user,
+        role__in=roles,
+    ).values("product_type_id")
+    authorized_product_type_groups = Product_Type_Group.objects.filter(
+        group__users=user,
+        role__in=roles,
+    ).values("product_type_id")
+
+    orgs_by_product_type = Organization.objects.filter(
+        Q(product_type_id__in=Subquery(authorized_product_type_roles))
+        | Q(product_type_id__in=Subquery(authorized_product_type_groups)),
+    ).distinct()
     products = get_authorized_aist_products(permission, user=user)
-    return Organization.objects.filter(projects__product__in=products).distinct()
+    orgs_by_projects = Organization.objects.filter(projects__product__in=products).distinct()
+    return (orgs_by_product_type | orgs_by_projects).distinct()

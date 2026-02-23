@@ -78,6 +78,7 @@ class AistAdminGuardMiddleware:
     admin_api_prefix = "/aist-admin/api/"
     admin_swagger_prefixes = ("/aist-admin/api/v2/oa3/schema/", "/aist-admin/api/v2/oa3/swagger-ui/")
     admin_static_prefix = "/aist-admin/static/"
+    admin_public_paths = {"/aist-admin/aist/github_hook/"}
     login_paths = {"/aist-admin/login/", "/aist-admin/logout/"}
 
     def __init__(self, get_response):
@@ -89,6 +90,9 @@ class AistAdminGuardMiddleware:
             return self.get_response(request)
 
         if path.startswith(self.admin_static_prefix):
+            return self.get_response(request)
+
+        if path in self.admin_public_paths:
             return self.get_response(request)
 
         if path.startswith(self.admin_api_prefix):

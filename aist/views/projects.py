@@ -14,7 +14,10 @@ from aist.ai_filter import get_ai_filter_reference
 from aist.api.projects import default_analyzers_payload, project_meta_payload, update_project_from_payload
 from aist.forms import AISTLaunchConfigForm, AISTProjectVersionForm
 from aist.models import AISTLaunchConfigAction, AISTProject, AISTStatus
-from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
+from aist.queries import (
+    get_authorized_aist_organizations,
+    get_authorized_aist_projects,
+)
 from aist.views._common import ERR_PROJECT_NOT_FOUND
 
 
@@ -139,6 +142,10 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
         .prefetch_related(Prefetch("projects", queryset=project_qs))
         .order_by("name")
     )
+    organizations_for_create = get_authorized_aist_organizations(
+        Permissions.Product_Type_Add_Product,
+        user=request.user,
+    ).order_by("name")
 
     # Projects that are not assigned to any organization -> "Others" section.
     unassigned_projects = project_qs.filter(organization__isnull=True)
@@ -149,6 +156,7 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
         "aist/projects.html",
         {
             "organizations": organizations,
+            "organizations_for_create": organizations_for_create,
             "unassigned_projects": unassigned_projects,
             "launch_config_form": AISTLaunchConfigForm(),
             "aist_status_choices": AISTStatus.choices,

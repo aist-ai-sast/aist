@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from django.shortcuts import get_object_or_404
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
+from dojo.models import Product
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -10,7 +12,10 @@ from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.models import AISTProject, Organization
-from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
+from aist.queries import (
+    get_authorized_aist_organizations,
+    get_authorized_aist_projects,
+)
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 
@@ -34,6 +39,33 @@ class AISTProjectSerializer(serializers.ModelSerializer):
             "updated",
             "repository",
         ]
+
+
+class AISTProjectCreateRequestSerializer(serializers.Serializer):
+    organization_id = serializers.IntegerField()
+    product_name = serializers.CharField(allow_blank=False, trim_whitespace=True)
+    script_path = serializers.CharField(
+        required=False,
+        allow_blank=False,
+        default="input_projects/default_imported_project_no_built.sh",
+        trim_whitespace=True,
+    )
+    compilable = serializers.BooleanField(required=False, default=False)
+    supported_languages = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    profile = serializers.JSONField(required=False, default=dict)
+
+    def validate_profile(self, value):
+        if value is None or value == {}:
+            return {}
+        if not isinstance(value, dict):
+            msg = 'Profile must be a JSON object (e.g. {"paths": {"exclude": []}}).'
+            raise serializers.ValidationError(msg)
+        return value
+
+
+class AISTProjectCreateResponseSerializer(serializers.Serializer):
+    ok = serializers.BooleanField()
+    project = AISTProjectSerializer()
 
 
 class DefaultAnalyzersRequestSerializer(serializers.Serializer):
@@ -104,6 +136,63 @@ class AISTProjectListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
             .select_related("product")
             .order_by("created")
         )
+
+
+class AISTProjectCreateAPI(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["aist"],
+        request=AISTProjectCreateRequestSerializer,
+        responses={
+            201: AISTProjectCreateResponseSerializer,
+            400: OpenApiResponse(description="Validation error"),
+            403: OpenApiResponse(description="Forbidden"),
+            404: OpenApiResponse(description="Organization not found"),
+            409: OpenApiResponse(description="Conflict"),
+        },
+        summary="Create empty AIST project",
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = AISTProjectCreateRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        org = get_object_or_404(
+            get_authorized_aist_organizations(Permissions.Product_Type_Add_Product, user=request.user),
+            id=serializer.validated_data["organization_id"],
+        )
+        product_type = org.ensure_product_type()
+        user_has_permission_or_403(request.user, product_type, Permissions.Product_Type_Add_Product)
+
+        product_name = serializer.validated_data["product_name"]
+        product, created_product = Product.objects.get_or_create(
+            name=product_name,
+            defaults={
+                "prod_type": product_type,
+                "description": "Created from AIST Projects UI",
+            },
+        )
+
+        if not created_product:
+            user_has_permission_or_403(request.user, product, Permissions.Product_Edit)
+            if product.prod_type_id != product_type.id:
+                msg = "Product already exists in another organization product type."
+                return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)
+
+        if AISTProject.objects.filter(product=product).exists():
+            msg = "AIST project for this product already exists."
+            return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)
+
+        project = AISTProject.objects.create(
+            product=product,
+            organization=org,
+            script_path=serializer.validated_data["script_path"],
+            compilable=serializer.validated_data["compilable"],
+            supported_languages=serializer.validated_data["supported_languages"],
+            profile=serializer.validated_data["profile"] or {},
+        )
+        out = AISTProjectSerializer(project)
+        return Response({"ok": True, "project": out.data}, status=status.HTTP_201_CREATED)
 
 
 class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIView):

@@ -21,22 +21,37 @@
                     <strong>Projects by organization</strong>
                 </div>
                 <div class="col-sm-6">
-                    <div class="input-group input-group-sm pull-right" style="max-width: 420px;">
-                <span class="input-group-btn">
-                    <button type="button"
-                            class="btn btn-default btn-sm"
-                            id="gitlab-import-open">
-                        <i class="fa-brands fa-gitlab" aria-hidden="true"></i>
-                        Import from GitLab
-                    </button>
-                </span>
-                        <span class="input-group-addon">
-                    <i class="fa fa-search" aria-hidden="true"></i>
-                </span>
-                        <input id="aist-projects-filter"
-                               type="text"
-                               class="form-control"
-                               placeholder="Filter by product name or project id...">
+                    <div class="pull-right" style="max-width: 720px; width: 100%;">
+                        <div class="btn-group btn-group-sm" role="group" style="margin-right: 8px;">
+                            <button type="button"
+                                    class="btn btn-default"
+                                    id="gitlab-import-open">
+                                <i class="fa-brands fa-gitlab" aria-hidden="true"></i>
+                                Import from GitLab
+                            </button>
+                            <button type="button"
+                                    class="btn btn-default"
+                                    id="github-import-open">
+                                <i class="fa-brands fa-github" aria-hidden="true"></i>
+                                Import from GitHub
+                            </button>
+                            <button type="button"
+                                    class="btn btn-default"
+                                    id="empty-project-open"
+                                    {% if not organizations_for_create %}disabled title="No organizations available for project creation"{% endif %}>
+                                <i class="fa fa-plus" aria-hidden="true"></i>
+                                Create empty project
+                            </button>
+                        </div>
+                        <div class="input-group input-group-sm" style="display: inline-flex; width: 320px; vertical-align: top;">
+                            <span class="input-group-addon">
+                                <i class="fa fa-search" aria-hidden="true"></i>
+                            </span>
+                            <input id="aist-projects-filter"
+                                   type="text"
+                                   class="form-control"
+                                   placeholder="Filter by product name or project id...">
+                        </div>
                     </div>
                 </div>
             </div>
@@ -418,6 +433,109 @@
                                 disabled>
                             Import selected
                         </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    {# Modal for importing projects from GitHub #}
+    <div class="modal fade" id="githubImportModal" tabindex="-1" role="dialog"
+         aria-labelledby="githubImportModalLabel">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <form id="github-import-form">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <button type="button" class="close" data-dismiss="modal"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                        <h4 class="modal-title" id="githubImportModalLabel">
+                            Import projects from GitHub
+                        </h4>
+                    </div>
+                    <div class="modal-body">
+                        <div id="github-import-error" class="alert alert-danger" style="display:none;"></div>
+                        <div class="form-group">
+                            <label for="github-org-select">Organization</label>
+                            <select class="form-control" id="github-org-select" name="organization_id" required>
+                                <option value="">Select organization</option>
+                                {% for org in organizations_for_create %}
+                                    <option value="{{ org.id }}">{{ org.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <p class="help-block">
+                                GitHub repositories will be imported as products inside selected AIST organization.
+                            </p>
+                        </div>
+                        <input type="hidden" id="github-installation-id" name="installation_id" value="">
+                        <div id="github-repos-container" style="display:none;">
+                            <p class="text-muted small">Select repositories to import.</p>
+                            <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+                                <table class="table table-condensed table-hover" id="github-repos-table">
+                                    <thead>
+                                    <tr>
+                                        <th style="width: 30px;"><input type="checkbox" id="github-select-all"></th>
+                                        <th>Repository</th>
+                                        <th style="width: 140px;">Default branch</th>
+                                        <th style="width: 100px;">Visibility</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody id="github-repos-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                        <button type="button" class="btn btn-primary" id="github-connect-btn">Connect GitHub</button>
+                        <button type="button" class="btn btn-default" id="github-list-btn">List repositories</button>
+                        <button type="button" class="btn btn-success" id="github-import-btn" disabled>Import selected</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    {# Modal for creating empty AIST project #}
+    <div class="modal fade" id="emptyProjectModal" tabindex="-1" role="dialog"
+         aria-labelledby="emptyProjectModalLabel">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <form id="empty-project-form">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <button type="button" class="close" data-dismiss="modal"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                        <h4 class="modal-title" id="emptyProjectModalLabel">Create empty AIST project</h4>
+                    </div>
+                    <div class="modal-body">
+                        <div id="empty-project-error" class="alert alert-danger" style="display:none;"></div>
+                        <div class="form-group">
+                            <label for="empty-project-org">Organization</label>
+                            <select class="form-control" id="empty-project-org" name="organization_id" required>
+                                <option value="">Select organization</option>
+                                {% for org in organizations_for_create %}
+                                    <option value="{{ org.id }}">{{ org.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="empty-project-name">Product name</label>
+                            <input type="text" class="form-control" id="empty-project-name" name="product_name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="empty-project-script-path">Script path</label>
+                            <input type="text"
+                                   class="form-control"
+                                   id="empty-project-script-path"
+                                   name="script_path"
+                                   value="input_projects/default_imported_project_no_built.sh"
+                                   required>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Create project</button>
                     </div>
                 </form>
             </div>
@@ -807,10 +925,33 @@
             var gitlabTokenField = document.getElementById("gitlab-token");
             var gitlabTokenToggle = document.getElementById("gitlab-token-toggle");
 
+            // GitHub import modal elements
+            var githubOpenBtn = document.getElementById("github-import-open");
+            var githubModal = document.getElementById("githubImportModal");
+            var githubErrorBox = document.getElementById("github-import-error");
+            var githubOrgSelect = document.getElementById("github-org-select");
+            var githubInstallationInput = document.getElementById("github-installation-id");
+            var githubConnectBtn = document.getElementById("github-connect-btn");
+            var githubListBtn = document.getElementById("github-list-btn");
+            var githubImportBtn = document.getElementById("github-import-btn");
+            var githubReposContainer = document.getElementById("github-repos-container");
+            var githubReposTbody = document.getElementById("github-repos-tbody");
+            var githubSelectAll = document.getElementById("github-select-all");
+
+            // Empty project modal elements
+            var emptyProjectOpenBtn = document.getElementById("empty-project-open");
+            var emptyProjectModal = document.getElementById("emptyProjectModal");
+            var emptyProjectForm = document.getElementById("empty-project-form");
+            var emptyProjectErrorBox = document.getElementById("empty-project-error");
+
             // URLs for GitLab integration
             var gitlabListUrl = "{% url 'aist:gitlab_projects_list' %}";
             var gitlabImportUrl = "{% url 'aist_api:import_project_from_gitlab' %}";
             var gitlabTokenUpdateUrlTemplate = "{% url 'aist_api:project_gitlab_token_update' project_id=0 %}";
+            var githubConnectStartUrl = "{% url 'aist_api:github_import_connect_start' %}";
+            var githubReposUrl = "{% url 'aist_api:github_import_repositories' %}";
+            var githubImportExecuteUrl = "{% url 'aist_api:github_import_execute' %}";
+            var emptyProjectCreateUrl = "{% url 'aist_api:project_create' %}";
 
 
             var currentRow = null;
@@ -1013,6 +1154,52 @@
                 gitlabImportBtn.disabled = !anyChecked;
             }
 
+            function clearGithubState() {
+                if (githubErrorBox) {
+                    githubErrorBox.style.display = "none";
+                    githubErrorBox.textContent = "";
+                }
+                if (githubReposTbody) {
+                    githubReposTbody.innerHTML = "";
+                }
+                if (githubReposContainer) {
+                    githubReposContainer.style.display = "none";
+                }
+                if (githubImportBtn) {
+                    githubImportBtn.disabled = true;
+                }
+                if (githubSelectAll) {
+                    githubSelectAll.checked = false;
+                }
+            }
+
+            function updateGithubImportButtonState() {
+                if (!githubReposTbody || !githubImportBtn) return;
+                var hasChecked = !!githubReposTbody.querySelector("input.github-repo-checkbox:checked");
+                githubImportBtn.disabled = !hasChecked;
+            }
+
+            function extractApiErrorMessage(data, fallbackMsg) {
+                if (!data || typeof data !== "object") {
+                    return fallbackMsg;
+                }
+                if (typeof data.detail === "string" && data.detail) {
+                    return data.detail;
+                }
+                var firstKey = Object.keys(data)[0];
+                if (!firstKey) {
+                    return fallbackMsg;
+                }
+                var value = data[firstKey];
+                if (Array.isArray(value) && value.length) {
+                    return String(value[0]);
+                }
+                if (typeof value === "string" && value) {
+                    return value;
+                }
+                return fallbackMsg;
+            }
+
 
             if (table) {
                 table.addEventListener("click", function (ev) {
@@ -1182,6 +1369,334 @@
                     }
                 });
             }
+
+            if (githubOpenBtn && githubModal) {
+                githubOpenBtn.addEventListener("click", function () {
+                    clearGithubState();
+                    if (window.jQuery && window.jQuery.fn.modal) {
+                        window.jQuery(githubModal).modal("show");
+                    } else {
+                        githubModal.classList.add("in");
+                        githubModal.style.display = "block";
+                    }
+                });
+            }
+
+            if (githubConnectBtn && githubOrgSelect) {
+                githubConnectBtn.addEventListener("click", function () {
+                    var orgId = (githubOrgSelect.value || "").trim();
+                    if (!orgId) {
+                        if (githubErrorBox) {
+                            githubErrorBox.textContent = "Please select organization.";
+                            githubErrorBox.style.display = "block";
+                        }
+                        return;
+                    }
+                    var csrf = getCsrfToken();
+                    var headers = {
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Content-Type": "application/json"
+                    };
+                    if (csrf) {
+                        headers["X-CSRFToken"] = csrf;
+                    }
+                    fetch(githubConnectStartUrl, {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: headers,
+                        body: JSON.stringify({organization_id: Number(orgId)})
+                    }).then(function (resp) {
+                        return resp.json().then(function (data) {
+                            return {ok: resp.ok, data: data};
+                        });
+                    }).then(function (result) {
+                        if (!result.ok || !result.data.redirect_url) {
+                            var msg = (result.data && result.data.detail) || "Failed to start GitHub connect.";
+                            if (githubErrorBox) {
+                                githubErrorBox.textContent = msg;
+                                githubErrorBox.style.display = "block";
+                            }
+                            return;
+                        }
+                        window.location.href = result.data.redirect_url;
+                    }).catch(function () {
+                        if (githubErrorBox) {
+                            githubErrorBox.textContent = "Unexpected error while starting GitHub connect.";
+                            githubErrorBox.style.display = "block";
+                        }
+                    });
+                });
+            }
+
+            if (githubListBtn && githubOrgSelect && githubInstallationInput && githubReposTbody) {
+                githubListBtn.addEventListener("click", function () {
+                    var orgId = (githubOrgSelect.value || "").trim();
+                    var installationId = (githubInstallationInput.value || "").trim();
+                    if (!orgId) {
+                        if (githubErrorBox) {
+                            githubErrorBox.textContent = "Please select organization.";
+                            githubErrorBox.style.display = "block";
+                        }
+                        return;
+                    }
+                    var query = "?organization_id=" + encodeURIComponent(orgId);
+                    if (installationId) {
+                        query += "&installation_id=" + encodeURIComponent(installationId);
+                    }
+                    clearGithubState();
+                    fetch(githubReposUrl + query, {
+                        method: "GET",
+                        credentials: "same-origin",
+                        headers: {"X-Requested-With": "XMLHttpRequest"}
+                    }).then(function (resp) {
+                        return resp.json().then(function (data) {
+                            return {ok: resp.ok, data: data};
+                        });
+                    }).then(function (result) {
+                        if (!result.ok) {
+                            var msg = extractApiErrorMessage(result.data, "Failed to list GitHub repositories.");
+                            if (msg === "GitHub installation is not connected.") {
+                                msg = "GitHub installation is not connected. Click Connect GitHub and complete redirect back to AIST.";
+                            }
+                            if (githubErrorBox) {
+                                githubErrorBox.textContent = msg;
+                                githubErrorBox.style.display = "block";
+                            }
+                            return;
+                        }
+                        var repos = result.data.repositories || [];
+                        if (!repos.length) {
+                            if (githubErrorBox) {
+                                githubErrorBox.textContent = "No repositories available.";
+                                githubErrorBox.style.display = "block";
+                            }
+                            return;
+                        }
+                        if (githubInstallationInput && result.data.installation_id) {
+                            githubInstallationInput.value = String(result.data.installation_id);
+                        }
+                        var rowsHtml = "";
+                        repos.forEach(function (repo) {
+                            rowsHtml +=
+                                "<tr>" +
+                                '<td><input type="checkbox" class="github-repo-checkbox" value="' + (repo.full_name || "") + '"></td>' +
+                                "<td>" + (repo.full_name || "") + "</td>" +
+                                "<td>" + (repo.default_branch || "main") + "</td>" +
+                                "<td>" + (repo.private ? "Private" : "Public") + "</td>" +
+                                "</tr>";
+                        });
+                        githubReposTbody.innerHTML = rowsHtml;
+                        if (githubReposContainer) {
+                            githubReposContainer.style.display = "block";
+                        }
+                        updateGithubImportButtonState();
+                    }).catch(function () {
+                        if (githubErrorBox) {
+                            githubErrorBox.textContent = "Unexpected error while listing GitHub repositories.";
+                            githubErrorBox.style.display = "block";
+                        }
+                    });
+                });
+            }
+
+            if (githubSelectAll && githubReposTbody) {
+                githubSelectAll.addEventListener("change", function () {
+                    var checked = githubSelectAll.checked;
+                    var checkboxes = githubReposTbody.querySelectorAll("input.github-repo-checkbox");
+                    Array.prototype.forEach.call(checkboxes, function (cb) {
+                        cb.checked = checked;
+                    });
+                    updateGithubImportButtonState();
+                });
+                githubReposTbody.addEventListener("change", function (ev) {
+                    var target = ev.target;
+                    if (!target || !target.classList.contains("github-repo-checkbox")) {
+                        return;
+                    }
+                    if (!target.checked && githubSelectAll) {
+                        githubSelectAll.checked = false;
+                    }
+                    updateGithubImportButtonState();
+                });
+            }
+
+            if (githubImportBtn && githubReposTbody && githubOrgSelect && githubInstallationInput) {
+                githubImportBtn.addEventListener("click", function () {
+                    var checked = githubReposTbody.querySelectorAll("input.github-repo-checkbox:checked");
+                    if (!checked.length) return;
+
+                    var orgId = (githubOrgSelect.value || "").trim();
+                    var installationId = (githubInstallationInput.value || "").trim();
+                    if (!orgId || !installationId) {
+                        if (githubErrorBox) {
+                            githubErrorBox.textContent = "GitHub installation is not connected.";
+                            githubErrorBox.style.display = "block";
+                        }
+                        return;
+                    }
+                    var repositories = Array.prototype.map.call(checked, function (cb) {
+                        return cb.value;
+                    });
+                    var csrf = getCsrfToken();
+                    var headers = {
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Content-Type": "application/json"
+                    };
+                    if (csrf) {
+                        headers["X-CSRFToken"] = csrf;
+                    }
+                    fetch(githubImportExecuteUrl, {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: headers,
+                        body: JSON.stringify({
+                            organization_id: Number(orgId),
+                            installation_id: Number(installationId),
+                            repositories: repositories
+                        })
+                    }).then(function (resp) {
+                        return resp.json().then(function (data) {
+                            return {ok: resp.ok, data: data};
+                        });
+                    }).then(function (result) {
+                        if (!result.ok) {
+                            var msg = (result.data && result.data.detail) || "Failed to import GitHub repositories.";
+                            if (githubErrorBox) {
+                                githubErrorBox.textContent = msg;
+                                githubErrorBox.style.display = "block";
+                            }
+                            return;
+                        }
+                        var imported = (result.data && Array.isArray(result.data.imported)) ? result.data.imported : [];
+                        var skipped = (result.data && Array.isArray(result.data.skipped)) ? result.data.skipped : [];
+                        var failed = (result.data && Array.isArray(result.data.failed)) ? result.data.failed : [];
+                        if (!imported.length) {
+                            var parts = [];
+                            if (skipped.length) {
+                                parts.push("Skipped: " + skipped.map(function (item) {
+                                    return item.repo + " (" + (item.reason || "skipped") + ")";
+                                }).join(", "));
+                            }
+                            if (failed.length) {
+                                parts.push("Failed: " + failed.map(function (item) {
+                                    var reason = item.reason || "failed";
+                                    var detail = item.detail ? (": " + item.detail) : "";
+                                    return item.repo + " (" + reason + detail + ")";
+                                }).join(", "));
+                            }
+                            if (githubErrorBox) {
+                                githubErrorBox.textContent = parts.length ? parts.join(" | ") : "No repositories were imported.";
+                                githubErrorBox.style.display = "block";
+                            }
+                            return;
+                        }
+                        if (window.jQuery && window.jQuery.fn.modal) {
+                            window.jQuery(githubModal).modal("hide");
+                        } else if (githubModal && githubModal.classList) {
+                            githubModal.classList.remove("in");
+                            githubModal.style.display = "none";
+                        }
+                        var successMsg = imported.length + " GitHub repositories imported.";
+                        if (skipped.length || failed.length) {
+                            successMsg += " " + skipped.length + " skipped, " + failed.length + " failed.";
+                        }
+                        showGlobalAlert(successMsg, "success");
+                        window.location.href = window.location.pathname;
+                    }).catch(function () {
+                        if (githubErrorBox) {
+                            githubErrorBox.textContent = "Unexpected error while importing GitHub repositories.";
+                            githubErrorBox.style.display = "block";
+                        }
+                    });
+                });
+            }
+
+            if (emptyProjectOpenBtn && emptyProjectModal) {
+                emptyProjectOpenBtn.addEventListener("click", function () {
+                    if (emptyProjectErrorBox) {
+                        emptyProjectErrorBox.textContent = "";
+                        emptyProjectErrorBox.style.display = "none";
+                    }
+                    if (window.jQuery && window.jQuery.fn.modal) {
+                        window.jQuery(emptyProjectModal).modal("show");
+                    } else {
+                        emptyProjectModal.classList.add("in");
+                        emptyProjectModal.style.display = "block";
+                    }
+                });
+            }
+
+            if (emptyProjectForm) {
+                emptyProjectForm.addEventListener("submit", function (ev) {
+                    ev.preventDefault();
+                    var formData = new FormData(emptyProjectForm);
+                    var payload = {
+                        organization_id: Number(formData.get("organization_id")),
+                        product_name: String(formData.get("product_name") || "").trim(),
+                        script_path: String(formData.get("script_path") || "").trim()
+                    };
+                    var csrf = getCsrfToken();
+                    var headers = {
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Content-Type": "application/json"
+                    };
+                    if (csrf) {
+                        headers["X-CSRFToken"] = csrf;
+                    }
+                    fetch(emptyProjectCreateUrl, {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: headers,
+                        body: JSON.stringify(payload)
+                    }).then(function (resp) {
+                        return resp.json().then(function (data) {
+                            return {ok: resp.ok, data: data};
+                        });
+                    }).then(function (result) {
+                        if (!result.ok || !result.data.ok) {
+                            var msg = (result.data && result.data.detail) || "Failed to create project.";
+                            if (emptyProjectErrorBox) {
+                                emptyProjectErrorBox.textContent = msg;
+                                emptyProjectErrorBox.style.display = "block";
+                            }
+                            return;
+                        }
+                        if (window.jQuery && window.jQuery.fn.modal) {
+                            window.jQuery(emptyProjectModal).modal("hide");
+                        } else if (emptyProjectModal && emptyProjectModal.classList) {
+                            emptyProjectModal.classList.remove("in");
+                            emptyProjectModal.style.display = "none";
+                        }
+                        showGlobalAlert("Empty project has been created.", "success");
+                        window.location.reload();
+                    }).catch(function () {
+                        if (emptyProjectErrorBox) {
+                            emptyProjectErrorBox.textContent = "Unexpected error while creating project.";
+                            emptyProjectErrorBox.style.display = "block";
+                        }
+                    });
+                });
+            }
+
+            (function autoLoadGithubFromCallbackQuery() {
+                if (!githubModal || !githubOrgSelect || !githubInstallationInput) return;
+                var params = new URLSearchParams(window.location.search || "");
+                var orgId = params.get("organization_id");
+                var installationId = params.get("github_installation_id");
+                if (!orgId || !installationId) return;
+                githubOrgSelect.value = orgId;
+                githubInstallationInput.value = installationId;
+                clearGithubState();
+                if (window.jQuery && window.jQuery.fn.modal) {
+                    window.jQuery(githubModal).modal("show");
+                } else {
+                    githubModal.classList.add("in");
+                    githubModal.style.display = "block";
+                }
+                if (githubListBtn) {
+                    githubListBtn.click();
+                }
+            })();
 
             // Show / hide GitLab token
             if (gitlabTokenToggle && gitlabTokenField) {

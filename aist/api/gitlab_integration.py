@@ -12,7 +12,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from aist.models import AISTProject, Organization, RepositoryInfo, ScmGitlabBinding, ScmType
+from aist.models import AISTProject, RepositoryInfo, ScmGitlabBinding, ScmType
+from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
 from aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GH flow uses
 
 
@@ -102,11 +103,13 @@ class ImportProjectFromGitlabAPI(APIView):
         langs = cfg.convert_languages(langs_raw)
 
         organization_id = serializer.validated_data.get("organization_id")
-        organization = get_object_or_404(Organization, pk=organization_id)
+        organization = get_object_or_404(
+            get_authorized_aist_organizations(Permissions.Product_Type_Add_Product, user=request.user),
+            pk=organization_id,
+        )
         product_type = organization.ensure_product_type()
 
         # 3) Create Product in resolved Product Type
-        user_has_permission_or_403(request.user, product_type, Permissions.Product_Type_Add_Product)
         product, created_product = Product.objects.get_or_create(
             name=path_with_ns,
             defaults={"prod_type": product_type, "description": description},
@@ -185,7 +188,11 @@ class ProjectGitlabTokenUpdateAPI(APIView):
         if not token:
             return Response({"detail": "GitLab token is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        project = get_object_or_404(AISTProject.objects.select_related("repository"), id=project_id)
+        project = get_object_or_404(
+            get_authorized_aist_projects(Permissions.Product_Edit, user=request.user).select_related("repository"),
+            id=project_id,
+        )
+        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
         repo = project.repository
         if not repo or repo.type != ScmType.GITLAB:
             return Response({"detail": "Project repository is not GitLab"}, status=status.HTTP_400_BAD_REQUEST)

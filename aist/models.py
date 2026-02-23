@@ -22,7 +22,6 @@ from django.core.validators import RegexValidator
 from django.db import models, transaction
 from django.utils import timezone
 from django_github_app.models import Installation
-from django_github_app.routing import GitHubRouter
 from dojo.models import Finding, Product, Product_Type, Test
 from encrypted_model_fields.fields import EncryptedCharField
 
@@ -38,8 +37,6 @@ ERR_UNSUPPORTED_ARCHIVE = "Unsupported archive format: not a ZIP or TAR.*"
 ERR_GITHASH_PARENT_MUST_BE_BRANCH = "resolved_from_branch must point to a GIT_BRANCH version."
 ERR_GITHASH_PARENT_PROJECT_MISMATCH = "resolved_from_branch must belong to the same project."
 ERR_RESOLVED_FROM_BRANCH_ONLY_FOR_GITHASH = "resolved_from_branch is allowed only for GIT_HASH versions."
-
-gh = GitHubRouter()
 
 
 class ScmType(models.TextChoices):
@@ -106,7 +103,10 @@ class ScmGithubBinding(models.Model):
         if not inst:
             logger.warning("No installation object for GitHub binding")
             return None
-        token = inst.get_access_token()
+        token = async_to_sync(_aget_installation_access_token)(inst)
+        if not token:
+            logger.warning("No access token for GitHub binding installation_id=%s", self.installation_id)
+            return None
         return f"{self.host(scm).replace('https://', 'https://x-access-token:' + token + '@')}/{scm.repo_full}.git"
 
     def build_blob_url(self, scm: RepositoryInfo, ref: str, path: str) -> str:
@@ -130,7 +130,9 @@ class ScmGithubBinding(models.Model):
         inst = Installation.objects.filter(installation_id=self.installation_id).first()
         if not inst:
             return {}
-        token = inst.get_access_token()
+        token = async_to_sync(_aget_installation_access_token)(inst)
+        if not token:
+            return {}
         return {"Authorization": f"token {token}"}
 
     def get_project_info(self, scm: RepositoryInfo):
@@ -139,13 +141,31 @@ class ScmGithubBinding(models.Model):
         owner = scm.repo_owner
         name = scm.repo_name
 
+        if not self.installation_id:
+            logger.warning("No installation ID for GitHub binding")
+            return None
+        installation = Installation.objects.filter(installation_id=self.installation_id).first()
+        if not installation:
+            logger.warning("No installation object for GitHub binding")
+            return None
+
         try:
-            data = async_to_sync(gh.getitem)(f"/repos/{owner}/{name}")
+            data = async_to_sync(_aget_github_repo_info)(installation, owner, name)
         except Exception:
-            logger.exception("Failed to fetch repo data from GitHubRouter for %s/%s", owner, name)
+            logger.exception("Failed to fetch repo data from GitHub API for %s/%s", owner, name)
             return None
 
         return data
+
+
+async def _aget_github_repo_info(installation: Installation, owner: str, name: str) -> dict:
+    async with installation.get_gh_client() as gh:
+        return await gh.getitem(f"/repos/{owner}/{name}")
+
+
+async def _aget_installation_access_token(installation: Installation) -> str | None:
+    async with installation.get_gh_client() as gh:
+        return await installation.aget_access_token(gh)
 
 
 class ScmGitlabBinding(models.Model):

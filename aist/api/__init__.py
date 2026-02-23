@@ -11,6 +11,17 @@ from aist.api.account import (
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.files import ProjectVersionFileBlobAPI
 from aist.api.findings import AISTFindingExportAPI, AISTFindingListAPI, AISTFindingNotesAPI
+from aist.api.github_integration import (
+    GithubConnectCallbackAPI,
+    GithubImportConnectStartAPI,
+    GithubImportExecuteAPI,
+    GithubImportOptionsAPI,
+    GithubImportRepositoriesAPI,
+    GithubProjectConnectStartAPI,
+    GithubProjectLinkRepositoryAPI,
+    GithubProjectRepositoriesAPI,
+    GithubProjectStatusAPI,
+)
 from aist.api.gitlab_integration import ImportProjectFromGitlabAPI, ProjectGitlabTokenUpdateAPI
 from aist.api.launch_configs import (
     EmailActionCreateSerializer,
@@ -52,6 +63,7 @@ from aist.api.pipelines import (
 from aist.api.product_summaries import AISTProductSummaryAPI
 from aist.api.project_versions import AISTProjectVersionCreateSerializer, ProjectVersionCreateAPI
 from aist.api.projects import (
+    AISTProjectCreateAPI,
     AISTProjectDetailAPI,
     AISTProjectListAPI,
     AISTProjectSerializer,
@@ -75,11 +87,21 @@ __all__ = [
     "AISTOrganizationSerializer",
     "AISTPipelineSummaryAPI",
     "AISTProductSummaryAPI",
+    "AISTProjectCreateAPI",
     "AISTProjectDetailAPI",
     "AISTProjectListAPI",
     "AISTProjectSerializer",
     "AISTProjectVersionCreateSerializer",
     "EmailActionCreateSerializer",
+    "GithubConnectCallbackAPI",
+    "GithubImportConnectStartAPI",
+    "GithubImportExecuteAPI",
+    "GithubImportOptionsAPI",
+    "GithubImportRepositoriesAPI",
+    "GithubProjectConnectStartAPI",
+    "GithubProjectLinkRepositoryAPI",
+    "GithubProjectRepositoriesAPI",
+    "GithubProjectStatusAPI",
     "ImportProjectFromGitlabAPI",
     "LaunchConfigActionSerializer",
     "LaunchConfigCreateRequestSerializer",

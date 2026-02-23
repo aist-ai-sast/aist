@@ -6,8 +6,8 @@ from django.contrib.auth import authenticate, get_user_model, login, logout, upd
 from django.contrib.auth.forms import PasswordChangeForm
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect
-from dojo.authorization.roles_permissions import Roles
-from dojo.models import Product_Type_Member
+from dojo.authorization.roles_permissions import Permissions, Roles
+from dojo.models import Product_Type_Group, Product_Type_Member
 from dojo.utils import get_system_setting
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
@@ -17,7 +17,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from single_session.signals import remove_all_sessions
 
-from aist.models import Organization
+from aist.queries import get_authorized_aist_organizations
 
 User = get_user_model()
 
@@ -46,6 +46,11 @@ def _role_rank(role_id: int | None) -> int:
 
 
 def _get_organization_memberships(user: User) -> list[OrganizationMembership]:
+    authorized_orgs = list(
+        get_authorized_aist_organizations(Permissions.Product_View, user=user)
+        .order_by("name")
+        .only("id", "name", "product_type_id"),
+    )
     if user.is_superuser:
         return [
             OrganizationMembership(
@@ -54,36 +59,81 @@ def _get_organization_memberships(user: User) -> list[OrganizationMembership]:
                 role_id=None,
                 role_name="Superuser",
             )
-            for org in Organization.objects.order_by("name").only("id", "name")
+            for org in authorized_orgs
         ]
 
-    rows = (
+    org_by_id = {org.id: org for org in authorized_orgs}
+    if not org_by_id:
+        return []
+
+    by_org: dict[int, OrganizationMembership] = {}
+    member_rows = (
         Product_Type_Member.objects.filter(
             user=user,
-            product_type__aist_organization__isnull=False,
+            product_type__aist_organization__in=org_by_id.keys(),
         )
         .values(
             "product_type__aist_organization",
-            "product_type__aist_organization__name",
             "role_id",
             "role__name",
         )
         .distinct()
     )
-    by_org: dict[int, OrganizationMembership] = {}
-    for row in rows:
+    for row in member_rows:
         organization_id = row["product_type__aist_organization"]
         if not organization_id:
             continue
+        org = org_by_id.get(organization_id)
+        if org is None:
+            continue
         candidate = OrganizationMembership(
             organization_id=organization_id,
-            organization_name=row["product_type__aist_organization__name"] or "",
+            organization_name=org.name,
             role_id=row["role_id"],
             role_name=row["role__name"] or "Reader",
         )
         current = by_org.get(organization_id)
         if current is None or _role_rank(candidate.role_id) > _role_rank(current.role_id):
             by_org[organization_id] = candidate
+
+    group_rows = (
+        Product_Type_Group.objects.filter(
+            group__users=user,
+            product_type__aist_organization__in=org_by_id.keys(),
+        )
+        .values(
+            "product_type__aist_organization",
+            "role_id",
+            "role__name",
+        )
+        .distinct()
+    )
+    for row in group_rows:
+        organization_id = row["product_type__aist_organization"]
+        if not organization_id:
+            continue
+        org = org_by_id.get(organization_id)
+        if org is None:
+            continue
+        candidate = OrganizationMembership(
+            organization_id=organization_id,
+            organization_name=org.name,
+            role_id=row["role_id"],
+            role_name=row["role__name"] or "Reader",
+        )
+        current = by_org.get(organization_id)
+        if current is None or _role_rank(candidate.role_id) > _role_rank(current.role_id):
+            by_org[organization_id] = candidate
+
+    for org in authorized_orgs:
+        if org.id not in by_org:
+            by_org[org.id] = OrganizationMembership(
+                organization_id=org.id,
+                organization_name=org.name,
+                role_id=Roles.Reader.value,
+                role_name="Reader",
+            )
+
     return sorted(by_org.values(), key=lambda item: item.organization_name.lower())
 
 

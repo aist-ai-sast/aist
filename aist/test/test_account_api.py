@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from django.contrib.auth.models import Group
 from django.test import Client
 from django.urls import reverse
+from dojo.authorization.roles_permissions import Roles
+from dojo.models import Product_Type_Group, Role
 from rest_framework.test import APIClient
 
 from aist.models import Organization
@@ -71,6 +74,35 @@ class AISTAccountAPITests(AISTApiBase):
         self.assertEqual(len(memberships), 1)
         self.assertEqual(memberships[0]["organization_name"], "Access Org")
         self.assertEqual(memberships[0]["role_name"], "Maintainer")
+
+    def test_me_get_returns_group_based_membership(self):
+        user = self.user.__class__.objects.create_user(
+            username="group-member",
+            email="group-member@example.com",
+            password="pass",  # noqa: S106
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        organization = Organization.objects.create(name="Group Org")
+        organization.product_type = self.prod_type
+        organization.save(update_fields=["product_type"])
+        self.project.organization = organization
+        self.project.save(update_fields=["organization"])
+
+        group = Group.objects.create(name="aist-group")
+        user.groups.add(group)
+        role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        Product_Type_Group.objects.create(product_type=self.prod_type, group=group, role=role_reader)
+
+        with patch("aist.api.account.get_system_setting", return_value=True):
+            response = client.get(reverse("aist_api:me"))
+
+        self.assertEqual(response.status_code, 200)
+        memberships = response.data.get("organization_memberships", [])
+        self.assertEqual(len(memberships), 1)
+        self.assertEqual(memberships[0]["organization_name"], "Group Org")
+        self.assertEqual(memberships[0]["role_name"], "Reader")
 
     def test_me_patch_updates_profile(self):
         with patch("aist.api.account.get_system_setting", return_value=True):

@@ -68,8 +68,8 @@ services:
       DD_LOGOUT_ALL_SESSIONS: "${DD_LOGOUT_ALL_SESSIONS:-False}"
       WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
       GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
-      CLIENT_ID: "${CLIENT_ID:-}"
-      NAME: "${NAME:-}"
+      GITHUB_CLIENT_ID: "${GITHUB_CLIENT_ID:-}"
+      GITHUB_APP_NAME: "${GITHUB_APP_NAME:-}"
       WEBHOOK_TYPE: "${WEBHOOK_TYPE:-}"
       PRIVATE_KEY: "${PRIVATE_KEY:-}"
       DD_DATABASE_URL: ${DD_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/defectdojo}
@@ -121,6 +121,12 @@ services:
       C_FORCE_ROOT: '1'
       DOCKER_HOST: unix:///var/run/docker.sock
       DOCKER_BUILDKIT: "${DOCKER_BUILDKIT:-1}"
+      WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
+      GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
+      GITHUB_CLIENT_ID: "${GITHUB_CLIENT_ID:-}"
+      GITHUB_APP_NAME: "${GITHUB_APP_NAME:-}"
+      WEBHOOK_TYPE: "${WEBHOOK_TYPE:-}"
+      PRIVATE_KEY: "${PRIVATE_KEY:-}"
       DD_CELERY_WORKER_POOL_TYPE: "${DD_CELERY_WORKER_POOL_TYPE:-prefork}"
       DD_CELERY_WORKER_CONCURRENCY: "${DD_CELERY_WORKER_CONCURRENCY:-6}"
       DD_CELERY_WORKER_AUTOSCALE_MAX: "${DD_CELERY_WORKER_AUTOSCALE_MAX:-8}"
@@ -153,8 +159,8 @@ services:
       FIELD_ENCRYPTION_KEY: "${FIELD_ENCRYPTION_KEY:-}"
       WEBHOOK_SECRET: "${WEBHOOK_SECRET:-}"
       GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
-      CLIENT_ID: "${CLIENT_ID:-}"
-      NAME: "${NAME:-}"
+      GITHUB_CLIENT_ID: "${GITHUB_CLIENT_ID:-}"
+      GITHUB_APP_NAME: "${GITHUB_APP_NAME:-}"
       WEBHOOK_TYPE: "${WEBHOOK_TYPE:-}"
       PRIVATE_KEY: "${PRIVATE_KEY:-}"
       DD_DATABASE_URL: ${DD_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/defectdojo}

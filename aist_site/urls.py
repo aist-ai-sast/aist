@@ -1,5 +1,6 @@
 from django.urls import include, path, re_path
 from django.views.generic import RedirectView
+from django_github_app.views import AsyncWebhookView
 from dojo.user.views import logout_view
 from dojo.utils import get_system_setting
 from drf_spectacular.settings import spectacular_settings
@@ -23,6 +24,7 @@ urlpatterns = [
         client_portal_index,
     ),
     path("aist-admin/aist/", include(("aist.urls", "aist"), namespace="aist")),
+    path("aist/github_hook/", AsyncWebhookView.as_view(), name="aist_github_hook_public"),
     re_path(
         r"^{}api/v2/aist/".format(get_system_setting("url_prefix")),
         include(("aist.api_urls", "aist_api")),
