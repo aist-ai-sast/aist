@@ -1,0 +1,30 @@
+---
+- name: Install ufw
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+  when: firewall_manage
+
+- name: Allow SSH
+  ansible.builtin.command:
+    argv: ["ufw", "allow", "OpenSSH"]
+  when: firewall_manage and firewall_allow_ssh
+  changed_when: false
+
+- name: Allow HTTP for ACME challenge and redirect
+  ansible.builtin.command:
+    argv: ["ufw", "allow", "80/tcp"]
+  when: firewall_manage
+  changed_when: false
+
+- name: Allow HTTPS
+  ansible.builtin.command:
+    argv: ["ufw", "allow", "443/tcp"]
+  when: firewall_manage
+  changed_when: false
+
+- name: Enable ufw
+  ansible.builtin.command:
+    argv: ["ufw", "--force", "enable"]
+  when: firewall_manage
+  changed_when: false

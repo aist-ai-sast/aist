@@ -1,0 +1,9 @@
+[Unit]
+Description=AIST PostgreSQL backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/aist-db-backup.sh

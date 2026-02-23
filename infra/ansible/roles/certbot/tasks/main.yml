@@ -1,0 +1,127 @@
+---
+- name: Install certbot
+  ansible.builtin.apt:
+    name: certbot
+    state: present
+    update_cache: true
+
+- name: Validate certbot email policy
+  ansible.builtin.assert:
+    that:
+      - certbot_email | length > 0 or certbot_register_unsafe_without_email
+    fail_msg: "Set certbot_email or enable certbot_register_unsafe_without_email=true"
+
+- name: Ensure certbot deploy-hook directory exists
+  ansible.builtin.file:
+    path: /usr/local/lib/aist
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install certbot deploy-hook script
+  ansible.builtin.template:
+    src: aist-certbot-deploy-hook.sh.j2
+    dest: /usr/local/lib/aist/certbot-deploy-hook.sh
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Check if LE certificate already exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+  register: le_cert_stat
+
+- name: Request Let's Encrypt certificate with email
+  ansible.builtin.command:
+    argv:
+      - certbot
+      - certonly
+      - --non-interactive
+      - --agree-tos
+      - --webroot
+      - -w
+      - "{{ acme_webroot_host }}"
+      - -d
+      - "{{ domain }}"
+      - --email
+      - "{{ certbot_email }}"
+      - --deploy-hook
+      - /usr/local/lib/aist/certbot-deploy-hook.sh
+  when:
+    - not le_cert_stat.stat.exists
+    - certbot_email | length > 0
+  changed_when: true
+
+- name: Request Let's Encrypt certificate without email
+  ansible.builtin.command:
+    argv:
+      - certbot
+      - certonly
+      - --non-interactive
+      - --agree-tos
+      - --register-unsafely-without-email
+      - --webroot
+      - -w
+      - "{{ acme_webroot_host }}"
+      - -d
+      - "{{ domain }}"
+      - --deploy-hook
+      - /usr/local/lib/aist/certbot-deploy-hook.sh
+  when:
+    - not le_cert_stat.stat.exists
+    - certbot_email | length == 0
+    - certbot_register_unsafe_without_email
+  changed_when: true
+
+- name: Read current LE fullchain checksum
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+    get_checksum: true
+  register: le_fullchain_current
+
+- name: Read current LE private key checksum
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ domain }}/privkey.pem"
+    get_checksum: true
+  register: le_privkey_current
+
+- name: Read deployed nginx cert checksum
+  ansible.builtin.stat:
+    path: "{{ nginx_ssl_host_dir }}/nginx.crt"
+    get_checksum: true
+  register: deployed_nginx_crt
+
+- name: Read deployed nginx key checksum
+  ansible.builtin.stat:
+    path: "{{ nginx_ssl_host_dir }}/nginx.key"
+    get_checksum: true
+  register: deployed_nginx_key
+
+- name: Ensure LE cert is deployed to nginx path and nginx is reloaded
+  ansible.builtin.command:
+    argv:
+      - /usr/local/lib/aist/certbot-deploy-hook.sh
+  when: >-
+    not deployed_nginx_crt.stat.exists
+    or not deployed_nginx_key.stat.exists
+    or deployed_nginx_crt.stat.checksum != le_fullchain_current.stat.checksum
+    or deployed_nginx_key.stat.checksum != le_privkey_current.stat.checksum
+  changed_when: true
+
+- name: Ensure certbot.timer is enabled and running
+  ansible.builtin.systemd:
+    name: certbot.timer
+    enabled: true
+    state: started
+
+- name: Run certbot renew dry-run
+  ansible.builtin.command:
+    argv:
+      - certbot
+      - renew
+      - --dry-run
+      - --deploy-hook
+      - /usr/local/lib/aist/certbot-deploy-hook.sh
+  when: certbot_dry_run_renew
+  changed_when: false

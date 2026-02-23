@@ -1,0 +1,23 @@
+---
+domain: aist.itsec-europe.com
+project_dir: /root/work/aist-defect-dojo
+compose_env_file: .env
+compose_file: docker-compose.yml
+
+acme_webroot_host: /root/work/aist/acme-webroot
+nginx_ssl_host_dir: /root/work/aist/nginx-ssl
+
+certbot_email: ""
+certbot_register_unsafe_without_email: true
+
+timezone: UTC
+
+backup_dir: /var/backups/aist-postgres
+backup_log_file: /var/log/aist-db-backup.log
+backup_retention_days: 30
+backup_on_calendar: "*-*-* 03:00:00"
+
+firewall_manage: true
+firewall_allow_ssh: true
+backup_run_immediately: false
+certbot_dry_run_renew: true

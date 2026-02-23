@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule AIST PostgreSQL backups
+
+[Timer]
+OnCalendar={{ backup_on_calendar }}
+Persistent=true
+Unit=aist-db-backup.service
+
+[Install]
+WantedBy=timers.target

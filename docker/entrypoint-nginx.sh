@@ -3,14 +3,22 @@
 set -e  # needed to handle "exit" correctly
 
 umask 0002
+SSL_DIR="/etc/nginx/ssl"
+SSL_CERT_PATH="${SSL_DIR}/nginx.crt"
+SSL_KEY_PATH="${SSL_DIR}/nginx.key"
+
 if [ "${GENERATE_TLS_CERTIFICATE}" = true ]; then
+  target_ssl_dir="/tmp/nginx-ssl"
+  mkdir -p "${target_ssl_dir}"
+  SSL_CERT_PATH="${target_ssl_dir}/nginx.crt"
+  SSL_KEY_PATH="${target_ssl_dir}/nginx.key"
   openssl req  \
       -x509 \
       -nodes \
       -days 365 \
       -newkey rsa:4096 \
-      -keyout /etc/nginx/ssl/nginx.key \
-      -out /etc/nginx/ssl/nginx.crt \
+      -keyout "${SSL_KEY_PATH}" \
+      -out "${SSL_CERT_PATH}" \
       -subj "/C=DE/ST=City/L=City/O=Global Security/OU=IT Department/CN=nginx"
 fi
 
@@ -23,6 +31,11 @@ else
 fi
 
 envsubst '$AIST_DOMAIN' < "$NGINX_CONFIG_SOURCE" > "$NGINX_CONFIG"
+
+if [ "${USE_TLS}" = true ] && [ "${SSL_CERT_PATH}" != "/etc/nginx/ssl/nginx.crt" ]; then
+  sed -i "s|/etc/nginx/ssl/nginx.crt|${SSL_CERT_PATH}|g" "$NGINX_CONFIG"
+  sed -i "s|/etc/nginx/ssl/nginx.key|${SSL_KEY_PATH}|g" "$NGINX_CONFIG"
+fi
 
 if ! ip -6 addr show dev lo | grep -q 'inet6 ::1'; then
   sed -i '/listen \[::\]:/d' "$NGINX_CONFIG"

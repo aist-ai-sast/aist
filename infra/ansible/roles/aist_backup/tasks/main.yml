@@ -1,0 +1,56 @@
+---
+- name: Ensure backup directory exists
+  ansible.builtin.file:
+    path: "{{ backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Ensure backup log directory exists
+  ansible.builtin.file:
+    path: "{{ backup_log_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install DB backup script
+  ansible.builtin.template:
+    src: aist-db-backup.sh.j2
+    dest: /usr/local/bin/aist-db-backup.sh
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install systemd backup service
+  ansible.builtin.template:
+    src: aist-db-backup.service.j2
+    dest: /etc/systemd/system/aist-db-backup.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install systemd backup timer
+  ansible.builtin.template:
+    src: aist-db-backup.timer.j2
+    dest: /etc/systemd/system/aist-db-backup.timer
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Enable and start DB backup timer
+  ansible.builtin.systemd:
+    name: aist-db-backup.timer
+    enabled: true
+    state: started
+
+- name: Run DB backup once immediately
+  ansible.builtin.systemd:
+    name: aist-db-backup.service
+    state: started
+  when: backup_run_immediately

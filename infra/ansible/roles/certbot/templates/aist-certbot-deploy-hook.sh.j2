@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DOMAIN="{{ domain }}"
+LIVE_DIR="/etc/letsencrypt/live/${DOMAIN}"
+TARGET_DIR="{{ nginx_ssl_host_dir }}"
+PROJECT_DIR="{{ project_dir }}"
+COMPOSE_ENV_FILE="{{ compose_env_file }}"
+
+install -d -m 0750 "${TARGET_DIR}"
+install -m 0644 "${LIVE_DIR}/fullchain.pem" "${TARGET_DIR}/nginx.crt"
+install -m 0640 "${LIVE_DIR}/privkey.pem" "${TARGET_DIR}/nginx.key"
+
+cd "${PROJECT_DIR}"
+docker compose --env-file "${COMPOSE_ENV_FILE}" exec -T nginx nginx -t
+docker compose --env-file "${COMPOSE_ENV_FILE}" exec -T nginx nginx -s reload

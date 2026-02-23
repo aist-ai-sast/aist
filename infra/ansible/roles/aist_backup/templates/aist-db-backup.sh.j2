@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="{{ project_dir }}"
+COMPOSE_ENV_FILE="{{ compose_env_file }}"
+BACKUP_DIR="{{ backup_dir }}"
+LOG_FILE="{{ backup_log_file }}"
+RETENTION_DAYS="{{ backup_retention_days }}"
+
+mkdir -p "${BACKUP_DIR}" "$(dirname "${LOG_FILE}")"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+STAMP="$(date -u +%Y%m%d_%H%M%S)"
+OUT_FILE="${BACKUP_DIR}/defectdojo_${STAMP}.sql.gz"
+TMP_FILE="${OUT_FILE}.tmp"
+
+cd "${PROJECT_DIR}"
+docker compose --env-file "${COMPOSE_ENV_FILE}" exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip -9 > "${TMP_FILE}"
+
+if [ ! -s "${TMP_FILE}" ]; then
+  rm -f "${TMP_FILE}"
+  echo "Backup failed: empty dump" >&2
+  exit 1
+fi
+
+mv -f "${TMP_FILE}" "${OUT_FILE}"
+find "${BACKUP_DIR}" -type f -name '*.sql.gz' -mtime "+${RETENTION_DAYS}" -delete
+
+echo "Backup created: ${OUT_FILE}"

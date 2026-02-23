@@ -1,0 +1,114 @@
+---
+- name: Provision AIST production host
+  hosts: aist_prod
+  become: true
+  vars_files:
+    - ../group_vars/prod.yml
+
+  pre_tasks:
+    - name: Validate project directory exists
+      ansible.builtin.stat:
+        path: "{{ project_dir }}"
+      register: project_dir_stat
+
+    - name: Fail when project directory is missing
+      ansible.builtin.assert:
+        that:
+          - project_dir_stat.stat.exists
+          - project_dir_stat.stat.isdir
+        fail_msg: "project_dir={{ project_dir }} is missing"
+
+    - name: Validate docker compose file exists
+      ansible.builtin.stat:
+        path: "{{ project_dir }}/{{ compose_file }}"
+      register: compose_file_stat
+
+    - name: Fail when docker compose file is missing
+      ansible.builtin.assert:
+        that:
+          - compose_file_stat.stat.exists
+          - compose_file_stat.stat.isreg
+        fail_msg: "Compose file not found: {{ project_dir }}/{{ compose_file }}"
+
+  roles:
+    - role: base
+    - role: firewall
+
+  tasks:
+    - name: Ensure ACME webroot exists
+      ansible.builtin.file:
+        path: "{{ acme_webroot_host }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure nginx SSL directory exists
+      ansible.builtin.file:
+        path: "{{ nginx_ssl_host_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Check if nginx certificate exists
+      ansible.builtin.stat:
+        path: "{{ nginx_ssl_host_dir }}/nginx.crt"
+      register: nginx_crt_stat
+
+    - name: Check if nginx private key exists
+      ansible.builtin.stat:
+        path: "{{ nginx_ssl_host_dir }}/nginx.key"
+      register: nginx_key_stat
+
+    - name: Generate temporary self-signed cert for first boot
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -nodes
+          - -newkey
+          - rsa:4096
+          - -days
+          - "2"
+          - -subj
+          - "/CN={{ domain }}"
+          - -keyout
+          - "{{ nginx_ssl_host_dir }}/nginx.key"
+          - -out
+          - "{{ nginx_ssl_host_dir }}/nginx.crt"
+      when: not nginx_crt_stat.stat.exists or not nginx_key_stat.stat.exists
+      changed_when: true
+
+    - name: Restrict permissions for nginx private key
+      ansible.builtin.file:
+        path: "{{ nginx_ssl_host_dir }}/nginx.key"
+        owner: root
+        group: root
+        mode: "0640"
+
+    - name: Start docker compose stack
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --env-file
+          - "{{ compose_env_file }}"
+          - up
+          - -d
+      args:
+        chdir: "{{ project_dir }}"
+      register: compose_up_result
+      changed_when: >-
+        'Created' in compose_up_result.stdout
+        or 'Recreated' in compose_up_result.stdout
+        or 'Started' in compose_up_result.stdout
+
+    - name: Ensure certbot and LE certificate are configured
+      ansible.builtin.include_role:
+        name: certbot
+
+    - name: Ensure DB backup automation is configured
+      ansible.builtin.include_role:
+        name: aist_backup

@@ -20,6 +20,13 @@ services:
     volumes:
       - defectdojo_media:/usr/share/nginx/html/media
       - type: bind
+        source: ${ACME_WEBROOT_HOST:-/tmp/aist/acme-webroot}
+        target: /var/www/certbot
+      - type: bind
+        source: ${NGINX_SSL_HOST_DIR:-/tmp/aist/nginx-ssl}
+        target: /etc/nginx/ssl
+        read_only: true
+      - type: bind
         source: ./docker/nginx/client_ui.conf
         target: /etc/nginx/nginx.conf
       - type: bind
@@ -27,7 +34,7 @@ services:
         target: /etc/nginx/nginx_TLS.conf
     ports:
       - target: 8080
-        published: ${DD_PORT:-8080}
+        published: ${DD_HTTP_PORT:-80}
         protocol: tcp
         mode: host
       - target: 443
