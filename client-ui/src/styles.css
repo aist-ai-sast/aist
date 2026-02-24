@@ -217,3 +217,210 @@ body::-webkit-scrollbar-thumb:hover,
 .date-input::-webkit-calendar-picker-indicator {
   opacity: 0;
 }
+
+.fc {
+  color: #d9e4fb;
+  --fc-border-color: rgba(45, 67, 105, 0.85);
+  --fc-page-bg-color: transparent;
+  --fc-neutral-bg-color: rgba(15, 24, 43, 0.92);
+  --fc-list-event-hover-bg-color: rgba(25, 39, 67, 0.9);
+  --fc-today-bg-color: rgba(77, 212, 255, 0.08);
+  --fc-event-bg-color: rgba(33, 60, 99, 0.95);
+  --fc-event-border-color: rgba(77, 212, 255, 0.35);
+  --fc-event-text-color: #eaf3ff;
+}
+
+.fc .fc-scrollgrid,
+.fc .fc-scrollgrid-section > td,
+.fc .fc-timegrid-slot,
+.fc .fc-timegrid-axis,
+.fc .fc-daygrid-day,
+.fc .fc-col-header-cell {
+  background: rgba(10, 16, 30, 0.85);
+}
+
+.fc .fc-daygrid-day-frame,
+.fc .fc-timegrid-col-frame {
+  min-height: 96px;
+}
+
+.fc .fc-toolbar-title {
+  font-size: 1rem;
+  color: #f2f6ff;
+  letter-spacing: 0.03em;
+}
+
+.fc .fc-button {
+  border: 1px solid rgba(38, 56, 90, 0.9) !important;
+  background: rgba(16, 24, 43, 0.92) !important;
+  color: #d3def6 !important;
+}
+
+.fc .fc-button-primary:not(:disabled):active,
+.fc .fc-button-primary:not(:disabled).fc-button-active {
+  border-color: rgba(77, 212, 255, 0.38) !important;
+  background: rgba(19, 42, 72, 0.92) !important;
+  box-shadow: inset 0 0 0 1px rgba(77, 212, 255, 0.2) !important;
+}
+
+.fc .fc-button:focus,
+.fc .fc-button-primary:focus {
+  box-shadow: none !important;
+}
+
+.fc .fc-daygrid-day-number,
+.fc .fc-col-header-cell-cushion {
+  color: #d3def6;
+}
+
+.fc .fc-day-today .fc-daygrid-day-number {
+  color: #8fe7ff;
+  font-weight: 600;
+}
+
+.fc .fc-highlight {
+  background: rgba(77, 212, 255, 0.2) !important;
+  border: 1px solid rgba(77, 212, 255, 0.45);
+}
+
+.fc .fc-event {
+  border-radius: 0.55rem;
+  padding: 1px 4px;
+  font-weight: 500;
+  box-shadow: 0 8px 16px rgba(4, 8, 18, 0.35);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.fc .fc-event-main,
+.fc .fc-event-main-frame {
+  min-width: 0;
+}
+
+.fc-aist-event-content {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.fc-aist-event-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 9999px;
+  background: rgba(8, 14, 26, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #eaf6ff;
+  line-height: 0;
+  flex-shrink: 0;
+}
+
+.fc-aist-event-icon svg,
+.fc-aist-event-icon span {
+  width: 0.78rem !important;
+  height: 0.78rem !important;
+  display: block;
+  margin: auto;
+}
+
+.fc-aist-event-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fc-aist-past-event {
+  opacity: 0.82;
+  background: linear-gradient(180deg, rgba(35, 53, 82, 0.9), rgba(26, 40, 64, 0.95)) !important;
+  border-color: rgba(88, 114, 158, 0.45) !important;
+}
+
+.fc-aist-future-event {
+  background: linear-gradient(180deg, rgba(25, 56, 92, 0.96), rgba(19, 42, 72, 0.98)) !important;
+  border-color: rgba(77, 212, 255, 0.58) !important;
+  border-left: 3px solid rgba(111, 228, 255, 0.9) !important;
+}
+
+.fc-aist-aggregated-event {
+  font-weight: 600;
+  outline: 1px dashed rgba(111, 228, 255, 0.45);
+}
+
+.fc-aist-type-finding_created {
+  background: linear-gradient(180deg, rgba(71, 34, 69, 0.95), rgba(53, 24, 52, 0.96)) !important;
+  border-color: rgba(250, 126, 223, 0.52) !important;
+}
+
+.fc-aist-type-finding_mitigated {
+  background: linear-gradient(180deg, rgba(41, 90, 78, 0.95), rgba(31, 68, 58, 0.96)) !important;
+  border-color: rgba(114, 221, 196, 0.6) !important;
+}
+
+.fc-aist-type-pipeline_scheduled {
+  background: linear-gradient(180deg, rgba(30, 76, 98, 0.96), rgba(21, 58, 76, 0.98)) !important;
+  border-color: rgba(108, 225, 255, 0.58) !important;
+}
+
+.fc-aist-type-pipeline_started {
+  background: linear-gradient(180deg, rgba(29, 81, 107, 0.96), rgba(21, 60, 80, 0.98)) !important;
+  border-color: rgba(77, 183, 216, 0.62) !important;
+}
+
+.fc-aist-pipeline-status-finished {
+  background: linear-gradient(180deg, rgba(29, 81, 107, 0.96), rgba(21, 60, 80, 0.98)) !important;
+  border-color: rgba(77, 183, 216, 0.62) !important;
+}
+
+.fc-aist-pipeline-status-warning {
+  background: linear-gradient(180deg, rgba(108, 66, 28, 0.96), rgba(82, 48, 18, 0.98)) !important;
+  border-color: rgba(255, 186, 94, 0.62) !important;
+}
+
+.fc-aist-pipeline-status-other {
+  background: linear-gradient(180deg, rgba(49, 67, 96, 0.95), rgba(34, 48, 72, 0.97)) !important;
+  border-color: rgba(145, 170, 210, 0.54) !important;
+}
+
+.fc-aist-type-project_created {
+  background: linear-gradient(180deg, rgba(93, 63, 24, 0.95), rgba(70, 46, 17, 0.96)) !important;
+  border-color: rgba(255, 195, 112, 0.58) !important;
+}
+
+.aist-calendar-hover-card {
+  position: fixed;
+  z-index: 80;
+  width: min(320px, calc(100vw - 1.5rem));
+  pointer-events: none;
+  border: 1px solid rgba(35, 57, 92, 0.9);
+  border-radius: 0.85rem;
+  background: linear-gradient(165deg, rgba(18, 30, 53, 0.98) 0%, rgba(12, 20, 38, 0.98) 100%);
+  box-shadow: 0 18px 34px rgba(3, 8, 16, 0.42);
+  padding: 0.65rem 0.8rem;
+}
+
+.aist-calendar-detail-hero {
+  background: linear-gradient(160deg, rgba(24, 35, 58, 0.92) 0%, rgba(15, 23, 41, 0.9) 100%);
+  border-color: rgba(76, 106, 156, 0.48);
+  box-shadow: 0 14px 30px rgba(5, 12, 25, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+@media (max-width: 1024px) {
+  .fc .fc-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+  .fc .fc-toolbar-chunk {
+    display: flex;
+    justify-content: center;
+  }
+  .fc .fc-button {
+    min-height: 40px;
+  }
+}

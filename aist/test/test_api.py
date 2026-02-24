@@ -1,6 +1,7 @@
 # aist/test/test_api.py
 from __future__ import annotations
 
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -550,6 +551,42 @@ class AISTFindingAuthorizationTests(AISTApiBase):
         self.assertEqual(resp.status_code, 200)
         ids = {row["id"] for row in resp.data.get("results", [])}
         self.assertNotIn(isolated_finding.id, ids)
+
+    def test_finding_list_filters_by_created_gte(self):
+        self.own_finding.date = timezone.now() - timedelta(days=5)
+        self.own_finding.save(update_fields=["date"])
+        newer = Finding.objects.create(
+            test=self.own_finding.test,
+            title="Newer finding",
+            severity="Medium",
+            date=timezone.now() - timedelta(days=1),
+            reporter=self.user,
+        )
+
+        cutoff = (timezone.now() - timedelta(days=2)).isoformat()
+        resp = self.client.get(reverse("aist_api:finding_list"), data={"created_gte": cutoff})
+        self.assertEqual(resp.status_code, 200)
+        ids = {row["id"] for row in resp.data.get("results", [])}
+        self.assertIn(newer.id, ids)
+        self.assertNotIn(self.own_finding.id, ids)
+
+    def test_finding_list_filters_by_created_lte(self):
+        self.own_finding.date = timezone.now() - timedelta(days=5)
+        self.own_finding.save(update_fields=["date"])
+        newer = Finding.objects.create(
+            test=self.own_finding.test,
+            title="Newest finding",
+            severity="Medium",
+            date=timezone.now() - timedelta(hours=6),
+            reporter=self.user,
+        )
+
+        cutoff = (timezone.now() - timedelta(days=2)).isoformat()
+        resp = self.client.get(reverse("aist_api:finding_list"), data={"created_lte": cutoff})
+        self.assertEqual(resp.status_code, 200)
+        ids = {row["id"] for row in resp.data.get("results", [])}
+        self.assertIn(self.own_finding.id, ids)
+        self.assertNotIn(newer.id, ids)
 
 
 class AIFindingResponseAPITests(AISTApiBase):

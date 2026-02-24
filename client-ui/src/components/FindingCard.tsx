@@ -1,6 +1,7 @@
 import type { Finding } from "../types";
 import { formatDateForUI } from "../lib/dateDisplay";
 import { formatProjectVersionText } from "../lib/projectVersion";
+import { severityBadgeClass } from "../lib/badgeStyles";
 import AiVerdictBadge from "./AiVerdictBadge";
 import FindingSnippetPreview from "./FindingSnippetPreview";
 
@@ -12,14 +13,6 @@ type FindingCardProps = {
   onSelectProjectVersion?: (projectVersion: string) => void;
   onSelectProject?: (projectId: number) => void;
   onSelectFile?: (filePath: string) => void;
-};
-
-const severityStyles: Record<Finding["severity"], string> = {
-  Critical: "border-danger-500/50 text-danger-500 bg-danger-500/10",
-  High: "border-danger-500/30 text-danger-500/80 bg-danger-500/10",
-  Medium: "border-amber-400/40 text-amber-400 bg-amber-400/10",
-  Low: "border-slate-500/40 text-slate-300 bg-slate-500/10",
-  Info: "border-slate-500/40 text-slate-300 bg-slate-500/10",
 };
 
 export default function FindingCard({
@@ -54,7 +47,7 @@ export default function FindingCard({
           <span
             className={[
               "rounded-full border px-3 py-1 font-semibold uppercase tracking-wide",
-              severityStyles[finding.severity],
+              severityBadgeClass(finding.severity),
             ].join(" ")}
           >
             {finding.severity}

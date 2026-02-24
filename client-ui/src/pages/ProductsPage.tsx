@@ -10,6 +10,7 @@ import TextInput from "../components/TextInput";
 import PermissionGate from "../components/PermissionGate";
 import PaginationBar from "../components/PaginationBar";
 import PageErrorState from "../components/PageErrorState";
+import { SEVERITY_ORDER, severityBarClass } from "../lib/badgeStyles";
 
 const statusOptions = [
   { value: "all", label: "All statuses" },
@@ -37,13 +38,7 @@ function SeverityBar({ severity }: { severity: ProductSummary["severity"] }) {
   const total = severityTotal(severity);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const activeValue = activeKey ? severity[activeKey as keyof typeof severity] ?? 0 : null;
-  const segments = [
-    { key: "Critical", color: "bg-danger-500" },
-    { key: "High", color: "bg-danger-500/70" },
-    { key: "Medium", color: "bg-amber-400" },
-    { key: "Low", color: "bg-slate-400" },
-    { key: "Info", color: "bg-slate-500" },
-  ] as const;
+  const segments = SEVERITY_ORDER.map((key) => ({ key, color: severityBarClass(key) }));
   return (
     <div className="relative">
       <div className="flex h-2 w-full overflow-hidden rounded-full bg-night-900">

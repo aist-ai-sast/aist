@@ -7,6 +7,7 @@ import PipelineFilterPanel from "../components/PipelineFilterPanel";
 import PaginationBar from "../components/PaginationBar";
 import { getRoute } from "../lib/routes";
 import PageErrorState from "../components/PageErrorState";
+import { pipelineStatusBadgeClass } from "../lib/badgeStyles";
 
 const statusOptions = [
   { value: "all", label: "All statuses" },
@@ -32,15 +33,6 @@ function truncateText(value: string | null | undefined, max = 32) {
   if (!value) return "—";
   if (value.length <= max) return value;
   return `${value.slice(0, max - 3)}...`;
-}
-
-function statusBadge(status: string) {
-  const upper = status.toUpperCase();
-  if (upper.includes("FAIL")) return "border-danger-500/50 text-danger-500 bg-danger-500/10";
-  if (upper.includes("WARNING")) return "border-amber-400/50 text-amber-300 bg-amber-400/10";
-  if (upper.includes("FINISH")) return "border-brand-600/50 text-brand-500 bg-brand-600/10";
-  if (upper.includes("START")) return "border-brand-600/50 text-brand-500 bg-brand-600/10";
-  return "border-slate-500/40 text-slate-300 bg-night-700";
 }
 
 function findingsPath(params: {
@@ -157,12 +149,17 @@ export default function PipelinesPage() {
   }, [projects, selectedProjectId]);
 
   useEffect(() => {
-    const projectParam = searchParams.get("project");
+    const projectParam = searchParams.get("project") ?? searchParams.get("project_id");
     if (!projectParam) return;
     const parsed = Number(projectParam);
     if (!Number.isNaN(parsed)) {
       setSelectedProjectId(parsed);
     }
+  }, [searchParams]);
+
+  useEffect(() => {
+    setCreatedFrom(searchParams.get("created_from") ?? searchParams.get("created_gte") ?? "");
+    setCreatedTo(searchParams.get("created_to") ?? searchParams.get("created_lte") ?? "");
   }, [searchParams]);
 
   const pipelinesQuery = usePipelineSummaries({
@@ -307,7 +304,7 @@ export default function PipelinesPage() {
                       <span
                         className={[
                           "rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide",
-                          statusBadge(pipeline.status),
+                          pipelineStatusBadgeClass(pipeline.status),
                         ].join(" ")}
                       >
                         {pipeline.status}

@@ -14,6 +14,7 @@ type SelectFieldProps = {
   disabled?: boolean;
   placeholder?: string;
   hideLabel?: boolean;
+  showIndicator?: boolean;
 };
 
 export default function SelectField({
@@ -24,30 +25,32 @@ export default function SelectField({
   disabled,
   placeholder = "Select",
   hideLabel = false,
+  showIndicator = true,
 }: SelectFieldProps) {
-  const selected = options.find((option) => option.value === value);
   return (
     <div>
       {hideLabel ? null : <label className="text-xs text-slate-400">{label}</label>}
       <Select.Root value={value || undefined} onValueChange={onChange} disabled={disabled}>
-      <Select.Trigger
-        className={[
-          "flex h-10 w-full items-center justify-between rounded-xl border border-night-500 bg-night-600 px-3 text-sm text-white outline-none transition focus-visible:border-brand-600 focus-visible:ring-2 focus-visible:ring-brand-600/60 data-[state=open]:border-brand-600 data-[state=open]:ring-2 data-[state=open]:ring-brand-600/60",
-          hideLabel ? "mt-0" : "mt-2",
-        ].join(" ")}
-      >
-        <Select.Value placeholder={placeholder} />
-          <Select.Icon className="text-slate-400">
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path d="M5.25 7.5 10 12.25 14.75 7.5H5.25Z" />
-            </svg>
-          </Select.Icon>
+        <Select.Trigger
+          className={[
+            "flex h-10 w-full items-center justify-between rounded-xl border border-night-500 bg-night-600 px-3 text-sm text-white outline-none transition focus-visible:border-brand-600 focus-visible:ring-2 focus-visible:ring-brand-600/60 data-[state=open]:border-brand-600 data-[state=open]:ring-2 data-[state=open]:ring-brand-600/60",
+            hideLabel ? "mt-0" : "mt-2",
+          ].join(" ")}
+        >
+          <Select.Value placeholder={placeholder} />
+          {showIndicator ? (
+            <Select.Icon className="text-slate-400">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M5.25 7.5 10 12.25 14.75 7.5H5.25Z" />
+              </svg>
+            </Select.Icon>
+          ) : null}
         </Select.Trigger>
         <Select.Portal>
           <Select.Content

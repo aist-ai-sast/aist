@@ -14,6 +14,7 @@ const FindingsPage = lazy(() => import("./pages/FindingsPage"));
 const FindingDetailPage = lazy(() => import("./pages/FindingDetailPage"));
 const ProductsPage = lazy(() => import("./pages/ProductsPage"));
 const PipelinesPage = lazy(() => import("./pages/PipelinesPage"));
+const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const PlaceholderPage = lazy(() => import("./pages/PlaceholderPage"));
 
@@ -23,6 +24,7 @@ try {
   getRoute("ui_finding_detail_path");
   getRoute("ui_products_path");
   getRoute("ui_pipelines_path");
+  getRoute("ui_calendar_path");
   getRoute("ui_settings_path");
 } catch (error) {
   routeBootstrapError = error as Error;
@@ -132,6 +134,10 @@ export default function App() {
                   <Route
                     path={getRoute("ui_pipelines_path")}
                     element={<PipelinesPage />}
+                  />
+                  <Route
+                    path={getRoute("ui_calendar_path")}
+                    element={<CalendarPage />}
                   />
                   <Route
                     path={getRoute("ui_search_path")}

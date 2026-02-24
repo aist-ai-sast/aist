@@ -8,6 +8,8 @@ type MultiSelectChipsProps = {
   onChange: (value: string[]) => void;
   emptyLabel?: string;
   visibleCount?: number;
+  hideLabel?: boolean;
+  chipsClassName?: string;
 };
 
 export default function MultiSelectChips({
@@ -17,13 +19,15 @@ export default function MultiSelectChips({
   onChange,
   emptyLabel = "No options available.",
   visibleCount = 12,
+  hideLabel = false,
+  chipsClassName,
 }: MultiSelectChipsProps) {
   const [expanded, setExpanded] = useState(false);
   const visibleOptions = expanded ? options : options.slice(0, visibleCount);
   return (
     <div>
-      <label className="text-xs text-slate-400">{label}</label>
-      <div className="mt-2 flex flex-wrap gap-2">
+      {hideLabel ? null : <label className="text-xs text-slate-400">{label}</label>}
+      <div className={[hideLabel ? "mt-0" : "mt-2", "flex flex-wrap gap-2", chipsClassName ?? ""].join(" ").trim()}>
         {options.length ? (
           visibleOptions.map((option) => (
             <button

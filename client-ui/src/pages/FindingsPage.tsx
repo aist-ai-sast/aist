@@ -30,6 +30,8 @@ export default function FindingsPage() {
   const [selectedProjectVersion, setSelectedProjectVersion] = useState<string>("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | undefined>();
+  const [createdFrom, setCreatedFrom] = useState<string>("");
+  const [createdTo, setCreatedTo] = useState<string>("");
   const [findingOverrides, setFindingOverrides] = useState<Record<number, Partial<Finding>>>({});
   const toast = useToast();
   const [searchParams] = useSearchParams();
@@ -41,6 +43,8 @@ export default function FindingsPage() {
   const findingsQuery = useFindingsPage({
     projectId: selectedProjectId,
     pipelineId: selectedPipelineId,
+    createdGte: createdFrom || undefined,
+    createdLte: createdTo || undefined,
     aiStatus:
       selectedAiResponse === "All"
         ? undefined
@@ -114,7 +118,7 @@ export default function FindingsPage() {
 
   useEffect(() => {
     setPageIndex(0);
-  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiResponse, selectedPipelineId, selectedFile, selectedProjectVersion, ordering, pageSize]);
+  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiResponse, selectedPipelineId, createdFrom, createdTo, selectedFile, selectedProjectVersion, ordering, pageSize]);
 
   const applyCloseState = (
     findingId: number,
@@ -154,6 +158,8 @@ export default function FindingsPage() {
 
     const pipeline = searchParams.get("pipeline") ?? searchParams.get("pipeline_id");
     setSelectedPipelineId(pipeline || undefined);
+    setCreatedFrom(searchParams.get("created_from") ?? searchParams.get("created_gte") ?? "");
+    setCreatedTo(searchParams.get("created_to") ?? searchParams.get("created_lte") ?? "");
     setSelectedProjectVersion(searchParams.get("project_version") ?? "");
     setSelectedFile(searchParams.get("file") ?? "");
     setSelectedCwe(searchParams.get("cwe") ?? "");
@@ -258,6 +264,10 @@ export default function FindingsPage() {
           onSeveritiesChange={setSelectedSeverities}
           selectedFile={selectedFile}
           onFileChange={setSelectedFile}
+          createdFrom={createdFrom}
+          onCreatedFromChange={setCreatedFrom}
+          createdTo={createdTo}
+          onCreatedToChange={setCreatedTo}
           selectedProjectVersion={selectedProjectVersion}
           onProjectVersionChange={(value) => {
             setSelectedProjectVersion(value);

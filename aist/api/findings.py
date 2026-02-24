@@ -114,6 +114,8 @@ class AISTFindingListItemSerializer(dojo_serializers.FindingSerializer):
 class AISTFindingFilter(ApiFindingFilter):
     pipeline_id = django_filters.CharFilter(method="filter_pipeline_id")
     project_id = django_filters.NumberFilter(field_name="aist_project_versions__project_id")
+    created_gte = django_filters.IsoDateTimeFilter(field_name="date", lookup_expr="gte")
+    created_lte = django_filters.IsoDateTimeFilter(field_name="date", lookup_expr="lte")
     project_version = django_filters.CharFilter(field_name="aist_project_versions__version", lookup_expr="exact")
     file = django_filters.CharFilter(field_name="file_path", lookup_expr="icontains")
     ai_status = django_filters.ChoiceFilter(
@@ -183,6 +185,8 @@ class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
                 enum=FINDING_API_CHOICES.ai_status,
             ),
             OpenApiParameter(name="project_id", required=False, type=int),
+            OpenApiParameter(name="created_gte", required=False, type=str),
+            OpenApiParameter(name="created_lte", required=False, type=str),
             OpenApiParameter(name="project_version", required=False, type=str),
             OpenApiParameter(name="file", required=False, type=str),
             OpenApiParameter(name="ordering", required=False, type=str, enum=FINDING_API_CHOICES.ordering),

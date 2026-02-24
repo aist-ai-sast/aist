@@ -47,6 +47,12 @@ def _build_routes() -> dict[str, Any]:
         ),
         "pipelines_list_url": reverse("aist_api:pipelines"),
         "pipelines_summary_url": reverse("aist_api:pipeline_summary"),
+        "calendar_events_url": reverse("aist_api:calendar_events"),
+        "calendar_event_detail_url": _replace_str_placeholder(
+            reverse("aist_api:calendar_event_detail", kwargs={"event_id": "EVENT_ID"}),
+            "EVENT_ID",
+            "event_id",
+        ),
         "pipeline_export_url": _replace_str_placeholder(
             reverse("aist_api:pipeline_export_ai_results", kwargs={"pipeline_id": "PIPELINE_ID"}),
             "PIPELINE_ID",
@@ -69,6 +75,7 @@ def _build_routes() -> dict[str, Any]:
         "ui_finding_detail_path": "/finding/:id",
         "ui_products_path": "/products",
         "ui_pipelines_path": "/pipelines",
+        "ui_calendar_path": "/calendar",
         "ui_search_path": "/search",
         "ui_settings_path": "/settings",
     }

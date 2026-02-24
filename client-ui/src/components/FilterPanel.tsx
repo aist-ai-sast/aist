@@ -1,4 +1,5 @@
 import type { Project } from "../types";
+import DateField from "./DateField";
 import MultiSelectChips from "./MultiSelectChips";
 import SelectField from "./SelectField";
 import TextInput from "./TextInput";
@@ -11,6 +12,10 @@ type FilterPanelProps = {
   onSeveritiesChange: (value: string[]) => void;
   selectedFile: string;
   onFileChange: (value: string) => void;
+  createdFrom: string;
+  onCreatedFromChange: (value: string) => void;
+  createdTo: string;
+  onCreatedToChange: (value: string) => void;
   selectedProjectVersion: string;
   onProjectVersionChange: (value: string) => void;
   selectedStatus: string;
@@ -34,6 +39,10 @@ export default function FilterPanel({
   onSeveritiesChange,
   selectedFile,
   onFileChange,
+  createdFrom,
+  onCreatedFromChange,
+  createdTo,
+  onCreatedToChange,
   selectedProjectVersion,
   onProjectVersionChange,
   selectedStatus,
@@ -90,6 +99,23 @@ export default function FilterPanel({
             onChange={(event) => onFileChange(event.target.value)}
             placeholder="e.g. src/app/main.py"
           />
+        </div>
+        <div>
+          <label className="text-xs text-slate-400">Created between</label>
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <DateField
+              label="From"
+              value={createdFrom}
+              onChange={onCreatedFromChange}
+              placeholder="dd.mm.yy"
+            />
+            <DateField
+              label="To"
+              value={createdTo}
+              onChange={onCreatedToChange}
+              placeholder="dd.mm.yy"
+            />
+          </div>
         </div>
         <SelectField
           label="Status"

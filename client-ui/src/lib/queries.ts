@@ -1,6 +1,16 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
-import type { AIResponse, Finding, FindingFilters, Note, PipelineSummary, ProductSummary, Project } from "../types";
+import type {
+  AIResponse,
+  CalendarEvent,
+  CalendarView,
+  Finding,
+  FindingFilters,
+  Note,
+  PipelineSummary,
+  ProductSummary,
+  Project,
+} from "../types";
 import { fetchJson, normalizeList } from "./api";
 import { getRoute } from "./routes";
 
@@ -109,6 +119,25 @@ type PipelineSummaryApi = {
   }>;
 };
 
+type CalendarEventApi = {
+  id: string;
+  event_type: CalendarEvent["eventType"];
+  title: string;
+  start: string;
+  end?: string | null;
+  is_all_day: boolean;
+  is_aggregated: boolean;
+  count: number;
+  is_future: boolean;
+  color_variant: string;
+  summary: Record<string, unknown>;
+  link?: string | null;
+};
+
+type CalendarEventsApiResponse = {
+  events: CalendarEventApi[];
+};
+
 type ListResponse<T> = { results?: T[]; count?: number; next?: string | null; previous?: string | null };
 
 function buildFindingsParams(
@@ -120,6 +149,8 @@ function buildFindingsParams(
     ...(pagination?.offset !== undefined ? { offset: String(pagination.offset) } : {}),
     ...(filters.projectId ? { project_id: String(filters.projectId) } : {}),
     ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
+    ...(filters.createdGte ? { created_gte: filters.createdGte } : {}),
+    ...(filters.createdLte ? { created_lte: filters.createdLte } : {}),
     ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
     ...(filters.file ? { file: filters.file } : {}),
     ...(filters.aiStatus ? { ai_status: filters.aiStatus } : {}),
@@ -527,4 +558,87 @@ export function useFindingTagsByProject(projectId?: number) {
 export function useAiResponse(aiByFinding: Map<number, AIResponse>, findingId?: number): AIResponse | null {
   if (!findingId) return null;
   return aiByFinding.get(findingId) ?? null;
+}
+
+type CalendarEventsFilters = {
+  start: string;
+  end: string;
+  view: CalendarView;
+  eventTypes: CalendarEvent["eventType"][];
+  projectIds?: number[];
+  timezone?: string;
+  grouping?: "auto" | "none";
+  limit?: number;
+};
+
+export function useCalendarEvents(filters: CalendarEventsFilters) {
+  return useQuery({
+    queryKey: ["calendar-events", filters],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        start: filters.start,
+        end: filters.end,
+        view: filters.view,
+        ...(filters.timezone ? { timezone: filters.timezone } : {}),
+        ...(filters.grouping ? { grouping: filters.grouping } : {}),
+        ...(filters.limit ? { limit: String(filters.limit) } : {}),
+      });
+      for (const eventType of filters.eventTypes) {
+        params.append("event_types", eventType);
+      }
+      for (const projectId of filters.projectIds ?? []) {
+        params.append("project_id", String(projectId));
+      }
+      const payload = await fetchJson<CalendarEventsApiResponse>(
+        `${getRoute("calendar_events_url")}?${params.toString()}`,
+      );
+      return (payload.events ?? []).map((item): CalendarEvent => ({
+        id: item.id,
+        eventType: item.event_type,
+        title: item.title,
+        start: item.start,
+        end: item.end ?? null,
+        isAllDay: item.is_all_day,
+        isAggregated: item.is_aggregated,
+        count: item.count,
+        isFuture: item.is_future,
+        colorVariant: item.color_variant,
+        summary: item.summary ?? {},
+        link: item.link ?? null,
+      }));
+    },
+    enabled: Boolean(filters.start && filters.end),
+  });
+}
+
+export function useCalendarEventDetail(eventId?: string, projectId?: number, timezone?: string) {
+  return useQuery({
+    queryKey: ["calendar-event-detail", eventId, projectId, timezone],
+    queryFn: async () => {
+      if (!eventId) return null;
+      const params = new URLSearchParams({
+        ...(projectId ? { project_id: String(projectId) } : {}),
+        ...(timezone ? { timezone } : {}),
+      });
+      const url = getRoute("calendar_event_detail_url", { event_id: eventId });
+      const payload = await fetchJson<CalendarEventApi>(
+        `${url}${params.toString() ? `?${params.toString()}` : ""}`,
+      );
+      return {
+        id: payload.id,
+        eventType: payload.event_type,
+        title: payload.title,
+        start: payload.start,
+        end: payload.end ?? null,
+        isAllDay: payload.is_all_day,
+        isAggregated: payload.is_aggregated,
+        count: payload.count,
+        isFuture: payload.is_future,
+        colorVariant: payload.color_variant,
+        summary: payload.summary ?? {},
+        link: payload.link ?? null,
+      } satisfies CalendarEvent;
+    },
+    enabled: Boolean(eventId),
+  });
 }

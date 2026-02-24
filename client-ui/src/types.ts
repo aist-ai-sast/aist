@@ -6,6 +6,8 @@ export type ProjectVersionType = "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH";
 export type FindingFilters = {
   projectId?: number;
   pipelineId?: string;
+  createdGte?: string;
+  createdLte?: string;
   projectVersion?: string;
   file?: string;
   severities?: Severity[];
@@ -123,4 +125,28 @@ export type PipelineSummary = {
     status?: string | null;
     updated?: string | null;
   }>;
+};
+
+export type CalendarEventType =
+  | "pipeline_started"
+  | "pipeline_scheduled"
+  | "finding_created"
+  | "finding_mitigated"
+  | "project_created";
+
+export type CalendarView = "day" | "week" | "month";
+
+export type CalendarEvent = {
+  id: string;
+  eventType: CalendarEventType;
+  title: string;
+  start: string;
+  end?: string | null;
+  isAllDay: boolean;
+  isAggregated: boolean;
+  count: number;
+  isFuture: boolean;
+  colorVariant: string;
+  summary: Record<string, unknown>;
+  link?: string | null;
 };

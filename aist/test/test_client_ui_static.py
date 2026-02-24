@@ -25,7 +25,7 @@ class ClientPortalRouteTests(SimpleTestCase):
         self.assertContains(response, "window.__AIST_ROUTES__")
 
     def test_anonymous_can_open_all_client_ui_routes(self):
-        for path in ("/findings", "/products", "/pipelines", "/search", "/settings", "/finding/1"):
+        for path in ("/findings", "/products", "/pipelines", "/calendar", "/search", "/settings", "/finding/1"):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 200)
@@ -50,10 +50,13 @@ class ClientPortalRouteTests(SimpleTestCase):
         self.assertIn("{finding_id}", routes["finding_notes_url"])
         self.assertIn("{finding_id}", routes["finding_export_url"])
         self.assertIn("{pipeline_id}", routes["pipeline_export_url"])
+        self.assertEqual(routes["calendar_events_url"], "/api/v2/aist/calendar/events/")
+        self.assertIn("{event_id}", routes["calendar_event_detail_url"])
         self.assertEqual(routes["ai_finding_responses_url"], "/api/v2/aist/ai-finding-responses/")
         self.assertIn("{project_version_id}", routes["project_version_file_url"])
         self.assertIn("{subpath}", routes["project_version_file_url"])
         self.assertEqual(routes["ui_findings_path"], "/findings")
+        self.assertEqual(routes["ui_calendar_path"], "/calendar")
         self.assertIn(":id", routes["ui_finding_detail_path"])
 
 
