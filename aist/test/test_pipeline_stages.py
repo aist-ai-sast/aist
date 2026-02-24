@@ -86,11 +86,12 @@ class AfterUploadEnrichTests(TestCase):
 # ---- watch_deduplication ----------------------------------------------------
 
 
-def _call_watch_dedup(*, pipeline, progress_qs=None, remaining_counts=None):
+def _call_watch_dedup(*, pipeline, progress_qs=None, remaining_counts=None, duplicate_exists_seq=None):
     with patch("aist.tasks.dedup.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
          patch("aist.tasks.dedup.AISTPipeline") as mock_model, \
          patch("aist.tasks.dedup.TestDeduplicationProgress") as mock_progress, \
-         patch("aist.tasks.dedup.AISTTestMeta") as mock_meta:
+         patch("aist.tasks.dedup.AISTTestMeta") as mock_meta, \
+         patch("aist.tasks.dedup.Finding") as mock_finding:
         mock_model.objects.get.return_value = pipeline
         if progress_qs is None:
             progress_qs = MagicMock()
@@ -107,6 +108,11 @@ def _call_watch_dedup(*, pipeline, progress_qs=None, remaining_counts=None):
         mock_meta_qs.count.side_effect = [*remaining_counts, remaining_counts[-1]]
         mock_meta.objects.filter.return_value = mock_meta_qs
         mock_meta.objects.bulk_create.return_value = []
+        if duplicate_exists_seq is None:
+            duplicate_exists_seq = [False]
+        mock_findings_qs = MagicMock()
+        mock_findings_qs.exists.side_effect = [*duplicate_exists_seq, duplicate_exists_seq[-1]]
+        mock_finding.objects.filter.return_value = mock_findings_qs
         _watch_deduplication.run(pipeline_id=pipeline.id, log_level="INFO")
         return pipeline
 
@@ -235,6 +241,23 @@ class WatchDeduplicationTests(TestCase):
         _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
         self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
         mock_auto_push.delay.assert_called_once_with(pipeline.id)
+
+    @patch("aist.tasks.dedup.async_dupe_delete")
+    def test_waits_for_duplicate_cleanup_before_waiting_confirmation(self, mock_async_dupe_delete):
+        tests_mgr = MagicMock()
+        tests_mgr.exists.return_value = True
+        tests_mgr.filter().count.return_value = 0
+        tests_mgr.values_list.return_value = [1]
+        pipeline = _mk_pipeline(status="WAITING_DEDUPLICATION_TO_FINISH", tests=tests_mgr)
+
+        _call_watch_dedup(
+            pipeline=pipeline,
+            remaining_counts=[0],
+            duplicate_exists_seq=[True, False],
+        )
+
+        self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
+        mock_async_dupe_delete.delay.assert_called_once_with()
 
 # ---- push_request_to_ai -----------------------------------------------------
 

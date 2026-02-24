@@ -1,0 +1,390 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from contextlib import suppress
+from dataclasses import dataclass
+
+from django.conf import settings
+from django.db.models import Q
+from dojo.finding import deduplication as dedupe_mod
+from dojo.finding.deduplication import set_duplicate
+from dojo.models import Finding
+
+from aist.dedupe.canonical import MatchVerdict, finding_signature, score_signatures
+from aist.parser_overrides import BEARER_SCAN_TYPE, HORUSEC_SCAN_TYPE, SEMGREP_SCAN_TYPE, SNYK_CODE_SCAN_TYPE
+
+AIST_DEDUPE_AUTO_TAG = "aist:duplicate:auto"
+AIST_DEDUPE_CANDIDATE_TAG = "aist:duplicate:candidate"
+AIST_DEDUPE_TAGS = (AIST_DEDUPE_AUTO_TAG, AIST_DEDUPE_CANDIDATE_TAG)
+SUPPORTED_SCAN_TYPES = (
+    SNYK_CODE_SCAN_TYPE,
+    "SnykCode Scan (Snyk Code Scan)",
+    SEMGREP_SCAN_TYPE,
+    HORUSEC_SCAN_TYPE,
+    BEARER_SCAN_TYPE,
+)
+
+
+@dataclass(slots=True)
+class CanonicalDedupeSummary:
+    processed: int = 0
+    auto_duplicates: int = 0
+    candidates: int = 0
+    promoted_candidates: int = 0
+    applied_duplicates: int = 0
+    unchanged: int = 0
+    conflicts: int = 0
+
+
+@dataclass(slots=True)
+class CanonicalMatchDecision:
+    verdict: MatchVerdict
+    score: int
+    root_id: int | None = None
+
+
+@dataclass(slots=True)
+class CanonicalDedupeResult:
+    summary: CanonicalDedupeSummary
+    decisions: dict[int, CanonicalMatchDecision]
+
+
+def _is_supported_scan_type(finding: Finding) -> bool:
+    test = getattr(finding, "test", None)
+    test_type = getattr(test, "test_type", None)
+    test_type_name = getattr(test_type, "name", None)
+    return bool(test_type_name in SUPPORTED_SCAN_TYPES)
+
+
+def _fallback_single_finding_dedupe(new_finding: Finding) -> None:
+    dedup_alg = new_finding.test.deduplication_algorithm
+    if dedup_alg == settings.DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL:
+        dedupe_mod.deduplicate_unique_id_from_tool(new_finding)
+    elif dedup_alg == settings.DEDUPE_ALGO_HASH_CODE:
+        dedupe_mod.deduplicate_hash_code(new_finding)
+    elif dedup_alg == settings.DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE:
+        dedupe_mod.deduplicate_uid_or_hash_code(new_finding)
+    else:
+        dedupe_mod.deduplicate_legacy(new_finding)
+
+
+def _fallback_batch_dedupe(findings: list[Finding]) -> None:
+    if not findings:
+        return
+    dedup_alg = findings[0].test.deduplication_algorithm
+    if dedup_alg == settings.DEDUPE_ALGO_HASH_CODE:
+        dedupe_mod._dedupe_batch_hash_code(findings)
+    elif dedup_alg == settings.DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL:
+        dedupe_mod._dedupe_batch_unique_id(findings)
+    elif dedup_alg == settings.DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE:
+        dedupe_mod._dedupe_batch_uid_or_hash(findings)
+    else:
+        dedupe_mod._dedupe_batch_legacy(findings)
+
+
+def _set_tag(finding: Finding, tag: str) -> None:
+    with suppress(Exception):
+        finding.tags.add(tag)
+
+
+def _clear_tag(finding: Finding, tag: str) -> None:
+    with suppress(Exception):
+        finding.tags.remove(tag)
+
+
+def clear_aist_duplicate_tags(finding: Finding) -> None:
+    for tag in AIST_DEDUPE_TAGS:
+        _clear_tag(finding, tag)
+
+
+def _resolve_scope_for_targets(target_findings: list[Finding]) -> list[Finding]:
+    if not target_findings:
+        return []
+
+    target_by_id = {finding.id: finding for finding in target_findings}
+    target_signatures = {finding.id: finding_signature(finding) for finding in target_findings}
+    scope_keys: set[tuple[int, str, int]] = set()
+    product_line_pairs: set[tuple[int, int]] = set()
+    for finding in target_findings:
+        signature = target_signatures[finding.id]
+        if signature.line is None or not signature.normalized_file_path or not _is_supported_scan_type(finding):
+            continue
+        product_id = finding.test.engagement.product_id
+        key = (product_id, signature.normalized_file_path, signature.line)
+        scope_keys.add(key)
+        product_line_pairs.add((product_id, signature.line))
+
+    if not scope_keys or not product_line_pairs:
+        return target_findings
+
+    product_line_q = Q()
+    for product_id, line in product_line_pairs:
+        product_line_q |= Q(test__engagement__product_id=product_id, line=line)
+
+    scoped_candidates = list(
+        Finding.objects.filter(test__test_type__name__in=SUPPORTED_SCAN_TYPES)
+        .filter(product_line_q)
+        .select_related("test", "test__engagement", "test__test_type")
+        .order_by("id"),
+    )
+
+    scoped_findings: dict[int, Finding] = dict(target_by_id)
+    for finding in scoped_candidates:
+        signature = finding_signature(finding)
+        if signature.line is None or not signature.normalized_file_path:
+            continue
+        key = (
+            finding.test.engagement.product_id,
+            signature.normalized_file_path,
+            signature.line,
+        )
+        if key in scope_keys:
+            scoped_findings[finding.id] = finding
+
+    return sorted(scoped_findings.values(), key=lambda item: item.id)
+
+
+def run_canonical_dedupe(
+    findings: list[Finding],
+    *,
+    apply: bool,
+    dry_run: bool,
+    apply_candidates: bool,
+    target_finding_ids: set[int] | None = None,
+    fallback_ineligible: bool = False,
+) -> CanonicalDedupeResult:
+    if target_finding_ids is None:
+        target_finding_ids = {finding.id for finding in findings}
+
+    summary = CanonicalDedupeSummary(processed=len(target_finding_ids))
+    decisions: dict[int, CanonicalMatchDecision] = {}
+    groups: dict[tuple[int, str, int], list[Finding]] = defaultdict(list)
+    signature_by_id = {finding.id: finding_signature(finding) for finding in findings}
+    ineligible_target_findings: list[Finding] = []
+
+    for finding in findings:
+        signature = signature_by_id[finding.id]
+        if signature.line is None or not signature.normalized_file_path:
+            decisions[finding.id] = CanonicalMatchDecision(verdict=MatchVerdict.NO_MATCH, score=0)
+            if fallback_ineligible and finding.id in target_finding_ids:
+                ineligible_target_findings.append(finding)
+            continue
+        group_key = (finding.test.engagement.product_id, signature.normalized_file_path, signature.line)
+        groups[group_key].append(finding)
+
+    for group in groups.values():
+        ordered = sorted(group, key=lambda item: (item.created, item.id))
+        for idx, finding in enumerate(ordered):
+            if idx == 0:
+                decisions[finding.id] = CanonicalMatchDecision(verdict=MatchVerdict.NO_MATCH, score=0)
+                continue
+
+            current_signature = signature_by_id[finding.id]
+            best_score = 0
+            best_verdict = MatchVerdict.NO_MATCH
+            best_root: Finding | None = None
+
+            for previous in ordered[:idx]:
+                prev_signature = signature_by_id[previous.id]
+                score = score_signatures(prev_signature, current_signature)
+                if score.score > best_score:
+                    best_score = score.score
+                    best_verdict = score.verdict
+                    best_root = previous.duplicate_finding if previous.duplicate else previous
+
+            decisions[finding.id] = CanonicalMatchDecision(
+                verdict=best_verdict,
+                score=best_score,
+                root_id=best_root.id if best_root else None,
+            )
+
+            if finding.id not in target_finding_ids:
+                continue
+
+            if best_verdict == MatchVerdict.DUPLICATE and best_root:
+                if finding.duplicate and finding.duplicate_finding_id == best_root.id:
+                    summary.auto_duplicates += 1
+                    continue
+                if finding.duplicate and finding.duplicate_finding_id not in {best_root.id, None}:
+                    summary.conflicts += 1
+                if apply and not dry_run:
+                    try:
+                        set_duplicate(finding, best_root)
+                        summary.applied_duplicates += 1
+                    except Exception:
+                        summary.conflicts += 1
+                        continue
+                    _clear_tag(finding, AIST_DEDUPE_CANDIDATE_TAG)
+                    _set_tag(finding, AIST_DEDUPE_AUTO_TAG)
+                summary.auto_duplicates += 1
+                continue
+
+            if best_verdict == MatchVerdict.CANDIDATE:
+                if apply and not dry_run and apply_candidates and best_root:
+                    if finding.duplicate and finding.duplicate_finding_id == best_root.id:
+                        summary.promoted_candidates += 1
+                        summary.candidates += 1
+                        continue
+                    try:
+                        set_duplicate(finding, best_root)
+                        summary.promoted_candidates += 1
+                        summary.applied_duplicates += 1
+                        _clear_tag(finding, AIST_DEDUPE_CANDIDATE_TAG)
+                        _set_tag(finding, AIST_DEDUPE_AUTO_TAG)
+                    except Exception:
+                        summary.conflicts += 1
+                else:
+                    if finding.duplicate:
+                        summary.conflicts += 1
+                    if apply and not dry_run:
+                        _set_tag(finding, AIST_DEDUPE_CANDIDATE_TAG)
+                        _clear_tag(finding, AIST_DEDUPE_AUTO_TAG)
+                if finding.duplicate:
+                    decisions[finding.id].root_id = finding.duplicate_finding_id
+                summary.candidates += 1
+
+    if fallback_ineligible and ineligible_target_findings:
+        _run_fallback_for_ineligible_targets(
+            ineligible_target_findings=ineligible_target_findings,
+            target_finding_ids=target_finding_ids,
+            decisions=decisions,
+            summary=summary,
+            apply=apply,
+            dry_run=dry_run,
+        )
+
+    summary.unchanged = sum(
+        1
+        for finding_id in target_finding_ids
+        if decisions.get(
+            finding_id,
+            CanonicalMatchDecision(verdict=MatchVerdict.NO_MATCH, score=0),
+        ).verdict
+        == MatchVerdict.NO_MATCH
+    )
+    return CanonicalDedupeResult(summary=summary, decisions=decisions)
+
+
+def custom_dedupe_finding(new_finding: Finding, *args, **kwargs) -> None:
+    if not _is_supported_scan_type(new_finding):
+        _fallback_single_finding_dedupe(new_finding)
+        return
+
+    scoped = _resolve_scope_for_targets([new_finding])
+    run_canonical_dedupe(
+        scoped,
+        apply=True,
+        dry_run=False,
+        apply_candidates=False,
+        target_finding_ids={new_finding.id},
+        fallback_ineligible=True,
+    )
+
+
+def custom_dedupe_batch(findings: list[Finding], *args, **kwargs) -> None:
+    if not findings:
+        return
+
+    supported_findings = [finding for finding in findings if _is_supported_scan_type(finding)]
+    unsupported_findings = [finding for finding in findings if not _is_supported_scan_type(finding)]
+
+    if supported_findings:
+        scoped = _resolve_scope_for_targets(supported_findings)
+        run_canonical_dedupe(
+            scoped,
+            apply=True,
+            dry_run=False,
+            apply_candidates=False,
+            target_finding_ids={finding.id for finding in supported_findings},
+            fallback_ineligible=True,
+        )
+
+    if unsupported_findings:
+        groups: dict[int, list[Finding]] = defaultdict(list)
+        for finding in unsupported_findings:
+            groups[finding.test_id].append(finding)
+        for group in groups.values():
+            ordered = sorted(group, key=lambda item: item.id)
+            _fallback_batch_dedupe(ordered)
+
+
+def _run_fallback_for_ineligible_targets(
+    *,
+    ineligible_target_findings: list[Finding],
+    target_finding_ids: set[int],
+    decisions: dict[int, CanonicalMatchDecision],
+    summary: CanonicalDedupeSummary,
+    apply: bool,
+    dry_run: bool,
+) -> None:
+    findings_by_test: dict[int, list[Finding]] = defaultdict(list)
+    for finding in ineligible_target_findings:
+        findings_by_test[finding.test_id].append(finding)
+
+    for test_targets in findings_by_test.values():
+        ordered_targets = sorted(test_targets, key=lambda item: item.id)
+        test = ordered_targets[0].test
+        dedup_alg = test.deduplication_algorithm
+
+        if dedup_alg == settings.DEDUPE_ALGO_HASH_CODE:
+            candidates_by_hash = dedupe_mod.find_candidates_for_deduplication_hash(test, ordered_targets)
+        elif dedup_alg == settings.DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL:
+            candidates_by_uid = dedupe_mod.find_candidates_for_deduplication_unique_id(test, ordered_targets)
+        elif dedup_alg == settings.DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE:
+            candidates_by_uid, candidates_by_hash = dedupe_mod.find_candidates_for_deduplication_uid_or_hash(
+                test,
+                ordered_targets,
+            )
+        else:
+            candidates_by_title, candidates_by_cwe = dedupe_mod.find_candidates_for_deduplication_legacy(
+                test,
+                ordered_targets,
+            )
+
+        for finding in ordered_targets:
+            if finding.id not in target_finding_ids:
+                continue
+            if dedup_alg == settings.DEDUPE_ALGO_HASH_CODE:
+                matches = dedupe_mod.get_matches_from_hash_candidates(finding, candidates_by_hash)
+            elif dedup_alg == settings.DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL:
+                matches = dedupe_mod.get_matches_from_unique_id_candidates(finding, candidates_by_uid)
+            elif dedup_alg == settings.DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE:
+                matches = dedupe_mod.get_matches_from_uid_or_hash_candidates(
+                    finding,
+                    candidates_by_uid,
+                    candidates_by_hash,
+                )
+            else:
+                matches = dedupe_mod.get_matches_from_legacy_candidates(
+                    finding,
+                    candidates_by_title,
+                    candidates_by_cwe,
+                )
+            match = next(iter(matches), None)
+            if not match:
+                continue
+
+            best_root = match.duplicate_finding if match.duplicate else match
+            if not best_root:
+                continue
+
+            decisions[finding.id] = CanonicalMatchDecision(
+                verdict=MatchVerdict.DUPLICATE,
+                score=0,
+                root_id=best_root.id,
+            )
+            if finding.duplicate and finding.duplicate_finding_id == best_root.id:
+                summary.auto_duplicates += 1
+                continue
+            if finding.duplicate and finding.duplicate_finding_id not in {best_root.id, None}:
+                summary.conflicts += 1
+            if apply and not dry_run:
+                try:
+                    set_duplicate(finding, best_root)
+                    summary.applied_duplicates += 1
+                except Exception:
+                    summary.conflicts += 1
+                    continue
+                _clear_tag(finding, AIST_DEDUPE_CANDIDATE_TAG)
+                _set_tag(finding, AIST_DEDUPE_AUTO_TAG)
+            summary.auto_duplicates += 1

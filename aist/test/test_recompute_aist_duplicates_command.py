@@ -6,7 +6,6 @@ from django.core.management import call_command
 from django.utils import timezone
 from dojo.models import Engagement, Finding, Test, Test_Type
 
-from aist.management.commands.recompute_aist_duplicates import AIST_DEDUPE_CANDIDATE_TAG
 from aist.models import AISTPipeline, AISTStatus
 from aist.test.test_api import AISTApiBase
 
@@ -157,7 +156,7 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
         self.assertFalse(negative.duplicate)
         self.assertIn("auto_duplicates=3", out.getvalue())
 
-    def test_apply_sets_candidate_tag_for_rule_only_match(self):
+    def test_apply_auto_matches_rule_only_match(self):
         first = self._create_finding(
             scan_type="Semgrep JSON Report",
             title="Custom issue in endpoint",
@@ -180,12 +179,9 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
         first.refresh_from_db()
         second.refresh_from_db()
 
-        self.assertFalse(second.duplicate)
-        self.assertIn(
-            AIST_DEDUPE_CANDIDATE_TAG,
-            set(second.tags.values_list("name", flat=True)),
-        )
-        self.assertIn("candidate_group", out.getvalue())
+        self.assertTrue(second.duplicate)
+        self.assertEqual(second.duplicate_finding_id, first.id)
+        self.assertIn("auto_duplicates=1", out.getvalue())
 
     def test_apply_candidates_promotes_candidate_to_duplicate(self):
         first = self._create_finding(
@@ -212,7 +208,7 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
 
         self.assertTrue(second.duplicate)
         self.assertEqual(second.duplicate_finding_id, first.id)
-        self.assertIn("promoted_candidates=1", output)
+        self.assertIn("promoted_candidates=0", output)
         self.assertIn("applied_duplicates=1", output)
 
     def test_apply_candidates_implies_apply(self):
@@ -302,3 +298,34 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
 
         self.assertTrue(duplicate.duplicate)
         self.assertFalse(outside.duplicate)
+
+    def test_line_zero_uses_fallback_hash_dedupe(self):
+        first = self._create_finding(
+            scan_type="Semgrep JSON Report",
+            title="No Use Weak Random Number Generator",
+            vuln_id="no_use_weak_random_number_generator",
+            file_path="cloud/cms/static/tinymce/js/tinymce/tinymce.min.js",
+            line=0,
+            cwe=0,
+        )
+        second = self._create_finding(
+            scan_type="Semgrep JSON Report",
+            title="No Use Weak Random Number Generator",
+            vuln_id="no_use_weak_random_number_generator",
+            file_path="cloud/cms/static/tinymce/js/tinymce/tinymce.min.js",
+            line=0,
+            cwe=0,
+            test=first.test,
+        )
+        first.hash_code = "9f8310b959cdf917dcfe318b85ece5cc708c64a277a093b92f485c855728aa8b"
+        second.hash_code = "9f8310b959cdf917dcfe318b85ece5cc708c64a277a093b92f485c855728aa8b"
+        first.save(update_fields=["hash_code"])
+        second.save(update_fields=["hash_code"])
+
+        out = StringIO()
+        call_command("recompute_aist_duplicates", "--apply", stdout=out)
+        second.refresh_from_db()
+
+        self.assertTrue(second.duplicate)
+        self.assertEqual(second.duplicate_finding_id, first.id)
+        self.assertIn("auto_duplicates=1", out.getvalue())

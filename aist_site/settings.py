@@ -148,3 +148,9 @@ for _scan_type in AIST_CANONICAL_DEDUPE_SCAN_TYPES:
 
 HASHCODE_ALLOWS_NULL_CWE = dict(globals().get("HASHCODE_ALLOWS_NULL_CWE", {}))
 HASHCODE_ALLOWS_NULL_CWE["Horusec Scan"] = True
+
+AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD = env.int("DD_AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD", default=2)  # noqa: F405
+AIST_CANONICAL_CANDIDATE_MIN_SCORE = env.int("DD_AIST_CANONICAL_CANDIDATE_MIN_SCORE", default=1)  # noqa: F405
+
+FINDING_DEDUPE_METHOD = "aist.dedupe.custom.custom_dedupe_finding"
+FINDING_DEDUPE_BATCH_METHOD = "aist.dedupe.custom.custom_dedupe_batch"

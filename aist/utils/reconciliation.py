@@ -4,7 +4,7 @@ import logging
 from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 
-from django.db import IntegrityError, transaction
+from django.db import connection, transaction
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from dojo.models import DojoMeta, Finding, Test
@@ -263,44 +263,34 @@ def safe_attach_findings_to_version(
         return stats
 
     through_model = pv.findings.through
-    existing_ids = list(Finding.objects.filter(id__in=finding_ids).values_list("id", flat=True))
-    existing_ids_set = set(existing_ids)
-    stats.missing_before_insert = len(finding_ids) - len(existing_ids_set)
+    existing_ids = set(Finding.objects.filter(id__in=finding_ids).values_list("id", flat=True))
+    stats.missing_before_insert = len(finding_ids) - len(existing_ids)
     if not existing_ids:
         return stats
 
-    before_count = through_model.objects.filter(
+    after_count = through_model.objects.filter(
         aistprojectversion_id=pv.id,
-        finding_id__in=existing_ids,
+        finding_id__in=list(existing_ids),
     ).count()
+    before_count = after_count
 
-    for chunk in _chunked(existing_ids):
-        if not chunk:
-            continue
-        rows = [through_model(aistprojectversion_id=pv.id, finding_id=fid) for fid in chunk]
-        try:
-            through_model.objects.bulk_create(rows, ignore_conflicts=True)
-        except IntegrityError:
-            stats.integrity_errors += 1
-            retry_ids = list(Finding.objects.filter(id__in=chunk).values_list("id", flat=True))
-            retry_set = set(retry_ids)
-            stats.missing_on_retry += len(chunk) - len(retry_set)
-            if not retry_ids:
-                continue
-            retry_rows = [through_model(aistprojectversion_id=pv.id, finding_id=fid) for fid in retry_ids]
-            try:
-                through_model.objects.bulk_create(retry_rows, ignore_conflicts=True)
-            except IntegrityError:
-                stats.integrity_errors += 1
-                logger.exception(
-                    "IntegrityError while linking findings to project version (pv_id=%s, chunk_size=%s)",
-                    pv.id,
-                    len(chunk),
-                )
+    through_table = through_model._meta.db_table
+    finding_table = Finding._meta.db_table
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            INSERT INTO {through_table} (aistprojectversion_id, finding_id)
+            SELECT %s, src.finding_id
+            FROM UNNEST(%s::bigint[]) AS src(finding_id)
+            INNER JOIN {finding_table} f ON f.id = src.finding_id
+            ON CONFLICT DO NOTHING
+            """,
+            [pv.id, list(existing_ids)],
+        )
 
     after_count = through_model.objects.filter(
         aistprojectversion_id=pv.id,
-        finding_id__in=existing_ids,
+        finding_id__in=list(existing_ids),
     ).count()
     stats.linked = max(after_count - before_count, 0)
     return stats

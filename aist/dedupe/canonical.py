@@ -6,6 +6,8 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any
 
+from django.conf import settings
+
 
 class CanonicalFamily(StrEnum):
     PRIVATE_KEY = "private_key"
@@ -29,8 +31,8 @@ class MatchVerdict(StrEnum):
     NO_MATCH = "no_match"
 
 
-AUTO_DUPLICATE_THRESHOLD = 4
-CANDIDATE_MIN_SCORE = 2
+DEFAULT_AUTO_DUPLICATE_THRESHOLD = 4
+DEFAULT_CANDIDATE_MIN_SCORE = 2
 
 
 _FAMILY_PATTERNS: dict[CanonicalFamily, tuple[re.Pattern[str], ...]] = {
@@ -165,6 +167,28 @@ def _normalize_cwe(cwe: Any) -> int | None:
     return value if value > 0 else None
 
 
+def _as_non_negative_int(raw: Any, default: int) -> int:
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def canonical_scoring_thresholds() -> tuple[int, int]:
+    auto_threshold = _as_non_negative_int(
+        getattr(settings, "AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD", DEFAULT_AUTO_DUPLICATE_THRESHOLD),
+        DEFAULT_AUTO_DUPLICATE_THRESHOLD,
+    )
+    candidate_threshold = _as_non_negative_int(
+        getattr(settings, "AIST_CANONICAL_CANDIDATE_MIN_SCORE", DEFAULT_CANDIDATE_MIN_SCORE),
+        DEFAULT_CANDIDATE_MIN_SCORE,
+    )
+    if auto_threshold > 0 and candidate_threshold >= auto_threshold:
+        candidate_threshold = auto_threshold - 1
+    return auto_threshold, candidate_threshold
+
+
 def finding_signature(finding: Any) -> CanonicalSignature:
     family = infer_canonical_family(
         vuln_id=str(getattr(finding, "vuln_id_from_tool", "") or ""),
@@ -243,9 +267,10 @@ def score_signatures(left: CanonicalSignature, right: CanonicalSignature) -> Mat
     ):
         return MatchScore(score=0, verdict=MatchVerdict.NO_MATCH, is_duplicate=False)
 
-    if score >= AUTO_DUPLICATE_THRESHOLD:
+    auto_threshold, candidate_threshold = canonical_scoring_thresholds()
+    if score >= auto_threshold:
         return MatchScore(score=score, verdict=MatchVerdict.DUPLICATE, is_duplicate=True)
-    if CANDIDATE_MIN_SCORE <= score < AUTO_DUPLICATE_THRESHOLD:
+    if candidate_threshold <= score < auto_threshold and score > 0:
         return MatchScore(score=score, verdict=MatchVerdict.CANDIDATE, is_duplicate=False)
     return MatchScore(score=score, verdict=MatchVerdict.NO_MATCH, is_duplicate=False)
 

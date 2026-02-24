@@ -5,15 +5,14 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core.management import call_command
-from django.db import IntegrityError
 from django.utils import timezone
 from dojo.models import DojoMeta, Engagement, Finding, Test, Test_Type
 
-from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus
+from aist.models import AISTPipeline, AISTStatus
 from aist.tasks.pipeline import run_sast_pipeline
 from aist.test.test_api import AISTApiBase
 from aist.utils.pipeline import finish_pipeline
-from aist.utils.reconciliation import reconcile_pipeline_orphans
+from aist.utils.reconciliation import reconcile_pipeline_orphans, safe_attach_findings_to_version
 
 
 class _DummyLogger:
@@ -72,7 +71,22 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             },
         )
 
-    def test_integrity_error_during_pv_attach_keeps_tests_and_finishes_with_warnings(self):
+    def test_safe_attach_ignores_non_existing_findings(self):
+        _dd_test, finding = self._make_test_with_finding(file_path="src/attach-ignore.py")
+        missing_id = finding.id + 999999
+
+        stats = safe_attach_findings_to_version(
+            pv=self.pv,
+            finding_ids=[finding.id, missing_id],
+            logger=_DummyLogger(),
+        )
+
+        self.assertEqual(stats.requested, 2)
+        self.assertEqual(stats.missing_before_insert, 1)
+        self.assertTrue(self.pv.findings.filter(id=finding.id).exists())
+        self.assertFalse(self.pv.findings.filter(id=missing_id).exists())
+
+    def test_pipeline_keeps_tests_and_finishes_with_warnings_on_postprocess_failure(self):
         dd_test, finding = self._make_test_with_finding()
         pipeline = AISTPipeline.objects.create(
             id="pipe-orphan-int-1",
@@ -80,8 +94,6 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
-        through_model = AISTProjectVersion.findings.through
-
         with (
             patch("aist.tasks.pipeline.PipelineArguments.from_dict", return_value=self._pipeline_params(self.pv.id)),
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
@@ -100,7 +112,6 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             ),
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[SimpleNamespace(test_id=dd_test.id)]),
             patch("aist.tasks.pipeline.postprocess_findings", side_effect=RuntimeError("forced crash")),
-            patch.object(through_model.objects, "bulk_create", side_effect=IntegrityError("fk violation")),
             self.assertRaises(RuntimeError),
         ):
             run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id})
@@ -109,7 +120,7 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
         self.assertTrue(pipeline.tests.filter(id=dd_test.id).exists())
         self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
         self.assertEqual((pipeline.launch_data or {}).get("imported_test_ids"), [dd_test.id])
-        self.assertFalse(self.pv.findings.filter(id=finding.id).exists())
+        self.assertTrue(self.pv.findings.filter(id=finding.id).exists())
 
     def test_finish_pipeline_reconciles_orphans_to_finished(self):
         dd_test, finding = self._make_test_with_finding(file_path="src/recovered.py")
