@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -1114,9 +1115,9 @@ class AISTProductSummaryTests(AISTApiBase):
         )
 
     def test_product_summary_counts(self):
-        resp = self.client.get(reverse("aist_api:product_summary"))
+        resp = self.client.get(reverse("client_product_summary"))
         self.assertEqual(resp.status_code, 200)
-        rows = resp.data.get("results", [])
+        rows = resp.json().get("results", [])
         row = next((item for item in rows if item["product_id"] == self.product.id), None)
         self.assertIsNotNone(row)
         self.assertEqual(row["findings_total"], 2)
@@ -1172,9 +1173,9 @@ class AISTPipelineSummaryTests(AISTApiBase):
         )
 
     def test_pipeline_summary(self):
-        resp = self.client.get(reverse("aist_api:pipeline_summary"))
+        resp = self.client.get(reverse("client_pipeline_summary"))
         self.assertEqual(resp.status_code, 200)
-        results = resp.data.get("results", [])
+        results = resp.json().get("results", [])
         row = next((item for item in results if item["id"] == self.pipeline.id), None)
         self.assertIsNotNone(row)
         self.assertEqual(row["status"], AISTStatus.FINISHED)
@@ -1183,8 +1184,14 @@ class AISTPipelineSummaryTests(AISTApiBase):
         self.assertEqual(row["findings"], 1)
 
     def test_pipeline_summary_filters_by_project_id(self):
+        other_product = Product.objects.create(
+            name="Other Summary Product",
+            description="desc",
+            prod_type=self.prod_type,
+            sla_configuration_id=self.sla.id,
+        )
         other_project = AISTProject.objects.create(
-            product=self.product,
+            product=other_product,
             supported_languages=["python"],
             script_path="scripts/build.sh",
             compilable=False,
@@ -1196,9 +1203,9 @@ class AISTPipelineSummaryTests(AISTApiBase):
             status=AISTStatus.FINISHED,
         )
 
-        resp = self.client.get(reverse("aist_api:pipeline_summary"), data={"project_id": self.project.id})
+        resp = self.client.get(reverse("client_pipeline_summary"), data={"project_id": self.project.id})
         self.assertEqual(resp.status_code, 200)
-        results = resp.data.get("results", [])
+        results = resp.json().get("results", [])
         ids = {item["id"] for item in results}
         self.assertIn(self.pipeline.id, ids)
         self.assertNotIn(other_pipeline.id, ids)
@@ -1212,8 +1219,18 @@ class AISTPipelineSummaryTests(AISTApiBase):
 
 
 class AISTUIApiTests(AISTApiBase):
+    def test_project_product_is_unique(self):
+        with self.assertRaises(IntegrityError):
+            AISTProject.objects.create(
+                product=self.product,
+                supported_languages=["python"],
+                script_path="scripts/another.sh",
+                compilable=False,
+                profile={},
+            )
+
     def test_project_update_api(self):
-        url = reverse("aist_api:project_update", kwargs={"project_id": self.project.id})
+        url = reverse("aist_api:project_detail", kwargs={"project_id": self.project.id})
         resp = self.client.post(
             url,
             data={
@@ -1239,7 +1256,7 @@ class AISTUIApiTests(AISTApiBase):
         self.project.organization = org
         self.project.save(update_fields=["organization"])
 
-        url = reverse("aist_api:project_update", kwargs={"project_id": self.project.id})
+        url = reverse("aist_api:project_detail", kwargs={"project_id": self.project.id})
         resp = self.client.post(
             url,
             data={
@@ -1276,7 +1293,7 @@ class AISTUIApiTests(AISTApiBase):
             organization=mismatch_org,
         )
 
-        url = reverse("aist_api:project_update", kwargs={"project_id": self.project.id})
+        url = reverse("aist_api:project_detail", kwargs={"project_id": self.project.id})
         resp = self.client.post(
             url,
             data={
@@ -1308,7 +1325,7 @@ class AISTUIApiTests(AISTApiBase):
             organization=hidden_org,
         )
 
-        url = reverse("aist_api:project_update", kwargs={"project_id": self.project.id})
+        url = reverse("aist_api:project_detail", kwargs={"project_id": self.project.id})
         resp = self.client.post(
             url,
             data={
@@ -1479,14 +1496,23 @@ class AISTSchemaTests(AISTApiBase):
             "/api/v2/aist/findings/{finding_id}/notes/": "get",
             "/api/v2/aist/findings/{finding_id}/export/": "post",
             "/api/v2/aist/findings/tags/": "get",
-            "/api/v2/aist/pipelines/summary/": "get",
-            "/api/v2/aist/products/summary/": "get",
             "/api/v2/aist/pipelines/{pipeline_id}/stop/": "post",
             "/api/v2/aist/pipelines/{pipeline_id}/export-ai-results/": "post",
         }
         for path, method in required_operations.items():
             self.assertIn(path, paths)
             self.assertIn(method, paths[path])
+        self.assertIn("/api/v2/aist/projects/", paths)
+        self.assertIn("post", paths["/api/v2/aist/projects/"])
+        self.assertIn("/api/v2/aist/projects/{project_id}/", paths)
+        self.assertIn("post", paths["/api/v2/aist/projects/{project_id}/"])
+        self.assertIn("/api/v2/aist/projects/{project_id}/versions", paths)
+        self.assertIn("post", paths["/api/v2/aist/projects/{project_id}/versions"])
+        self.assertNotIn("/api/v2/aist/projects/create/", paths)
+        self.assertNotIn("/api/v2/aist/projects/{project_id}/update/", paths)
+        self.assertNotIn("/api/v2/aist/projects/{project_id}/versions/create/", paths)
+        self.assertNotIn("/api/v2/aist/pipelines/summary/", paths)
+        self.assertNotIn("/api/v2/aist/products/summary/", paths)
 
 
 class LaunchConfigAPITests(AISTApiBase):

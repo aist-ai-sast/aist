@@ -17,6 +17,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from single_session.signals import remove_all_sessions
 
+from aist.api.schema import AISTApiTag
 from aist.queries import get_authorized_aist_organizations
 
 User = get_user_model()
@@ -229,7 +230,7 @@ class AISTMeAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.PROFILE.value],
         summary="Current user account",
         responses={200: AISTMeSerializer},
     )
@@ -238,7 +239,7 @@ class AISTMeAPI(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.PROFILE.value],
         summary="Update current user account",
         request=AISTMeSerializer,
         responses={200: AISTMeSerializer},
@@ -259,7 +260,7 @@ class AISTMeChangePasswordAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.PROFILE.value],
         summary="Change current user password",
         request=AISTChangePasswordSerializer,
         responses={200: OpenApiResponse(description="Password changed")},
@@ -278,7 +279,7 @@ class AISTAuthLoginAPI(APIView):
     throttle_scope = "aist_auth_login"
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.AUTH.value],
         summary="Login current client session",
         request=AISTAuthLoginSerializer,
         responses={204: OpenApiResponse(description="Logged in")},
@@ -303,7 +304,7 @@ class AISTAuthLogoutAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.AUTH.value],
         summary="Logout current session",
         request=None,
         responses={204: OpenApiResponse(description="Logged out")},
@@ -319,7 +320,7 @@ class AISTAuthLogoutAllAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.AUTH.value],
         summary="Logout all sessions for current user",
         request=None,
         responses={204: OpenApiResponse(description="Logged out from all sessions")},

@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.shortcuts import get_object_or_404
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
-from dojo.models import Product
+from dojo.models import Product, SLA_Configuration
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
 from rest_framework.permissions import IsAuthenticated
@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.models import AISTProject, Organization
 from aist.queries import (
     get_authorized_aist_organizations,
@@ -123,7 +124,7 @@ class AISTProjectListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.PROJECTS.value],
         summary="List all AISTProjects",
         description="Returns all existing AISTProject records with their metadata.",
     )
@@ -137,12 +138,9 @@ class AISTProjectListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
             .order_by("created")
         )
 
-
-class AISTProjectCreateAPI(APIView):
-    permission_classes = [IsAuthenticated]
-
     @extend_schema(
-        tags=["aist"],
+        operation_id="aist_projects_create",
+        tags=[AISTApiTag.PROJECTS.value],
         request=AISTProjectCreateRequestSerializer,
         responses={
             201: AISTProjectCreateResponseSerializer,
@@ -165,12 +163,17 @@ class AISTProjectCreateAPI(APIView):
         user_has_permission_or_403(request.user, product_type, Permissions.Product_Type_Add_Product)
 
         product_name = serializer.validated_data["product_name"]
+        default_sla = SLA_Configuration.objects.order_by("id").first()
+        product_defaults = {
+            "prod_type": product_type,
+            "description": "Created from AIST Projects UI",
+        }
+        if default_sla is not None:
+            product_defaults["sla_configuration"] = default_sla
+
         product, created_product = Product.objects.get_or_create(
             name=product_name,
-            defaults={
-                "prod_type": product_type,
-                "description": "Created from AIST Projects UI",
-            },
+            defaults=product_defaults,
         )
 
         if not created_product:
@@ -206,7 +209,7 @@ class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIV
 
     @extend_schema(
         responses={204: OpenApiResponse(description="AIST project deleted"), 404: OpenApiResponse(description="Not found")},
-        tags=["aist"],
+        tags=[AISTApiTag.PROJECTS.value],
         summary="Delete AIST project",
         description="Deletes the specified AISTProject by id.",
     )
@@ -221,7 +224,7 @@ class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIV
 
     @extend_schema(
         responses={404: OpenApiResponse(description="Not found")},
-        tags=["aist"],
+        tags=[AISTApiTag.PROJECTS.value],
         summary="Get AIST project",
         description="Get the specified AISTProject by id.",
     )
@@ -231,6 +234,25 @@ class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIV
         )
         serializer = AISTProjectSerializer(project)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        operation_id="aist_projects_update",
+        request=ProjectUpdateRequestSerializer,
+        responses={200: OpenApiResponse(description="Project updated")},
+        tags=[AISTApiTag.PROJECTS.value],
+    )
+    def post(self, request, project_id: int, *args, **kwargs) -> Response:
+        project = self.get_authorized_object(
+            permission=Permissions.Product_Edit,
+            id=project_id,
+        )
+        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+        serializer = ProjectUpdateRequestSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        payload, errors = update_project_from_payload(project=project, payload=serializer.validated_data)
+        if errors:
+            return Response({"ok": False, "errors": errors}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"ok": True, "project": payload})
 
 
 def project_meta_payload(project: AISTProject) -> dict:
@@ -314,7 +336,10 @@ class AISTProjectMetaAPI(AuthorizedQuerySetMixin, APIView):
         permission=Permissions.Product_View,
     )
 
-    @extend_schema(responses={200: OpenApiResponse(description="Project meta")})
+    @extend_schema(
+        responses={200: OpenApiResponse(description="Project meta")},
+        tags=[AISTApiTag.PROJECTS.value],
+    )
     def get(self, request, project_id: int):
         project = self.get_authorized_object(
             id=project_id,
@@ -332,6 +357,7 @@ class AISTDefaultAnalyzersAPI(AuthorizedQuerySetMixin, APIView):
     @extend_schema(
         request=DefaultAnalyzersRequestSerializer,
         responses={200: OpenApiResponse(description="Default analyzers")},
+        tags=[AISTApiTag.PROJECTS.value],
     )
     def post(self, request):
         serializer = DefaultAnalyzersRequestSerializer(data=request.data)
@@ -353,28 +379,3 @@ class AISTDefaultAnalyzersAPI(AuthorizedQuerySetMixin, APIView):
         if error:
             return Response({"detail": error}, status=status.HTTP_400_BAD_REQUEST)
         return Response(payload)
-
-
-class AISTProjectUpdateAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
-
-    @extend_schema(
-        request=ProjectUpdateRequestSerializer,
-        responses={200: OpenApiResponse(description="Project updated")},
-    )
-    def post(self, request, project_id: int):
-        project = self.get_authorized_object(
-            permission=Permissions.Product_Edit,
-            id=project_id,
-        )
-        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
-        serializer = ProjectUpdateRequestSerializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
-        payload, errors = update_project_from_payload(project=project, payload=serializer.validated_data)
-        if errors:
-            return Response({"ok": False, "errors": errors}, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"ok": True, "project": payload})

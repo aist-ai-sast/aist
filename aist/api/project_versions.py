@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.models import AISTProjectVersion, VersionType
 from aist.queries import get_authorized_aist_projects
 
@@ -96,6 +97,7 @@ class ProjectVersionCreateAPI(AuthorizedQuerySetMixin, APIView):
                 description="Project not found",
             ),
         },
+        tags=[AISTApiTag.PROJECTS.value],
     )
     def post(self, request, project_id):
         project = self.get_authorized_object(permission=Permissions.Product_Edit, pk=project_id)

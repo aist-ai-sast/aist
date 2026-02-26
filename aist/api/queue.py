@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.queries import get_authorized_aist_queue_items
 
 
@@ -29,7 +30,7 @@ class PipelineLaunchQueueListAPI(AuthorizedQuerySetMixin, APIView):
         limit = serializers.IntegerField(required=False, min_value=1, max_value=2000, default=200)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_QUEUE.value],
         summary="List pipeline launch queue items",
         parameters=[
             OpenApiParameter(name="only_pending", required=False, type=bool),
@@ -89,7 +90,7 @@ class PipelineLaunchQueueClearDispatchedAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_QUEUE.value],
         summary="Delete dispatched queue items older than X days",
         request=PipelineLaunchQueueClearSerializer,
         responses={200: OpenApiResponse(description="Deleted count")},
@@ -121,7 +122,7 @@ class PipelineLaunchQueueDetailAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_QUEUE.value],
         summary="Delete pipeline launch queue item by id",
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )

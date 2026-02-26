@@ -40,13 +40,13 @@ def _build_routes() -> dict[str, Any]:
         "test_detail_url": _replace_int_placeholder(reverse("test-detail", args=[0]), "id"),
         "engagement_detail_url": _replace_int_placeholder(reverse("engagement-detail", args=[0]), "id"),
         "projects_list_url": reverse("aist_api:project_list"),
-        "product_summary_url": reverse("aist_api:product_summary"),
+        "product_summary_url": reverse("client_product_summary"),
         "project_meta_url": _replace_int_placeholder(
             reverse("aist_api:project_meta", kwargs={"project_id": 0}),
             "project_id",
         ),
         "pipelines_list_url": reverse("aist_api:pipelines"),
-        "pipelines_summary_url": reverse("aist_api:pipeline_summary"),
+        "pipelines_summary_url": reverse("client_pipeline_summary"),
         "calendar_events_url": reverse("aist_api:calendar_events"),
         "calendar_event_detail_url": _replace_str_placeholder(
             reverse("aist_api:calendar_event_detail", kwargs={"event_id": "EVENT_ID"}),

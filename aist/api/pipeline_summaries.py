@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.models import AISTPipeline, AISTStatus
 from aist.queries import get_authorized_aist_pipelines
 from aist.utils.project_version_refs import resolve_project_version_git_refs
@@ -81,7 +82,7 @@ class AISTPipelineSummaryAPI(AuthorizedQuerySetMixin, APIView):
             )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.PIPELINES.value],
         summary="List pipeline summaries",
         parameters=[
             OpenApiParameter(name="project_id", required=False, type=int),

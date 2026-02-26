@@ -24,6 +24,7 @@ from rest_framework.views import APIView
 
 from aist.api.common import API_SEVERITY_VALUES
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.models import AISTAIFindingResponse, VersionType
 from aist.queries import get_authorized_aist_pipelines, get_authorized_findings
 
@@ -173,7 +174,7 @@ class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.FINDINGS.value],
         summary="List AIST findings",
         parameters=[
             OpenApiParameter(name="pipeline_id", required=False, type=str),
@@ -246,7 +247,7 @@ class AISTFindingNotesAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.FINDINGS.value],
         summary="List finding notes",
         responses={200: AISTFindingNoteSerializer(many=True)},
     )
@@ -257,7 +258,7 @@ class AISTFindingNotesAPI(AuthorizedQuerySetMixin, APIView):
         return Response(out.data, status=status.HTTP_200_OK)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.FINDINGS.value],
         summary="Add finding note",
         request=AISTFindingCreateNoteSerializer,
         responses={201: AISTFindingNoteSerializer},
@@ -293,7 +294,7 @@ class AISTFindingExportAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.FINDINGS.value],
         summary="Export single finding",
         parameters=[OpenApiParameter(name="format", required=False, type=str, enum=FINDING_API_CHOICES.export_format)],
         request=AISTFindingExportRequestSerializer,

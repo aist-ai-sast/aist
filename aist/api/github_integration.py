@@ -28,6 +28,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.models import AISTProject, Organization, RepositoryInfo, ScmGithubBinding, ScmType
 from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
 from aist.utils.pipeline_imports import _load_analyzers_config
@@ -153,7 +154,7 @@ class GithubImportOptionsAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.GITHUB.value],
         responses={200: GithubImportOptionsResponseSerializer},
         summary="GitHub import options",
     )
@@ -169,7 +170,7 @@ class GithubImportConnectStartAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.GITHUB.value],
         request=GithubConnectStartImportSerializer,
         responses={200: GithubConnectStartResponseSerializer},
         summary="Start GitHub import connect",
@@ -195,7 +196,7 @@ class GithubConnectCallbackAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.GITHUB.value],
         parameters=[GithubConnectCallbackSerializer],
         responses={302: OpenApiResponse(description="Redirect to AIST admin page")},
         summary="GitHub connect callback",
@@ -240,7 +241,7 @@ class GithubImportRepositoriesAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.GITHUB.value],
         parameters=[GithubImportRepositoriesQuerySerializer],
         responses={200: GithubRepositoriesResponseSerializer},
         summary="List GitHub repositories for import",
@@ -270,7 +271,7 @@ class GithubImportExecuteAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.GITHUB.value],
         request=GithubImportExecuteSerializer,
         responses={200: GithubImportExecuteResponseSerializer},
         summary="Execute GitHub import",
@@ -317,7 +318,7 @@ class GithubProjectStatusAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.GITHUB.value],
         responses={200: GithubProjectStatusResponseSerializer},
         summary="GitHub status for AIST project",
     )
@@ -351,7 +352,7 @@ class GithubProjectConnectStartAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.GITHUB.value],
         request=None,
         responses={200: GithubConnectStartResponseSerializer},
         summary="Start GitHub connect for existing project",
@@ -380,7 +381,7 @@ class GithubProjectRepositoriesAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.GITHUB.value],
         parameters=[GithubProjectRepositoriesQuerySerializer],
         responses={200: GithubRepositoriesResponseSerializer},
         summary="List GitHub repositories for existing project",
@@ -419,7 +420,7 @@ class GithubProjectLinkRepositoryAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.GITHUB.value],
         request=GithubProjectLinkRepositorySerializer,
         responses={200: GithubProjectLinkRepositoryResponseSerializer},
         summary="Link GitHub repository to existing AIST project",

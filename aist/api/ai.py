@@ -17,6 +17,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline, AISTStatus
 from aist.queries import get_authorized_aist_pipelines, get_authorized_findings
@@ -112,6 +113,7 @@ class AISendRequestAPI(AuthorizedQuerySetMixin, APIView):
     @extend_schema(
         request=AISendRequestSerializer,
         responses={200: OpenApiResponse(description="AI request queued")},
+        tags=[AISTApiTag.AI.value],
     )
     def post(self, request, pipeline_id: str):
         pipeline = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
@@ -132,7 +134,10 @@ class AIDeleteResponseAPI(AuthorizedQuerySetMixin, APIView):
         permission=Permissions.Product_View,
     )
 
-    @extend_schema(responses={204: OpenApiResponse(description="Deleted")})
+    @extend_schema(
+        responses={204: OpenApiResponse(description="Deleted")},
+        tags=[AISTApiTag.AI.value],
+    )
     def delete(self, request, pipeline_id: str, response_id: int):
         pipeline = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
         user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
@@ -147,6 +152,7 @@ class AIPipelineCallbackAPI(APIView):
     @extend_schema(
         request=AIPipelineCallbackSerializer,
         responses={200: OpenApiResponse(description="Callback accepted")},
+        tags=[AISTApiTag.AI.value],
     )
     def post(self, request, pipeline_id: str):
         get_object_or_404(AISTPipeline, id=pipeline_id)
@@ -220,6 +226,7 @@ class AIFindingResponseListAPI(AuthorizedQuerySetMixin, APIView):
 
     @extend_schema(
         responses={200: AIFindingResponseItemSerializer(many=True)},
+        tags=[AISTApiTag.AI.value],
     )
     def get(self, request):
         pipeline_qs = self.get_authorized_queryset()

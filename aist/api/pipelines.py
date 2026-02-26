@@ -26,6 +26,7 @@ from rest_framework.views import APIView
 from aist.ai_filter import validate_and_normalize_filter
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.logging_transport import BACKLOG_COUNT, PUBSUB_CHANNEL_TPL, STREAM_KEY, get_pipeline_log_path, get_redis
 from aist.models import AISTPipeline, AISTStatus, TestDeduplicationProgress
 from aist.pipeline_args import PipelineArguments
@@ -127,7 +128,7 @@ class PipelineStartAPI(AuthorizedQuerySetMixin, APIView):
                 request_only=True,
             ),
         ],
-        tags=["aist"],
+        tags=[AISTApiTag.PIPELINES.value],
         summary="Start pipeline",
         description="Creates and starts AIST Pipeline for the given existing AISTProjectVersion.",
     )
@@ -219,7 +220,7 @@ class PipelineListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
             fields = ("project_id", "status", "created_gte", "created_lte", "ordering")
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.PIPELINES.value],
         summary="List pipelines",
         description=(
             "Returns a paginated list of AIST pipelines. "
@@ -268,7 +269,7 @@ class PipelineAPI(AuthorizedQuerySetMixin, APIView):
 
     @extend_schema(
         responses={200: PipelineResponseSerializer, 404: OpenApiResponse(description="Not found")},
-        tags=["aist"],
+        tags=[AISTApiTag.PIPELINES.value],
         summary="Get pipeline status",
         description="Returns pipeline status and AI response.",
     )
@@ -288,7 +289,7 @@ class PipelineAPI(AuthorizedQuerySetMixin, APIView):
         responses={204: OpenApiResponse(description="Pipeline deleted"),
                    400: OpenApiResponse(description="Cannot delete pipeline"),
                    404: OpenApiResponse(description="Not found")},
-        tags=["aist"],
+        tags=[AISTApiTag.PIPELINES.value],
         summary="Delete pipeline",
         description="Deletes the specified AISTPipeline by id.",
     )
@@ -670,6 +671,7 @@ class PipelineStopAPI(AuthorizedQuerySetMixin, APIView):
     @extend_schema(
         request=None,
         responses={200: PipelineStopResponseSerializer},
+        tags=[AISTApiTag.PIPELINES.value],
     )
     def post(self, request, pipeline_id: str):
         pipeline = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
@@ -691,6 +693,7 @@ class ExportAIResultsAPI(AuthorizedQuerySetMixin, APIView):
             200: OpenApiResponse(description="Export file"),
             400: OpenApiResponse(description="No AI responses available for export"),
         },
+        tags=[AISTApiTag.PIPELINES.value],
     )
     def post(self, request, pipeline_id: str):
         pipeline = self.get_authorized_object(id=pipeline_id)
@@ -709,7 +712,10 @@ class PipelineLogsProgressiveAPI(AuthorizedQuerySetMixin, APIView):
         permission=Permissions.Product_View,
     )
 
-    @extend_schema(responses={200: OpenApiResponse(description="Log chunk")})
+    @extend_schema(
+        responses={200: OpenApiResponse(description="Log chunk")},
+        tags=[AISTApiTag.PIPELINES.value],
+    )
     def get(self, request, pipeline_id: str):
         pipeline = self.get_authorized_object(id=pipeline_id)
         serializer = PipelineLogsProgressiveQuerySerializer(data=request.query_params)
@@ -728,7 +734,10 @@ class PipelineLogsFullAPI(AuthorizedQuerySetMixin, APIView):
         permission=Permissions.Product_View,
     )
 
-    @extend_schema(responses={200: OpenApiResponse(description="Full log")})
+    @extend_schema(
+        responses={200: OpenApiResponse(description="Full log")},
+        tags=[AISTApiTag.PIPELINES.value],
+    )
     def get(self, request, pipeline_id: str):
         pipeline = self.get_authorized_object(id=pipeline_id)
         return pipeline_logs_full_response(pipeline)
@@ -741,7 +750,10 @@ class PipelineLogsDownloadAPI(AuthorizedQuerySetMixin, APIView):
         permission=Permissions.Product_View,
     )
 
-    @extend_schema(responses={200: OpenApiResponse(description="Log download")})
+    @extend_schema(
+        responses={200: OpenApiResponse(description="Log download")},
+        tags=[AISTApiTag.PIPELINES.value],
+    )
     def get(self, request, pipeline_id: str):
         pipeline = self.get_authorized_object(id=pipeline_id)
         return pipeline_logs_download_response(pipeline)
@@ -754,7 +766,10 @@ class PipelineLogsStreamAPI(AuthorizedQuerySetMixin, APIView):
         permission=Permissions.Product_View,
     )
 
-    @extend_schema(responses={200: OpenApiResponse(description="SSE stream")})
+    @extend_schema(
+        responses={200: OpenApiResponse(description="SSE stream")},
+        tags=[AISTApiTag.PIPELINES.value],
+    )
     def get(self, request, pipeline_id: str):
         pipeline = self.get_authorized_object(id=pipeline_id)
         return stream_logs_sse_response(pipeline)
@@ -767,7 +782,10 @@ class PipelineLogsStreamRedisAPI(AuthorizedQuerySetMixin, APIView):
         permission=Permissions.Product_View,
     )
 
-    @extend_schema(responses={200: OpenApiResponse(description="SSE stream (redis)")})
+    @extend_schema(
+        responses={200: OpenApiResponse(description="SSE stream (redis)")},
+        tags=[AISTApiTag.PIPELINES.value],
+    )
     def get(self, request, pipeline_id: str):
         pipeline = self.get_authorized_queryset().only("id").filter(id=pipeline_id).first()
         if not pipeline:
@@ -782,7 +800,10 @@ class PipelineStatusStreamAPI(AuthorizedQuerySetMixin, APIView):
         permission=Permissions.Product_View,
     )
 
-    @extend_schema(responses={200: OpenApiResponse(description="Status SSE stream")})
+    @extend_schema(
+        responses={200: OpenApiResponse(description="Status SSE stream")},
+        tags=[AISTApiTag.PIPELINES.value],
+    )
     def get(self, request, pipeline_id: str):
         if not self.get_authorized_queryset().filter(id=pipeline_id).exists():
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -796,7 +817,10 @@ class PipelineDeduplicationProgressAPI(AuthorizedQuerySetMixin, APIView):
         permission=Permissions.Product_View,
     )
 
-    @extend_schema(responses={200: OpenApiResponse(description="Deduplication progress")})
+    @extend_schema(
+        responses={200: OpenApiResponse(description="Deduplication progress")},
+        tags=[AISTApiTag.PIPELINES.value],
+    )
     def get(self, request, pipeline_id: str):
         pipeline = self.get_authorized_object(id=pipeline_id)
         return Response(deduplication_progress_payload(pipeline))
@@ -809,7 +833,10 @@ class PipelineEnrichProgressAPI(AuthorizedQuerySetMixin, APIView):
         permission=Permissions.Product_View,
     )
 
-    @extend_schema(responses={200: OpenApiResponse(description="Enrichment SSE stream")})
+    @extend_schema(
+        responses={200: OpenApiResponse(description="Enrichment SSE stream")},
+        tags=[AISTApiTag.PIPELINES.value],
+    )
     def get(self, request, pipeline_id: str):
         if not self.get_authorized_queryset().filter(id=pipeline_id).exists():
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)

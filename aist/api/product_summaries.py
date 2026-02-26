@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 
 from aist.api.common import API_SEVERITY_VALUES, empty_severity_counts
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.models import AISTPipeline
 from aist.queries import get_authorized_aist_projects, get_authorized_findings
 
@@ -38,7 +39,7 @@ class AISTProductSummaryAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.PRODUCTS.value],
         summary="List product summaries",
         responses={200: AISTProductSummaryRowSerializer(many=True)},
     )

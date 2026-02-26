@@ -9,6 +9,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.schema import AISTApiTag
+
 
 def gitlab_projects_list_payload(gitlab_url: str, gitlab_token: str) -> tuple[dict, int]:
     if not gitlab_url or not gitlab_token:
@@ -70,6 +72,7 @@ class GitlabProjectsListAPI(APIView):
     @extend_schema(
         request=RequestSerializer,
         responses={200: OpenApiResponse(description="GitLab projects list")},
+        tags=[AISTApiTag.GITLAB.value],
     )
     def post(self, request):
         serializer = self.RequestSerializer(data=request.data)

@@ -75,13 +75,6 @@ class CalendarEventsApiTests(TestCase):
             compilable=False,
             profile={},
         )
-        self.project_second = AISTProject.objects.create(
-            product=self.product,
-            supported_languages=["python"],
-            script_path="scripts/build.sh",
-            compilable=False,
-            profile={},
-        )
         self.version = AISTProjectVersion.objects.create(
             project=self.project,
             version_type=VersionType.GIT_HASH,

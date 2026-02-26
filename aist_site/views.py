@@ -51,7 +51,18 @@ def aist_only_preprocessing_hook(endpoints):
     filtered = []
     for endpoint in endpoints:
         path, path_regex, method, callback = endpoint
-        if path.startswith(("/api/v2/aist/", "/projects_version/")):
+        normalized = path.removeprefix("/aist-admin")
+        if normalized.startswith(("/api/v2/aist/", "/projects_version/")):
+            filtered.append((path, path_regex, method, callback))
+    return filtered
+
+
+def dojo_preprocessing_hook(endpoints):
+    filtered = []
+    for endpoint in endpoints:
+        path, path_regex, method, callback = endpoint
+        normalized = path.removeprefix("/aist-admin")
+        if normalized.startswith("/api/v2/") and not normalized.startswith(("/api/v2/aist/", "/api/v2/oa3/")):
             filtered.append((path, path_regex, method, callback))
     return filtered
 

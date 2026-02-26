@@ -30,6 +30,7 @@ from aist.api.calendar_domain import (
     build_calendar_request_context,
 )
 from aist.api.common import CommaSeparatedListField, TimezoneNameField
+from aist.api.schema import AISTApiTag
 from aist.queries import (
     get_authorized_aist_launch_schedules,
     get_authorized_aist_pipelines,
@@ -532,7 +533,7 @@ class AISTCalendarEventsAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.CALENDAR.value],
         operation_id="aist_calendar_events_list",
         summary="List calendar events for client UI",
         parameters=[
@@ -579,7 +580,7 @@ class AISTCalendarEventDetailAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.CALENDAR.value],
         operation_id="aist_calendar_event_detail_retrieve",
         summary="Get a single calendar event detail",
         parameters=[

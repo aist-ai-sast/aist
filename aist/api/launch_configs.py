@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.pipelines import PipelineResponseSerializer
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.models import (
     AISTLaunchConfigAction,
     AISTProject,
@@ -288,7 +289,7 @@ class ProjectLaunchConfigListCreateAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="List launch configs for project",
         responses={200: LaunchConfigSerializer(many=True)},
     )
@@ -298,7 +299,7 @@ class ProjectLaunchConfigListCreateAPI(AuthorizedQuerySetMixin, APIView):
         return Response(LaunchConfigSerializer(qs, many=True).data)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="Create launch config for project",
         request=LaunchConfigCreateRequestSerializer,
         responses={201: LaunchConfigSerializer},
@@ -374,7 +375,7 @@ class ProjectLaunchConfigDetailAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="Get launch config",
         responses={200: LaunchConfigSerializer, 404: OpenApiResponse(description="Not found")},
     )
@@ -383,7 +384,7 @@ class ProjectLaunchConfigDetailAPI(AuthorizedQuerySetMixin, APIView):
         return Response(LaunchConfigSerializer(obj).data)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="Delete launch config",
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
@@ -394,7 +395,7 @@ class ProjectLaunchConfigDetailAPI(AuthorizedQuerySetMixin, APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="Update launch config",
         request=LaunchConfigUpdateRequestSerializer,
         responses={200: LaunchConfigSerializer, 404: OpenApiResponse(description="Not found")},
@@ -436,7 +437,7 @@ class ProjectLaunchConfigStartAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="Start pipeline using launch config",
         request=LaunchConfigStartRequestSerializer,
         responses={
@@ -563,7 +564,7 @@ class ProjectLaunchConfigActionListCreateAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="List actions for launch config",
         responses={200: LaunchConfigActionSerializer(many=True)},
     )
@@ -573,7 +574,7 @@ class ProjectLaunchConfigActionListCreateAPI(AuthorizedQuerySetMixin, APIView):
         return Response(LaunchConfigActionSerializer(qs, many=True).data)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="Create action for launch config",
         request=BaseActionCreateSerializer,
         responses={201: LaunchConfigActionSerializer},
@@ -609,7 +610,7 @@ class ProjectLaunchConfigActionDetailAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="Get action for launch config",
         responses={200: LaunchConfigActionSerializer, 404: OpenApiResponse(description="Not found")},
     )
@@ -622,7 +623,7 @@ class ProjectLaunchConfigActionDetailAPI(AuthorizedQuerySetMixin, APIView):
         return Response(LaunchConfigActionSerializer(obj).data)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="Update action for launch config",
         request=LaunchConfigActionUpdateSerializer,
         responses={200: LaunchConfigActionSerializer, 404: OpenApiResponse(description="Not found")},
@@ -663,7 +664,7 @@ class ProjectLaunchConfigActionDetailAPI(AuthorizedQuerySetMixin, APIView):
         return Response(LaunchConfigActionSerializer(obj).data)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="Delete action for launch config",
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
@@ -697,6 +698,7 @@ class LaunchConfigDashboardListAPI(AuthorizedQuerySetMixin, APIView):
 
     @extend_schema(
         responses={200: LaunchConfigDashboardSerializer(many=True)},
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
     )
     def get(self, request):
         filterset = self.FilterSet(
@@ -716,7 +718,7 @@ class LaunchConfigDashboardListAPI(AuthorizedQuerySetMixin, APIView):
         return Response(LaunchConfigDashboardSerializer(qs, many=True).data)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_CONFIGS.value],
         summary="Delete action for launch config",
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )

@@ -11,7 +11,7 @@ from aist.test.test_api import AISTApiBase
 class AISTProjectCreateAPITests(AISTApiBase):
     def setUp(self):
         super().setUp()
-        self.url = reverse("aist_api:project_create")
+        self.url = reverse("aist_api:project_list")
 
     def test_create_empty_project_success(self):
         target_pt = Product_Type.objects.create(name="Org PT")

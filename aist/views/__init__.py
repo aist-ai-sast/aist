@@ -37,6 +37,7 @@ from aist.views.projects import (
     project_meta,
     project_version_create,
 )
+from aist.views.summaries import pipeline_summary, product_summary
 
 __all__ = [
     "ai_filter_reference",
@@ -58,7 +59,9 @@ __all__ = [
     "pipeline_logs_raw",
     "pipeline_set_status",
     "pipeline_status_stream",
+    "pipeline_summary",
     "product_analyzers_json",
+    "product_summary",
     "project_launch_config_create_ui",
     "project_meta",
     "project_version_create",

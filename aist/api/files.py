@@ -15,6 +15,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.link_builder import LinkBuilder
 from aist.models import VersionType
 from aist.queries import get_authorized_aist_project_versions
@@ -48,7 +49,7 @@ class ProjectVersionFileBlobAPI(AuthorizedQuerySetMixin, generics.GenericAPIView
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.PROJECTS.value],
         summary="Get file from extracted project version archive",
         description=(
             "Returns the raw bytes of a file located **inside** the extracted archive of the specified "

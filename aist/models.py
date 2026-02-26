@@ -321,7 +321,7 @@ class AISTProject(models.Model):
     created = models.DateTimeField(default=timezone.now, editable=False)
     updated = models.DateTimeField(auto_now=True)
 
-    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    product = models.OneToOneField(Product, on_delete=models.CASCADE)
     supported_languages = models.JSONField(default=list, blank=True)
     script_path = models.CharField(max_length=1024)
     compilable = models.BooleanField(default=False)

@@ -12,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.schema import AISTApiTag
 from aist.models import AISTProject, RepositoryInfo, ScmGitlabBinding, ScmType
 from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
 from aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GH flow uses
@@ -58,7 +59,7 @@ class ImportProjectFromGitlabAPI(APIView):
     @extend_schema(
         request=ImportGitlabRequestSerializer,
         responses={201: OpenApiResponse(ImportGitlabResponseSerializer)},
-        tags=["aist"],
+        tags=[AISTApiTag.GITLAB.value],
         summary="Import project from GitLab",
         description="Creates Product and AISTProject from GitLab project id (MVP).",
     )
@@ -178,7 +179,7 @@ class ProjectGitlabTokenUpdateAPI(APIView):
     @extend_schema(
         request=UpdateGitlabTokenRequestSerializer,
         responses={200: OpenApiResponse(description="Token updated")},
-        tags=["aist"],
+        tags=[AISTApiTag.GITLAB.value],
         summary="Update GitLab token for project",
     )
     def post(self, request, project_id: int, *args, **kwargs):

@@ -18,6 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.models import AISTProject, AISTProjectLaunchConfig, LaunchSchedule, PipelineLaunchQueue
 from aist.queries import (
     get_authorized_aist_launch_schedules,
@@ -276,7 +277,7 @@ class ProjectLaunchScheduleUpsertAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
         summary="Create or update launch schedule for project",
         request=LaunchScheduleUpsertSerializer,
         responses={201: OpenApiResponse(description="Schedule created or updated")},
@@ -354,7 +355,7 @@ class LaunchScheduleListAPI(AuthorizedQuerySetMixin, APIView):
 
     @extend_schema(
         operation_id="aist_launch_schedules_list",
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
         summary="List all launch schedules",
         parameters=[
             OpenApiParameter(name="project_id", type=int, required=False),
@@ -416,7 +417,7 @@ class LaunchScheduleDetailAPI(AuthorizedQuerySetMixin, APIView):
 
     @extend_schema(
         operation_id="aist_launch_schedules_retrieve",
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
         summary="Get launch schedule by id",
         responses={200: LaunchScheduleSerializer, 404: OpenApiResponse(description="Not found")},
     )
@@ -434,7 +435,7 @@ class LaunchScheduleDetailAPI(AuthorizedQuerySetMixin, APIView):
         return Response(LaunchScheduleSerializer(obj).data, status=status.HTTP_200_OK)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
         summary="Delete launch schedule by id",
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
@@ -444,6 +445,11 @@ class LaunchScheduleDetailAPI(AuthorizedQuerySetMixin, APIView):
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    @extend_schema(
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
+        summary="Partially update launch schedule",
+        responses={200: LaunchScheduleSerializer, 400: OpenApiResponse(description="Validation error")},
+    )
     def patch(self, request, launch_schedule_id: int):
         """
         Partial update for LaunchSchedule.
@@ -505,7 +511,7 @@ class LaunchSchedulePreviewAPI(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
         summary="Preview next N runs for a cron expression",
         request=LaunchSchedulePreviewSerializer,
         responses={200: OpenApiResponse(description="Preview list")},
@@ -547,7 +553,7 @@ class LaunchScheduleBulkDisableAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
         summary="Disable schedules for an organization or a project",
         request=LaunchScheduleBulkDisableSerializer,
         responses={200: OpenApiResponse(description="Updated count")},
@@ -584,7 +590,7 @@ class LaunchScheduleRunOnceAPI(AuthorizedQuerySetMixin, APIView):
     )
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
         summary="Enqueue one run for a schedule",
         responses={200: OpenApiResponse(description="Enqueued queue item"), 404: OpenApiResponse(description="Not found")},
     )

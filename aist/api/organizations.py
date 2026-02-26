@@ -8,6 +8,7 @@ from rest_framework import generics, serializers
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response  # noqa: TC002
 
+from aist.api.schema import AISTApiTag
 from aist.models import Organization
 from aist.queries import get_authorized_aist_organizations
 
@@ -45,7 +46,7 @@ class OrganizationCreateAPI(generics.ListCreateAPIView):
         return get_authorized_aist_organizations(Permissions.Product_View, user=self.request.user).order_by("name")
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.ORGANIZATIONS.value],
         summary="Create organization",
         description="Creates a new organization that can be used to group AIST projects.",
         request=AISTOrganizationSerializer,
@@ -56,7 +57,7 @@ class OrganizationCreateAPI(generics.ListCreateAPIView):
         return super().post(request, *args, **kwargs)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.ORGANIZATIONS.value],
         summary="List organizations",
         description="Returns organizations available to the current user.",
         responses={200: OpenApiResponse(AISTOrganizationSerializer(many=True), description="Organizations list")},

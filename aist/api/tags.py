@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
+from aist.api.schema import AISTApiTag
 from aist.queries import get_authorized_aist_projects, get_authorized_findings
 
 
@@ -23,7 +24,7 @@ class AvailableFindingTagsAPI(AuthorizedQuerySetMixin, APIView):
         project_id = serializers.IntegerField(required=False)
 
     @extend_schema(
-        tags=["aist"],
+        tags=[AISTApiTag.FINDINGS.value],
         summary="List available finding tags",
         parameters=[OpenApiParameter(name="project_id", required=False, type=int)],
         responses={

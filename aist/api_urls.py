@@ -11,9 +11,6 @@ from aist.api import (
     AISTFindingNotesAPI,
     AISTMeAPI,
     AISTMeChangePasswordAPI,
-    AISTPipelineSummaryAPI,
-    AISTProductSummaryAPI,
-    AISTProjectCreateAPI,
     AISTProjectDetailAPI,
     AISTProjectListAPI,
     GithubConnectCallbackAPI,
@@ -66,7 +63,6 @@ from aist.api.pipelines import (
 from aist.api.projects import (
     AISTDefaultAnalyzersAPI,
     AISTProjectMetaAPI,
-    AISTProjectUpdateAPI,
 )
 from aist.api.tags import AvailableFindingTagsAPI
 
@@ -80,11 +76,8 @@ urlpatterns = [
     path("calendar/events/", AISTCalendarEventsAPI.as_view(), name="calendar_events"),
     path("calendar/events/<path:event_id>/", AISTCalendarEventDetailAPI.as_view(), name="calendar_event_detail"),
     path("projects/", AISTProjectListAPI.as_view(), name="project_list"),
-    path("projects/create/", AISTProjectCreateAPI.as_view(), name="project_create"),
-    path("products/summary/", AISTProductSummaryAPI.as_view(), name="product_summary"),
     path("projects/<int:project_id>/", AISTProjectDetailAPI.as_view(), name="project_detail"),
     path("projects/<int:project_id>/meta/", AISTProjectMetaAPI.as_view(), name="project_meta"),
-    path("projects/<int:project_id>/update/", AISTProjectUpdateAPI.as_view(), name="project_update"),
     path("projects/default-analyzers/", AISTDefaultAnalyzersAPI.as_view(), name="default_analyzers"),
     path("pipelines/start/", PipelineStartAPI.as_view(), name="pipeline_start"),
     path("pipelines/<str:pipeline_id>", PipelineAPI.as_view(), name="pipeline_status"),
@@ -103,7 +96,6 @@ urlpatterns = [
         name="pipeline_export_ai_results",
     ),
     path("pipelines/", PipelineListAPI.as_view(), name="pipelines"),
-    path("pipelines/summary/", AISTPipelineSummaryAPI.as_view(), name="pipeline_summary"),
     path(
         "pipelines/<str:pipeline_id>/logs/progressive/",
         PipelineLogsProgressiveAPI.as_view(),
@@ -158,7 +150,7 @@ urlpatterns = [
         name="project_version_file_blob",
     ),
     path(
-        "projects/<int:project_id>/versions/create/",
+        "projects/<int:project_id>/versions",
         ProjectVersionCreateAPI.as_view(),
         name="project_version_create",
     ),

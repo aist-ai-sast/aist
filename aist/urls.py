@@ -11,6 +11,7 @@ from aist.views import (
     pipeline_progress,
     pipelines,
     projects,
+    summaries,
 )
 
 app_name = "aist"
@@ -43,7 +44,9 @@ urlpatterns = [
 
     path("pipeline/<str:pipeline_id>/status/stream/", pipeline_progress.pipeline_status_stream, name="pipeline_status_stream"),
     path("aist/default-analyzers/", projects.default_analyzers, name="default_analyzers"),
+    path("products/summary/", summaries.product_summary, name="product_summary"),
     path("pipelines/", pipelines.pipeline_list, name="pipeline_list"),
+    path("pipelines/summary/", summaries.pipeline_summary, name="pipeline_summary"),
     path("pipelines/<str:pipeline_id>/set_status_push_to_ai/", pipelines.pipeline_set_status, name="pipeline_set_status"),
     # TODO: make generic
     path("projects/<int:pk>/meta.json", projects.project_meta, name="project_meta"),
