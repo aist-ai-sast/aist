@@ -462,11 +462,11 @@ class Command(BaseCommand):
                 name=f"{spec.slug} security engagement",
                 defaults={
                     "target_start": project_created_at,
-                    "target_end": now + timedelta(days=365),
+                    "target_end": today + timedelta(days=365),
                 },
             )
-            if engagement.target_end < now:
-                engagement.target_end = now + timedelta(days=365)
+            if engagement.target_end < today:
+                engagement.target_end = today + timedelta(days=365)
                 engagement.save(update_fields=["target_end"])
 
             dojo_test, _ = Test.objects.get_or_create(

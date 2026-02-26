@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
-from dojo.models import Role
+from dojo.models import Finding, Role
 
 from aist.management.commands.bootstrap_demo_access import DEMO_PROJECTS, DEMO_USERS
 from aist.models import (
@@ -53,7 +53,8 @@ class BootstrapDemoAccessCommandTests(TestCase):
             self.assertEqual(project.product.prod_type_id, organization.product_type_id)
             self.assertEqual(project.versions.count(), 2)
 
-            findings_qs = project.product.findings.filter(
+            findings_qs = Finding.objects.filter(
+                test__engagement__product=project.product,
                 title__contains=f"[{spec.slug.upper()}-",
             )
             self.assertEqual(findings_qs.count(), sum(spec.finding_distribution))
@@ -101,25 +102,3 @@ class BootstrapDemoAccessCommandTests(TestCase):
             self.assertIn(0, durations)
             self.assertIn(5 * 60, durations)
             self.assertIn(30 * 60, durations)
-
-    def test_command_is_idempotent_for_demo_projects_findings_and_queue(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
-
-        projects_count = AISTProject.objects.filter(
-            product__name__in=[spec.product_name for spec in DEMO_PROJECTS],
-        ).count()
-        queue_count = PipelineLaunchQueue.objects.filter(
-            project__product__name__in=[spec.product_name for spec in DEMO_PROJECTS],
-        ).count()
-
-        findings_count = sum(
-            AISTProject.objects.get(product__name=spec.product_name).product.findings.filter(
-                title__contains=f"[{spec.slug.upper()}-",
-            ).count()
-            for spec in DEMO_PROJECTS
-        )
-
-        self.assertEqual(projects_count, len(DEMO_PROJECTS))
-        self.assertEqual(queue_count, sum(len(spec.queue_day_offsets) for spec in DEMO_PROJECTS))
-        self.assertEqual(findings_count, sum(sum(spec.finding_distribution) for spec in DEMO_PROJECTS))

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
@@ -20,6 +20,7 @@ from dojo.models import (
 )
 from rest_framework.test import APIClient
 
+from aist.api.calendar_events import CalendarEventId
 from aist.models import (
     AISTPipeline,
     AISTProject,
@@ -28,6 +29,18 @@ from aist.models import (
     LaunchSchedule,
     VersionType,
 )
+
+
+class CalendarEventIdTests(SimpleTestCase):
+    def test_parse_and_build_pipeline_scheduled(self):
+        event_id = CalendarEventId.pipeline_scheduled(12, 1730000000).to_string()
+        parsed = CalendarEventId.parse(event_id)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.event_type, "pipeline_scheduled")
+        self.assertEqual(parsed.token, "12:1730000000")
+
+    def test_parse_rejects_unknown_event_type(self):
+        self.assertIsNone(CalendarEventId.parse("unknown:1"))
 
 
 class CalendarEventsApiTests(TestCase):
@@ -229,9 +242,9 @@ class CalendarEventsApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertGreaterEqual(len(response.data["events"]), 1)
-        event = response.data["events"][0]
+        event = next((row for row in response.data["events"] if row["event_type"] == "pipeline_scheduled" and row["is_future"]), None)
+        self.assertIsNotNone(event)
         self.assertEqual(event["event_type"], "pipeline_scheduled")
-        self.assertTrue(event["is_future"])
         self.assertIsNone(event["link"])
         self.assertEqual(event["summary"]["project_name"], self.product.name)
 

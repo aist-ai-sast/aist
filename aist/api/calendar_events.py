@@ -6,7 +6,6 @@ from datetime import date as date_type
 from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfo
 
 from croniter import croniter
 from django.db.models import Count, DateTimeField
@@ -21,7 +20,16 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from aist.api.common import CommaSeparatedListField, TimezoneNameField, empty_severity_counts
+from aist.api.calendar_domain import (
+    CALENDAR_EVENT_TYPES,
+    CalendarEventData,
+    CalendarEventId,
+    CalendarRequestContext,
+    SeverityBucket,
+    SeveritySummary,
+    build_calendar_request_context,
+)
+from aist.api.common import CommaSeparatedListField, TimezoneNameField
 from aist.queries import (
     get_authorized_aist_launch_schedules,
     get_authorized_aist_pipelines,
@@ -44,95 +52,11 @@ class CalendarApiChoices:
 CALENDAR_API_CHOICES = CalendarApiChoices(
     view=["day", "week", "month"],
     grouping=["auto", "none"],
-    event_type=["pipeline_started", "pipeline_scheduled", "finding_created", "finding_mitigated", "project_created"],
+    event_type=list(CALENDAR_EVENT_TYPES),
 )
 
 MAX_RANGE_DAYS = 93
 MAX_SCHEDULE_OCCURRENCES_PER_SCHEDULE = 300
-
-
-@dataclass(frozen=True, slots=True)
-class CalendarRequestContext:
-    start: datetime
-    end: datetime
-    view: str
-    grouping: str
-    limit: int
-    event_types: tuple[str, ...]
-    project_ids: set[int]
-    tzinfo: object
-    now_local: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class CalendarEventData:
-    id: str
-    event_type: str
-    title: str
-    start: datetime
-    end: datetime | None
-    is_all_day: bool
-    is_aggregated: bool
-    count: int
-    is_future: bool
-    color_variant: str
-    summary: dict[str, object]
-    link: str | None
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "id": self.id,
-            "event_type": self.event_type,
-            "title": self.title,
-            "start": self.start,
-            "end": self.end,
-            "is_all_day": self.is_all_day,
-            "is_aggregated": self.is_aggregated,
-            "count": self.count,
-            "is_future": self.is_future,
-            "color_variant": self.color_variant,
-            "summary": self.summary,
-            "link": self.link,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class ParsedEventId:
-    event_type: str
-    token: str
-
-    @classmethod
-    def parse(cls, event_id: str) -> ParsedEventId | None:
-        event_type, _, token = event_id.partition(":")
-        if not token or event_type not in CALENDAR_API_CHOICES.event_type:
-            return None
-        return cls(event_type=event_type, token=token)
-
-
-@dataclass(slots=True)
-class SeveritySummary:
-    counts: dict[str, int]
-
-    @classmethod
-    def empty(cls) -> SeveritySummary:
-        return cls(counts=empty_severity_counts())
-
-    def add(self, level: str | None) -> None:
-        if level in self.counts:
-            self.counts[level] += 1
-
-    def to_dict(self) -> dict[str, int]:
-        return dict(self.counts)
-
-
-@dataclass(slots=True)
-class SeverityBucket:
-    total: int
-    severity: SeveritySummary
-
-    @classmethod
-    def empty(cls) -> SeverityBucket:
-        return cls(total=0, severity=SeveritySummary.empty())
 
 
 class CalendarEventFactory:
@@ -173,7 +97,7 @@ class CalendarEventFactory:
         started = self._to_local(project.created)
         is_future = self._is_future(started)
         return CalendarEventData(
-            id=f"project_created:{project.id}",
+            id=CalendarEventId.project_created(project.id).to_string(),
             event_type="project_created",
             title=f"Project created: {project.product.name}",
             start=started,
@@ -211,7 +135,7 @@ class CalendarEventFactory:
             },
         )
         return CalendarEventData(
-            id=f"pipeline_started:{pipeline.id}",
+            id=CalendarEventId.pipeline_started(pipeline.id).to_string(),
             event_type="pipeline_started",
             title=f"Pipeline started: {pipeline.id}",
             start=started,
@@ -240,7 +164,7 @@ class CalendarEventFactory:
     def pipeline_scheduled(self, schedule, run_at: datetime, run_ts: int) -> CalendarEventData:
         is_future = self._is_future(run_at)
         return CalendarEventData(
-            id=f"pipeline_scheduled:{schedule.id}:{run_ts}",
+            id=CalendarEventId.pipeline_scheduled(schedule.id, run_ts).to_string(),
             event_type="pipeline_scheduled",
             title=f"Pipeline scheduled: {schedule.launch_config.project.product.name}",
             start=run_at,
@@ -263,7 +187,7 @@ class CalendarEventFactory:
         started = self._to_local(event_at)
         is_future = self._is_future(started)
         return CalendarEventData(
-            id=f"finding_created:{finding.id}",
+            id=CalendarEventId.finding_created(finding.id).to_string(),
             event_type="finding_created",
             title=f"Finding created: {finding.title}",
             start=started,
@@ -281,7 +205,7 @@ class CalendarEventFactory:
         start_of_day = self._day_start(day)
         is_future = self._is_future(start_of_day)
         return CalendarEventData(
-            id=f"finding_created:{day.isoformat()}",
+            id=CalendarEventId.finding_created(day.isoformat()).to_string(),
             event_type="finding_created",
             title=f"Findings created: {bucket.total}",
             start=start_of_day,
@@ -299,7 +223,7 @@ class CalendarEventFactory:
         start_of_day = self._day_start(day)
         is_future = self._is_future(start_of_day)
         return CalendarEventData(
-            id=f"finding_mitigated:{day.isoformat()}",
+            id=CalendarEventId.finding_mitigated(day).to_string(),
             event_type="finding_mitigated",
             title=f"Findings mitigated: {bucket.total}",
             start=start_of_day,
@@ -314,62 +238,65 @@ class CalendarEventFactory:
         )
 
 
-class CalendarEventsService:
-    def __init__(self, *, user, context: CalendarRequestContext):
-        self.user = user
-        self.ctx = context
-        self.factory = CalendarEventFactory(tzinfo=context.tzinfo, now_local=context.now_local)
-        self.projects, self.pipelines, self.schedules, self.findings = _scoped_authorized_data(
-            user=user,
-            project_filter=context.project_ids,
+class CalendarEventsRepository:
+    def __init__(self, *, user, project_filter: set[int]):
+        self.projects = get_authorized_aist_projects(Permissions.Product_View, user=user).select_related("product")
+        self.pipelines = get_authorized_aist_pipelines(Permissions.Product_View, user=user).select_related(
+            "project",
+            "project__product",
         )
-        self._event_dispatch: dict[str, Callable[[], list[CalendarEventData]]] = {
-            "project_created": self._list_project_created,
-            "pipeline_started": self._list_pipeline_started,
-            "pipeline_scheduled": self._list_pipeline_scheduled,
-            "finding_created": self._list_finding_created,
-            "finding_mitigated": self._list_finding_mitigated,
-        }
-        self._detail_dispatch: dict[str, Callable[[str], CalendarEventData | None]] = {
-            "project_created": self._detail_project_created,
-            "pipeline_started": self._detail_pipeline_started,
-            "pipeline_scheduled": self._detail_pipeline_scheduled,
-            "finding_created": self._detail_finding_created,
-            "finding_mitigated": self._detail_finding_mitigated,
+        self.schedules = get_authorized_aist_launch_schedules(Permissions.Product_View, user=user).select_related(
+            "launch_config__project",
+            "launch_config__project__product",
+        )
+        self.findings = get_authorized_findings(Permissions.Finding_View, user=user)
+
+        if project_filter:
+            self.projects = self.projects.filter(id__in=project_filter)
+            self.pipelines = self.pipelines.filter(project_id__in=project_filter)
+            self.schedules = self.schedules.filter(launch_config__project_id__in=project_filter)
+            self.findings = self.findings.filter(aist_project_versions__project_id__in=project_filter).distinct()
+
+    @staticmethod
+    def findings_by_pipeline_ids(pipeline_ids: list[str]) -> dict[str, int]:
+        if not pipeline_ids:
+            return {}
+        counts_qs = (
+            Finding.objects.filter(test__aist_pipelines__id__in=pipeline_ids)
+            .order_by()
+            .values("test__aist_pipelines__id")
+            .annotate(total=Count("id"))
+        )
+        return {
+            str(row["test__aist_pipelines__id"]): int(row["total"])
+            for row in counts_qs
         }
 
-    def list_events(self) -> list[CalendarEventData]:
-        events: list[CalendarEventData] = []
-        for event_type in self.ctx.event_types:
-            events.extend(self._event_dispatch[event_type]())
-        events.sort(key=lambda event: (event.start, event.id))
-        return events
+    @staticmethod
+    def findings_count_for_pipeline(pipeline_id: str) -> int:
+        return (
+            Finding.objects.filter(test__aist_pipelines__id=pipeline_id)
+            .order_by()
+            .values("id")
+            .distinct()
+            .count()
+        )
 
-    def get_event_detail(self, parsed_event_id: ParsedEventId) -> CalendarEventData | None:
-        handler = self._detail_dispatch.get(parsed_event_id.event_type)
-        if not handler:
-            return None
-        return handler(parsed_event_id.token)
+
+class BaseCalendarService:
+    def __init__(self, *, context: CalendarRequestContext, repository: CalendarEventsRepository):
+        self.ctx = context
+        self.repo = repository
+        self.factory = CalendarEventFactory(tzinfo=context.tzinfo, now_local=context.now_local)
 
     def _list_project_created(self) -> list[CalendarEventData]:
-        rows = self.projects.filter(created__gte=self.ctx.start, created__lt=self.ctx.end).order_by("created")
+        rows = self.repo.projects.filter(created__gte=self.ctx.start, created__lt=self.ctx.end).order_by("created")
         return [self.factory.project_created(item) for item in rows]
 
     def _list_pipeline_started(self) -> list[CalendarEventData]:
-        rows = list(self.pipelines.filter(created__gte=self.ctx.start, created__lt=self.ctx.end).order_by("created"))
+        rows = list(self.repo.pipelines.filter(created__gte=self.ctx.start, created__lt=self.ctx.end).order_by("created"))
         pipeline_ids = [item.id for item in rows]
-        findings_by_pipeline: dict[str, int] = {}
-        if pipeline_ids:
-            counts_qs = (
-                Finding.objects.filter(test__aist_pipelines__id__in=pipeline_ids)
-                .order_by()
-                .values("test__aist_pipelines__id")
-                .annotate(total=Count("id"))
-            )
-            findings_by_pipeline = {
-                str(row["test__aist_pipelines__id"]): int(row["total"])
-                for row in counts_qs
-            }
+        findings_by_pipeline = CalendarEventsRepository.findings_by_pipeline_ids(pipeline_ids)
         return [self.factory.pipeline_started(item, findings_by_pipeline.get(item.id, 0)) for item in rows]
 
     def _list_pipeline_scheduled(self) -> list[CalendarEventData]:
@@ -377,7 +304,7 @@ class CalendarEventsService:
         range_start_local = timezone.localtime(self.ctx.start, self.ctx.tzinfo)
         range_end_local = timezone.localtime(self.ctx.end, self.ctx.tzinfo)
 
-        for schedule in self.schedules.filter(enabled=True):
+        for schedule in self.repo.schedules.filter(enabled=True):
             occurrences = 0
             iterator = croniter(schedule.cron_expression, range_start_local)
             while occurrences < MAX_SCHEDULE_OCCURRENCES_PER_SCHEDULE:
@@ -391,7 +318,7 @@ class CalendarEventsService:
 
     def _list_finding_created(self) -> list[CalendarEventData]:
         findings_qs = (
-            self.findings.annotate(event_at=Coalesce("date", "created", output_field=DateTimeField()))
+            self.repo.findings.annotate(event_at=Coalesce("date", "created", output_field=DateTimeField()))
             .filter(event_at__gte=self.ctx.start, event_at__lt=self.ctx.end)
             .distinct()
         )
@@ -411,7 +338,7 @@ class CalendarEventsService:
 
     def _list_finding_mitigated(self) -> list[CalendarEventData]:
         mitigated_qs = (
-            self.findings.filter(active=False)
+            self.repo.findings.filter(active=False)
             .exclude(last_status_update__isnull=True)
             .filter(last_status_update__gte=self.ctx.start, last_status_update__lt=self.ctx.end)
             .distinct()
@@ -430,20 +357,14 @@ class CalendarEventsService:
             project_id = int(token)
         except ValueError:
             return None
-        project = self.projects.filter(id=project_id).first()
+        project = self.repo.projects.filter(id=project_id).first()
         return self.factory.project_created(project) if project else None
 
     def _detail_pipeline_started(self, token: str) -> CalendarEventData | None:
-        pipeline = self.pipelines.filter(id=token).first()
+        pipeline = self.repo.pipelines.filter(id=token).first()
         if not pipeline:
             return None
-        findings_count = (
-            Finding.objects.filter(test__aist_pipelines__id=pipeline.id)
-            .order_by()
-            .values("id")
-            .distinct()
-            .count()
-        )
+        findings_count = CalendarEventsRepository.findings_count_for_pipeline(pipeline.id)
         return self.factory.pipeline_started(pipeline, findings_count)
 
     def _detail_pipeline_scheduled(self, token: str) -> CalendarEventData | None:
@@ -453,7 +374,7 @@ class CalendarEventsService:
             run_ts = int(ts_token)
         except ValueError:
             return None
-        schedule = self.schedules.filter(id=schedule_id, enabled=True).first()
+        schedule = self.repo.schedules.filter(id=schedule_id, enabled=True).first()
         if not schedule:
             return None
         run_at = datetime.fromtimestamp(run_ts, tz=self.ctx.tzinfo)
@@ -476,7 +397,7 @@ class CalendarEventsService:
             finding_id = int(token)
         except ValueError:
             return None
-        finding = self.findings.filter(id=finding_id).first()
+        finding = self.repo.findings.filter(id=finding_id).first()
         if not finding:
             return None
         event_at = finding.date or finding.created
@@ -488,12 +409,12 @@ class CalendarEventsService:
 
         if mitigated:
             day_qs = (
-                self.findings.filter(active=False)
+                self.repo.findings.filter(active=False)
                 .exclude(last_status_update__isnull=True)
                 .filter(last_status_update__gte=day_start, last_status_update__lt=day_end)
             )
         else:
-            day_qs = self.findings.annotate(event_at=Coalesce("date", "created", output_field=DateTimeField())).filter(
+            day_qs = self.repo.findings.annotate(event_at=Coalesce("date", "created", output_field=DateTimeField())).filter(
                 event_at__gte=day_start,
                 event_at__lt=day_end,
             )
@@ -509,6 +430,43 @@ class CalendarEventsService:
         if mitigated:
             return self.factory.finding_mitigated_aggregate(day, bucket)
         return self.factory.finding_created_aggregate(day, bucket)
+
+
+class CalendarEventListService(BaseCalendarService):
+    def __init__(self, *, context: CalendarRequestContext, repository: CalendarEventsRepository):
+        super().__init__(context=context, repository=repository)
+        self.dispatch: dict[str, Callable[[], list[CalendarEventData]]] = {
+            "project_created": self._list_project_created,
+            "pipeline_started": self._list_pipeline_started,
+            "pipeline_scheduled": self._list_pipeline_scheduled,
+            "finding_created": self._list_finding_created,
+            "finding_mitigated": self._list_finding_mitigated,
+        }
+
+    def list_events(self) -> list[CalendarEventData]:
+        events: list[CalendarEventData] = []
+        for event_type in self.ctx.event_types:
+            events.extend(self.dispatch[event_type]())
+        events.sort(key=lambda event: (event.start, event.id))
+        return events
+
+
+class CalendarEventDetailService(BaseCalendarService):
+    def __init__(self, *, context: CalendarRequestContext, repository: CalendarEventsRepository):
+        super().__init__(context=context, repository=repository)
+        self.dispatch: dict[str, Callable[[str], CalendarEventData | None]] = {
+            "project_created": self._detail_project_created,
+            "pipeline_started": self._detail_pipeline_started,
+            "pipeline_scheduled": self._detail_pipeline_scheduled,
+            "finding_created": self._detail_finding_created,
+            "finding_mitigated": self._detail_finding_mitigated,
+        }
+
+    def get_event_detail(self, event_id: CalendarEventId) -> CalendarEventData | None:
+        handler = self.dispatch.get(event_id.event_type)
+        if not handler:
+            return None
+        return handler(event_id.token)
 
 
 class CalendarEventRowSerializer(serializers.Serializer):
@@ -575,6 +533,7 @@ class AISTCalendarEventsAPI(APIView):
 
     @extend_schema(
         tags=["aist"],
+        operation_id="aist_calendar_events_list",
         summary="List calendar events for client UI",
         parameters=[
             OpenApiParameter(name="start", required=True, type=str),
@@ -593,8 +552,9 @@ class AISTCalendarEventsAPI(APIView):
         if not params.is_valid():
             return Response(params.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        context = _build_context(params.validated_data)
-        service = CalendarEventsService(user=request.user, context=context)
+        context = build_calendar_request_context(params.validated_data)
+        repository = CalendarEventsRepository(user=request.user, project_filter=context.project_ids)
+        service = CalendarEventListService(context=context, repository=repository)
         events = service.list_events()
 
         truncated = len(events) > context.limit
@@ -620,6 +580,7 @@ class AISTCalendarEventDetailAPI(APIView):
 
     @extend_schema(
         tags=["aist"],
+        operation_id="aist_calendar_event_detail_retrieve",
         summary="Get a single calendar event detail",
         parameters=[
             OpenApiParameter(name="event_id", required=True, location=OpenApiParameter.PATH, type=str),
@@ -636,11 +597,11 @@ class AISTCalendarEventDetailAPI(APIView):
         if not params.is_valid():
             return Response(params.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        parsed_event = ParsedEventId.parse(event_id)
+        parsed_event = CalendarEventId.parse(event_id)
         if not parsed_event:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        context = _build_context(
+        context = build_calendar_request_context(
             {
                 "start": timezone.now(),
                 "end": timezone.now() + timedelta(days=1),
@@ -652,7 +613,8 @@ class AISTCalendarEventDetailAPI(APIView):
                 "timezone": params.validated_data.get("timezone", ""),
             },
         )
-        service = CalendarEventsService(user=request.user, context=context)
+        repository = CalendarEventsRepository(user=request.user, project_filter=context.project_ids)
+        service = CalendarEventDetailService(context=context, repository=repository)
         event = service.get_event_detail(parsed_event)
         if not event:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -665,45 +627,8 @@ def _ensure_aware(value: datetime, tzinfo) -> datetime:
     return value
 
 
-def _build_context(validated_data: dict[str, object]) -> CalendarRequestContext:
-    tz_name = str(validated_data.get("timezone") or "").strip()
-    tzinfo = ZoneInfo(tz_name) if tz_name else timezone.get_current_timezone()
-    return CalendarRequestContext(
-        start=validated_data["start"],
-        end=validated_data["end"],
-        view=validated_data["view"],
-        grouping=validated_data["grouping"],
-        limit=validated_data["limit"],
-        event_types=tuple(validated_data["event_types"]),
-        project_ids=set(validated_data.get("project_id", [])),
-        tzinfo=tzinfo,
-        now_local=timezone.localtime(timezone.now(), tzinfo),
-    )
-
-
 def _parse_day_token(token: str) -> date_type | None:
     try:
         return datetime.strptime(token, "%Y-%m-%d").date()
     except ValueError:
         return None
-
-
-def _scoped_authorized_data(*, user, project_filter: set[int]):
-    projects = get_authorized_aist_projects(Permissions.Product_View, user=user).select_related("product")
-    pipelines = get_authorized_aist_pipelines(Permissions.Product_View, user=user).select_related(
-        "project",
-        "project__product",
-    )
-    schedules = get_authorized_aist_launch_schedules(Permissions.Product_View, user=user).select_related(
-        "launch_config__project",
-        "launch_config__project__product",
-    )
-    findings = get_authorized_findings(Permissions.Finding_View, user=user)
-
-    if project_filter:
-        projects = projects.filter(id__in=project_filter)
-        pipelines = pipelines.filter(project_id__in=project_filter)
-        schedules = schedules.filter(launch_config__project_id__in=project_filter)
-        findings = findings.filter(aist_project_versions__project_id__in=project_filter).distinct()
-
-    return projects, pipelines, schedules, findings

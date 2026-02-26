@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import PropertyMock, patch
+
 from django.conf import settings
 from django.test import override_settings
 from django.utils import timezone
@@ -136,8 +138,6 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
 
     def test_non_supported_scan_type_uses_default_fallback(self):
         test = self._create_test("Custom Scanner")
-        test.deduplication_algorithm = settings.DEDUPE_ALGO_HASH_CODE
-        test.save(update_fields=["deduplication_algorithm"])
 
         _ = self._create_finding(
             test=test,
@@ -156,15 +156,19 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
             hash_code="fallback-hash",
         )
 
-        dedupe_batch_of_findings([imported])
+        with patch.object(
+            Test,
+            "deduplication_algorithm",
+            new_callable=PropertyMock,
+            return_value=settings.DEDUPE_ALGO_HASH_CODE,
+        ):
+            dedupe_batch_of_findings([imported])
         imported.refresh_from_db()
 
         self.assertTrue(imported.duplicate)
 
     def test_supported_scan_type_with_line_zero_uses_fallback_hash_dedupe(self):
         test = self._create_test("Semgrep JSON Report")
-        test.deduplication_algorithm = settings.DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE
-        test.save(update_fields=["deduplication_algorithm"])
 
         _ = self._create_finding(
             test=test,
@@ -185,7 +189,13 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
             hash_code="9f8310b959cdf917dcfe318b85ece5cc708c64a277a093b92f485c855728aa8b",
         )
 
-        dedupe_batch_of_findings([imported])
+        with patch.object(
+            Test,
+            "deduplication_algorithm",
+            new_callable=PropertyMock,
+            return_value=settings.DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+        ):
+            dedupe_batch_of_findings([imported])
         imported.refresh_from_db()
 
         self.assertTrue(imported.duplicate)
