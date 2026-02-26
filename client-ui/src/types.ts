@@ -37,7 +37,7 @@ export type Finding = {
   date?: string;
   createdAt?: string;
   filePath: string;
-  line: number;
+  line: number | null;
   tool: string;
   description?: string;
   cwe?: number | null;

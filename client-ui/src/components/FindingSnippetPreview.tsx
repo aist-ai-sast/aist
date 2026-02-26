@@ -7,7 +7,7 @@ import { useFileSnippet } from "../lib/snippetCache";
 type FindingSnippetPreviewProps = {
   filePath?: string;
   sourceFileLink?: string;
-  line?: number;
+  line?: number | null;
 };
 
 export default function FindingSnippetPreview({
@@ -16,9 +16,9 @@ export default function FindingSnippetPreview({
   line,
 }: FindingSnippetPreviewProps) {
   void filePath;
-  const { snippet, isLoading, isError } = useFileSnippet({
+  const { snippet, isLoading, isError, isSourceUnavailable } = useFileSnippet({
     sourceFileLink,
-    line,
+    line: line ?? undefined,
   });
 
   const previewText = useMemo(() => {
@@ -31,7 +31,7 @@ export default function FindingSnippetPreview({
     return DOMPurify.sanitize(hljs.highlightAuto(previewText).value);
   }, [previewText]);
 
-  if (!sourceFileLink || !line) {
+  if (!sourceFileLink) {
     return (
       <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 font-mono text-xs text-slate-400">
         Snippet preview unavailable
@@ -50,7 +50,9 @@ export default function FindingSnippetPreview({
   if (isError || !snippet) {
     return (
       <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 font-mono text-xs text-slate-400">
-        Snippet preview unavailable
+        {isSourceUnavailable
+          ? "Source file is unavailable for this project version."
+          : "Snippet preview unavailable"}
       </div>
     );
   }

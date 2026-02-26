@@ -8,7 +8,7 @@ const MonacoEditor = lazy(() => import("@monaco-editor/react"));
 type CodeSnippetProps = {
   filePath?: string;
   sourceFileLink?: string;
-  line?: number;
+  line?: number | null;
   fallback?: string;
 };
 
@@ -18,9 +18,9 @@ export default function CodeSnippet({
   line,
   fallback,
 }: CodeSnippetProps) {
-  const { snippet, isLoading, isError } = useFileSnippet({
+  const { snippet, isLoading, isError, isSourceUnavailable } = useFileSnippet({
     sourceFileLink,
-    line,
+    line: line ?? undefined,
   });
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -51,6 +51,7 @@ export default function CodeSnippet({
     if (expanded) {
       return snippet.highlight;
     }
+    if (!snippet.highlight) return null;
     return snippet.highlight - snippet.start + 1;
   }, [snippet, expanded]);
 
@@ -87,7 +88,7 @@ export default function CodeSnippet({
     applyHighlight();
   }, [editorReady, highlightLine, snippetText]);
 
-  if (!sourceFileLink || !line) {
+  if (!sourceFileLink) {
     return (
       <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-xs text-slate-400">
         Code snippet unavailable.
@@ -114,7 +115,9 @@ export default function CodeSnippet({
   if (isError || !snippet) {
     return (
       <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-xs text-slate-400">
-        {fallback ?? "Snippet failed to load."}
+        {isSourceUnavailable
+          ? "Source file is unavailable for this project version."
+          : (fallback ?? "Snippet failed to load.")}
       </div>
     );
   }
@@ -132,6 +135,11 @@ export default function CodeSnippet({
           <span className="truncate">{filePath ?? "File"}</span>
         </span>
         <div className="flex flex-wrap items-center gap-2">
+          {!snippet.hasHighlight ? (
+            <span className="rounded-lg border border-night-500 bg-night-700 px-2 py-1 text-xs text-slate-300">
+              Line is not provided by scanner; showing file content.
+            </span>
+          ) : null}
           <button
             className="rounded-lg border border-night-500 bg-night-700 px-2 py-1 text-xs text-slate-200"
             onClick={() => setExpanded((value) => !value)}

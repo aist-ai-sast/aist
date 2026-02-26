@@ -127,7 +127,7 @@ export default function FindingCard({
           </svg>
           <span className="truncate">File: {finding.filePath}</span>
         </button>
-        <span>Line {finding.line}</span>
+        <span>{finding.line && finding.line > 0 ? `Line ${finding.line}` : "Line not provided"}</span>
         {finding.projectVersion ? (
           <button
             type="button"

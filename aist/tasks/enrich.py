@@ -1,3 +1,4 @@
+import logging
 import os
 from math import ceil
 from typing import Any
@@ -11,6 +12,8 @@ from aist.logging_transport import get_redis, install_pipeline_logging
 from aist.models import AISTPipeline, AISTStatus
 from aist.tasks.dedup import watch_deduplication
 from aist.utils.pipeline import set_pipeline_status
+
+logger = logging.getLogger(__name__)
 
 
 @shared_task(bind=True)
@@ -60,8 +63,9 @@ def enrich_finding_task(
     except Finding.DoesNotExist:
         return 0
     else:
+        file_path = f.file_path or ""
+        test_id = getattr(f, "test_id", None)
         try:
-            file_path = f.file_path or ""
             if trim_path and file_path.startswith(trim_path):
                 tp = trim_path if trim_path.endswith("/") else trim_path + "/"
                 f.file_path = file_path.replace(tp, "")
@@ -69,20 +73,51 @@ def enrich_finding_task(
                 file_path = f.file_path
 
             linker = LinkBuilder(project_version_descriptor)
-            link = linker.build(file_path)
+            try:
+                link = linker.build(file_path)
+            except Exception:
+                logger.exception(
+                    "Failed to build source link for finding enrichment: "
+                    "finding_id=%s file_path=%s test_id=%s project_version_descriptor=%s",
+                    finding_id,
+                    file_path,
+                    test_id,
+                    project_version_descriptor,
+                )
+                return 0
+
             if not link:
                 return 0
             acceptable = not linker.contains_excluded_path(link)
             if acceptable:
-                DojoMeta.objects.update_or_create(
-                    finding=f,
-                    name="sourcefile_link",
-                    value=link,
-                )
+                try:
+                    DojoMeta.objects.update_or_create(
+                        finding=f,
+                        name="sourcefile_link",
+                        value=link,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to upsert sourcefile_link meta for finding enrichment: "
+                        "finding_id=%s file_path=%s test_id=%s project_version_descriptor=%s",
+                        finding_id,
+                        file_path,
+                        test_id,
+                        project_version_descriptor,
+                    )
+                    return 0
             else:
                 f.delete()
             return 1  # noqa: TRY300
         except Exception:
+            logger.exception(
+                "Unexpected finding enrichment error: "
+                "finding_id=%s file_path=%s test_id=%s project_version_descriptor=%s",
+                finding_id,
+                file_path,
+                test_id,
+                project_version_descriptor,
+            )
             return 0
 
 

@@ -168,6 +168,7 @@ function buildFindingsParams(
 }
 
 function mapFindingApiToUi(item: FindingApi): Finding {
+  const normalizedLine = typeof item.line === "number" ? item.line : null;
   return {
     sourceFileLink: item.finding_meta?.find((meta) => meta.name === "sourcefile_link")?.value,
     id: item.id,
@@ -186,7 +187,7 @@ function mapFindingApiToUi(item: FindingApi): Finding {
     projectVersion: item.project_version ?? undefined,
     projectVersionType: item.project_version_type ?? undefined,
     filePath: item.file_path ?? "",
-    line: item.line ?? 0,
+    line: normalizedLine,
     tool: "",
     description: item.description ?? undefined,
     cwe: item.cwe ?? null,
