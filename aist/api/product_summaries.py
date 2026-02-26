@@ -10,6 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.common import API_SEVERITY_VALUES, empty_severity_counts
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.models import AISTPipeline
 from aist.queries import get_authorized_aist_projects, get_authorized_findings
@@ -59,17 +60,17 @@ class AISTProductSummaryAPI(AuthorizedQuerySetMixin, APIView):
         )
         findings = findings.order_by()
 
+        severity_annotations = {
+            f"severity_{severity.lower()}": Count("id", filter=Q(severity=severity))
+            for severity in API_SEVERITY_VALUES
+        }
         counts = findings.values("test__engagement__product_id").annotate(
             total=Count("id"),
             active=Count("id", filter=Q(active=True)),
-            critical=Count("id", filter=Q(severity="Critical")),
-            high=Count("id", filter=Q(severity="High")),
-            medium=Count("id", filter=Q(severity="Medium")),
-            low=Count("id", filter=Q(severity="Low")),
-            info=Count("id", filter=Q(severity="Info")),
             risk_accepted=Count("id", filter=Q(risk_accepted=True)),
             under_review=Count("id", filter=Q(under_review=True)),
             mitigated=Count("id", filter=Q(is_mitigated=True)),
+            **severity_annotations,
         )
 
         counts_by_product = {row["test__engagement__product_id"]: row for row in counts}
@@ -87,13 +88,9 @@ class AISTProductSummaryAPI(AuthorizedQuerySetMixin, APIView):
         results: list[dict[str, Any]] = []
         for project in projects:
             row = counts_by_product.get(project.product_id, {})
-            severity = {
-                "Critical": row.get("critical", 0),
-                "High": row.get("high", 0),
-                "Medium": row.get("medium", 0),
-                "Low": row.get("low", 0),
-                "Info": row.get("info", 0),
-            }
+            severity = empty_severity_counts()
+            for level in API_SEVERITY_VALUES:
+                severity[level] = row.get(f"severity_{level.lower()}", 0)
             active_count = row.get("active", 0)
             last_pipeline_at = project.last_pipeline_updated or project.updated
             results.append(

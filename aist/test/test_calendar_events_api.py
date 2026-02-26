@@ -191,6 +191,24 @@ class CalendarEventsApiTests(TestCase):
         project_ids = {row["summary"]["project_id"] for row in response.data["events"]}
         self.assertEqual(project_ids, {self.project.id})
 
+    def test_accepts_comma_separated_query_params(self):
+        start, end = self._base_range()
+        response = self.client.get(
+            self._url(),
+            data={
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "view": "month",
+                "event_types": "project_created,pipeline_started",
+                "project_id": str(self.project.id),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(len(response.data["events"]), 1)
+        for event in response.data["events"]:
+            if "project_id" in event["summary"]:
+                self.assertEqual(event["summary"]["project_id"], self.project.id)
+
     def test_pipeline_scheduled_returns_future_events(self):
         now = timezone.localtime(timezone.now()).replace(second=0, microsecond=0)
         future = now + timedelta(days=2)

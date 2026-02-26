@@ -12,7 +12,7 @@ from django_filters import rest_framework as django_filters
 from dojo.api_v2 import serializers as dojo_serializers
 from dojo.authorization.roles_permissions import Permissions
 from dojo.filters import ApiFindingFilter
-from dojo.models import SEVERITY_CHOICES, Notes
+from dojo.models import Notes
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_field
 from openpyxl import Workbook
@@ -22,6 +22,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.common import API_SEVERITY_VALUES
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.models import AISTAIFindingResponse, VersionType
 from aist.queries import get_authorized_aist_pipelines, get_authorized_findings
@@ -37,7 +38,7 @@ class FindingApiChoices:
 
 FINDING_API_CHOICES = FindingApiChoices(
     ai_status=["has_ai", "no_ai", "ai_tp", "ai_fp", "ai_u"],
-    severity=[value for value, _label in SEVERITY_CHOICES],
+    severity=list(API_SEVERITY_VALUES),
     export_format=["csv", "xlsx"],
     ordering=list(getattr(ApiFindingFilter.base_filters.get("o"), "param_map", {}).keys()),
 )
