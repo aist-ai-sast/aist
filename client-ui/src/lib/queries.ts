@@ -612,6 +612,72 @@ export function useCalendarEvents(filters: CalendarEventsFilters) {
   });
 }
 
+export type DashboardSummary = {
+  kpi: {
+    total_active: number;
+    critical_high: number;
+    total_findings: number;
+    risk_accepted: number;
+    projects_count: number;
+  };
+  severity_distribution: Record<string, number>;
+  top_projects: Array<{
+    project_id: number | null;
+    name: string;
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    info: number;
+    total_active: number;
+  }>;
+  finding_status_breakdown: {
+    active: number;
+    mitigated: number;
+    risk_accepted: number;
+    under_review: number;
+    false_positive: number;
+    out_of_scope: number;
+  };
+  findings_aging_heatmap: {
+    buckets: string[];
+    severities: string[];
+    matrix: Record<string, Record<string, number>>;
+  };
+  risk_trend: Array<{
+    week: string;
+    new_findings: number;
+    mitigated_findings: number;
+    net: number;
+  }>;
+  pipeline_performance_trend: Array<{
+    week: string;
+    runs: number;
+    median_duration_seconds: number;
+    warnings_rate: number;
+  }>;
+  ai_verdict_analytics: {
+    total: number;
+    verdict_counts: Record<"true_positive" | "false_positive" | "uncertain", number>;
+    severity_by_verdict: Record<
+      "Critical" | "High" | "Medium" | "Low" | "Info",
+      Record<"true_positive" | "false_positive" | "uncertain", number>
+    >;
+    uncertainty_buckets: Record<"low" | "medium" | "high", number>;
+  };
+};
+
+export function useDashboardSummary(projectId?: number) {
+  return useQuery({
+    queryKey: ["dashboard-summary", projectId ?? null],
+    queryFn: () => {
+      const url = new URL(getRoute("dashboard_summary_url"), window.location.origin);
+      if (projectId) url.searchParams.set("project_id", String(projectId));
+      return fetchJson<DashboardSummary>(url.toString());
+    },
+  });
+}
+
 export function useCalendarEventDetail(eventId?: string, projectId?: number, timezone?: string) {
   return useQuery({
     queryKey: ["calendar-event-detail", eventId, projectId, timezone],

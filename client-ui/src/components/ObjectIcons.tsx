@@ -1,4 +1,12 @@
 export const ObjectIcons = {
+  dashboard: (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M3 3h8v8H3V3Zm0 10h8v8H3v-8Zm10-10h8v4h-8V3Zm0 6h8v12h-8V9Z"
+      />
+    </svg>
+  ),
   findings: (
     <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
       <path

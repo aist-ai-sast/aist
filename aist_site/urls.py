@@ -6,14 +6,19 @@ from dojo.utils import get_system_setting
 
 from aist.views.auth import logout_all_devices_view
 from aist.views.client_portal import client_portal_index
-from aist.views.summaries import pipeline_summary, product_summary
+from aist.views.summaries import dashboard_summary, pipeline_summary, product_summary
 from aist_site import views as aist_site_views
 from aist_site.openapi import build_schema_custom_settings
 
 urlpatterns = [
     path(
         "",
-        RedirectView.as_view(pattern_name="findings", permanent=False),
+        RedirectView.as_view(url="/dashboard", permanent=False),
+    ),
+    path(
+        "dashboard",
+        client_portal_index,
+        name="dashboard",
     ),
     path(
         "findings",
@@ -28,6 +33,7 @@ urlpatterns = [
     path("aist/github_hook/", AsyncWebhookView.as_view(), name="aist_github_hook_public"),
     path("summary/products/", product_summary, name="client_product_summary"),
     path("summary/pipelines/", pipeline_summary, name="client_pipeline_summary"),
+    path("summary/dashboard/", dashboard_summary, name="client_dashboard_summary"),
     re_path(
         r"^{}api/v2/aist/".format(get_system_setting("url_prefix")),
         include(("aist.api_urls", "aist_api")),

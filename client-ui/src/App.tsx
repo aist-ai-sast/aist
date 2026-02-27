@@ -10,6 +10,7 @@ import { getRoute } from "./lib/routes";
 import { AUTH_EXPIRED_EVENT, isAccessDeniedError, isAuthExpiredError, toUserMessage } from "./lib/api";
 import LoginPage from "./pages/LoginPage";
 
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const FindingsPage = lazy(() => import("./pages/FindingsPage"));
 const FindingDetailPage = lazy(() => import("./pages/FindingDetailPage"));
 const ProductsPage = lazy(() => import("./pages/ProductsPage"));
@@ -20,6 +21,7 @@ const PlaceholderPage = lazy(() => import("./pages/PlaceholderPage"));
 
 let routeBootstrapError: Error | null = null;
 try {
+  getRoute("ui_dashboard_path");
   getRoute("ui_findings_path");
   getRoute("ui_finding_detail_path");
   getRoute("ui_products_path");
@@ -125,6 +127,7 @@ export default function App() {
                 )}
               >
                 <Routes>
+                  <Route path={getRoute("ui_dashboard_path")} element={<DashboardPage />} />
                   <Route path={getRoute("ui_findings_path")} element={<FindingsPage />} />
                   <Route path={getRoute("ui_finding_detail_path")} element={<FindingDetailPage />} />
                   <Route
@@ -152,7 +155,7 @@ export default function App() {
                     path={getRoute("ui_settings_path")}
                     element={<SettingsPage />}
                   />
-                  <Route path="*" element={<Navigate to={getRoute("ui_findings_path")} replace />} />
+                  <Route path="*" element={<Navigate to={getRoute("ui_dashboard_path")} replace />} />
                 </Routes>
               </Suspense>
             </main>

@@ -9,6 +9,7 @@ type SidebarProps = {
 
 export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const links = [
+    { to: getRoute("ui_dashboard_path"), label: "Dashboard", icon: ObjectIcons.dashboard },
     { to: getRoute("ui_findings_path"), label: "Findings", icon: ObjectIcons.findings },
     { to: getRoute("ui_products_path"), label: "Projects", icon: ObjectIcons.projects },
     { to: getRoute("ui_pipelines_path"), label: "Pipelines", icon: ObjectIcons.pipelines },

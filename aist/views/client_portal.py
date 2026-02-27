@@ -71,6 +71,8 @@ def _build_routes() -> dict[str, Any]:
             "SUBPATH",
             "subpath",
         ),
+        "dashboard_summary_url": reverse("client_dashboard_summary"),
+        "ui_dashboard_path": "/dashboard",
         "ui_findings_path": reverse("findings"),
         "ui_finding_detail_path": "/finding/:id",
         "ui_products_path": "/products",

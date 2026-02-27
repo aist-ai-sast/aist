@@ -1,6 +1,8 @@
 type RouteMap = {
   login_url: string;
   login_api_url: string;
+  dashboard_summary_url: string;
+  ui_dashboard_path: string;
   logout_url: string;
   logout_all_devices_url: string;
   user_profile_url: string;

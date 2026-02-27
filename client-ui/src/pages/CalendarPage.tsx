@@ -354,6 +354,7 @@ export default function CalendarPage() {
             }}
             eventClick={(info) => {
               setSelectedEventId(info.event.id);
+              setHoverCard(null);
             }}
             datesSet={(info) => {
               setVisibleRange({
