@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import contextlib
+import csv
 import datetime
+import json
 import statistics
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 from django.contrib.auth.decorators import login_required
+from django.core.cache import cache
 from django.db.models import Count, DateTimeField, OuterRef, Q, Subquery
 from django.db.models.functions import Coalesce, TruncWeek
 from django.http import HttpRequest, HttpResponse, JsonResponse
@@ -14,7 +19,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_GET
 from dojo.authorization.roles_permissions import Permissions
-from dojo.models import Finding
+from dojo.models import CWE, Finding
 
 from aist.api.common import API_SEVERITY_VALUES, empty_severity_counts
 from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus
@@ -25,6 +30,156 @@ PIPELINE_ORDERING = {"created", "-created", "updated", "-updated"}
 PIPELINE_STATUS = {status for status, _label in AISTStatus.choices}
 TREND_WEEKS = 12
 AGE_BUCKETS = ("0_7", "8_30", "31_90", "90_plus")
+CWE_DISTRIBUTION_LIMIT = 12
+CWE_META_CACHE_TIMEOUT_SECONDS = 60 * 60 * 24
+CWE_FIXTURE_PATH = Path(__file__).resolve().parents[2] / "vendor/defectdojo/dojo/fixtures/cwe.json"
+
+
+def _trim_text(value: str | None, *, max_length: int) -> str:
+    text = (value or "").strip()
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 1].rstrip()}…"
+
+
+@lru_cache(maxsize=1)
+def _load_cwe_fixture_lookup() -> dict[int, dict[str, str]]:
+    try:
+        payload = json.loads(CWE_FIXTURE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    lookup: dict[int, dict[str, str]] = {}
+    if not isinstance(payload, list):
+        return lookup
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        fields = item.get("fields")
+        if not isinstance(fields, dict):
+            continue
+        try:
+            number = int(fields.get("number"))
+        except (TypeError, ValueError):
+            continue
+        lookup[number] = {
+            "title": str(fields.get("description") or "").strip(),
+            "url": str(fields.get("url") or "").strip(),
+        }
+    return lookup
+
+
+@lru_cache(maxsize=1)
+def _get_cwe2_database():
+    try:
+        from cwe2.database import Database  # noqa: PLC0415
+    except Exception:
+        return None
+    with contextlib.suppress(Exception):
+        return Database()
+    return None
+
+
+@lru_cache(maxsize=1)
+def _get_cwe2_row_lookup() -> dict[int, dict[str, str]]:
+    db = _get_cwe2_database()
+    if db is None:
+        return {}
+    lookup: dict[int, dict[str, str]] = {}
+    with contextlib.suppress(Exception):
+        for cwe_file in getattr(db, "cwe_files", []):
+            cwe_file.seek(0)
+            for row in csv.DictReader(cwe_file):
+                raw_id = row.get("CWE-ID")
+                if not raw_id:
+                    continue
+                with contextlib.suppress(ValueError):
+                    lookup[int(raw_id)] = row
+    return lookup
+
+
+def _extract_cwe2_impact(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    cleaned = raw.replace("::", " ").replace(":IMPACT:", " ").replace(":SCOPE:", " ")
+    cleaned = " ".join(cleaned.split())
+    return _trim_text(cleaned, max_length=320)
+
+
+def _fetch_cwe_meta_from_cwe2(cwe_id: int) -> dict[str, str] | None:
+    row = _get_cwe2_row_lookup().get(int(cwe_id))
+    if not row:
+        return None
+    title = _trim_text(str(row.get("Name", "") or ""), max_length=160)
+    description = _trim_text(
+        str(row.get("Description", "") or row.get("Extended Description", "") or ""),
+        max_length=320,
+    )
+    impact = _extract_cwe2_impact(row.get("Common Consequences", ""))
+    return {
+        "title": title,
+        "description": description,
+        "impact": impact,
+        "url": f"https://cwe.mitre.org/data/definitions/{int(cwe_id)}.html",
+    }
+
+
+def _build_cwe_distribution(findings_qs) -> list[dict[str, Any]]:
+    rows = list(
+        findings_qs.filter(active=True)
+        .exclude(cwe__isnull=True)
+        .exclude(cwe=0)
+        .values("cwe")
+        .annotate(total=Count("id"))
+        .order_by("-total", "cwe")[:CWE_DISTRIBUTION_LIMIT],
+    )
+    if not rows:
+        return []
+
+    cwe_ids = [int(row["cwe"]) for row in rows if row.get("cwe")]
+    fixture_lookup = _load_cwe_fixture_lookup()
+    cwe_lookup = {
+        int(row["number"]): {"title": row.get("description", ""), "url": row.get("url", "")}
+        for row in CWE.objects.filter(number__in=cwe_ids).values("number", "description", "url")
+    }
+
+    cache_keys = {cwe_id: f"aist:cwe:meta:{cwe_id}" for cwe_id in cwe_ids}
+    cached_rows = cache.get_many(cache_keys.values())
+    cached_meta: dict[int, dict[str, str] | None] = {
+        cwe_id: meta if isinstance(meta, dict) else None
+        for cwe_id, cache_key in cache_keys.items()
+        for meta in [cached_rows.get(cache_key)]
+    }
+    result: list[dict[str, Any]] = []
+    uncached_meta: dict[str, dict[str, str]] = {}
+    for row in rows:
+        cwe_id = int(row["cwe"])
+        local = cwe_lookup.get(cwe_id) or fixture_lookup.get(cwe_id, {})
+        meta = cached_meta.get(cwe_id) or _fetch_cwe_meta_from_cwe2(cwe_id)
+        if not isinstance(meta, dict) or not meta:
+            meta = {
+                "title": _trim_text(str(local.get("title", "")), max_length=160),
+                "description": _trim_text(str(local.get("title", "")), max_length=320),
+                "impact": "",
+                "url": str(local.get("url", "")),
+            }
+        if cached_meta.get(cwe_id) is None:
+            uncached_meta[cache_keys[cwe_id]] = meta
+
+        title = _trim_text(str(meta.get("title") or local.get("title") or ""), max_length=160)
+        result.append(
+            {
+                "cwe": cwe_id,
+                "count": int(row.get("total", 0)),
+                "title": title,
+                "description": _trim_text(str(meta.get("description", "")), max_length=320),
+                "impact": _trim_text(str(meta.get("impact", "")), max_length=320),
+                "url": str(meta.get("url", "") or local.get("url", "")),
+            },
+        )
+    if uncached_meta:
+        cache.set_many(uncached_meta, timeout=CWE_META_CACHE_TIMEOUT_SECONDS)
+    return result
 
 
 def _series_start_week(now: datetime.datetime, *, weeks: int = TREND_WEEKS) -> datetime.datetime:
@@ -474,6 +629,7 @@ def dashboard_summary(request: HttpRequest) -> HttpResponse:
     findings_aging_heatmap = _build_findings_aging_heatmap(findings_qs)
     risk_trend = _build_risk_trend(findings_qs)
     pipeline_performance_trend = _build_pipeline_performance_trend(pipelines_qs)
+    cwe_distribution = _build_cwe_distribution(findings_qs)
     ai_verdict_analytics = _build_ai_verdict_analytics(pipelines_qs=pipelines_qs, product_ids=product_ids)
 
     return JsonResponse(
@@ -498,6 +654,7 @@ def dashboard_summary(request: HttpRequest) -> HttpResponse:
             "findings_aging_heatmap": findings_aging_heatmap,
             "risk_trend": risk_trend,
             "pipeline_performance_trend": pipeline_performance_trend,
+            "cwe_distribution": cwe_distribution,
             "ai_verdict_analytics": ai_verdict_analytics,
         },
     )

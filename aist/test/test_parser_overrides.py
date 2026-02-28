@@ -1,13 +1,19 @@
+from datetime import datetime
+from unittest.mock import patch
+
 from django.test import SimpleTestCase
 from dojo.tools import factory
 from dojo.tools.bearer_cli.parser import BearerCLIParser
+from dojo.tools.horusec.parser import HorusecParser
 from dojo.tools.semgrep.parser import SemgrepParser
 from dojo.tools.snyk_code.parser import SnykCodeParser
 
 from aist.parser_overrides import (
     HumanizedBearerParser,
+    HumanizedHorusecParser,
     HumanizedSemgrepParser,
     HumanizedSnykCodeParser,
+    extract_horusec_cwe,
     install_bearer_parser_override,
     install_semgrep_parser_override,
     install_snyk_code_parser_override,
@@ -104,3 +110,43 @@ class HumanizedSnykCodeParserTests(SimpleTestCase):
             normalize_bearer_title(raw),
             "Unsanitized User Input in Dynamic HTML Insertion (XSS)",
         )
+
+    def test_extract_horusec_cwe_returns_first_match(self):
+        details = "warning text CWE-489 and then CWE-338 in same details"
+        self.assertEqual(extract_horusec_cwe(details), 489)
+
+    def test_horusec_parser_sets_cwe_from_details_when_missing(self):
+        parser = HumanizedHorusecParser()
+        data = {
+            "vulnerabilities": {
+                "details": "(1/1) * Possible Vulnerability Detected: Debug enabled CWE-489",
+                "language": "python",
+                "code": "DEBUG=True",
+                "severity": "HIGH",
+                "file": "settings.py",
+                "confidence": "HIGH",
+                "line": "10",
+            },
+        }
+
+        finding = parser._get_finding(data, datetime(2026, 1, 1))
+
+        self.assertEqual(finding.cwe, 489)
+
+    def test_horusec_parser_does_not_override_existing_cwe(self):
+        parser = HumanizedHorusecParser()
+        data = {
+            "vulnerabilities": {
+                "details": "any details CWE-489",
+            },
+        }
+
+        existing = type(
+            "FindingStub",
+            (),
+            {"title": "(1/1) * Possible Vulnerability Detected: Debug enabled", "cwe": 295, "vuln_id_from_tool": ""},
+        )()
+        with patch.object(HorusecParser, "_get_finding", return_value=existing):
+            finding = parser._get_finding(data, datetime(2026, 1, 1))
+
+        self.assertEqual(finding.cwe, 295)

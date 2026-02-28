@@ -4,6 +4,15 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --aist-chart-accent-1: rgba(77, 212, 255, 0.9);
+  --aist-chart-accent-2: rgba(52, 211, 153, 0.9);
+  --aist-chart-accent-3: rgba(251, 146, 60, 0.9);
+  --aist-chart-accent-4: rgba(167, 139, 250, 0.9);
+  --aist-chart-accent-5: rgba(248, 113, 113, 0.9);
+  --aist-chart-accent-6: rgba(45, 212, 191, 0.9);
+}
+
 .line-clamp-2 {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -167,6 +176,38 @@
 
 .aist-clickable-text:hover {
   color: #dbe6fb;
+}
+
+.aist-chart-tooltip {
+  max-width: min(360px, 88vw);
+  width: min(360px, 88vw);
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  overflow: hidden;
+  line-height: 1.45;
+}
+
+.aist-chart-tooltip * {
+  max-width: 100%;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+.aist-chart-tooltip .aist-tooltip-title {
+  font-weight: 600;
+  color: #e5f3ff;
+  margin-bottom: 0.25rem;
+}
+
+.aist-chart-tooltip .aist-tooltip-row + .aist-tooltip-row {
+  margin-top: 0.2rem;
+}
+
+.aist-chart-tooltip .aist-tooltip-label {
+  color: #9fb3d6;
+  font-weight: 500;
 }
 
 html,

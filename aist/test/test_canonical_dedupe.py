@@ -9,6 +9,7 @@ from aist.dedupe.canonical import (
     MatchVerdict,
     finding_signature,
     infer_canonical_family,
+    normalize_canonical_rule_key,
     normalize_file_path,
     score_findings,
 )
@@ -105,3 +106,49 @@ class CanonicalDedupeTests(SimpleTestCase):
         signature = finding_signature(finding)
         self.assertEqual(signature.family, CanonicalFamily.HARDCODED_SECRET)
         self.assertEqual(signature.cwe, 798)
+
+    def test_family_inference_for_semgrep_jwt_secret_and_snyk_noncrypto_secret(self):
+        semgrep_family = infer_canonical_family(
+            vuln_id="generic_secrets_security_detected_jwt_token_detected_jwt_token",
+            title="",
+        )
+        snyk_family = infer_canonical_family(
+            vuln_id="javascript_hardcodednoncryptosecret",
+            title="",
+        )
+        self.assertEqual(semgrep_family, CanonicalFamily.HARDCODED_SECRET)
+        self.assertEqual(snyk_family, CanonicalFamily.HARDCODED_SECRET)
+
+    def test_normalize_canonical_rule_key_aliases_secret_rules_only(self):
+        secret_alias = normalize_canonical_rule_key(
+            family=CanonicalFamily.HARDCODED_SECRET,
+            value="generic_secrets_security_detected_jwt_token_detected_jwt_token",
+        )
+        non_secret_rule = normalize_canonical_rule_key(
+            family=CanonicalFamily.SQL_INJECTION,
+            value="python/sql-injection",
+        )
+
+        self.assertEqual(secret_alias, "secret_jwt_or_noncrypto_hardcoded")
+        self.assertEqual(non_secret_rule, "python_sql_injection")
+
+    def test_score_duplicate_for_cross_scanner_jwt_secret_variants(self):
+        semgrep = DummyFinding(
+            title="JWT token detected",
+            vuln_id_from_tool="generic_secrets_security_detected_jwt_token_detected_jwt_token",
+            file_path="src/config.ts",
+            line=122,
+            cwe=321,
+        )
+        snyk = DummyFinding(
+            title="Hardcoded non-crypto secret",
+            vuln_id_from_tool="javascript_hardcodednoncryptosecret",
+            file_path="src/config.ts",
+            line=122,
+            cwe=547,
+        )
+
+        match = score_findings(semgrep, snyk)
+        self.assertTrue(match.is_duplicate)
+        self.assertEqual(match.verdict, MatchVerdict.DUPLICATE)
+        self.assertGreaterEqual(match.score, 4)

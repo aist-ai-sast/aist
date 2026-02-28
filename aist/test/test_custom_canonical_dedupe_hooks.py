@@ -199,3 +199,30 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
         imported.refresh_from_db()
 
         self.assertTrue(imported.duplicate)
+
+    def test_batch_hook_marks_duplicate_for_jwt_secret_cross_scanner_case(self):
+        semgrep_test = self._create_test("Semgrep JSON Report")
+        snyk_test = self._create_test("Snyk Code Scan")
+        original = self._create_finding(
+            test=semgrep_test,
+            title="JWT token detected",
+            vuln_id="generic_secrets_security_detected_jwt_token_detected_jwt_token",
+            file_path="src/config.ts",
+            line=122,
+            cwe=321,
+        )
+        imported = self._create_finding(
+            test=snyk_test,
+            title="Hardcoded non-crypto secret",
+            vuln_id="javascript_hardcodednoncryptosecret",
+            file_path="src/config.ts",
+            line=122,
+            cwe=547,
+        )
+
+        dedupe_batch_of_findings([imported])
+        imported.refresh_from_db()
+
+        self.assertTrue(imported.duplicate)
+        self.assertEqual(imported.duplicate_finding_id, original.id)
+        self.assertIn(AIST_DEDUPE_AUTO_TAG, set(imported.tags.values_list("name", flat=True)))

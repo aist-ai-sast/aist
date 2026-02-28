@@ -61,6 +61,7 @@ class DemoProjectSpec:
 class DemoFindingTemplate:
     title: str
     severity: str
+    cwe: int
     file_path: str
     vuln_id: str
     description: str
@@ -162,6 +163,7 @@ DEMO_FINDING_TEMPLATES = [
     DemoFindingTemplate(
         title="Hardcoded cloud access key in deployment script",
         severity="High",
+        cwe=798,
         file_path="deploy/scripts/release.sh",
         vuln_id="DEMO-SEC-001",
         description="A static token is committed directly in repository scripts.",
@@ -170,6 +172,7 @@ DEMO_FINDING_TEMPLATES = [
     DemoFindingTemplate(
         title="SQL query built from unsanitized input",
         severity="Critical",
+        cwe=89,
         file_path="src/api/reporting/query_builder.py",
         vuln_id="DEMO-SEC-002",
         description="String interpolation is used to construct SQL clauses.",
@@ -178,6 +181,7 @@ DEMO_FINDING_TEMPLATES = [
     DemoFindingTemplate(
         title="Insecure TLS verification disabled for outbound call",
         severity="Medium",
+        cwe=295,
         file_path="src/integrations/payment_gateway/client.py",
         vuln_id="DEMO-SEC-003",
         description="Certificate validation is switched off for convenience path.",
@@ -186,6 +190,7 @@ DEMO_FINDING_TEMPLATES = [
     DemoFindingTemplate(
         title="Path traversal risk in archive extraction endpoint",
         severity="High",
+        cwe=22,
         file_path="src/services/import/archive_handler.go",
         vuln_id="DEMO-SEC-004",
         description="Archive members are written without canonical path checks.",
@@ -194,6 +199,7 @@ DEMO_FINDING_TEMPLATES = [
     DemoFindingTemplate(
         title="Verbose error output leaks internal service topology",
         severity="Low",
+        cwe=200,
         file_path="src/http/middleware/error_responses.ts",
         vuln_id="DEMO-SEC-005",
         description="Unhandled exceptions expose internal hosts and stack traces.",
@@ -513,6 +519,7 @@ class Command(BaseCommand):
                     title=title,
                     defaults={
                         "severity": template.severity,
+                        "cwe": template.cwe,
                         "date": finding_date,
                         "reporter": reporter,
                         "file_path": template.file_path,
@@ -526,6 +533,9 @@ class Command(BaseCommand):
                 if finding.severity != template.severity:
                     finding.severity = template.severity
                     updates.append("severity")
+                if finding.cwe != template.cwe:
+                    finding.cwe = template.cwe
+                    updates.append("cwe")
                 if finding.date != finding_date:
                     finding.date = finding_date
                     updates.append("date")

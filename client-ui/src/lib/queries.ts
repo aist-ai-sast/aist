@@ -656,6 +656,14 @@ export type DashboardSummary = {
     median_duration_seconds: number;
     warnings_rate: number;
   }>;
+  cwe_distribution: Array<{
+    cwe: number;
+    count: number;
+    title: string;
+    description: string;
+    impact: string;
+    url: string;
+  }>;
   ai_verdict_analytics: {
     total: number;
     verdict_counts: Record<"true_positive" | "false_positive" | "uncertain", number>;
@@ -675,6 +683,7 @@ export function useDashboardSummary(projectId?: number) {
       if (projectId) url.searchParams.set("project_id", String(projectId));
       return fetchJson<DashboardSummary>(url.toString());
     },
+    staleTime: 5 * 60 * 1000,
   });
 }
 

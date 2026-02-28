@@ -26,6 +26,7 @@ HORUSEC_TITLE_PREFIX_PATTERN = re.compile(
     r"^\s*\(\s*\d+\s*/\s*\d+\s*\)\s*\*?\s*Possible\s+Vulnerability\s+Detected:\s*",
     flags=re.IGNORECASE,
 )
+HORUSEC_CWE_PATTERN = re.compile(r"CWE-(\d+)", flags=re.IGNORECASE)
 BEARER_TITLE_LOCATION_SUFFIX_PATTERN = re.compile(
     r"\s+in\s+[\w./-]+:\d+\s*$",
     flags=re.IGNORECASE,
@@ -42,6 +43,28 @@ def _stabilize_dedupe_fields(finding, *, rule_hint: str | None = None):  # type:
     current_cwe = getattr(finding, "cwe", None)
     if not current_cwe and family_cwe:
         finding.cwe = family_cwe
+
+
+def _is_missing_cwe(value: object) -> bool:
+    if value is None:
+        return True
+    try:
+        return int(value) <= 0
+    except (TypeError, ValueError):
+        return True
+
+
+def extract_horusec_cwe(details: str | None) -> int | None:
+    if not details:
+        return None
+    match = HORUSEC_CWE_PATTERN.search(details)
+    if not match:
+        return None
+    try:
+        cwe = int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    return cwe if cwe > 0 else None
 
 
 class HumanizedSnykCodeParser(SnykCodeParser):
@@ -159,6 +182,10 @@ def normalize_horusec_title(raw_title: str) -> str:
 class HumanizedHorusecParser(HorusecParser):
     def _get_finding(self, data, date):  # type: ignore[no-untyped-def]
         finding = super()._get_finding(data, date)
+        details = str(((data or {}).get("vulnerabilities") or {}).get("details") or "")
+        extracted_cwe = extract_horusec_cwe(details)
+        if _is_missing_cwe(getattr(finding, "cwe", None)) and extracted_cwe:
+            finding.cwe = extracted_cwe
         finding.title = normalize_horusec_title(finding.title)
         _stabilize_dedupe_fields(finding, rule_hint=finding.title)
         return finding

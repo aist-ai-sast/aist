@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from operator import itemgetter
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
 from dojo.models import (
+    CWE,
     Engagement,
     Finding,
     Product,
@@ -58,14 +61,14 @@ class DashboardSummaryViewTests(TestCase):
         self.test_type = Test_Type.objects.create(name="Dashboard test type")
         self.engagement = Engagement.objects.create(
             name="Dashboard engagement",
-            target_start="2026-01-01",
-            target_end="2026-12-31",
+            target_start=date(2026, 1, 1),
+            target_end=date(2026, 12, 31),
             product=self.product,
         )
         self.test = Test.objects.create(
             engagement=self.engagement,
-            target_start="2026-01-01",
-            target_end="2026-12-31",
+            target_start=date(2026, 1, 1),
+            target_end=date(2026, 12, 31),
             test_type=self.test_type,
         )
 
@@ -127,6 +130,7 @@ class DashboardSummaryViewTests(TestCase):
         self.assertIn("findings_aging_heatmap", data)
         self.assertIn("risk_trend", data)
         self.assertIn("pipeline_performance_trend", data)
+        self.assertIn("cwe_distribution", data)
         self.assertIn("ai_verdict_analytics", data)
 
         kpi = data["kpi"]
@@ -218,14 +222,14 @@ class DashboardSummaryViewTests(TestCase):
         )
         engagement2 = Engagement.objects.create(
             name="Other engagement",
-            target_start="2026-01-01",
-            target_end="2026-12-31",
+            target_start=date(2026, 1, 1),
+            target_end=date(2026, 12, 31),
             product=product2,
         )
         test2 = Test.objects.create(
             engagement=engagement2,
-            target_start="2026-01-01",
-            target_end="2026-12-31",
+            target_start=date(2026, 1, 1),
+            target_end=date(2026, 12, 31),
             test_type=self.test_type,
         )
         Finding.objects.create(
@@ -370,3 +374,53 @@ class DashboardSummaryViewTests(TestCase):
         self.assertEqual(analytics["severity_by_verdict"]["High"]["false_positive"], 1)
         self.assertEqual(analytics["uncertainty_buckets"]["low"], 1)
         self.assertEqual(analytics["uncertainty_buckets"]["high"], 1)
+
+    def test_cwe_distribution_returns_top_active_cwes_with_enriched_metadata(self):
+        cache.delete("aist:cwe:meta:79")
+        cache.delete("aist:cwe:meta:89")
+        CWE.objects.update_or_create(
+            number=79,
+            defaults={
+                "description": "Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
+                "url": "https://cwe.mitre.org/data/definitions/79.html",
+            },
+        )
+        CWE.objects.update_or_create(
+            number=89,
+            defaults={
+                "description": "Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+                "url": "https://cwe.mitre.org/data/definitions/89.html",
+            },
+        )
+
+        self.finding_critical.cwe = 79
+        self.finding_critical.save(update_fields=["cwe", "updated"])
+        self.finding_high.cwe = 79
+        self.finding_high.save(update_fields=["cwe", "updated"])
+        self.finding_medium.cwe = 89
+        self.finding_medium.save(update_fields=["cwe", "updated"])
+        # Inactive finding must not contribute to CWE distribution.
+        self.finding_mitigated.cwe = 79
+        self.finding_mitigated.save(update_fields=["cwe", "updated"])
+
+        with patch(
+            "aist.views.summaries._fetch_cwe_meta_from_cwe2",
+            return_value={
+                "title": "Improper Neutralization of Input During Web Page Generation",
+                "description": "Improper neutralization of untrusted input in generated output.",
+                "impact": "Execution of attacker-controlled scripts in victim browsers.",
+                "url": "https://cwe.mitre.org/data/definitions/79.html",
+            },
+        ):
+            response = self.client.get(self._url())
+
+        self.assertEqual(response.status_code, 200)
+        distribution = response.json()["cwe_distribution"]
+        self.assertEqual(len(distribution), 2)
+        self.assertEqual(distribution[0]["cwe"], 79)
+        self.assertEqual(distribution[0]["count"], 2)
+        self.assertIn("Improper Neutralization", distribution[0]["title"])
+        self.assertIn("Improper neutralization", distribution[0]["description"])
+        self.assertIn("attacker-controlled", distribution[0]["impact"])
+        self.assertEqual(distribution[1]["cwe"], 89)
+        self.assertEqual(distribution[1]["count"], 1)

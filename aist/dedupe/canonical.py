@@ -33,6 +33,11 @@ class MatchVerdict(StrEnum):
 
 DEFAULT_AUTO_DUPLICATE_THRESHOLD = 4
 DEFAULT_CANDIDATE_MIN_SCORE = 2
+SCORE_CWE_EXPLICIT_MATCH = 3
+SCORE_CWE_MIXED_CONFIDENCE_MATCH = 2
+SCORE_FAMILY_MATCH = 3
+SCORE_RULE_MATCH = 2
+SCORE_COMPONENT_MATCH = 1
 
 
 _FAMILY_PATTERNS: dict[CanonicalFamily, tuple[re.Pattern[str], ...]] = {
@@ -46,7 +51,9 @@ _FAMILY_PATTERNS: dict[CanonicalFamily, tuple[re.Pattern[str], ...]] = {
     ),
     CanonicalFamily.HARDCODED_SECRET: (
         re.compile(r"hardcoded[_\s-]?(secret|password|token)", re.IGNORECASE),
+        re.compile(r"hardcodednoncryptosecret", re.IGNORECASE),
         re.compile(r"detected[_\s-]?secret", re.IGNORECASE),
+        re.compile(r"detected[_\s-]?jwt[_\s-]?token", re.IGNORECASE),
     ),
     CanonicalFamily.SSL_VERIFICATION: (
         re.compile(r"ssl[_\s-]?(verify|verification)", re.IGNORECASE),
@@ -102,6 +109,16 @@ _FAMILY_CWE: dict[CanonicalFamily, int] = {
     CanonicalFamily.SQL_INJECTION: 89,
     CanonicalFamily.POSTMESSAGE_ORIGIN: 346,
 }
+_HARDCODED_SECRET_RULE_ALIASES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"javascript_hardcodednoncryptosecret", re.IGNORECASE),
+        "secret_jwt_or_noncrypto_hardcoded",
+    ),
+    (
+        re.compile(r"generic[_\s-]?secrets[_\s-]?security[_\s-]?detected[_\s-]?jwt[_\s-]?token", re.IGNORECASE),
+        "secret_jwt_or_noncrypto_hardcoded",
+    ),
+)
 
 
 @dataclass(slots=True)
@@ -141,6 +158,19 @@ def normalize_rule_key(value: str | None) -> str:
         return ""
     normalized = re.sub(r"[^a-z0-9]+", "_", raw)
     return normalized.strip("_")
+
+
+def normalize_canonical_rule_key(*, family: CanonicalFamily, value: str | None) -> str:
+    # First normalize raw rule id/title to a stable token format.
+    normalized_rule = normalize_rule_key(value)
+    if not normalized_rule:
+        return ""
+    # Then apply family-specific aliases for known cross-scanner equivalents.
+    if family == CanonicalFamily.HARDCODED_SECRET:
+        for pattern, alias in _HARDCODED_SECRET_RULE_ALIASES:
+            if pattern.search(normalized_rule):
+                return alias
+    return normalized_rule
 
 
 def infer_canonical_family(*, vuln_id: str | None = None, title: str | None = None) -> CanonicalFamily:
@@ -189,7 +219,20 @@ def canonical_scoring_thresholds() -> tuple[int, int]:
     return auto_threshold, candidate_threshold
 
 
+def _component_evidence_matches(left: CanonicalSignature, right: CanonicalSignature) -> bool:
+    return (
+        left.component_name
+        and right.component_name
+        and left.component_name == right.component_name
+    ) or (
+        left.component_version
+        and right.component_version
+        and left.component_version == right.component_version
+    )
+
+
 def finding_signature(finding: Any) -> CanonicalSignature:
+    # Build a normalized, scanner-agnostic signature used by score_signatures().
     family = infer_canonical_family(
         vuln_id=str(getattr(finding, "vuln_id_from_tool", "") or ""),
         title=str(getattr(finding, "title", "") or ""),
@@ -198,8 +241,9 @@ def finding_signature(finding: Any) -> CanonicalSignature:
     cwe_inferred = cwe is None
     if cwe_inferred:
         cwe = cwe_for_family(family)
-    normalized_rule = normalize_rule_key(
-        str(getattr(finding, "vuln_id_from_tool", "") or getattr(finding, "title", "") or ""),
+    normalized_rule = normalize_canonical_rule_key(
+        family=family,
+        value=str(getattr(finding, "vuln_id_from_tool", "") or getattr(finding, "title", "") or ""),
     )
     component_name = (str(getattr(finding, "component_name", "") or "")).strip().lower()
     component_version = (str(getattr(finding, "component_version", "") or "")).strip().lower()
@@ -217,6 +261,7 @@ def finding_signature(finding: Any) -> CanonicalSignature:
 
 
 def score_signatures(left: CanonicalSignature, right: CanonicalSignature) -> MatchScore:
+    # Hard gate: canonical dedupe only compares findings on the same path and line.
     if (
         not left.normalized_file_path
         or not right.normalized_file_path
@@ -233,28 +278,22 @@ def score_signatures(left: CanonicalSignature, right: CanonicalSignature) -> Mat
     component_match = False
     family_match = left.family == right.family and left.family != CanonicalFamily.UNKNOWN
 
+    # Evidence scoring is additive; final verdict is decided by thresholds.
     if left.cwe and right.cwe and left.cwe == right.cwe:
         if not left.cwe_inferred and not right.cwe_inferred:
             cwe_match = True
-            score += 3
+            score += SCORE_CWE_EXPLICIT_MATCH
         elif left.cwe_inferred != right.cwe_inferred:
             cwe_match = True
-            score += 2
+            score += SCORE_CWE_MIXED_CONFIDENCE_MATCH
     if family_match:
-        score += 3
+        score += SCORE_FAMILY_MATCH
     if left.normalized_rule and right.normalized_rule and left.normalized_rule == right.normalized_rule:
         rule_match = True
-        score += 2
-    if (
-        (left.component_name and right.component_name and left.component_name == right.component_name)
-        or (
-            left.component_version
-            and right.component_version
-            and left.component_version == right.component_version
-        )
-    ):
+        score += SCORE_RULE_MATCH
+    if _component_evidence_matches(left, right):
         component_match = True
-        score += 1
+        score += SCORE_COMPONENT_MATCH
 
     # Avoid candidate matches based only on inferred family classification.
     if (

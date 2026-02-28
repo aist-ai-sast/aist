@@ -153,3 +153,4 @@ docs/.hugo_build.lock
 # Frontend source folder intentionally tracked.
 !client-ui/src/lib/
 !client-ui/src/lib/**
+/triage/

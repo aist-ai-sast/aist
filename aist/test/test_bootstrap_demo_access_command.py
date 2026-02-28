@@ -59,6 +59,8 @@ class BootstrapDemoAccessCommandTests(TestCase):
             )
             self.assertEqual(findings_qs.count(), sum(spec.finding_distribution))
             self.assertEqual(findings_qs.values("date").distinct().count(), len(spec.finding_distribution))
+            self.assertFalse(findings_qs.filter(cwe__isnull=True).exists())
+            self.assertFalse(findings_qs.filter(cwe=0).exists())
             linked_findings_count = AISTProjectVersion.findings.through.objects.filter(
                 aistprojectversion__project=project,
                 finding_id__in=findings_qs.values("id"),
