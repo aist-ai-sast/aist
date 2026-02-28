@@ -55,6 +55,33 @@ class AistResponseMaskingMiddleware:
         return response
 
 
+class AistNoStoreHtmlMiddleware:
+
+    """
+    Ensure browser/proxy caches never store HTML responses.
+
+    This prevents stale SPA shell pages after deploy while allowing
+    static assets to be cached separately.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        if getattr(response, "streaming", False):
+            return response
+
+        content_type = (response.get("Content-Type") or "").lower()
+        if "text/html" not in content_type:
+            return response
+
+        response.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+
 class AistAdminGuardMiddleware:
 
     """

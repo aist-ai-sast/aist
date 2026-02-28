@@ -20,10 +20,16 @@ WSGI_APPLICATION = "aist_site.wsgi.application"
 ASGI_APPLICATION = "aist_site.asgi.application"
 
 
-if "aist_site.middleware.AistResponseMaskingMiddleware" not in MIDDLEWARE:  # noqa: F405
-    middleware = list(MIDDLEWARE)  # noqa: F405
-    middleware.insert(0, "aist_site.middleware.AistResponseMaskingMiddleware")
-    MIDDLEWARE = middleware
+for _middleware in reversed(
+    (
+        "aist_site.middleware.AistNoStoreHtmlMiddleware",
+        "aist_site.middleware.AistResponseMaskingMiddleware",
+    ),
+):
+    if _middleware not in MIDDLEWARE:  # noqa: F405
+        middleware = list(MIDDLEWARE)  # noqa: F405
+        middleware.insert(0, _middleware)
+        MIDDLEWARE = middleware
 
 # Guard DefectDojo UI from non-superusers while keeping API access intact.
 if "aist_site.middleware.AistAdminGuardMiddleware" not in MIDDLEWARE:
@@ -36,7 +42,9 @@ if "aist_site.middleware.AistAdminGuardMiddleware" not in MIDDLEWARE:
     MIDDLEWARE = middleware
 
 # Register AIST app.
-extra_apps = [app for app in ("django_github_app", "aist.apps.AistConfig") if app not in INSTALLED_APPS]  # noqa: F405
+extra_apps = [
+    app for app in ("django_vite", "django_github_app", "aist.apps.AistConfig") if app not in INSTALLED_APPS  # noqa: F405
+]
 if extra_apps:
     INSTALLED_APPS = [*extra_apps, *INSTALLED_APPS]  # noqa: F405
 
@@ -45,6 +53,20 @@ AIST_PIPELINE_CODE_PATH = env(  # noqa: F405
     "AIST_PIPELINE_CODE_PATH",
     default=str(PRODUCT_BASE_DIR / "sast-combinator" / "sast-pipeline"),
 )
+
+DJANGO_VITE = {
+    "default": {
+        "dev_mode": env.bool("AIST_DJANGO_VITE_DEV_MODE", default=False),  # noqa: F405
+        "app_client_class": "aist.vite.AistDjangoViteAppClient",
+        "manifest_path": Path(
+            env("AIST_DJANGO_VITE_MANIFEST_PATH", default="/app/client-ui/dist/assets/manifest.json"),  # noqa: F405
+        ),
+        "dev_server_protocol": env("AIST_DJANGO_VITE_DEV_SERVER_PROTOCOL", default="http"),  # noqa: F405
+        "dev_server_host": env("AIST_DJANGO_VITE_DEV_SERVER_HOST", default="localhost"),  # noqa: F405
+        "dev_server_port": env.int("AIST_DJANGO_VITE_DEV_SERVER_PORT", default=5173),  # noqa: F405
+        "static_url_prefix": "/",
+    },
+}
 
 # Ensure admin auth redirects stay within the protected prefix.
 LOGIN_URL = "/aist-admin/login/"

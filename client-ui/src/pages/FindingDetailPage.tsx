@@ -1,4 +1,4 @@
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { useState } from "react";
 import FindingDetailTabs from "../components/FindingDetailTabs";
 import AiVerdictBadge from "../components/AiVerdictBadge";
@@ -20,7 +20,8 @@ import PageErrorState from "../components/PageErrorState";
 
 export default function FindingDetailPage() {
   const params = useParams();
-  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
   const pipelineFromQuery = searchParams.get("pipeline") || undefined;
   const findingId = params.id ? Number(params.id) : undefined;
   const findingQuery = useFinding(findingId);

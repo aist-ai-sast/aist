@@ -4,9 +4,21 @@ import json
 import re
 
 from django.contrib.auth import get_user_model
-from django.test import Client, SimpleTestCase, TestCase
+from django.test import Client, SimpleTestCase, TestCase, override_settings
+
+DJANGO_VITE_TEST_SETTINGS = {
+    "default": {
+        "dev_mode": True,
+        "manifest_path": "/non-existent-manifest-for-tests.json",
+        "dev_server_protocol": "http",
+        "dev_server_host": "localhost",
+        "dev_server_port": 5173,
+        "static_url_prefix": "/",
+    },
+}
 
 
+@override_settings(DJANGO_VITE=DJANGO_VITE_TEST_SETTINGS)
 class ClientPortalRouteTests(SimpleTestCase):
     def _extract_routes_json(self, html: str) -> dict:
         match = re.search(r"window\.__AIST_ROUTES__\s*=\s*(\{.*?\});", html, flags=re.DOTALL)
@@ -16,13 +28,23 @@ class ClientPortalRouteTests(SimpleTestCase):
     def test_root_redirects_to_findings(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response["Location"], "/findings")
+        self.assertEqual(response["Location"], "/dashboard")
 
     def test_client_side_route_fallback_renders_same_shell(self):
         response = self.client.get("/findings/123")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<div id="root"></div>', html=True)
         self.assertContains(response, "window.__AIST_ROUTES__")
+        self.assertContains(response, 'type="module"')
+        self.assertRegex(response.content.decode("utf-8"), r'href="/assets/[^"]+\.css"')
+        self.assertRegex(response.content.decode("utf-8"), r'src="/assets/[^"]+\.js"')
+
+    def test_html_shell_has_no_store_cache_headers(self):
+        response = self.client.get("/dashboard")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("no-store", response.get("Cache-Control", ""))
+        self.assertEqual(response.get("Pragma"), "no-cache")
+        self.assertEqual(response.get("Expires"), "0")
 
     def test_anonymous_can_open_all_client_ui_routes(self):
         for path in ("/findings", "/products", "/pipelines", "/calendar", "/search", "/settings", "/finding/1"):
@@ -62,6 +84,7 @@ class ClientPortalRouteTests(SimpleTestCase):
         self.assertIn(":id", routes["ui_finding_detail_path"])
 
 
+@override_settings(DJANGO_VITE=DJANGO_VITE_TEST_SETTINGS)
 class ClientPortalAuthFlowTests(TestCase):
     def test_login_route_is_available(self):
         response = self.client.get("/auth/login/")

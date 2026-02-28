@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { usePipelineSummaries, useProjects } from "../lib/queries";
 import type { PipelineSummary } from "../types";
@@ -128,8 +128,12 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
 
 export default function PipelinesPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const projectsQuery = useProjects();
-  const [searchParams] = useSearchParams();
+  const searchParams = useMemo(
+    () => new URLSearchParams(location.search),
+    [location.search],
+  );
   const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>();
   const [status, setStatus] = useState("all");
   const [search, setSearch] = useState("");

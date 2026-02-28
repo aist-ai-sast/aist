@@ -3,7 +3,7 @@ import dayGridPlugin from "@fullcalendar/daygrid";
 import interactionPlugin from "@fullcalendar/interaction";
 import timeGridPlugin from "@fullcalendar/timegrid";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import CalendarEventDetailsPanel from "../components/calendar/CalendarEventDetailsPanel";
 import CalendarEventTypeIcon from "../components/calendar/CalendarEventTypeIcon";
@@ -121,8 +121,12 @@ function parseMetaIds(raw: string | null): string[] {
 
 export default function CalendarPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const projects = useProjects();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const searchParams = useMemo(
+    () => new URLSearchParams(location.search),
+    [location.search],
+  );
 
   const initialView = parseCalendarView(searchParams.get("view"));
   const initialDate = searchParams.get("date") || shortDate(new Date());
@@ -241,11 +245,18 @@ export default function CalendarPage() {
     if (selectedEventId) next.set("event", selectedEventId);
     else next.delete("event");
     if (next.toString() !== searchParams.toString()) {
-      setSearchParams(next, { replace: true });
+      navigate(
+        {
+          pathname: location.pathname,
+          search: `?${next.toString()}`,
+        },
+        { replace: true },
+      );
     }
   }, [
+    location.pathname,
+    navigate,
     searchParams,
-    setSearchParams,
     visibleRange.view,
     activeDate,
     selectedProjectId,

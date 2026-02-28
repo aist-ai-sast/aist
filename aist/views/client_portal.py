@@ -89,5 +89,8 @@ def client_portal_index(request):
     return render(
         request,
         "aist/client_portal.html",
-        {"routes_json": json.dumps(routes), "csrf_token": csrf_token},
+        {
+            "routes_json": json.dumps(routes),
+            "csrf_token": csrf_token,
+        },
     )

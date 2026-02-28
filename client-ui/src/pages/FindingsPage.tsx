@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import FilterPanel from "../components/FilterPanel";
 import FindingCard from "../components/FindingCard";
 import SegmentedSortControl from "../components/SegmentedSortControl";
@@ -34,7 +34,11 @@ export default function FindingsPage() {
   const [createdTo, setCreatedTo] = useState<string>("");
   const [findingOverrides, setFindingOverrides] = useState<Record<number, Partial<Finding>>>({});
   const toast = useToast();
-  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const searchParams = useMemo(
+    () => new URLSearchParams(location.search),
+    [location.search],
+  );
   const [pageSize, setPageSize] = useState<number>(50);
   const [pageIndex, setPageIndex] = useState<number>(0);
   const projectsQuery = useProjects();
