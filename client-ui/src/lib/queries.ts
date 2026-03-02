@@ -151,6 +151,8 @@ function buildFindingsParams(
     ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
     ...(filters.createdGte ? { created_gte: filters.createdGte } : {}),
     ...(filters.createdLte ? { created_lte: filters.createdLte } : {}),
+    ...(filters.statusUpdatedGte ? { status_updated_gte: filters.statusUpdatedGte } : {}),
+    ...(filters.statusUpdatedLte ? { status_updated_lte: filters.statusUpdatedLte } : {}),
     ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
     ...(filters.file ? { file: filters.file } : {}),
     ...(filters.aiStatus ? { ai_status: filters.aiStatus } : {}),

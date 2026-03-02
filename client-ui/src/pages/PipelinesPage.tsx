@@ -186,10 +186,13 @@ export default function PipelinesPage() {
 
   const projectOptions = useMemo(
     () =>
-      projects.map((project) => ({
-        value: String(project.id),
-        label: project.name,
-      })),
+      [
+        { value: "all", label: "All projects" },
+        ...projects.map((project) => ({
+          value: String(project.id),
+          label: project.name,
+        })),
+      ],
     [projects],
   );
 
@@ -215,6 +218,14 @@ export default function PipelinesPage() {
   useEffect(() => {
     setPageIndex(0);
   }, [selectedProjectId, status, search, createdFrom, createdTo, pageSize]);
+
+  const clearAllFilters = () => {
+    setSelectedProjectId(undefined);
+    setStatus("all");
+    setSearch("");
+    setCreatedFrom("");
+    setCreatedTo("");
+  };
 
   if (projectsQuery.isLoading) {
     return (
@@ -244,6 +255,7 @@ export default function PipelinesPage() {
           createdTo={createdTo}
           onCreatedToChange={setCreatedTo}
           statusOptions={statusOptions}
+          onClearAll={clearAllFilters}
         />
       </div>
 

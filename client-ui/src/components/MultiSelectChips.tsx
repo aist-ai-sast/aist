@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
+import FilterClearButton from "./FilterClearButton";
 
 type MultiSelectChipsProps = {
   label: string;
   options: string[];
   selected: string[];
   onChange: (value: string[]) => void;
+  onClear?: () => void;
   emptyLabel?: string;
   visibleCount?: number;
   hideLabel?: boolean;
@@ -17,6 +19,7 @@ export default function MultiSelectChips({
   options,
   selected,
   onChange,
+  onClear,
   emptyLabel = "No options available.",
   visibleCount = 12,
   hideLabel = false,
@@ -26,7 +29,14 @@ export default function MultiSelectChips({
   const visibleOptions = expanded ? options : options.slice(0, visibleCount);
   return (
     <div>
-      {hideLabel ? null : <label className="text-xs text-slate-400">{label}</label>}
+      {hideLabel ? null : (
+        <div className="flex items-center justify-between gap-2">
+          <label className="text-xs text-slate-400">{label}</label>
+          {onClear && selected.length > 0 ? (
+            <FilterClearButton onClick={onClear} />
+          ) : null}
+        </div>
+      )}
       <div className={[hideLabel ? "mt-0" : "mt-2", "flex flex-wrap gap-2", chipsClassName ?? ""].join(" ").trim()}>
         {options.length ? (
           visibleOptions.map((option) => (

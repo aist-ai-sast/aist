@@ -14,8 +14,24 @@ import { useToast } from "../components/ToastProvider";
 import PaginationBar from "../components/PaginationBar";
 import { buildFindingsOrdering, FINDINGS_SORT_OPTIONS, type FindingsSortKey } from "../lib/findingsSort";
 import PageErrorState from "../components/PageErrorState";
+import SelectField from "../components/SelectField";
+import TextInput from "../components/TextInput";
+import { ApiError, toUserMessage } from "../lib/api";
+import { type FindingCloseReason, useBulkFindingStatus } from "../lib/mutations";
 
 const DetailPanel = lazy(() => import("../components/DetailPanel"));
+
+const BULK_ACTION_OPTIONS: { value: string; label: string }[] = [
+  { value: "close", label: "Close Findings" },
+  { value: "reopen", label: "Reopen Findings" },
+];
+
+const BULK_CLOSE_REASON_OPTIONS: { value: string; label: string }[] = [
+  { value: "mitigated", label: "Mitigated" },
+  { value: "false_positive", label: "False Positive" },
+  { value: "out_of_scope", label: "Out of Scope" },
+  { value: "duplicate", label: "Duplicate" },
+];
 
 export default function FindingsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>();
@@ -32,7 +48,15 @@ export default function FindingsPage() {
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | undefined>();
   const [createdFrom, setCreatedFrom] = useState<string>("");
   const [createdTo, setCreatedTo] = useState<string>("");
+  const [statusUpdatedFrom, setStatusUpdatedFrom] = useState<string>("");
+  const [statusUpdatedTo, setStatusUpdatedTo] = useState<string>("");
   const [findingOverrides, setFindingOverrides] = useState<Record<number, Partial<Finding>>>({});
+  const [selectedFindingIds, setSelectedFindingIds] = useState<number[]>([]);
+  const [bulkEditMode, setBulkEditMode] = useState<boolean>(false);
+  const [bulkAction, setBulkAction] = useState<"close" | "reopen">("close");
+  const [bulkCloseReason, setBulkCloseReason] = useState<FindingCloseReason>("mitigated");
+  const [bulkReasonNote, setBulkReasonNote] = useState<string>("");
+  const [bulkLockedFindingIds, setBulkLockedFindingIds] = useState<number[]>([]);
   const toast = useToast();
   const location = useLocation();
   const searchParams = useMemo(
@@ -43,12 +67,15 @@ export default function FindingsPage() {
   const [pageIndex, setPageIndex] = useState<number>(0);
   const projectsQuery = useProjects();
   const ordering = buildFindingsOrdering(selectedSort, selectedSortDirection);
+  const bulkStatusMutation = useBulkFindingStatus();
 
   const findingsQuery = useFindingsPage({
     projectId: selectedProjectId,
     pipelineId: selectedPipelineId,
     createdGte: createdFrom || undefined,
     createdLte: createdTo || undefined,
+    statusUpdatedGte: statusUpdatedFrom || undefined,
+    statusUpdatedLte: statusUpdatedTo || undefined,
     aiStatus:
       selectedAiResponse === "All"
         ? undefined
@@ -121,8 +148,14 @@ export default function FindingsPage() {
   }, [findings, expandedIds.length]);
 
   useEffect(() => {
+    if (!selectedFindingIds.length) return;
+    const allowed = new Set(findings.map((finding) => finding.id));
+    setSelectedFindingIds((current) => current.filter((id) => allowed.has(id)));
+  }, [findings, selectedFindingIds.length]);
+
+  useEffect(() => {
     setPageIndex(0);
-  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiResponse, selectedPipelineId, createdFrom, createdTo, selectedFile, selectedProjectVersion, ordering, pageSize]);
+  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiResponse, selectedPipelineId, createdFrom, createdTo, statusUpdatedFrom, statusUpdatedTo, selectedFile, selectedProjectVersion, ordering, pageSize]);
 
   const applyCloseState = (
     findingId: number,
@@ -164,6 +197,12 @@ export default function FindingsPage() {
     setSelectedPipelineId(pipeline || undefined);
     setCreatedFrom(searchParams.get("created_from") ?? searchParams.get("created_gte") ?? "");
     setCreatedTo(searchParams.get("created_to") ?? searchParams.get("created_lte") ?? "");
+    setStatusUpdatedFrom(
+      searchParams.get("status_updated_from") ?? searchParams.get("status_updated_gte") ?? "",
+    );
+    setStatusUpdatedTo(
+      searchParams.get("status_updated_to") ?? searchParams.get("status_updated_lte") ?? "",
+    );
     setSelectedProjectVersion(searchParams.get("project_version") ?? "");
     setSelectedFile(searchParams.get("file") ?? "");
     setSelectedCwe(searchParams.get("cwe") ?? "");
@@ -211,6 +250,126 @@ export default function FindingsPage() {
   const handleProjectChange = (projectId?: number) => {
     setSelectedProjectId(projectId);
     setSelectedProjectVersion("");
+  };
+  const clearAllFilters = () => {
+    setSelectedProjectId(undefined);
+    setSelectedSeverities([]);
+    setSelectedStatus("All");
+    setSelectedRisk([]);
+    setSelectedAiResponse("All");
+    setSelectedCwe("");
+    setSelectedFile("");
+    setSelectedProjectVersion("");
+    setSelectedTags([]);
+    setSelectedPipelineId(undefined);
+    setCreatedFrom("");
+    setCreatedTo("");
+    setStatusUpdatedFrom("");
+    setStatusUpdatedTo("");
+  };
+
+  const selectedFindingsCount = selectedFindingIds.length;
+  const selectedFindingIdsSet = useMemo(() => new Set(selectedFindingIds), [selectedFindingIds]);
+  const bulkLockedFindingIdsSet = useMemo(() => new Set(bulkLockedFindingIds), [bulkLockedFindingIds]);
+  const canRunBulkAction = selectedFindingsCount > 0 && bulkReasonNote.trim().length > 0 && !bulkStatusMutation.isPending;
+  const bulkControlLabelClass = "mb-1 block text-xs uppercase tracking-[0.18em] text-slate-400";
+  const toggleBulkFindingSelection = (findingId: number, checked: boolean) => {
+    setSelectedFindingIds((current) => {
+      if (checked) {
+        return current.includes(findingId) ? current : [...current, findingId];
+      }
+      return current.filter((id) => id !== findingId);
+    });
+  };
+  const toggleBulkEditMode = () => {
+    setBulkEditMode((current) => {
+      const next = !current;
+      if (!next) {
+        setSelectedFindingIds([]);
+        setBulkReasonNote("");
+      }
+      return next;
+    });
+  };
+
+  const applyBulkStatus = () => {
+    const findingIds = [...selectedFindingIds];
+    if (!findingIds.length) {
+      toast.push("Select at least one finding.", "error");
+      return;
+    }
+    const reason = bulkReasonNote.trim();
+    if (!reason) {
+      toast.push("Reason is required.", "error");
+      return;
+    }
+
+    setBulkLockedFindingIds(findingIds);
+    bulkStatusMutation.mutate(
+      {
+        findingIds,
+        action: bulkAction,
+        reason,
+        closeReason: bulkAction === "close" ? bulkCloseReason : undefined,
+      },
+      {
+        onSuccess: (result) => {
+          const changedIds = new Set(result.updated_ids);
+          if (bulkAction === "reopen") {
+            setFindingOverrides((current) => {
+              const next = { ...current };
+              for (const findingId of changedIds) {
+                next[findingId] = {
+                  ...next[findingId],
+                  active: true,
+                  isMitigated: false,
+                  falsePositive: false,
+                  outOfScope: false,
+                  duplicate: false,
+                };
+              }
+              return next;
+            });
+          } else {
+            setFindingOverrides((current) => {
+              const next = { ...current };
+              for (const findingId of changedIds) {
+                next[findingId] = {
+                  ...next[findingId],
+                  active: false,
+                  isMitigated: bulkCloseReason === "mitigated",
+                  falsePositive: bulkCloseReason === "false_positive",
+                  outOfScope: bulkCloseReason === "out_of_scope",
+                  duplicate: bulkCloseReason === "duplicate",
+                };
+              }
+              return next;
+            });
+          }
+          setSelectedFindingIds([]);
+          setBulkReasonNote("");
+          toast.push(`Updated ${result.updated_count} findings.`, "success");
+        },
+        onError: (error) => {
+          if (error instanceof ApiError && error.status === 423) {
+            const payload = (error.payload ?? {}) as { locked_ids?: number[] };
+            // Keep the locked highlight so the user can see which findings
+            // are blocked. onSettled will NOT clear it in this case.
+            setBulkLockedFindingIds(payload.locked_ids ?? findingIds);
+          } else {
+            setBulkLockedFindingIds([]);
+          }
+          toast.push(`Bulk update failed: ${toUserMessage(error)}`, "error");
+        },
+        onSettled: (_, error) => {
+          // On 423 the locked highlight is intentionally kept — cleared by
+          // the user when they cancel bulk edit or retry successfully.
+          if (!(error instanceof ApiError && error.status === 423)) {
+            setBulkLockedFindingIds([]);
+          }
+        },
+      },
+    );
   };
 
   const exportCurrentView = () => {
@@ -287,6 +446,7 @@ export default function FindingsPage() {
           onTagsChange={setSelectedTags}
           selectedAiResponse={selectedAiResponse}
           onAiResponseChange={setSelectedAiResponse}
+          onClearAll={clearAllFilters}
         />
       </div>
 
@@ -294,6 +454,26 @@ export default function FindingsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs uppercase tracking-[0.2em] text-slate-400">
           <span>Findings · Total {findingsQuery.data?.count ?? 0}</span>
           <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-end">
+            <button
+              className="aist-icon-button h-10 w-full sm:w-auto text-xs font-semibold uppercase tracking-[0.14em]"
+              onClick={toggleBulkEditMode}
+              disabled={bulkStatusMutation.isPending}
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                {bulkEditMode ? (
+                  <path
+                    fill="currentColor"
+                    d="m7.41 6 4.59 4.59L16.59 6 18 7.41 13.41 12 18 16.59 16.59 18 12 13.41 7.41 18 6 16.59 10.59 12 6 7.41 7.41 6Z"
+                  />
+                ) : (
+                  <path
+                    fill="currentColor"
+                    d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"
+                  />
+                )}
+              </svg>
+              {bulkEditMode ? "Cancel Bulk Edit" : "Start Bulk Edit"}
+            </button>
             <button
               className="aist-icon-button h-10 w-full sm:w-auto"
               onClick={exportCurrentView}
@@ -317,6 +497,67 @@ export default function FindingsPage() {
             />
           </div>
         </div>
+        {bulkEditMode ? (
+          <div className="rounded-2xl border border-night-500 bg-night-700/95 p-4 shadow-panel">
+            <div className="mb-3 flex items-center justify-between gap-2 text-xs uppercase tracking-[0.18em] text-slate-400">
+              <span>Bulk Edit</span>
+              <span>Selected: {selectedFindingsCount}</span>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-[180px] flex-1">
+                <label className={bulkControlLabelClass}>BULK ACTION</label>
+                <SelectField
+                  label="BULK ACTION"
+                  value={bulkAction}
+                  onChange={(value) => setBulkAction(value as "close" | "reopen")}
+                  options={BULK_ACTION_OPTIONS}
+                  hideLabel
+                />
+              </div>
+              {bulkAction === "close" ? (
+                <div className="min-w-[220px] flex-1">
+                  <label className={bulkControlLabelClass}>CLOSE AS</label>
+                  <SelectField
+                    label="CLOSE AS"
+                    value={bulkCloseReason}
+                    onChange={(value) => setBulkCloseReason(value as FindingCloseReason)}
+                    options={BULK_CLOSE_REASON_OPTIONS}
+                    hideLabel
+                  />
+                </div>
+              ) : null}
+              <div className="min-w-[260px] flex-[2]">
+                <label className={bulkControlLabelClass}>REASON</label>
+                <TextInput
+                  value={bulkReasonNote}
+                  onChange={(event) => setBulkReasonNote(event.target.value)}
+                  placeholder="Enter reason for audit log"
+                />
+              </div>
+              <button
+                className="aist-icon-button h-10 text-xs font-semibold uppercase tracking-[0.14em] disabled:opacity-50"
+                disabled={selectedFindingsCount === 0 || bulkStatusMutation.isPending}
+                onClick={() => setSelectedFindingIds([])}
+              >
+                Clear
+              </button>
+              <button
+                className="aist-icon-button h-10 text-xs font-semibold uppercase tracking-[0.14em] disabled:opacity-50"
+                disabled={bulkStatusMutation.isPending}
+                onClick={toggleBulkEditMode}
+              >
+                Hide Bulk Edit
+              </button>
+              <button
+                className="h-10 rounded-xl bg-brand-500 px-4 text-xs font-semibold uppercase tracking-[0.14em] text-night-900 disabled:opacity-50"
+                disabled={!canRunBulkAction}
+                onClick={applyBulkStatus}
+              >
+                Apply to {selectedFindingsCount}
+              </button>
+            </div>
+          </div>
+        ) : null}
         <div className="flex min-h-[calc(100vh-280px)] flex-col">
           {findingsQuery.isLoading ? (
             <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
@@ -335,6 +576,10 @@ export default function FindingsPage() {
                     <div key={finding.id} className="space-y-3">
                       <FindingCard
                         finding={finding}
+                        showBulkSelection={bulkEditMode}
+                        selectedForBulk={selectedFindingIdsSet.has(finding.id)}
+                        onToggleBulkSelection={toggleBulkFindingSelection}
+                        bulkLocked={bulkLockedFindingIdsSet.has(finding.id)}
                         isOpen={expandedIds.includes(finding.id)}
                         onSelectProjectVersion={(projectVersion) => {
                           setSelectedProjectVersion(projectVersion);
@@ -360,7 +605,6 @@ export default function FindingsPage() {
                                 finding={finding}
                                 permissionProductId={projectsById.get(finding.projectId ?? 0)?.productId}
                                 aiResponse={aiResponse}
-                                pipelineId={selectedPipelineId ?? aiResponse?.pipelineId}
                                 selectedTags={selectedTags}
                                 onToggleTag={(tag) =>
                                   setSelectedTags((current) =>
@@ -375,6 +619,7 @@ export default function FindingsPage() {
                                 }
                                 onCloseApplied={applyCloseState}
                                 onReopened={applyReopenState}
+                                isStatusEditLocked={bulkLockedFindingIdsSet.has(finding.id)}
                                 embedded
                               />
                             </Suspense>

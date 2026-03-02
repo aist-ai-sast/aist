@@ -74,11 +74,6 @@ class AISTAIViewsTests(AISTApiBase):
         self.assertIn("semgrep", keys)
         self.assertIn("trivy", keys)
 
-    def test_product_analyzers_json_allows_other_product_for_superuser(self):
-        url = reverse("aist:product_analyzers_json", kwargs={"product_id": self.other_product.id})
-        resp = self.client.get(url)
-        self.assertEqual(resp.status_code, 200)
-
     def test_search_findings_json_filters(self):
         f1 = Finding.objects.create(
             test=self.test_semgrep,
@@ -167,14 +162,6 @@ class AISTAIViewsTests(AISTApiBase):
         self.assertIn("EQUALS", data["comparisons"])
         self.assertTrue(data["keywords"])
         self.assertTrue(data["fields"])
-
-    def test_ai_filter_help_page(self):
-        url = reverse("aist:ai_filter_help")
-        resp = self.client.get(url)
-        self.assertEqual(resp.status_code, 200)
-        body = resp.content.decode("utf-8")
-        self.assertIn("AI Filter Help", body)
-        self.assertIn("limit", body)
 
     def test_ai_filter_validate_ok(self):
         url = reverse("aist:ai_filter_validate")

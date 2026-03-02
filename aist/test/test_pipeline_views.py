@@ -143,23 +143,17 @@ class AISTPipelineDetailAIModeTests(AISTApiBase):
             status=AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI,
         )
 
-    def test_auto_default_shows_in_progress_message(self):
-        self.pipeline.launch_data = {"ai": {"mode": "AUTO_DEFAULT"}}
-        self.pipeline.save(update_fields=["launch_data"])
-
+    def test_pipeline_detail_ai_mode_visibility(self):
+        cases = (
+            ("AUTO_DEFAULT", "AUTO_DEFAULT in progress.", "Push selected findings to AI"),
+            ("MANUAL", "Push selected findings to AI", "AUTO_DEFAULT in progress."),
+        )
         url = reverse("aist:pipeline_detail", kwargs={"pipeline_id": self.pipeline.id})
-        resp = self.client.get(url)
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "AUTO_DEFAULT in progress.")
-        self.assertNotContains(resp, "Push selected findings to AI")
-
-    def test_manual_shows_push_form(self):
-        self.pipeline.launch_data = {"ai": {"mode": "MANUAL"}}
-        self.pipeline.save(update_fields=["launch_data"])
-
-        url = reverse("aist:pipeline_detail", kwargs={"pipeline_id": self.pipeline.id})
-        resp = self.client.get(url)
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Push selected findings to AI")
+        for mode, expected_text, unexpected_text in cases:
+            with self.subTest(mode=mode):
+                self.pipeline.launch_data = {"ai": {"mode": mode}}
+                self.pipeline.save(update_fields=["launch_data"])
+                resp = self.client.get(url)
+                self.assertEqual(resp.status_code, 200)
+                self.assertContains(resp, expected_text)
+                self.assertNotContains(resp, unexpected_text)

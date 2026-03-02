@@ -1,5 +1,6 @@
 import SelectField from "./SelectField";
 import DateField from "./DateField";
+import FilterClearButton from "./FilterClearButton";
 import TextInput from "./TextInput";
 
 type Option = {
@@ -20,6 +21,7 @@ type PipelineFilterPanelProps = {
   createdTo: string;
   onCreatedToChange: (value: string) => void;
   statusOptions: Option[];
+  onClearAll: () => void;
 };
 
 export default function PipelineFilterPanel({
@@ -35,21 +37,47 @@ export default function PipelineFilterPanel({
   createdTo,
   onCreatedToChange,
   statusOptions,
+  onClearAll,
 }: PipelineFilterPanelProps) {
   return (
     <aside className="p-5 aist-card">
-      <div className="text-xs uppercase tracking-[0.2em] text-slate-400 mb-4">Filters</div>
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Filters</div>
+        <FilterClearButton onClick={onClearAll} label="Clear all" />
+      </div>
       <div className="space-y-4">
-        <SelectField
-          label="Project"
-          value={selectedProjectId ? String(selectedProjectId) : ""}
-          onChange={(value) => onProjectChange(value ? Number(value) : undefined)}
-          placeholder="All projects"
-          options={projectOptions}
-        />
-        <SelectField label="Status" value={status} onChange={onStatusChange} options={statusOptions} />
         <div>
-          <label className="text-xs text-slate-400">Branch / Commit</label>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">Project</label>
+            {selectedProjectId ? (
+              <FilterClearButton onClick={() => onProjectChange(undefined)} />
+            ) : null}
+          </div>
+          <SelectField
+            label="Project"
+            hideLabel
+            value={selectedProjectId ? String(selectedProjectId) : "all"}
+            onChange={(value) => onProjectChange(value && value !== "all" ? Number(value) : undefined)}
+            placeholder="All projects"
+            options={projectOptions}
+          />
+        </div>
+        <div>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">Status</label>
+            {status !== "all" ? (
+              <FilterClearButton onClick={() => onStatusChange("all")} />
+            ) : null}
+          </div>
+          <SelectField label="Status" hideLabel value={status} onChange={onStatusChange} options={statusOptions} />
+        </div>
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">Branch / Commit</label>
+            {search ? (
+              <FilterClearButton onClick={() => onSearchChange("")} />
+            ) : null}
+          </div>
           <TextInput
             className="mt-2 px-4"
             placeholder="Search branch or commit..."
@@ -58,7 +86,17 @@ export default function PipelineFilterPanel({
           />
         </div>
         <div>
-          <label className="text-xs text-slate-400">Created between</label>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">Created between</label>
+            {createdFrom || createdTo ? (
+              <FilterClearButton
+                onClick={() => {
+                  onCreatedFromChange("");
+                  onCreatedToChange("");
+                }}
+              />
+            ) : null}
+          </div>
           <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <DateField
               label="From"

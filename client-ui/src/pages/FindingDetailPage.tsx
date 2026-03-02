@@ -1,4 +1,4 @@
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useState } from "react";
 import FindingDetailTabs from "../components/FindingDetailTabs";
 import AiVerdictBadge from "../components/AiVerdictBadge";
@@ -20,9 +20,6 @@ import PageErrorState from "../components/PageErrorState";
 
 export default function FindingDetailPage() {
   const params = useParams();
-  const location = useLocation();
-  const searchParams = new URLSearchParams(location.search);
-  const pipelineFromQuery = searchParams.get("pipeline") || undefined;
   const findingId = params.id ? Number(params.id) : undefined;
   const findingQuery = useFinding(findingId);
   const projectsQuery = useProjects();
@@ -67,7 +64,6 @@ export default function FindingDetailPage() {
   }) => {
     const params = new URLSearchParams();
     if (resolvedProjectId) params.set("project", String(resolvedProjectId));
-    if (pipelineFromQuery) params.set("pipeline", pipelineFromQuery);
     if (projectVersion) params.set("project_version", projectVersion);
     if (file) params.set("file", file);
     const query = params.toString();

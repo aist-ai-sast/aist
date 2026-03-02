@@ -6,6 +6,7 @@ from aist.api import (
     AISTAuthLogoutAPI,
     AISTCalendarEventDetailAPI,
     AISTCalendarEventsAPI,
+    AISTFindingBulkStatusAPI,
     AISTFindingExportAPI,
     AISTFindingListAPI,
     AISTFindingNotesAPI,
@@ -142,6 +143,7 @@ urlpatterns = [
         name="organization_create",
     ),
     path("findings/", AISTFindingListAPI.as_view(), name="finding_list"),
+    path("findings/bulk-status/", AISTFindingBulkStatusAPI.as_view(), name="finding_bulk_status"),
     path("findings/<int:finding_id>/notes/", AISTFindingNotesAPI.as_view(), name="finding_notes"),
     path("findings/<int:finding_id>/export/", AISTFindingExportAPI.as_view(), name="finding_export"),
     path(

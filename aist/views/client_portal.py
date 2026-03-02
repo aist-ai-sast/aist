@@ -33,6 +33,7 @@ def _build_routes() -> dict[str, Any]:
             "finding_id",
         ),
         "finding_close_url": _replace_int_placeholder(reverse("finding-close", args=[0]), "id"),
+        "finding_bulk_status_url": reverse("aist_api:finding_bulk_status"),
         "finding_export_url": _replace_int_placeholder(
             reverse("aist_api:finding_export", kwargs={"finding_id": 0}),
             "finding_id",
@@ -74,7 +75,7 @@ def _build_routes() -> dict[str, Any]:
         "dashboard_summary_url": reverse("client_dashboard_summary"),
         "ui_dashboard_path": "/dashboard",
         "ui_findings_path": reverse("findings"),
-        "ui_finding_detail_path": "/finding/:id",
+        "ui_finding_detail_path": "/findings/:id",
         "ui_products_path": "/products",
         "ui_pipelines_path": "/pipelines",
         "ui_calendar_path": "/calendar",

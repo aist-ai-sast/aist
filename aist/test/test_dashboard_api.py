@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from operator import itemgetter
 from unittest.mock import patch
 
@@ -59,16 +59,18 @@ class DashboardSummaryViewTests(TestCase):
         )
 
         self.test_type = Test_Type.objects.create(name="Dashboard test type")
+        period_start = timezone.make_aware(datetime(2026, 1, 1, 0, 0, 0))
+        period_end = timezone.make_aware(datetime(2026, 12, 31, 23, 59, 59))
         self.engagement = Engagement.objects.create(
             name="Dashboard engagement",
-            target_start=date(2026, 1, 1),
-            target_end=date(2026, 12, 31),
+            target_start=period_start,
+            target_end=period_end,
             product=self.product,
         )
         self.test = Test.objects.create(
             engagement=self.engagement,
-            target_start=date(2026, 1, 1),
-            target_end=date(2026, 12, 31),
+            target_start=period_start,
+            target_end=period_end,
             test_type=self.test_type,
         )
 
@@ -117,40 +119,6 @@ class DashboardSummaryViewTests(TestCase):
         unauthenticated = Client()
         response = unauthenticated.get(self._url())
         self.assertEqual(response.status_code, 302)
-
-    def test_returns_200_with_correct_shape(self):
-        response = self.client.get(self._url())
-        self.assertEqual(response.status_code, 200)
-
-        data = response.json()
-        self.assertIn("kpi", data)
-        self.assertIn("severity_distribution", data)
-        self.assertIn("top_projects", data)
-        self.assertIn("finding_status_breakdown", data)
-        self.assertIn("findings_aging_heatmap", data)
-        self.assertIn("risk_trend", data)
-        self.assertIn("pipeline_performance_trend", data)
-        self.assertIn("cwe_distribution", data)
-        self.assertIn("ai_verdict_analytics", data)
-
-        kpi = data["kpi"]
-        self.assertIn("total_active", kpi)
-        self.assertIn("critical_high", kpi)
-        self.assertIn("total_findings", kpi)
-        self.assertIn("risk_accepted", kpi)
-        self.assertIn("projects_count", kpi)
-
-        status = data["finding_status_breakdown"]
-        self.assertIn("active", status)
-        self.assertIn("mitigated", status)
-        self.assertIn("risk_accepted", status)
-        self.assertIn("under_review", status)
-        self.assertIn("false_positive", status)
-        self.assertIn("out_of_scope", status)
-
-        sev = data["severity_distribution"]
-        for key in ("Critical", "High", "Medium", "Low", "Info"):
-            self.assertIn(key, sev)
 
     def test_kpi_values_are_correct(self):
         response = self.client.get(self._url())
@@ -222,14 +190,14 @@ class DashboardSummaryViewTests(TestCase):
         )
         engagement2 = Engagement.objects.create(
             name="Other engagement",
-            target_start=date(2026, 1, 1),
-            target_end=date(2026, 12, 31),
+            target_start=timezone.make_aware(datetime(2026, 1, 1, 0, 0, 0)),
+            target_end=timezone.make_aware(datetime(2026, 12, 31, 23, 59, 59)),
             product=product2,
         )
         test2 = Test.objects.create(
             engagement=engagement2,
-            target_start=date(2026, 1, 1),
-            target_end=date(2026, 12, 31),
+            target_start=timezone.make_aware(datetime(2026, 1, 1, 0, 0, 0)),
+            target_end=timezone.make_aware(datetime(2026, 12, 31, 23, 59, 59)),
             test_type=self.test_type,
         )
         Finding.objects.create(

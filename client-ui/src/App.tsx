@@ -130,6 +130,7 @@ export default function App() {
                   <Route path={getRoute("ui_dashboard_path")} element={<DashboardPage />} />
                   <Route path={getRoute("ui_findings_path")} element={<FindingsPage />} />
                   <Route path={getRoute("ui_finding_detail_path")} element={<FindingDetailPage />} />
+                  <Route path="/finding/:id" element={<FindingDetailPage />} />
                   <Route
                     path={getRoute("ui_products_path")}
                     element={<ProductsPage />}

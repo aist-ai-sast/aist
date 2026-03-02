@@ -22,6 +22,7 @@ ASGI_APPLICATION = "aist_site.asgi.application"
 
 for _middleware in reversed(
     (
+        "aist_site.middleware.AistFindingBulkLockMiddleware",
         "aist_site.middleware.AistNoStoreHtmlMiddleware",
         "aist_site.middleware.AistResponseMaskingMiddleware",
     ),

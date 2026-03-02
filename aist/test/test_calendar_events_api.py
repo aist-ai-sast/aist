@@ -241,6 +241,31 @@ class CalendarEventsApiTests(TestCase):
         self.assertIsNone(event["link"])
         self.assertEqual(event["summary"]["project_name"], self.product.name)
 
+    def test_pipeline_scheduled_does_not_duplicate_on_dst_week(self):
+        schedule = LaunchSchedule.objects.create(
+            launch_config=self.launch_config,
+            cron_expression="45 10 * * 1",
+            enabled=True,
+        )
+        response = self.client.get(
+            self._url(),
+            data={
+                "start": "2026-03-29T00:00:00+01:00",
+                "end": "2026-04-05T00:00:00+02:00",
+                "view": "week",
+                "timezone": "Europe/Berlin",
+                "event_types": ["pipeline_scheduled"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        schedule_events = [
+            row
+            for row in response.data["events"]
+            if row["event_type"] == "pipeline_scheduled"
+            and row["summary"].get("schedule_id") == schedule.id
+        ]
+        self.assertEqual(len(schedule_events), 1)
+
     def test_finding_mitigated_event_is_listed(self):
         test_type = Test_Type.objects.create(name="Calendar mitigated type")
         engagement = Engagement.objects.create(

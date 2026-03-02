@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import csv
 import re
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, time
 from io import BytesIO, StringIO
 from urllib.parse import urlsplit
 
+from django.db import OperationalError, transaction
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django_filters import rest_framework as django_filters
 from dojo.api_v2 import serializers as dojo_serializers
 from dojo.authorization.roles_permissions import Permissions
 from dojo.filters import ApiFindingFilter
+from dojo.finding import helper as finding_helper
 from dojo.models import Notes
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_field
@@ -25,6 +30,12 @@ from rest_framework.views import APIView
 from aist.api.common import API_SEVERITY_VALUES
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.findings_bulk_lock import (
+    acquire_bulk_locks,
+    get_locked_finding_ids,
+    normalize_finding_ids,
+    release_bulk_locks,
+)
 from aist.models import AISTAIFindingResponse, VersionType
 from aist.queries import get_authorized_aist_pipelines, get_authorized_findings
 
@@ -116,8 +127,10 @@ class AISTFindingListItemSerializer(dojo_serializers.FindingSerializer):
 class AISTFindingFilter(ApiFindingFilter):
     pipeline_id = django_filters.CharFilter(method="filter_pipeline_id")
     project_id = django_filters.NumberFilter(field_name="aist_project_versions__project_id")
-    created_gte = django_filters.IsoDateTimeFilter(field_name="date", lookup_expr="gte")
-    created_lte = django_filters.IsoDateTimeFilter(field_name="date", lookup_expr="lte")
+    created_gte = django_filters.IsoDateTimeFilter(method="filter_created_gte")
+    created_lte = django_filters.IsoDateTimeFilter(method="filter_created_lte")
+    status_updated_gte = django_filters.IsoDateTimeFilter(method="filter_status_updated_gte")
+    status_updated_lte = django_filters.IsoDateTimeFilter(method="filter_status_updated_lte")
     project_version = django_filters.CharFilter(field_name="aist_project_versions__version", lookup_expr="exact")
     file = django_filters.CharFilter(field_name="file_path", lookup_expr="icontains")
     ai_status = django_filters.ChoiceFilter(
@@ -143,6 +156,42 @@ class AISTFindingFilter(ApiFindingFilter):
         if not pipeline:
             return queryset.none()
         return queryset.filter(test__aist_pipelines=pipeline)
+
+    def _is_date_only_bound(self, key: str) -> bool:
+        raw_value = (self.data.get(key) or "").strip()
+        return bool(raw_value) and "T" not in raw_value and " " not in raw_value
+
+    def _normalize_datetime_bound(self, key: str, value: datetime, *, upper: bool) -> datetime:
+        if not self._is_date_only_bound(key):
+            return value
+        tz = value.tzinfo or timezone.get_current_timezone()
+        bound_time = time.max if upper else time.min
+        bound_value = datetime.combine(value.date(), bound_time)
+        return timezone.make_aware(bound_value, tz) if timezone.is_naive(bound_value) else bound_value
+
+    def filter_created_gte(self, queryset, name, value):
+        if not value:
+            return queryset
+        value = self._normalize_datetime_bound("created_gte", value, upper=False)
+        return queryset.filter(created__gte=value)
+
+    def filter_created_lte(self, queryset, name, value):
+        if not value:
+            return queryset
+        value = self._normalize_datetime_bound("created_lte", value, upper=True)
+        return queryset.filter(created__lte=value)
+
+    def filter_status_updated_gte(self, queryset, name, value):
+        if not value:
+            return queryset
+        value = self._normalize_datetime_bound("status_updated_gte", value, upper=False)
+        return queryset.filter(last_status_update__gte=value)
+
+    def filter_status_updated_lte(self, queryset, name, value):
+        if not value:
+            return queryset
+        value = self._normalize_datetime_bound("status_updated_lte", value, upper=True)
+        return queryset.filter(last_status_update__lte=value)
 
     def filter_ai_status(self, queryset, name, value):
         status_value = (value or "").strip().lower()
@@ -189,6 +238,8 @@ class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
             OpenApiParameter(name="project_id", required=False, type=int),
             OpenApiParameter(name="created_gte", required=False, type=str),
             OpenApiParameter(name="created_lte", required=False, type=str),
+            OpenApiParameter(name="status_updated_gte", required=False, type=str),
+            OpenApiParameter(name="status_updated_lte", required=False, type=str),
             OpenApiParameter(name="project_version", required=False, type=str),
             OpenApiParameter(name="file", required=False, type=str),
             OpenApiParameter(name="ordering", required=False, type=str, enum=FINDING_API_CHOICES.ordering),
@@ -396,3 +447,172 @@ class AISTFindingExportAPI(AuthorizedQuerySetMixin, APIView):
         response = HttpResponse(csv_buffer.getvalue(), content_type="text/csv; charset=utf-8")
         response["Content-Disposition"] = f'attachment; filename="aist_finding_{finding.id}.csv"'
         return response
+
+
+class AISTFindingBulkStatusRequestSerializer(serializers.Serializer):
+    max_batch_size = 500
+    max_reason_length = 4096
+
+    finding_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+        max_length=max_batch_size,
+    )
+    action = serializers.ChoiceField(choices=("close", "reopen"))
+    close_reason = serializers.ChoiceField(
+        choices=("mitigated", "false_positive", "out_of_scope", "duplicate"),
+        required=False,
+        allow_null=True,
+    )
+    reason = serializers.CharField(allow_blank=False, trim_whitespace=True, max_length=max_reason_length)
+
+    def validate(self, attrs):
+        action = attrs.get("action")
+        close_reason = attrs.get("close_reason")
+        if action == "close" and not close_reason:
+            msg = "close_reason is required when action=close"
+            raise serializers.ValidationError({"close_reason": msg})
+        return attrs
+
+
+class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = AISTFindingBulkStatusRequestSerializer
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_findings,
+        permission=Permissions.Finding_Edit,
+    )
+
+    @extend_schema(
+        tags=[AISTApiTag.FINDINGS.value],
+        summary="Bulk change finding status",
+        request=AISTFindingBulkStatusRequestSerializer,
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        requested_ids = normalize_finding_ids(serializer.validated_data["finding_ids"])
+        if not requested_ids:
+            return Response(
+                {"detail": "finding_ids must contain at least one valid id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # --- Authorization pre-check (no row lock yet) ---
+        # Verify all findings are accessible before acquiring any markers so we
+        # never mark findings the user cannot edit.
+        authorized_ids = set(
+            self.get_authorized_queryset()
+            .filter(id__in=requested_ids)
+            .values_list("id", flat=True),
+        )
+        if len(authorized_ids) != len(requested_ids):
+            return Response(
+                {"detail": "Some findings are unavailable."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # --- UX pre-check (read-only cache query) ---
+        # Fast early exit that returns the specific IDs currently in-flight so
+        # the UI can highlight them.  Not an integrity guarantee — the DB lock
+        # below is.
+        known_locked = get_locked_finding_ids(requested_ids)
+        if known_locked:
+            return Response(
+                {"detail": "Some findings are currently locked.", "locked_ids": sorted(known_locked)},
+                status=status.HTTP_423_LOCKED,
+            )
+
+        # --- Mark findings as in-flight (UX marker) ---
+        # Lets the middleware return an early 423 to concurrent single-finding
+        # mutations and lets the UI show a locked state.  Released in finally.
+        owner_token = str(uuid.uuid4())
+        acquired_ids, _ = acquire_bulk_locks(requested_ids, owner_token)
+
+        action = serializer.validated_data["action"]
+        close_reason = serializer.validated_data.get("close_reason")
+        reason_note = serializer.validated_data["reason"]
+        bulk_note_entry = f"Bulk status update: {reason_note}"
+        updated_ids: list[int] = []
+        try:
+            with transaction.atomic():
+                # select_for_update(nowait=True) is the actual integrity guard:
+                # - raises OperationalError immediately if any row is already
+                #   locked by another transaction (bulk-vs-bulk race).
+                # - a count mismatch after the lock means a finding was deleted
+                #   or became inaccessible between the pre-check and now.
+                findings = list(
+                    self.get_authorized_queryset()
+                    .select_for_update(nowait=True)
+                    .select_related("test__engagement__product")
+                    .filter(id__in=requested_ids),
+                )
+                if len(findings) != len(requested_ids):
+                    return Response(
+                        {"detail": "Some findings were modified concurrently. Please retry."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                for finding in findings:
+                    if action == "reopen":
+                        _bulk_reopen_finding(
+                            finding=finding,
+                            user=request.user,
+                            note_entry=bulk_note_entry,
+                        )
+                    else:
+                        _bulk_close_finding(
+                            finding=finding,
+                            user=request.user,
+                            close_reason=close_reason or "mitigated",
+                            note_entry=bulk_note_entry,
+                        )
+                    updated_ids.append(finding.id)
+        except OperationalError:
+            # Another DB transaction already holds a row lock on one or more
+            # findings.  The cache pre-check handles the common case; this
+            # catches the narrow race window between that check and the DB lock.
+            return Response(
+                {"detail": "Some findings are locked by a concurrent operation. Please retry."},
+                status=status.HTTP_423_LOCKED,
+            )
+        finally:
+            release_bulk_locks(acquired_ids, owner_token)
+
+        return Response(
+            {"updated_count": len(updated_ids), "updated_ids": updated_ids},
+            status=status.HTTP_200_OK,
+        )
+
+
+def _bulk_reopen_finding(*, finding, user, note_entry: str) -> None:
+    finding.active = True
+    finding.is_mitigated = False
+    finding.false_p = False
+    finding.out_of_scope = False
+    finding.duplicate = False
+    finding.under_review = False
+    finding.last_reviewed = timezone.now()
+    finding.last_reviewed_by = user
+    finding.save()
+    _add_bulk_note(finding=finding, user=user, note_entry=note_entry)
+
+
+def _bulk_close_finding(*, finding, user, close_reason: str, note_entry: str) -> None:
+    finding_helper.close_finding(
+        finding=finding,
+        user=user,
+        is_mitigated=close_reason == "mitigated",
+        mitigated=timezone.now(),
+        mitigated_by=user,
+        false_p=close_reason == "false_positive",
+        out_of_scope=close_reason == "out_of_scope",
+        duplicate=close_reason == "duplicate",
+        note_entry=note_entry,
+    )
+    finding.save()
+
+
+def _add_bulk_note(*, finding, user, note_entry: str) -> None:
+    note = Notes.objects.create(entry=note_entry, author=user, private=False)
+    finding.notes.add(note)

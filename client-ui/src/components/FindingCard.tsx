@@ -13,6 +13,10 @@ type FindingCardProps = {
   onSelectProjectVersion?: (projectVersion: string) => void;
   onSelectProject?: (projectId: number) => void;
   onSelectFile?: (filePath: string) => void;
+  showBulkSelection?: boolean;
+  selectedForBulk?: boolean;
+  onToggleBulkSelection?: (findingId: number, checked: boolean) => void;
+  bulkLocked?: boolean;
 };
 
 export default function FindingCard({
@@ -23,6 +27,10 @@ export default function FindingCard({
   onSelectProjectVersion,
   onSelectProject,
   onSelectFile,
+  showBulkSelection = false,
+  selectedForBulk = false,
+  onToggleBulkSelection,
+  bulkLocked = false,
 }: FindingCardProps) {
   const createdLabel = formatDateForUI(finding.createdAt) ?? formatDateForUI(finding.date);
   return (
@@ -44,6 +52,41 @@ export default function FindingCard({
     >
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
         <div className="flex flex-wrap items-center gap-2">
+          {showBulkSelection ? (
+            <label
+              className={[
+                "inline-flex items-center gap-2 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition",
+                selectedForBulk
+                  ? "border-brand-500/60 bg-brand-500/10 text-brand-200"
+                  : "border-night-500 bg-night-800 text-slate-300 hover:border-brand-600/50",
+                bulkLocked ? "opacity-60" : "",
+              ].join(" ")}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                className="peer sr-only"
+                checked={selectedForBulk}
+                onChange={(event) => onToggleBulkSelection?.(finding.id, event.target.checked)}
+                disabled={bulkLocked}
+                aria-label={`Select finding ${finding.id}`}
+              />
+              <span
+                className={[
+                  "inline-flex h-4 w-4 items-center justify-center rounded-md border transition",
+                  selectedForBulk
+                    ? "border-brand-500 bg-brand-500/90 text-night-900 shadow-[0_0_0_1px_rgba(77,212,255,0.28)]"
+                    : "border-night-400/80 bg-night-700 text-transparent",
+                ].join(" ")}
+                aria-hidden="true"
+              >
+                <svg viewBox="0 0 12 12" className="h-3 w-3">
+                  <path fill="currentColor" d="M4.8 9.2 1.6 6l1.1-1.1 2.1 2.1 4.5-4.5 1.1 1.1-5.6 5.6Z" />
+                </svg>
+              </span>
+              <span>{selectedForBulk ? "Selected" : "Select"}</span>
+            </label>
+          ) : null}
           <span
             className={[
               "rounded-full border px-3 py-1 font-semibold uppercase tracking-wide",

@@ -7,6 +7,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import CalendarEventDetailsPanel from "../components/calendar/CalendarEventDetailsPanel";
 import CalendarEventTypeIcon from "../components/calendar/CalendarEventTypeIcon";
+import FilterClearButton from "../components/FilterClearButton";
 import PageErrorState from "../components/PageErrorState";
 import SelectField from "../components/SelectField";
 import { calendarViewToApiView, mapCalendarEventToUi } from "../lib/calendar";
@@ -175,6 +176,11 @@ export default function CalendarPage() {
       return [...current, id];
     });
   };
+  const clearAllFilters = () => {
+    setSelectedProjectId(undefined);
+    setSelectedMetaIds(EVENT_TYPE_META.map((item) => item.id));
+    setSelectedEventId(null);
+  };
 
   const eventTypesForQuery = selectedEventTypes.length ? selectedEventTypes : ALL_EVENT_TYPES;
   const events = useCalendarEvents({
@@ -307,9 +313,17 @@ export default function CalendarPage() {
             <h1 className="text-lg font-semibold text-slate-100">Calendar</h1>
             <p className="text-sm text-slate-400">Timeline of pipeline, project, and finding events.</p>
           </div>
+          <FilterClearButton
+            className="self-start lg:self-center"
+            onClick={clearAllFilters}
+            label="Clear all filters"
+          />
           <div className="flex w-full flex-wrap items-center gap-4 lg:w-auto lg:justify-end">
             <div className="flex items-center gap-2">
               <span className="text-xs text-slate-400 whitespace-nowrap">Project</span>
+              {selectedProjectId ? (
+                <FilterClearButton onClick={() => setSelectedProjectId(undefined)} />
+              ) : null}
               <div className="w-[220px]">
                 <SelectField
                   label="Project"
@@ -324,6 +338,9 @@ export default function CalendarPage() {
             </div>
             <div className="flex min-w-[360px] flex-1 items-center gap-1">
               <span className="text-xs text-slate-400 whitespace-nowrap">Event type</span>
+              {selectedMetaIds.length !== EVENT_TYPE_META.length ? (
+                <FilterClearButton onClick={() => setSelectedMetaIds(EVENT_TYPE_META.map((item) => item.id))} />
+              ) : null}
               <EventTypeSelector
                 className="gap-1"
                 selected={selectedMetaIds}

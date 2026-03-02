@@ -1,14 +1,12 @@
 import { useState } from "react";
 
 import type { Finding } from "../types";
-import { useCloseFinding, useUpdateFindingStatus } from "../lib/mutations";
+import { useCloseFinding, useUpdateFindingStatus, type FindingCloseReason } from "../lib/mutations";
 import { useToast } from "./ToastProvider";
 import SelectField from "./SelectField";
 import PermissionGate from "./PermissionGate";
 
-type CloseReason = "mitigated" | "false_positive" | "out_of_scope" | "duplicate";
-
-const reasonOptions: { value: CloseReason; label: string }[] = [
+const reasonOptions: { value: FindingCloseReason; label: string }[] = [
   { value: "mitigated", label: "Close as Mitigated" },
   { value: "false_positive", label: "Close as False Positive" },
   { value: "out_of_scope", label: "Close as Out of Scope" },
@@ -18,8 +16,9 @@ const reasonOptions: { value: CloseReason; label: string }[] = [
 type FindingStatusActionsProps = {
   finding: Finding;
   permissionProductId?: number;
-  onApplied?: (reason: CloseReason) => void;
+  onApplied?: (reason: FindingCloseReason) => void;
   onReopened?: () => void;
+  isLocked?: boolean;
 };
 
 export default function FindingStatusActions({
@@ -27,11 +26,12 @@ export default function FindingStatusActions({
   permissionProductId,
   onApplied,
   onReopened,
+  isLocked = false,
 }: FindingStatusActionsProps) {
   const toast = useToast();
   const closeFinding = useCloseFinding();
   const updateFindingStatus = useUpdateFindingStatus();
-  const [reason, setReason] = useState<CloseReason>("mitigated");
+  const [reason, setReason] = useState<FindingCloseReason>("mitigated");
 
   return (
     <div className="mt-4">
@@ -65,7 +65,7 @@ export default function FindingStatusActions({
                   },
                 )
               }
-              disabled={closeFinding.isPending}
+              disabled={closeFinding.isPending || isLocked}
             >
               Apply
             </button>
@@ -87,11 +87,14 @@ export default function FindingStatusActions({
                   },
                 )
               }
-              disabled={updateFindingStatus.isPending}
+              disabled={updateFindingStatus.isPending || isLocked}
             >
               Reopen
             </button>
           )}
+          {isLocked ? (
+            <div className="text-xs text-amber-300">Locked by active bulk update.</div>
+          ) : null}
         </div>
       </PermissionGate>
     </div>

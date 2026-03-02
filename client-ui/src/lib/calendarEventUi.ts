@@ -73,9 +73,22 @@ export function buildCalendarActionLinks(event: CalendarEvent, selectedProjectId
     links.push({ label: "Open findings for this date", to: findingsByDate });
   }
   if (event.eventType === "finding_mitigated") {
+    const offsetMatch = event.start.match(/(Z|[+-]\d{2}:\d{2})$/);
+    const dayBounds = offsetMatch
+      ? {
+          gte: `${day}T00:00:00${offsetMatch[1]}`,
+          lte: `${day}T23:59:59.999${offsetMatch[1]}`,
+        }
+      : { gte: day, lte: day };
+    const params = new URLSearchParams({
+      ...(project ? { project: String(project) } : {}),
+      status_updated_gte: dayBounds.gte,
+      status_updated_lte: dayBounds.lte,
+      active: "false",
+    });
     links.push({
       label: "Open mitigated findings for this date",
-      to: `${findingsByDate}${findingsByDate.includes("?") ? "&" : "?"}active=false`,
+      to: `/findings?${params.toString()}`,
     });
   }
   if (event.eventType === "pipeline_started") {
@@ -96,7 +109,7 @@ export function buildCalendarActionLinks(event: CalendarEvent, selectedProjectId
     }
   }
   if (summary.finding_id) {
-    links.push({ label: "Open finding", to: `/finding/${summary.finding_id}` });
+    links.push({ label: "Open finding", to: `/findings/${summary.finding_id}` });
   }
 
   return links.filter((item, idx, arr) => arr.findIndex((other) => other.to === item.to) === idx);

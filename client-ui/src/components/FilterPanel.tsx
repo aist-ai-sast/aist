@@ -1,5 +1,6 @@
 import type { Project } from "../types";
 import DateField from "./DateField";
+import FilterClearButton from "./FilterClearButton";
 import MultiSelectChips from "./MultiSelectChips";
 import SelectField from "./SelectField";
 import TextInput from "./TextInput";
@@ -29,6 +30,7 @@ type FilterPanelProps = {
   onTagsChange: (value: string[]) => void;
   selectedAiResponse: string;
   onAiResponseChange: (value: string) => void;
+  onClearAll: () => void;
 };
 
 export default function FilterPanel({
@@ -56,34 +58,53 @@ export default function FilterPanel({
   onTagsChange,
   selectedAiResponse,
   onAiResponseChange,
+  onClearAll,
 }: FilterPanelProps) {
   return (
     <aside className="p-5 aist-card aist-filter-panel overflow-hidden">
-      <div className="text-xs uppercase tracking-[0.2em] text-slate-400 mb-4">
-        Filters
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
+          Filters
+        </div>
+        <FilterClearButton onClick={onClearAll} label="Clear all" />
       </div>
       <div className="space-y-4">
-        <SelectField
-          label="Project"
-          value={selectedProjectId ? String(selectedProjectId) : "all"}
-          onChange={(value) => onProjectChange(value && value !== "all" ? Number(value) : undefined)}
-          placeholder="All projects"
-          options={[
-            { value: "all", label: "All projects" },
-            ...products.map((product) => ({
-              value: String(product.id),
-              label: product.name,
-            })),
-          ]}
-        />
+        <div>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">Project</label>
+            {selectedProjectId ? (
+              <FilterClearButton onClick={() => onProjectChange(undefined)} />
+            ) : null}
+          </div>
+          <SelectField
+            label="Project"
+            hideLabel
+            value={selectedProjectId ? String(selectedProjectId) : "all"}
+            onChange={(value) => onProjectChange(value && value !== "all" ? Number(value) : undefined)}
+            placeholder="All projects"
+            options={[
+              { value: "all", label: "All projects" },
+              ...products.map((product) => ({
+                value: String(product.id),
+                label: product.name,
+              })),
+            ]}
+          />
+        </div>
         <MultiSelectChips
           label="Severity"
           options={["Critical", "High", "Medium", "Low", "Info"]}
           selected={selectedSeverities}
           onChange={onSeveritiesChange}
+          onClear={() => onSeveritiesChange([])}
         />
         <div>
-          <label className="text-xs text-slate-400">Project Version</label>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">Project Version</label>
+            {selectedProjectVersion ? (
+              <FilterClearButton onClick={() => onProjectVersionChange("")} />
+            ) : null}
+          </div>
           <TextInput
             className="mt-2"
             value={selectedProjectVersion}
@@ -92,7 +113,12 @@ export default function FilterPanel({
           />
         </div>
         <div>
-          <label className="text-xs text-slate-400">File</label>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">File</label>
+            {selectedFile ? (
+              <FilterClearButton onClick={() => onFileChange("")} />
+            ) : null}
+          </div>
           <TextInput
             className="mt-2"
             value={selectedFile}
@@ -101,7 +127,17 @@ export default function FilterPanel({
           />
         </div>
         <div>
-          <label className="text-xs text-slate-400">Created between</label>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">Created between</label>
+            {createdFrom || createdTo ? (
+              <FilterClearButton
+                onClick={() => {
+                  onCreatedFromChange("");
+                  onCreatedToChange("");
+                }}
+              />
+            ) : null}
+          </div>
           <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <DateField
               label="From"
@@ -117,15 +153,24 @@ export default function FilterPanel({
             />
           </div>
         </div>
-        <SelectField
-          label="Status"
-          value={selectedStatus}
-          onChange={onStatusChange}
-          options={["All", "Active", "Non-Active"].map((option) => ({
-            value: option,
-            label: option,
-          }))}
-        />
+        <div>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">Status</label>
+            {selectedStatus !== "All" ? (
+              <FilterClearButton onClick={() => onStatusChange("All")} />
+            ) : null}
+          </div>
+          <SelectField
+            label="Status"
+            hideLabel
+            value={selectedStatus}
+            onChange={onStatusChange}
+            options={["All", "Active", "Non-Active"].map((option) => ({
+              value: option,
+              label: option,
+            }))}
+          />
+        </div>
         <MultiSelectChips
           label="Risk State"
           options={["Risk Accepted", "Under Review", "Mitigated"]}
@@ -141,9 +186,15 @@ export default function FilterPanel({
             if (values.includes("Mitigated")) next.push("mitigated");
             onRiskChange(next);
           }}
+          onClear={() => onRiskChange([])}
         />
         <div>
-          <label className="text-xs text-slate-400">CWE (comma-separated)</label>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">CWE (comma-separated)</label>
+            {selectedCwe ? (
+              <FilterClearButton onClick={() => onCweChange("")} />
+            ) : null}
+          </div>
           <TextInput
             className="mt-2"
             value={selectedCwe}
@@ -156,22 +207,32 @@ export default function FilterPanel({
           options={availableTags}
           selected={selectedTags}
           onChange={onTagsChange}
+          onClear={() => onTagsChange([])}
           emptyLabel="No tags available."
           visibleCount={10}
         />
-        <SelectField
-          label="AI Status"
-          value={selectedAiResponse}
-          onChange={onAiResponseChange}
-          options={[
-            { value: "All", label: "All" },
-            { value: "has_ai", label: "Has AI Response" },
-            { value: "no_ai", label: "No AI Response" },
-            { value: "ai_tp", label: "AI TP" },
-            { value: "ai_fp", label: "AI FP" },
-            { value: "ai_u", label: "AI U" },
-          ]}
-        />
+        <div>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">AI Status</label>
+            {selectedAiResponse !== "All" ? (
+              <FilterClearButton onClick={() => onAiResponseChange("All")} />
+            ) : null}
+          </div>
+          <SelectField
+            label="AI Status"
+            hideLabel
+            value={selectedAiResponse}
+            onChange={onAiResponseChange}
+            options={[
+              { value: "All", label: "All" },
+              { value: "has_ai", label: "Has AI Response" },
+              { value: "no_ai", label: "No AI Response" },
+              { value: "ai_tp", label: "AI TP" },
+              { value: "ai_fp", label: "AI FP" },
+              { value: "ai_u", label: "AI U" },
+            ]}
+          />
+        </div>
       </div>
     </aside>
   );

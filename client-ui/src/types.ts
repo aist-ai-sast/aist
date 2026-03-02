@@ -8,6 +8,8 @@ export type FindingFilters = {
   pipelineId?: string;
   createdGte?: string;
   createdLte?: string;
+  statusUpdatedGte?: string;
+  statusUpdatedLte?: string;
   projectVersion?: string;
   file?: string;
   severities?: Severity[];

@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
 
 from django.conf import settings
+from django.http import JsonResponse
 from django.shortcuts import render
 from rest_framework import exceptions
 from rest_framework.authentication import get_authorization_header
 from rest_framework.request import Request
 from rest_framework.settings import api_settings
 
+from aist.findings_bulk_lock import get_locked_finding_ids
 from aist.utils.secrets import mask_sensitive_data
 
 if TYPE_CHECKING:
@@ -216,4 +219,57 @@ class AistAdminGuardMiddleware:
                 continue
             user, _ = auth_result
             return user
+        return None
+
+
+class AistFindingBulkLockMiddleware:
+
+    """
+    UX guard for single-finding mutations during an active bulk status update.
+
+    Returns HTTP 423 early to PATCH / PUT / DELETE on ``/api/v2/findings/{id}/``
+    and POST to ``/api/v2/findings/{id}/close/`` while the finding is marked
+    as in-flight by a bulk operation — saving the request from queuing behind
+    the DB row lock and giving the user a clear actionable error.
+
+    This is a UX optimisation, NOT a data integrity mechanism.
+    Concurrent write safety is guaranteed by ``select_for_update(nowait=True)``
+    inside ``AISTFindingBulkStatusAPI``.
+
+    If the cache marker is absent (e.g. cache backend down or TTL expired),
+    this middleware does nothing — the DB-level lock remains in effect.
+    """
+
+    detail_url_re = re.compile(r"^/api/v2/findings/(?P<finding_id>\d+)/?$")
+    close_url_re = re.compile(r"^/api/v2/findings/(?P<finding_id>\d+)/close/?$")
+    mutating_methods = {"PATCH", "PUT", "POST", "DELETE"}
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        finding_id = self._extract_finding_id(request)
+        if finding_id is not None and get_locked_finding_ids([finding_id]):
+            return JsonResponse(
+                {
+                    "detail": "Finding is locked by an active bulk status update.",
+                    "finding_id": finding_id,
+                },
+                status=423,
+            )
+        return self.get_response(request)
+
+    def _extract_finding_id(self, request) -> int | None:
+        method = (request.method or "").upper()
+        if method not in self.mutating_methods:
+            return None
+
+        path = request.path_info or ""
+        close_match = self.close_url_re.match(path)
+        if close_match and method == "POST":
+            return int(close_match.group("finding_id"))
+
+        detail_match = self.detail_url_re.match(path)
+        if detail_match and method in {"PATCH", "PUT", "DELETE"}:
+            return int(detail_match.group("finding_id"))
         return None

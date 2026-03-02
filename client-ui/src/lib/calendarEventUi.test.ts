@@ -50,9 +50,30 @@ describe("buildCalendarActionLinks", () => {
     expect(links).toEqual([
       {
         label: "Open mitigated findings for this date",
-        to: "/findings?project=17&created_from=2026-02-24&created_to=2026-02-24&active=false",
+        to: "/findings?project=17&status_updated_gte=2026-02-24T00%3A00%3A00Z&status_updated_lte=2026-02-24T23%3A59%3A59.999Z&active=false",
       },
     ]);
+  });
+
+  it("uses plural findings route for single finding links", () => {
+    const event: CalendarEvent = {
+      id: "finding_created:232896",
+      eventType: "finding_created",
+      title: "Finding created",
+      start: "2026-02-24T08:30:00Z",
+      end: null,
+      isAllDay: false,
+      isAggregated: false,
+      count: 1,
+      isFuture: false,
+      colorVariant: "finding",
+      summary: { finding_id: 232896 },
+      link: null,
+    };
+
+    const links = buildCalendarActionLinks(event);
+    expect(links.some((item) => item.to === "/findings/232896")).toBe(true);
+    expect(links.some((item) => item.to === "/finding/232896")).toBe(false);
   });
 });
 

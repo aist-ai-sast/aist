@@ -14,15 +14,6 @@ from aist.test.test_api import AISTApiBase
 
 
 class AISTAccountAPITests(AISTApiBase):
-    def test_auth_login_returns_204_for_valid_credentials(self):
-        client = APIClient()
-        response = client.post(
-            reverse("aist_api:auth_login"),
-            data={"username": self.user.username, "password": "pass"},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 204)
-
     def test_auth_login_rejects_invalid_credentials(self):
         client = Client(enforce_csrf_checks=True)
         client.get(reverse("client_login"))
@@ -36,26 +27,26 @@ class AISTAccountAPITests(AISTApiBase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json().get("detail"), "Invalid username or password.")
 
-    def test_auth_login_rejects_without_csrf_token(self):
+    def test_auth_login_csrf_behavior(self):
         client = Client(enforce_csrf_checks=True)
-        response = client.post(
-            reverse("aist_api:auth_login"),
+        login_url = reverse("aist_api:auth_login")
+
+        without_csrf = client.post(
+            login_url,
             data={"username": self.user.username, "password": "pass"},
             content_type="application/json",
         )
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(without_csrf.status_code, 403)
 
-    def test_auth_login_accepts_with_csrf_token(self):
-        client = Client(enforce_csrf_checks=True)
         client.get(reverse("client_login"))
         csrf_token = client.cookies["csrftoken"].value
-        response = client.post(
-            reverse("aist_api:auth_login"),
+        with_csrf = client.post(
+            login_url,
             data={"username": self.user.username, "password": "pass"},
             content_type="application/json",
             HTTP_X_CSRFTOKEN=csrf_token,
         )
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(with_csrf.status_code, 204)
 
     def test_me_get_returns_profile(self):
         organization = Organization.objects.create(name="Access Org")

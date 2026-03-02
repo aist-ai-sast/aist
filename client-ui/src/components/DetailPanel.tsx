@@ -12,7 +12,6 @@ type DetailPanelProps = {
   finding?: Finding;
   permissionProductId?: number;
   aiResponse?: AIResponse | null;
-  pipelineId?: string;
   embedded?: boolean;
   selectedTags?: string[];
   onToggleTag?: (tag: string) => void;
@@ -20,13 +19,13 @@ type DetailPanelProps = {
   onToggleCwe?: (cwe: string) => void;
   onCloseApplied?: (findingId: number, reason: "mitigated" | "false_positive" | "out_of_scope" | "duplicate") => void;
   onReopened?: (findingId: number) => void;
+  isStatusEditLocked?: boolean;
 };
 
 export default function DetailPanel({
   finding,
   permissionProductId,
   aiResponse,
-  pipelineId,
   embedded = false,
   selectedTags,
   onToggleTag,
@@ -34,6 +33,7 @@ export default function DetailPanel({
   onToggleCwe,
   onCloseApplied,
   onReopened,
+  isStatusEditLocked = false,
 }: DetailPanelProps) {
   const exportFinding = useExportFinding();
   const toast = useToast();
@@ -46,7 +46,6 @@ export default function DetailPanel({
     );
   }
 
-  const resolvedPipelineId = pipelineId ?? aiResponse?.pipelineId;
   const exportDisabled = !finding?.id;
   const headerAction = (
     <button
@@ -130,14 +129,11 @@ export default function DetailPanel({
           permissionProductId={permissionProductId}
           onApplied={(reason) => onCloseApplied?.(finding.id, reason)}
           onReopened={() => onReopened?.(finding.id)}
+          isLocked={isStatusEditLocked}
         />
       </div>
       <Link
-        to={
-          resolvedPipelineId
-            ? `${getRoute("ui_finding_detail_path", { id: finding.id })}?pipeline=${encodeURIComponent(resolvedPipelineId)}`
-            : getRoute("ui_finding_detail_path", { id: finding.id })
-        }
+        to={getRoute("ui_finding_detail_path", { id: finding.id })}
         className="mt-4 inline-flex text-sm text-brand-500"
       >
         Open full detail →

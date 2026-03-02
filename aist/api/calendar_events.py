@@ -302,18 +302,20 @@ class BaseCalendarService:
 
     def _list_pipeline_scheduled(self) -> list[CalendarEventData]:
         events: list[CalendarEventData] = []
-        range_start_local = timezone.localtime(self.ctx.start, self.ctx.tzinfo)
-        range_end_local = timezone.localtime(self.ctx.end, self.ctx.tzinfo)
+        server_tz = timezone.get_default_timezone()
+        range_start_server = timezone.localtime(self.ctx.start, server_tz)
+        range_end_server = timezone.localtime(self.ctx.end, server_tz)
 
         for schedule in self.repo.schedules.filter(enabled=True):
             occurrences = 0
-            iterator = croniter(schedule.cron_expression, range_start_local)
+            iterator = croniter(schedule.cron_expression, range_start_server)
             while occurrences < MAX_SCHEDULE_OCCURRENCES_PER_SCHEDULE:
-                next_run = _ensure_aware(iterator.get_next(datetime), self.ctx.tzinfo)
-                if next_run >= range_end_local:
+                next_run_server = _ensure_aware(iterator.get_next(datetime), server_tz)
+                if next_run_server >= range_end_server:
                     break
-                run_ts = int(next_run.timestamp())
-                events.append(self.factory.pipeline_scheduled(schedule, next_run, run_ts))
+                run_ts = int(next_run_server.timestamp())
+                next_run_local = timezone.localtime(next_run_server, self.ctx.tzinfo)
+                events.append(self.factory.pipeline_scheduled(schedule, next_run_local, run_ts))
                 occurrences += 1
         return events
 

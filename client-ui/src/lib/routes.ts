@@ -12,6 +12,7 @@ type RouteMap = {
   finding_detail_url: string;
   finding_notes_url: string;
   finding_close_url: string;
+  finding_bulk_status_url: string;
   finding_export_url: string;
   finding_tags_url: string;
   test_detail_url: string;

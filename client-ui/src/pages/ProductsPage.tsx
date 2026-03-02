@@ -7,6 +7,7 @@ import { getRoute } from "../lib/routes";
 import MultiSelectChips from "../components/MultiSelectChips";
 import SelectField from "../components/SelectField";
 import TextInput from "../components/TextInput";
+import FilterClearButton from "../components/FilterClearButton";
 import PermissionGate from "../components/PermissionGate";
 import PaginationBar from "../components/PaginationBar";
 import PageErrorState from "../components/PageErrorState";
@@ -110,6 +111,12 @@ export default function ProductsPage() {
     }
   }, [filtered.length, pageIndex, pageSize]);
 
+  const clearAllFilters = () => {
+    setSearch("");
+    setStatus("all");
+    setSelectedTags([]);
+  };
+
   const lastSync = useMemo(() => {
     const dates = summaries
       .map((summary) => summary.lastSync)
@@ -150,14 +157,32 @@ export default function ProductsPage() {
       </div>
 
       <div className="p-4 aist-card">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Filters</div>
+          <FilterClearButton onClick={clearAllFilters} label="Clear all" />
+        </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <TextInput
-            className="flex-1 px-4"
-            placeholder="Search projects..."
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
+          <div className="flex-1">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <label className="text-xs text-slate-400">Search</label>
+              {search ? (
+                <FilterClearButton onClick={() => setSearch("")} />
+              ) : null}
+            </div>
+            <TextInput
+              className="px-4"
+              placeholder="Search projects..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
           <div className="w-full sm:w-44">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <label className="text-xs text-slate-400">Status</label>
+              {status !== "all" ? (
+                <FilterClearButton onClick={() => setStatus("all")} />
+              ) : null}
+            </div>
             <SelectField
               label="Status"
               value={status}
@@ -173,6 +198,7 @@ export default function ProductsPage() {
             options={tagOptions}
             selected={selectedTags}
             onChange={setSelectedTags}
+            onClear={() => setSelectedTags([])}
             visibleCount={8}
           />
         </div>

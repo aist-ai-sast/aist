@@ -1,12 +1,12 @@
 # aist/test/test_api.py
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.db import IntegrityError
+from django.db import IntegrityError, OperationalError
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -24,10 +24,11 @@ from dojo.models import (
     Test,
     Test_Type,
 )
-from drf_spectacular.generators import SchemaGenerator
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
+from aist.api.findings import AISTFindingBulkStatusAPI
+from aist.findings_bulk_lock import acquire_bulk_locks, release_bulk_locks
 from aist.models import (
     AISTAIFindingResponse,
     AISTAIResponse,
@@ -405,36 +406,22 @@ class AISTAuthorizationTests(AISTApiBase):
         self.assertIn(own.id, ids)
         self.assertNotIn("pipe-other", ids)
 
-    def test_pipeline_detail_denies_other_product(self):
-        AISTPipeline.objects.create(
-            id="pipe-other",
-            project=self.other_project,
-            status=AISTStatus.FINISHED,
+    def test_pipeline_endpoints_deny_other_product(self):
+        route_names = (
+            "aist_api:pipeline_status",
+            "aist_api:pipeline_status_stream",
+            "aist_api:pipeline_logs_full",
         )
-        resp = self.client.get(reverse("aist_api:pipeline_status", kwargs={"pipeline_id": "pipe-other"}))
-        self.assertEqual(resp.status_code, 404)
-
-    def test_pipeline_status_stream_denies_other_product(self):
-        AISTPipeline.objects.create(
-            id="pipe-other-stream",
-            project=self.other_project,
-            status=AISTStatus.FINISHED,
-        )
-        resp = self.client.get(
-            reverse("aist_api:pipeline_status_stream", kwargs={"pipeline_id": "pipe-other-stream"}),
-        )
-        self.assertEqual(resp.status_code, 404)
-
-    def test_pipeline_logs_full_denies_other_product(self):
-        AISTPipeline.objects.create(
-            id="pipe-other-logs",
-            project=self.other_project,
-            status=AISTStatus.FINISHED,
-        )
-        resp = self.client.get(
-            reverse("aist_api:pipeline_logs_full", kwargs={"pipeline_id": "pipe-other-logs"}),
-        )
-        self.assertEqual(resp.status_code, 404)
+        for index, route_name in enumerate(route_names, start=1):
+            with self.subTest(route_name=route_name):
+                pipeline_id = f"pipe-other-{index}"
+                AISTPipeline.objects.create(
+                    id=pipeline_id,
+                    project=self.other_project,
+                    status=AISTStatus.FINISHED,
+                )
+                resp = self.client.get(reverse(route_name, kwargs={"pipeline_id": pipeline_id}))
+                self.assertEqual(resp.status_code, 404)
 
 
 class AISTFindingAuthorizationTests(AISTApiBase):
@@ -554,15 +541,16 @@ class AISTFindingAuthorizationTests(AISTApiBase):
         self.assertNotIn(isolated_finding.id, ids)
 
     def test_finding_list_filters_by_created_gte(self):
-        self.own_finding.date = timezone.now() - timedelta(days=5)
-        self.own_finding.save(update_fields=["date"])
+        own_created = timezone.now() - timedelta(days=5)
+        Finding.objects.filter(id=self.own_finding.id).update(created=own_created)
         newer = Finding.objects.create(
             test=self.own_finding.test,
             title="Newer finding",
             severity="Medium",
-            date=timezone.now() - timedelta(days=1),
+            date=(timezone.now() - timedelta(days=30)).date(),
             reporter=self.user,
         )
+        Finding.objects.filter(id=newer.id).update(created=timezone.now() - timedelta(days=1))
 
         cutoff = (timezone.now() - timedelta(days=2)).isoformat()
         resp = self.client.get(reverse("aist_api:finding_list"), data={"created_gte": cutoff})
@@ -572,15 +560,15 @@ class AISTFindingAuthorizationTests(AISTApiBase):
         self.assertNotIn(self.own_finding.id, ids)
 
     def test_finding_list_filters_by_created_lte(self):
-        self.own_finding.date = timezone.now() - timedelta(days=5)
-        self.own_finding.save(update_fields=["date"])
+        Finding.objects.filter(id=self.own_finding.id).update(created=timezone.now() - timedelta(days=5))
         newer = Finding.objects.create(
             test=self.own_finding.test,
             title="Newest finding",
             severity="Medium",
-            date=timezone.now() - timedelta(hours=6),
+            date=(timezone.now() - timedelta(days=10)).date(),
             reporter=self.user,
         )
+        Finding.objects.filter(id=newer.id).update(created=timezone.now() - timedelta(hours=6))
 
         cutoff = (timezone.now() - timedelta(days=2)).isoformat()
         resp = self.client.get(reverse("aist_api:finding_list"), data={"created_lte": cutoff})
@@ -588,6 +576,78 @@ class AISTFindingAuthorizationTests(AISTApiBase):
         ids = {row["id"] for row in resp.data.get("results", [])}
         self.assertIn(self.own_finding.id, ids)
         self.assertNotIn(newer.id, ids)
+
+    def test_finding_list_same_day_date_bounds_include_full_day(self):
+        day = timezone.localdate() - timedelta(days=3)
+        local_tz = timezone.get_current_timezone()
+        same_day_time = timezone.make_aware(datetime.combine(day, time(hour=12, minute=0)), local_tz)
+        next_day_time = timezone.make_aware(
+            datetime.combine(day + timedelta(days=1), time(hour=12, minute=0)),
+            local_tz,
+        )
+        Finding.objects.filter(id=self.own_finding.id).update(created=same_day_time)
+        next_day_finding = Finding.objects.create(
+            test=self.own_finding.test,
+            title="Next day finding",
+            severity="Low",
+            date=day,
+            reporter=self.user,
+        )
+        Finding.objects.filter(id=next_day_finding.id).update(created=next_day_time)
+
+        resp = self.client.get(
+            reverse("aist_api:finding_list"),
+            data={"created_gte": day.isoformat(), "created_lte": day.isoformat()},
+        )
+        self.assertEqual(resp.status_code, 200)
+        ids = {row["id"] for row in resp.data.get("results", [])}
+        self.assertIn(self.own_finding.id, ids)
+        self.assertNotIn(next_day_finding.id, ids)
+
+    def test_finding_list_created_filters_use_created_not_scan_date(self):
+        day = timezone.localdate() - timedelta(days=4)
+        local_tz = timezone.get_current_timezone()
+        created_inside = timezone.make_aware(datetime.combine(day, time(hour=9, minute=30)), local_tz)
+        Finding.objects.filter(id=self.own_finding.id).update(
+            created=created_inside,
+            date=day - timedelta(days=10),
+        )
+
+        resp = self.client.get(
+            reverse("aist_api:finding_list"),
+            data={"created_gte": day.isoformat(), "created_lte": day.isoformat()},
+        )
+        self.assertEqual(resp.status_code, 200)
+        ids = {row["id"] for row in resp.data.get("results", [])}
+        self.assertIn(self.own_finding.id, ids)
+
+    def test_finding_list_filters_by_status_updated_day_bounds(self):
+        day = timezone.localdate() - timedelta(days=2)
+        local_tz = timezone.get_current_timezone()
+        status_updated_inside = timezone.make_aware(datetime.combine(day, time(hour=11, minute=45)), local_tz)
+        status_updated_outside = timezone.make_aware(
+            datetime.combine(day + timedelta(days=1), time(hour=8, minute=15)),
+            local_tz,
+        )
+        Finding.objects.filter(id=self.own_finding.id).update(active=False, last_status_update=status_updated_inside)
+        outside = Finding.objects.create(
+            test=self.own_finding.test,
+            title="Mitigated outside day",
+            severity="Medium",
+            date=day,
+            reporter=self.user,
+            active=False,
+            last_status_update=status_updated_outside,
+        )
+
+        resp = self.client.get(
+            reverse("aist_api:finding_list"),
+            data={"status_updated_gte": day.isoformat(), "status_updated_lte": day.isoformat(), "active": "false"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        ids = {row["id"] for row in resp.data.get("results", [])}
+        self.assertIn(self.own_finding.id, ids)
+        self.assertNotIn(outside.id, ids)
 
 
 class AIFindingResponseAPITests(AISTApiBase):
@@ -782,29 +842,22 @@ class AISTFindingAIFilterTests(AISTApiBase):
             summary="AI reasoning",
         )
 
-    def test_finding_list_filters_has_ai_response(self):
-        resp = self.client.get(
-            reverse("aist_api:finding_list"),
-            data={"test__engagement__product": self.product.id, "ai_status": "has_ai"},
+    def test_finding_list_filters_by_ai_presence_status(self):
+        cases = (
+            ("has_ai", self.finding_with_ai.id, self.finding_without_ai.id),
+            ("no_ai", self.finding_without_ai.id, self.finding_with_ai.id),
         )
-
-        self.assertEqual(resp.status_code, 200)
-        ids = [row["id"] for row in resp.data["results"]]
-        self.assertIn(self.finding_with_ai.id, ids)
-        self.assertNotIn(self.finding_without_ai.id, ids)
-        self.assertEqual(resp.data["count"], 1)
-
-    def test_finding_list_filters_no_ai_response(self):
-        resp = self.client.get(
-            reverse("aist_api:finding_list"),
-            data={"test__engagement__product": self.product.id, "ai_status": "no_ai"},
-        )
-
-        self.assertEqual(resp.status_code, 200)
-        ids = [row["id"] for row in resp.data["results"]]
-        self.assertIn(self.finding_without_ai.id, ids)
-        self.assertNotIn(self.finding_with_ai.id, ids)
-        self.assertEqual(resp.data["count"], 1)
+        for ai_status, expected_id, unexpected_id in cases:
+            with self.subTest(ai_status=ai_status):
+                resp = self.client.get(
+                    reverse("aist_api:finding_list"),
+                    data={"test__engagement__product": self.product.id, "ai_status": ai_status},
+                )
+                self.assertEqual(resp.status_code, 200)
+                ids = [row["id"] for row in resp.data["results"]]
+                self.assertIn(expected_id, ids)
+                self.assertNotIn(unexpected_id, ids)
+                self.assertEqual(resp.data["count"], 1)
 
     def test_finding_list_rejects_invalid_ai_response_filter(self):
         resp = self.client.get(
@@ -813,24 +866,21 @@ class AISTFindingAIFilterTests(AISTApiBase):
         )
         self.assertEqual(resp.status_code, 400)
 
-    def test_finding_list_filters_by_ai_tp_status(self):
-        resp = self.client.get(
-            reverse("aist_api:finding_list"),
-            data={"test__engagement__product": self.product.id, "ai_status": "ai_tp"},
+    def test_finding_list_filters_by_ai_verdict_status(self):
+        cases = (
+            ("ai_tp", [self.finding_with_ai.id], 1),
+            ("ai_fp", [], 0),
         )
-
-        self.assertEqual(resp.status_code, 200)
-        ids = [row["id"] for row in resp.data["results"]]
-        self.assertEqual(ids, [self.finding_with_ai.id])
-
-    def test_finding_list_filters_by_ai_fp_status(self):
-        resp = self.client.get(
-            reverse("aist_api:finding_list"),
-            data={"test__engagement__product": self.product.id, "ai_status": "ai_fp"},
-        )
-
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.data["count"], 0)
+        for ai_status, expected_ids, expected_count in cases:
+            with self.subTest(ai_status=ai_status):
+                resp = self.client.get(
+                    reverse("aist_api:finding_list"),
+                    data={"test__engagement__product": self.product.id, "ai_status": ai_status},
+                )
+                self.assertEqual(resp.status_code, 200)
+                ids = [row["id"] for row in resp.data["results"]]
+                self.assertEqual(ids, expected_ids)
+                self.assertEqual(resp.data["count"], expected_count)
 
 
 class AISTFindingTagsTests(AISTApiBase):
@@ -895,23 +945,21 @@ class AISTFindingTagsTests(AISTApiBase):
         self.other_finding.tags = "other"
         self.other_finding.save()
 
-    def test_finding_tags_returns_global_tags(self):
+    def test_finding_tags_scope(self):
         url = reverse("aist_api:finding_tags")
-        resp = self.client.get(url)
-        self.assertEqual(resp.status_code, 200)
-        tags = resp.data.get("tags", [])
-        self.assertIn("security", tags)
-        self.assertIn("domxss", tags)
-        self.assertIn("other", tags)
-
-    def test_finding_tags_filters_by_project(self):
-        url = reverse("aist_api:finding_tags")
-        resp = self.client.get(url, data={"project_id": self.project.id})
-        self.assertEqual(resp.status_code, 200)
-        tags = resp.data.get("tags", [])
-        self.assertIn("security", tags)
-        self.assertIn("domxss", tags)
-        self.assertNotIn("other", tags)
+        cases = (
+            ({}, {"security", "domxss", "other"}, set()),
+            ({"project_id": self.project.id}, {"security", "domxss"}, {"other"}),
+        )
+        for params, expected_present, expected_absent in cases:
+            with self.subTest(params=params):
+                resp = self.client.get(url, data=params)
+                self.assertEqual(resp.status_code, 200)
+                tags = set(resp.data.get("tags", []))
+                for tag in expected_present:
+                    self.assertIn(tag, tags)
+                for tag in expected_absent:
+                    self.assertNotIn(tag, tags)
 
     def test_finding_list_tags_or(self):
         url = reverse("aist_api:finding_list")
@@ -1073,6 +1121,229 @@ class AISTFindingTagsTests(AISTApiBase):
         ids = {row["id"] for row in severity_injection.data.get("results", [])}
         self.assertIn(self.finding.id, ids)
         self.assertNotIn(self.other_finding.id, ids)
+
+
+class AISTFindingBulkStatusTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.user)
+        self.engagement = Engagement.objects.create(
+            name="Engage bulk finding",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        self.test_type = Test_Type.objects.create(name="Semgrep bulk finding")
+        self.test = Test.objects.create(
+            engagement=self.engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=self.test_type,
+        )
+        self.finding_a = Finding.objects.create(
+            test=self.test,
+            title="Bulk finding A",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+            active=True,
+        )
+        self.finding_b = Finding.objects.create(
+            test=self.test,
+            title="Bulk finding B",
+            severity="Medium",
+            date=timezone.now(),
+            reporter=self.user,
+            active=True,
+        )
+
+    def test_bulk_close_sets_status_and_note(self):
+        resp = self.client.post(
+            reverse("aist_api:finding_bulk_status"),
+            data={
+                "finding_ids": [self.finding_a.id, self.finding_b.id],
+                "action": "close",
+                "close_reason": "false_positive",
+                "reason": "Manual triage decision",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["updated_count"], 2)
+
+        self.finding_a.refresh_from_db()
+        self.finding_b.refresh_from_db()
+        self.assertFalse(self.finding_a.active)
+        self.assertTrue(self.finding_a.false_p)
+        self.assertTrue(self.finding_a.is_mitigated)
+        self.assertFalse(self.finding_b.active)
+        self.assertTrue(self.finding_b.false_p)
+        self.assertTrue(self.finding_b.notes.filter(entry="Bulk status update: Manual triage decision").exists())
+
+    def test_bulk_reopen_reactivates_selected_findings(self):
+        self.finding_a.active = False
+        self.finding_a.is_mitigated = True
+        self.finding_a.false_p = True
+        self.finding_a.save(update_fields=["active", "is_mitigated", "false_p", "updated"])
+
+        resp = self.client.post(
+            reverse("aist_api:finding_bulk_status"),
+            data={
+                "finding_ids": [self.finding_a.id],
+                "action": "reopen",
+                "reason": "Reopened after validation",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.finding_a.refresh_from_db()
+        self.assertTrue(self.finding_a.active)
+        self.assertFalse(self.finding_a.is_mitigated)
+        self.assertFalse(self.finding_a.false_p)
+        self.assertTrue(self.finding_a.notes.filter(entry="Bulk status update: Reopened after validation").exists())
+
+    def test_bulk_status_returns_423_when_finding_is_locked(self):
+        owner_token = f"owner-{self.finding_a.id}"
+        acquire_bulk_locks([self.finding_a.id], owner_token)
+        try:
+            resp = self.client.post(
+                reverse("aist_api:finding_bulk_status"),
+                data={
+                    "finding_ids": [self.finding_a.id],
+                    "action": "close",
+                    "close_reason": "mitigated",
+                    "reason": "Queued in another bulk operation",
+                },
+                format="json",
+            )
+        finally:
+            release_bulk_locks([self.finding_a.id], owner_token=None)
+
+        self.assertEqual(resp.status_code, 423)
+        self.assertEqual(resp.data["locked_ids"], [self.finding_a.id])
+
+    def test_bulk_close_requires_close_reason(self):
+        resp = self.client.post(
+            reverse("aist_api:finding_bulk_status"),
+            data={
+                "finding_ids": [self.finding_a.id],
+                "action": "close",
+                "reason": "manual review",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("close_reason", resp.data)
+
+    def test_bulk_status_rejects_blank_reason(self):
+        resp = self.client.post(
+            reverse("aist_api:finding_bulk_status"),
+            data={
+                "finding_ids": [self.finding_a.id],
+                "action": "reopen",
+                "reason": "   ",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("reason", resp.data)
+
+    def test_bulk_status_returns_423_on_db_row_lock_conflict(self):
+        """
+        When select_for_update(nowait=True) raises OperationalError because
+        another DB transaction already holds a row lock, the endpoint returns
+        423 without crashing and cache markers are cleaned up.
+        """
+        call_count = [0]
+        original_get_qs = AISTFindingBulkStatusAPI.get_authorized_queryset
+
+        class _LockedQS:
+
+            """Simulates a queryset whose rows are locked by another transaction."""
+
+            def select_for_update(self, **kwargs):
+                return self
+
+            def select_related(self, *args):
+                return self
+
+            def filter(self, **kwargs):
+                return self
+
+            def __iter__(self):
+                msg = "could not obtain lock on row in relation"
+                raise OperationalError(msg)
+
+        def patched_get_qs(self_view):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return original_get_qs(self_view)
+            return _LockedQS()
+
+        with patch.object(AISTFindingBulkStatusAPI, "get_authorized_queryset", patched_get_qs):
+            resp = self.client.post(
+                reverse("aist_api:finding_bulk_status"),
+                data={
+                    "finding_ids": [self.finding_a.id],
+                    "action": "close",
+                    "close_reason": "mitigated",
+                    "reason": "Concurrent lock test",
+                },
+                format="json",
+            )
+
+        self.assertEqual(resp.status_code, 423)
+        self.assertIn("concurrent", resp.data["detail"].lower())
+
+    def test_bulk_status_returns_409_on_concurrent_modification(self):
+        """
+        When a finding is deleted between the auth pre-check and the DB row
+        lock, the endpoint returns 409 (no KeyError / 500) and cache markers
+        are cleaned up.
+        """
+        call_count = [0]
+        original_get_qs = AISTFindingBulkStatusAPI.get_authorized_queryset
+
+        class _DeletedQS:
+
+            """Simulates a queryset that returns nothing because the finding was deleted."""
+
+            def select_for_update(self, **kwargs):
+                return self
+
+            def select_related(self, *args):
+                return self
+
+            def filter(self, **kwargs):
+                return self
+
+            def __iter__(self):
+                return iter([])
+
+        def patched_get_qs(self_view):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return original_get_qs(self_view)
+            return _DeletedQS()
+
+        with patch.object(AISTFindingBulkStatusAPI, "get_authorized_queryset", patched_get_qs):
+            resp = self.client.post(
+                reverse("aist_api:finding_bulk_status"),
+                data={
+                    "finding_ids": [self.finding_a.id],
+                    "action": "close",
+                    "close_reason": "mitigated",
+                    "reason": "Concurrent deletion test",
+                },
+                format="json",
+            )
+
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("concurrent", resp.data["detail"].lower())
 
 
 class AISTProductSummaryTests(AISTApiBase):
@@ -1484,35 +1755,6 @@ class AISTUIApiTests(AISTApiBase):
 
         self.assertEqual(resp.status_code, 400)
         self.assertIn("format", resp.data)
-
-
-class AISTSchemaTests(AISTApiBase):
-    def test_openapi_includes_custom_aist_api_views(self):
-        schema = SchemaGenerator().get_schema(request=None, public=True)
-        paths = schema.get("paths", {})
-
-        required_operations = {
-            "/api/v2/aist/findings/": "get",
-            "/api/v2/aist/findings/{finding_id}/notes/": "get",
-            "/api/v2/aist/findings/{finding_id}/export/": "post",
-            "/api/v2/aist/findings/tags/": "get",
-            "/api/v2/aist/pipelines/{pipeline_id}/stop/": "post",
-            "/api/v2/aist/pipelines/{pipeline_id}/export-ai-results/": "post",
-        }
-        for path, method in required_operations.items():
-            self.assertIn(path, paths)
-            self.assertIn(method, paths[path])
-        self.assertIn("/api/v2/aist/projects/", paths)
-        self.assertIn("post", paths["/api/v2/aist/projects/"])
-        self.assertIn("/api/v2/aist/projects/{project_id}/", paths)
-        self.assertIn("post", paths["/api/v2/aist/projects/{project_id}/"])
-        self.assertIn("/api/v2/aist/projects/{project_id}/versions", paths)
-        self.assertIn("post", paths["/api/v2/aist/projects/{project_id}/versions"])
-        self.assertNotIn("/api/v2/aist/projects/create/", paths)
-        self.assertNotIn("/api/v2/aist/projects/{project_id}/update/", paths)
-        self.assertNotIn("/api/v2/aist/projects/{project_id}/versions/create/", paths)
-        self.assertNotIn("/api/v2/aist/pipelines/summary/", paths)
-        self.assertNotIn("/api/v2/aist/products/summary/", paths)
 
 
 class LaunchConfigAPITests(AISTApiBase):

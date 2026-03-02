@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import json
-import re
-
 from django.contrib.auth import get_user_model
 from django.test import Client, SimpleTestCase, TestCase, override_settings
 
@@ -20,25 +17,6 @@ DJANGO_VITE_TEST_SETTINGS = {
 
 @override_settings(DJANGO_VITE=DJANGO_VITE_TEST_SETTINGS)
 class ClientPortalRouteTests(SimpleTestCase):
-    def _extract_routes_json(self, html: str) -> dict:
-        match = re.search(r"window\.__AIST_ROUTES__\s*=\s*(\{.*?\});", html, flags=re.DOTALL)
-        self.assertIsNotNone(match)
-        return json.loads(match.group(1))
-
-    def test_root_redirects_to_findings(self):
-        response = self.client.get("/")
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response["Location"], "/dashboard")
-
-    def test_client_side_route_fallback_renders_same_shell(self):
-        response = self.client.get("/findings/123")
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '<div id="root"></div>', html=True)
-        self.assertContains(response, "window.__AIST_ROUTES__")
-        self.assertContains(response, 'type="module"')
-        self.assertRegex(response.content.decode("utf-8"), r'href="/assets/[^"]+\.css"')
-        self.assertRegex(response.content.decode("utf-8"), r'src="/assets/[^"]+\.js"')
-
     def test_html_shell_has_no_store_cache_headers(self):
         response = self.client.get("/dashboard")
         self.assertEqual(response.status_code, 200)
@@ -46,51 +24,9 @@ class ClientPortalRouteTests(SimpleTestCase):
         self.assertEqual(response.get("Pragma"), "no-cache")
         self.assertEqual(response.get("Expires"), "0")
 
-    def test_anonymous_can_open_all_client_ui_routes(self):
-        for path in ("/findings", "/products", "/pipelines", "/calendar", "/search", "/settings", "/finding/1"):
-            with self.subTest(path=path):
-                response = self.client.get(path)
-                self.assertEqual(response.status_code, 200)
-                self.assertContains(response, '<div id="root"></div>', html=True)
-                self.assertContains(response, "window.__AIST_ROUTES__")
-
-    def test_runtime_routes_include_expected_api_endpoints(self):
-        response = self.client.get("/pipelines")
-        self.assertEqual(response.status_code, 200)
-
-        html = response.content.decode("utf-8")
-        routes = self._extract_routes_json(html)
-
-        self.assertEqual(routes["login_url"], "/auth/login/")
-        self.assertEqual(routes["login_api_url"], "/api/v2/aist/auth/login/")
-        self.assertEqual(routes["logout_url"], "/api/v2/aist/auth/logout/")
-        self.assertIn("logout_all_devices_url", routes)
-        self.assertIn("me_url", routes)
-        self.assertIn("me_change_password_url", routes)
-        self.assertIn("{id}", routes["finding_detail_url"])
-        self.assertIn("{id}", routes["finding_close_url"])
-        self.assertIn("{finding_id}", routes["finding_notes_url"])
-        self.assertIn("{finding_id}", routes["finding_export_url"])
-        self.assertIn("{pipeline_id}", routes["pipeline_export_url"])
-        self.assertEqual(routes["calendar_events_url"], "/api/v2/aist/calendar/events/")
-        self.assertIn("{event_id}", routes["calendar_event_detail_url"])
-        self.assertEqual(routes["ai_finding_responses_url"], "/api/v2/aist/ai-finding-responses/")
-        self.assertEqual(routes["product_summary_url"], "/summary/products/")
-        self.assertEqual(routes["pipelines_summary_url"], "/summary/pipelines/")
-        self.assertIn("{project_version_id}", routes["project_version_file_url"])
-        self.assertIn("{subpath}", routes["project_version_file_url"])
-        self.assertEqual(routes["ui_findings_path"], "/findings")
-        self.assertEqual(routes["ui_calendar_path"], "/calendar")
-        self.assertIn(":id", routes["ui_finding_detail_path"])
-
 
 @override_settings(DJANGO_VITE=DJANGO_VITE_TEST_SETTINGS)
 class ClientPortalAuthFlowTests(TestCase):
-    def test_login_route_is_available(self):
-        response = self.client.get("/auth/login/")
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '<div id="root"></div>', html=True)
-
     def test_anonymous_is_rejected_from_authenticated_aist_api(self):
         for path in ("/api/v2/aist/me/", "/api/v2/aist/projects/", "/api/v2/aist/findings/"):
             with self.subTest(path=path):

@@ -3,6 +3,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchBlob, fetchJson } from "./api";
 import { getRoute } from "./routes";
 
+export type FindingCloseReason = "mitigated" | "false_positive" | "out_of_scope" | "duplicate";
+
 export function useUpdateFindingStatus() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -42,7 +44,7 @@ export function useCloseFinding() {
       reason,
     }: {
       id: number;
-      reason: "mitigated" | "false_positive" | "out_of_scope" | "duplicate";
+      reason: FindingCloseReason;
     }) => {
       const payload = {
         is_mitigated: reason === "mitigated",
@@ -57,6 +59,41 @@ export function useCloseFinding() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["findings"] });
+      queryClient.invalidateQueries({ queryKey: ["finding"] });
+    },
+  });
+}
+
+export function useBulkFindingStatus() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      findingIds,
+      action,
+      reason,
+      closeReason,
+    }: {
+      findingIds: number[];
+      action: "close" | "reopen";
+      reason: string;
+      closeReason?: FindingCloseReason;
+    }) => {
+      const payload: Record<string, unknown> = {
+        finding_ids: findingIds,
+        action,
+        reason,
+      };
+      if (action === "close") {
+        payload.close_reason = closeReason ?? "mitigated";
+      }
+      return fetchJson<{ updated_count: number; updated_ids: number[] }>(getRoute("finding_bulk_status_url"), {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["findings"] });
+      queryClient.invalidateQueries({ queryKey: ["findings-page"] });
       queryClient.invalidateQueries({ queryKey: ["finding"] });
     },
   });

@@ -100,5 +100,5 @@ class HorusecTitleMigrationTests(AISTApiBase):
         call_command("migrate_horusec_titles")
         horusec_finding.refresh_from_db()
 
-        self.assertEqual(horusec_finding.title, "Debug Enabled Cwe-489")
+        self.assertEqual(horusec_finding.title, "Debug Enabled CWE-489")
         self.assertEqual(horusec_finding.cwe, 489)
