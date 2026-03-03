@@ -27,6 +27,7 @@ def _build_routes() -> dict[str, Any]:
         "me_url": reverse("aist_api:me"),
         "me_change_password_url": reverse("aist_api:me_change_password"),
         "findings_list_url": reverse("aist_api:finding_list"),
+        "finding_timeline_url": reverse("aist_api:finding_timeline"),
         "finding_detail_url": _replace_int_placeholder(reverse("finding-detail", args=[0]), "id"),
         "finding_notes_url": _replace_int_placeholder(
             reverse("aist_api:finding_notes", kwargs={"finding_id": 0}),

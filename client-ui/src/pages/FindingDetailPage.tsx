@@ -13,6 +13,7 @@ import {
 import { useExportFinding } from "../lib/mutations";
 import { useToast } from "../components/ToastProvider";
 import FindingStatusActions from "../components/FindingStatusActions";
+import FindingSeverityControl from "../components/FindingSeverityControl";
 import { formatProjectVersionText } from "../lib/projectVersion";
 import { getRoute } from "../lib/routes";
 import { formatDateForUI } from "../lib/dateDisplay";
@@ -206,6 +207,13 @@ export default function FindingDetailPage() {
           </div>
         </div>
         <div className="flex items-end gap-3">
+          <FindingSeverityControl
+            finding={finding}
+            permissionProductId={aistProject?.productId}
+            onChanged={(severity) => {
+              setLocalFindingOverride({ severity });
+            }}
+          />
           <FindingStatusActions
             finding={finding}
             permissionProductId={aistProject?.productId}

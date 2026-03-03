@@ -56,15 +56,19 @@ export default function CalendarEventDetailsPanel({ selectedEvent, selectedProje
     findings?: number;
     severity?: Record<string, number>;
     actions?: Array<{ type?: string | null; status?: string | null }>;
+    reasons?: Record<string, number>;
   };
   const actions = buildCalendarActionLinks(selectedEvent, selectedProjectId);
   const primaryAction = actions[0] ?? null;
   const secondaryActions = actions.slice(1);
   const { rows: severityRows, total: severityTotal } = getSeverityDistribution(selectedEvent.summary);
   const showSeverityDistribution =
-    (selectedEvent.eventType === "finding_created" || selectedEvent.eventType === "finding_mitigated")
+    (selectedEvent.eventType === "finding_created" || selectedEvent.eventType === "finding_processed")
     && selectedEvent.isAggregated
     && severityRows.length > 0;
+  const hasProcessedReasons = selectedEvent.eventType === "finding_processed"
+    && summary.reasons
+    && Object.values(summary.reasons).some((value) => Number(value) > 0);
 
   return (
     <div className="mt-3 space-y-3">
@@ -129,6 +133,21 @@ export default function CalendarEventDetailsPanel({ selectedEvent, selectedProje
         </DetailCard>
       ) : (
         <>
+          {hasProcessedReasons ? (
+            <DetailCard className="text-xs text-slate-200">
+              <div className="mb-2 text-[11px] uppercase tracking-[0.14em] text-slate-400">Processed breakdown</div>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                {Object.entries(summary.reasons ?? {})
+                  .filter(([, value]) => Number(value) > 0)
+                  .map(([reason, value]) => (
+                    <div key={reason} className="flex items-center justify-between rounded-md border border-night-500 bg-night-800/70 px-2 py-1">
+                      <span className="capitalize">{reason.replaceAll("_", " ")}</span>
+                      <span className="font-semibold text-slate-100">{value}</span>
+                    </div>
+                  ))}
+              </div>
+            </DetailCard>
+          ) : null}
           {showSeverityDistribution ? null : (
             <DetailCard className="text-sm text-slate-300">{formatCalendarSummary(selectedEvent.summary)}</DetailCard>
           )}

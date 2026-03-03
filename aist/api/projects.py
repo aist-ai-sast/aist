@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from django.shortcuts import get_object_or_404
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Product, SLA_Configuration
@@ -43,7 +42,9 @@ class AISTProjectSerializer(serializers.ModelSerializer):
 
 
 class AISTProjectCreateRequestSerializer(serializers.Serializer):
-    organization_id = serializers.IntegerField()
+    organization_id = serializers.PrimaryKeyRelatedField(
+        queryset=Organization.objects.none(),
+    )
     product_name = serializers.CharField(allow_blank=False, trim_whitespace=True)
     script_path = serializers.CharField(
         required=False,
@@ -54,6 +55,16 @@ class AISTProjectCreateRequestSerializer(serializers.Serializer):
     compilable = serializers.BooleanField(required=False, default=False)
     supported_languages = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     profile = serializers.JSONField(required=False, default=dict)
+
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get("request")
+        if request and getattr(request, "user", None) and request.user.is_authenticated:
+            fields["organization_id"].queryset = get_authorized_aist_organizations(
+                Permissions.Product_Type_Add_Product,
+                user=request.user,
+            )
+        return fields
 
     def validate_profile(self, value):
         if value is None or value == {}:
@@ -152,13 +163,10 @@ class AISTProjectListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
         summary="Create empty AIST project",
     )
     def post(self, request, *args, **kwargs):
-        serializer = AISTProjectCreateRequestSerializer(data=request.data)
+        serializer = AISTProjectCreateRequestSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
 
-        org = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_Type_Add_Product, user=request.user),
-            id=serializer.validated_data["organization_id"],
-        )
+        org = serializer.validated_data["organization_id"]
         product_type = org.ensure_product_type()
         user_has_permission_or_403(request.user, product_type, Permissions.Product_Type_Add_Product)
 

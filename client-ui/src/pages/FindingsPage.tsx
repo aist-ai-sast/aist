@@ -50,6 +50,8 @@ export default function FindingsPage() {
   const [createdTo, setCreatedTo] = useState<string>("");
   const [statusUpdatedFrom, setStatusUpdatedFrom] = useState<string>("");
   const [statusUpdatedTo, setStatusUpdatedTo] = useState<string>("");
+  const [mitigatedFrom, setMitigatedFrom] = useState<string>("");
+  const [mitigatedTo, setMitigatedTo] = useState<string>("");
   const [findingOverrides, setFindingOverrides] = useState<Record<number, Partial<Finding>>>({});
   const [selectedFindingIds, setSelectedFindingIds] = useState<number[]>([]);
   const [bulkEditMode, setBulkEditMode] = useState<boolean>(false);
@@ -76,6 +78,10 @@ export default function FindingsPage() {
     createdLte: createdTo || undefined,
     statusUpdatedGte: statusUpdatedFrom || undefined,
     statusUpdatedLte: statusUpdatedTo || undefined,
+    processedGte: statusUpdatedFrom || undefined,
+    processedLte: statusUpdatedTo || undefined,
+    mitigatedGte: mitigatedFrom || undefined,
+    mitigatedLte: mitigatedTo || undefined,
     aiStatus:
       selectedAiResponse === "All"
         ? undefined
@@ -155,7 +161,7 @@ export default function FindingsPage() {
 
   useEffect(() => {
     setPageIndex(0);
-  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiResponse, selectedPipelineId, createdFrom, createdTo, statusUpdatedFrom, statusUpdatedTo, selectedFile, selectedProjectVersion, ordering, pageSize]);
+  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiResponse, selectedPipelineId, createdFrom, createdTo, statusUpdatedFrom, statusUpdatedTo, mitigatedFrom, mitigatedTo, selectedFile, selectedProjectVersion, ordering, pageSize]);
 
   const applyCloseState = (
     findingId: number,
@@ -188,6 +194,19 @@ export default function FindingsPage() {
     }));
   };
 
+  const applySeverityState = (
+    findingId: number,
+    severity: "Critical" | "High" | "Medium" | "Low" | "Info",
+  ) => {
+    setFindingOverrides((current) => ({
+      ...current,
+      [findingId]: {
+        ...current[findingId],
+        severity,
+      },
+    }));
+  };
+
   useEffect(() => {
     const projectRaw = searchParams.get("project") ?? searchParams.get("project_id");
     const projectParsed = projectRaw ? Number(projectRaw) : NaN;
@@ -198,10 +217,24 @@ export default function FindingsPage() {
     setCreatedFrom(searchParams.get("created_from") ?? searchParams.get("created_gte") ?? "");
     setCreatedTo(searchParams.get("created_to") ?? searchParams.get("created_lte") ?? "");
     setStatusUpdatedFrom(
-      searchParams.get("status_updated_from") ?? searchParams.get("status_updated_gte") ?? "",
+      searchParams.get("processed_from")
+      ?? searchParams.get("processed_gte")
+      ?? searchParams.get("status_updated_from")
+      ?? searchParams.get("status_updated_gte")
+      ?? "",
     );
     setStatusUpdatedTo(
-      searchParams.get("status_updated_to") ?? searchParams.get("status_updated_lte") ?? "",
+      searchParams.get("processed_to")
+      ?? searchParams.get("processed_lte")
+      ?? searchParams.get("status_updated_to")
+      ?? searchParams.get("status_updated_lte")
+      ?? "",
+    );
+    setMitigatedFrom(
+      searchParams.get("mitigated_from") ?? searchParams.get("mitigated_gte") ?? "",
+    );
+    setMitigatedTo(
+      searchParams.get("mitigated_to") ?? searchParams.get("mitigated_lte") ?? "",
     );
     setSelectedProjectVersion(searchParams.get("project_version") ?? "");
     setSelectedFile(searchParams.get("file") ?? "");
@@ -266,6 +299,8 @@ export default function FindingsPage() {
     setCreatedTo("");
     setStatusUpdatedFrom("");
     setStatusUpdatedTo("");
+    setMitigatedFrom("");
+    setMitigatedTo("");
   };
 
   const selectedFindingsCount = selectedFindingIds.length;
@@ -619,6 +654,7 @@ export default function FindingsPage() {
                                 }
                                 onCloseApplied={applyCloseState}
                                 onReopened={applyReopenState}
+                                onSeverityChanged={applySeverityState}
                                 isStatusEditLocked={bulkLockedFindingIdsSet.has(finding.id)}
                                 embedded
                               />

@@ -77,6 +77,7 @@ from aist.api.queue import (
     PipelineLaunchQueueDetailAPI,
     PipelineLaunchQueueListAPI,
 )
+from aist.api.timeline_events import AISTFindingTimelineAPI
 
 __all__ = [
     "AISTAuthLoginAPI",
@@ -88,6 +89,7 @@ __all__ = [
     "AISTFindingExportAPI",
     "AISTFindingListAPI",
     "AISTFindingNotesAPI",
+    "AISTFindingTimelineAPI",
     "AISTMeAPI",
     "AISTMeChangePasswordAPI",
     "AISTOrganizationSerializer",

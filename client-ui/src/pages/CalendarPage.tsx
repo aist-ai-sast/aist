@@ -43,10 +43,10 @@ const EVENT_TYPE_META = [
     colorClass: "fc-aist-type-finding_created",
   },
   {
-    id: "finding_mitigated",
-    value: "finding_mitigated",
-    label: "Finding mitigated",
-    colorClass: "fc-aist-type-finding_mitigated",
+    id: "finding_processed",
+    value: "finding_processed",
+    label: "Finding processed",
+    colorClass: "fc-aist-type-finding_processed",
   },
   {
     id: "project_created",

@@ -10,6 +10,7 @@ from dojo.authorization.roles_permissions import Roles
 from dojo.models import (
     Engagement,
     Finding,
+    Notes,
     Product,
     Product_Type,
     Product_Type_Member,
@@ -92,6 +93,9 @@ class CalendarEventsApiTests(TestCase):
 
     def _detail_url(self, event_id: str):
         return reverse("aist_api:calendar_event_detail", kwargs={"event_id": event_id})
+
+    def _timeline_url(self):
+        return reverse("aist_api:finding_timeline")
 
     def _base_range(self):
         now = timezone.now().replace(microsecond=0, second=0)
@@ -266,7 +270,7 @@ class CalendarEventsApiTests(TestCase):
         ]
         self.assertEqual(len(schedule_events), 1)
 
-    def test_finding_mitigated_event_is_listed(self):
+    def test_finding_processed_event_is_listed(self):
         test_type = Test_Type.objects.create(name="Calendar mitigated type")
         engagement = Engagement.objects.create(
             name="Calendar mitigated engagement",
@@ -287,9 +291,10 @@ class CalendarEventsApiTests(TestCase):
             date=timezone.now() - timedelta(days=1),
             reporter=self.user,
             active=False,
+            is_mitigated=True,
         )
-        finding.last_status_update = timezone.now() - timedelta(hours=8)
-        finding.save(update_fields=["last_status_update"])
+        finding.mitigated = timezone.now() - timedelta(hours=8)
+        finding.save(update_fields=["mitigated"])
         self.version.findings.add(finding)
 
         start, end = self._base_range()
@@ -299,15 +304,97 @@ class CalendarEventsApiTests(TestCase):
                 "start": start.isoformat(),
                 "end": end.isoformat(),
                 "view": "month",
-                "event_types": ["finding_mitigated"],
+                "event_types": ["finding_processed"],
             },
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data["events"]), 1)
         event = response.data["events"][0]
-        self.assertEqual(event["event_type"], "finding_mitigated")
+        self.assertEqual(event["event_type"], "finding_processed")
         self.assertTrue(event["is_aggregated"])
-        self.assertEqual(event["summary"]["active"], False)
+        self.assertEqual(event["summary"]["reasons"]["mitigated"], 1)
+
+    def test_finding_processed_uses_last_status_update_for_closed_findings(self):
+        test_type = Test_Type.objects.create(name="Calendar mitigated strict type")
+        engagement = Engagement.objects.create(
+            name="Calendar mitigated strict engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        outside_range = timezone.now() - timedelta(days=10)
+        inside_range = timezone.now() - timedelta(hours=2)
+        finding = Finding.objects.create(
+            test=test,
+            title="Closed not mitigated",
+            severity="Medium",
+            date=timezone.now() - timedelta(days=1),
+            reporter=self.user,
+            active=False,
+            is_mitigated=False,
+            mitigated=outside_range,
+            last_status_update=inside_range,
+        )
+        self.version.findings.add(finding)
+
+        start, end = self._base_range()
+        response = self.client.get(
+            self._url(),
+            data={
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "view": "month",
+                "event_types": ["finding_processed"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["events"]), 1)
+        self.assertEqual(response.data["events"][0]["summary"]["reasons"]["resolved"], 1)
+
+    def test_finding_processed_includes_severity_changed_reason(self):
+        test_type = Test_Type.objects.create(name="Calendar processed severity type")
+        engagement = Engagement.objects.create(
+            name="Calendar processed severity engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Severity changed finding",
+            severity="Low",
+            date=timezone.now() - timedelta(days=1),
+            reporter=self.user,
+        )
+        self.version.findings.add(finding)
+        finding.severity = "High"
+        finding.save(update_fields=["severity", "updated"])
+
+        start, end = self._base_range()
+        response = self.client.get(
+            self._url(),
+            data={
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "view": "month",
+                "event_types": ["finding_processed"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["events"]), 1)
+        self.assertEqual(response.data["events"][0]["summary"]["reasons"]["severity_changed"], 1)
 
     def test_calendar_event_detail_pipeline_started(self):
         start, end = self._base_range()
@@ -334,3 +421,162 @@ class CalendarEventsApiTests(TestCase):
     def test_calendar_event_detail_not_found(self):
         detail = self.client.get(self._detail_url("pipeline_started:not-found"))
         self.assertEqual(detail.status_code, 404)
+
+    def test_finding_timeline_uses_shared_finding_event_stream(self):
+        test_type = Test_Type.objects.create(name="Timeline type")
+        engagement = Engagement.objects.create(
+            name="Timeline engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        created_finding = Finding.objects.create(
+            test=test,
+            title="Timeline created",
+            severity="High",
+            date=timezone.now() - timedelta(hours=10),
+            reporter=self.user,
+        )
+        mitigated_finding = Finding.objects.create(
+            test=test,
+            title="Timeline mitigated",
+            severity="Medium",
+            date=timezone.now() - timedelta(days=2),
+            reporter=self.user,
+            active=False,
+            is_mitigated=True,
+            mitigated=timezone.now() - timedelta(hours=1),
+        )
+        self.version.findings.add(created_finding, mitigated_finding)
+        start, end = self._base_range()
+        response = self.client.get(
+            self._timeline_url(),
+            data={
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "event_types": ["finding_created", "finding_processed"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        event_types = {row["event_type"] for row in response.data["events"]}
+        self.assertIn("finding_created", event_types)
+        self.assertIn("finding_processed", event_types)
+        processed = next(row for row in response.data["events"] if row["event_type"] == "finding_processed")
+        self.assertEqual(processed["processed_reason"], "mitigated")
+
+    def test_finding_timeline_filters_by_project(self):
+        test_type = Test_Type.objects.create(name="Timeline project filter type")
+        engagement = Engagement.objects.create(
+            name="Timeline project filter engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Project timeline finding",
+            severity="Low",
+            date=timezone.now() - timedelta(hours=3),
+            reporter=self.user,
+        )
+        self.version.findings.add(finding)
+        start, end = self._base_range()
+        response = self.client.get(
+            self._timeline_url(),
+            data={
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "project_id": [self.project.id],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(len(response.data["events"]), 1)
+        for row in response.data["events"]:
+            if row["project_ids"]:
+                self.assertEqual(set(row["project_ids"]), {self.project.id})
+
+    def test_finding_timeline_includes_owner_and_notes_for_single_finding(self):
+        test_type = Test_Type.objects.create(name="Timeline history owner type")
+        engagement = Engagement.objects.create(
+            name="Timeline history owner engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Timeline owner finding",
+            severity="High",
+            date=timezone.now() - timedelta(hours=2),
+            reporter=self.user,
+        )
+        self.version.findings.add(finding)
+        note = Notes.objects.create(entry="Owner note", author=self.user, private=False)
+        finding.notes.add(note)
+
+        response = self.client.get(
+            self._timeline_url(),
+            data={
+                "start": (timezone.now() - timedelta(days=365)).isoformat(),
+                "end": (timezone.now() + timedelta(days=1)).isoformat(),
+                "finding_id": finding.id,
+                "event_types": ["finding_created", "finding_processed", "finding_note_added"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        event_types = {row["event_type"] for row in response.data["events"]}
+        self.assertIn("finding_created", event_types)
+        self.assertIn("finding_note_added", event_types)
+        note_event = next(row for row in response.data["events"] if row["event_type"] == "finding_note_added")
+        self.assertEqual(note_event["owner"], self.user.username)
+        self.assertEqual(note_event["details"], "Owner note")
+
+    def test_finding_timeline_allows_long_range_for_single_finding(self):
+        test_type = Test_Type.objects.create(name="Timeline long history type")
+        engagement = Engagement.objects.create(
+            name="Timeline long history engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test,
+            title="Timeline long range finding",
+            severity="Low",
+            date=timezone.now() - timedelta(days=120),
+            reporter=self.user,
+        )
+        self.version.findings.add(finding)
+        response = self.client.get(
+            self._timeline_url(),
+            data={
+                "start": (timezone.now() - timedelta(days=180)).isoformat(),
+                "end": (timezone.now() + timedelta(days=1)).isoformat(),
+                "finding_id": finding.id,
+            },
+        )
+        self.assertEqual(response.status_code, 200)

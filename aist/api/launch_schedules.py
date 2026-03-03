@@ -207,7 +207,11 @@ class LaunchScheduleSerializer(serializers.ModelSerializer):
 
 class LaunchScheduleUpsertSerializer(serializers.ModelSerializer):
     # incoming field (so we don't require nested object)
-    launch_config_id = serializers.IntegerField(write_only=True)
+    launch_config_id = serializers.PrimaryKeyRelatedField(
+        source="launch_config",
+        queryset=AISTProjectLaunchConfig.objects.none(),
+        write_only=True,
+    )
 
     class Meta:
         model = LaunchSchedule
@@ -217,6 +221,13 @@ class LaunchScheduleUpsertSerializer(serializers.ModelSerializer):
             "max_concurrent_per_worker",
             "launch_config_id",
         ]
+
+    def get_fields(self):
+        fields = super().get_fields()
+        project: AISTProject | None = self.context.get("project")
+        if project is not None:
+            fields["launch_config_id"].queryset = AISTProjectLaunchConfig.objects.filter(project=project)
+        return fields
 
     def validate_cron_expression(self, v: str) -> str:
         v = (v or "").strip()
@@ -246,26 +257,10 @@ class LaunchScheduleUpsertSerializer(serializers.ModelSerializer):
         return v
 
     def validate(self, attrs: dict) -> dict:
-        """
-        Resolve launch_config_id -> launch_config object AND ensure it belongs to the given project.
-        Project is passed via serializer context: {"project": project}.
-        """
         project: AISTProject | None = self.context.get("project")
         if project is None:
             msg = "Internal error: project is missing in serializer context."
             raise serializers.ValidationError(msg)
-
-        cfg_id = attrs.get("launch_config_id")
-        if not cfg_id:
-            raise serializers.ValidationError({"launch_config_id": "launch_config_id is required."})
-
-        cfg = AISTProjectLaunchConfig.objects.filter(id=cfg_id, project=project).first()
-        if not cfg:
-            raise serializers.ValidationError({"launch_config_id": "Launch config not found for this project."})
-
-        # Store resolved FK object; we no longer need the id
-        attrs["launch_config"] = cfg
-        attrs.pop("launch_config_id", None)
         return attrs
 
 

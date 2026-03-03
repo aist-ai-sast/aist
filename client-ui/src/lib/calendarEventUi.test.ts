@@ -16,6 +16,14 @@ describe("formatCalendarSummary", () => {
       }),
     ).toBe("Critical: 2 | High: 3 | Medium: 1 | Low: 0 | Info: 0");
   });
+
+  it("formats processed reasons summary", () => {
+    expect(
+      formatCalendarSummary({
+        reasons: { mitigated: 2, resolved: 1, severity_changed: 0 },
+      }),
+    ).toBe("mitigated: 2 | resolved: 1");
+  });
 });
 
 describe("formatDurationFromSeconds", () => {
@@ -29,11 +37,11 @@ describe("formatDurationFromSeconds", () => {
 });
 
 describe("buildCalendarActionLinks", () => {
-  it("builds date and project aware links for finding mitigated", () => {
+  it("builds date and project aware links for finding processed", () => {
     const event: CalendarEvent = {
-      id: "finding_mitigated:2026-02-24",
-      eventType: "finding_mitigated",
-      title: "Findings mitigated: 5",
+      id: "finding_processed:2026-02-24",
+      eventType: "finding_processed",
+      title: "Findings processed: 5",
       start: "2026-02-24T00:00:00Z",
       end: null,
       isAllDay: true,
@@ -41,7 +49,7 @@ describe("buildCalendarActionLinks", () => {
       count: 5,
       isFuture: false,
       colorVariant: "past_aggregate",
-      summary: { project_id: 17, active: false },
+      summary: { project_id: 17 },
       link: null,
     };
 
@@ -49,8 +57,8 @@ describe("buildCalendarActionLinks", () => {
 
     expect(links).toEqual([
       {
-        label: "Open mitigated findings for this date",
-        to: "/findings?project=17&status_updated_gte=2026-02-24T00%3A00%3A00Z&status_updated_lte=2026-02-24T23%3A59%3A59.999Z&active=false",
+        label: "Open processed findings for this date",
+        to: "/findings?project=17&processed_gte=2026-02-24T00%3A00%3A00Z&processed_lte=2026-02-24T23%3A59%3A59.999Z",
       },
     ]);
   });

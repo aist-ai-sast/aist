@@ -15,7 +15,7 @@ export default function CalendarEventTypeIcon({
   if (eventType === "finding_created") {
     return <span className={className}>{ObjectIcons.findings}</span>;
   }
-  if (eventType === "finding_mitigated") {
+  if (eventType === "finding_processed") {
     return (
       <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
         <path fill="currentColor" d="M9.2 16.1 5.5 12.4l1.1-1.1 2.6 2.6 8.2-8.2 1.1 1.1-9.3 9.3Z" />

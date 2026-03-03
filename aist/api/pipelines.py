@@ -28,7 +28,7 @@ from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.logging_transport import BACKLOG_COUNT, PUBSUB_CHANNEL_TPL, STREAM_KEY, get_pipeline_log_path, get_redis
-from aist.models import AISTPipeline, AISTStatus, TestDeduplicationProgress
+from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, TestDeduplicationProgress
 from aist.pipeline_args import PipelineArguments
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_project_versions
 from aist.tasks import run_sast_pipeline
@@ -54,8 +54,21 @@ PIPELINE_API_CHOICES = PipelineApiChoices(
 
 
 class PipelineStartRequestSerializer(serializers.Serializer):
-    project_version_id = serializers.IntegerField(required=True)
+    project_version_id = serializers.PrimaryKeyRelatedField(
+        queryset=AISTProjectVersion.objects.none(),
+        write_only=True,
+    )
     ai_filter = serializers.JSONField(required=False, allow_null=True)
+
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get("request")
+        if request and getattr(request, "user", None) and request.user.is_authenticated:
+            fields["project_version_id"].queryset = get_authorized_aist_project_versions(
+                Permissions.Product_Edit,
+                user=request.user,
+            )
+        return fields
 
 
 class PipelineResponseSerializer(serializers.Serializer):
@@ -137,12 +150,9 @@ class PipelineStartAPI(AuthorizedQuerySetMixin, APIView):
             setattr(request, api_settings.URL_FORMAT_OVERRIDE, None)
 
         # validate body
-        serializer = PipelineStartRequestSerializer(data=request.data)
+        serializer = PipelineStartRequestSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-
-        pv_id = serializer.validated_data["project_version_id"]
-        # we take project from version to avoid double inputs
-        project_version = self.get_authorized_object(pk=pv_id)
+        project_version = serializer.validated_data["project_version_id"]
         project = project_version.project
         user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
         provided_ai_filter = serializer.validated_data.get("ai_filter", None)

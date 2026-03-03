@@ -398,7 +398,7 @@ body::-webkit-scrollbar-thumb:hover,
   border-color: rgba(250, 126, 223, 0.52) !important;
 }
 
-.fc-aist-type-finding_mitigated {
+.fc-aist-type-finding_processed {
   background: linear-gradient(180deg, rgba(41, 90, 78, 0.95), rgba(31, 68, 58, 0.96)) !important;
   border-color: rgba(114, 221, 196, 0.6) !important;
 }

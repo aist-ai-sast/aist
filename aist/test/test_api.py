@@ -649,6 +649,72 @@ class AISTFindingAuthorizationTests(AISTApiBase):
         self.assertIn(self.own_finding.id, ids)
         self.assertNotIn(outside.id, ids)
 
+    def test_finding_list_filters_by_mitigated_day_bounds(self):
+        day = timezone.localdate() - timedelta(days=2)
+        local_tz = timezone.get_current_timezone()
+        mitigated_inside = timezone.make_aware(datetime.combine(day, time(hour=11, minute=45)), local_tz)
+        mitigated_outside = timezone.make_aware(
+            datetime.combine(day + timedelta(days=1), time(hour=8, minute=15)),
+            local_tz,
+        )
+        Finding.objects.filter(id=self.own_finding.id).update(
+            active=False,
+            is_mitigated=True,
+            mitigated=mitigated_inside,
+            last_status_update=mitigated_inside + timedelta(hours=1),
+        )
+        outside = Finding.objects.create(
+            test=self.own_finding.test,
+            title="Mitigated outside day",
+            severity="Medium",
+            date=day,
+            reporter=self.user,
+            active=False,
+            is_mitigated=True,
+            mitigated=mitigated_outside,
+        )
+
+        resp = self.client.get(
+            reverse("aist_api:finding_list"),
+            data={"mitigated_gte": day.isoformat(), "mitigated_lte": day.isoformat(), "active": "false", "is_mitigated": "true"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        ids = {row["id"] for row in resp.data.get("results", [])}
+        self.assertIn(self.own_finding.id, ids)
+        self.assertNotIn(outside.id, ids)
+
+    def test_finding_list_filters_by_processed_day_bounds(self):
+        now = timezone.now()
+        processed_inside = now - timedelta(minutes=30)
+        processed_outside = now - timedelta(days=2)
+        Finding.objects.filter(id=self.own_finding.id).update(
+            active=False,
+            is_mitigated=True,
+            last_status_update=processed_inside,
+        )
+        outside = Finding.objects.create(
+            test=self.own_finding.test,
+            title="Processed outside day",
+            severity="Medium",
+            date=timezone.localdate(),
+            reporter=self.user,
+            active=False,
+            is_mitigated=False,
+            last_status_update=processed_outside,
+        )
+
+        resp = self.client.get(
+            reverse("aist_api:finding_list"),
+            data={
+                "processed_gte": (now - timedelta(hours=2)).isoformat(),
+                "processed_lte": (now + timedelta(hours=1)).isoformat(),
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        ids = {row["id"] for row in resp.data.get("results", [])}
+        self.assertIn(self.own_finding.id, ids)
+        self.assertNotIn(outside.id, ids)
+
 
 class AIFindingResponseAPITests(AISTApiBase):
     def test_returns_sanitized_ai_finding_responses_without_job_id(self):

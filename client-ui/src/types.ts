@@ -10,6 +10,10 @@ export type FindingFilters = {
   createdLte?: string;
   statusUpdatedGte?: string;
   statusUpdatedLte?: string;
+  processedGte?: string;
+  processedLte?: string;
+  mitigatedGte?: string;
+  mitigatedLte?: string;
   projectVersion?: string;
   file?: string;
   severities?: Severity[];
@@ -133,7 +137,7 @@ export type CalendarEventType =
   | "pipeline_started"
   | "pipeline_scheduled"
   | "finding_created"
-  | "finding_mitigated"
+  | "finding_processed"
   | "project_created";
 
 export type CalendarView = "day" | "week" | "month";
@@ -151,4 +155,23 @@ export type CalendarEvent = {
   colorVariant: string;
   summary: Record<string, unknown>;
   link?: string | null;
+};
+
+export type FindingTimelineEventType =
+  | "finding_created"
+  | "finding_processed"
+  | "finding_note_added";
+
+export type FindingTimelineEvent = {
+  id: string;
+  eventType: FindingTimelineEventType;
+  happenedAt: string;
+  findingId: number;
+  title: string;
+  severity: string;
+  projectIds: number[];
+  processedReason?: string | null;
+  owner?: string | null;
+  details?: string | null;
+  link: string;
 };

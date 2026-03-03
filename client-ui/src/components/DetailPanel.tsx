@@ -3,6 +3,7 @@ import type { AIResponse, Finding } from "../types";
 import { useExportFinding } from "../lib/mutations";
 import { useToast } from "./ToastProvider";
 import FindingStatusActions from "./FindingStatusActions";
+import FindingSeverityControl from "./FindingSeverityControl";
 import { Link } from "react-router-dom";
 import { getRoute } from "../lib/routes";
 
@@ -19,6 +20,7 @@ type DetailPanelProps = {
   onToggleCwe?: (cwe: string) => void;
   onCloseApplied?: (findingId: number, reason: "mitigated" | "false_positive" | "out_of_scope" | "duplicate") => void;
   onReopened?: (findingId: number) => void;
+  onSeverityChanged?: (findingId: number, severity: "Critical" | "High" | "Medium" | "Low" | "Info") => void;
   isStatusEditLocked?: boolean;
 };
 
@@ -33,6 +35,7 @@ export default function DetailPanel({
   onToggleCwe,
   onCloseApplied,
   onReopened,
+  onSeverityChanged,
   isStatusEditLocked = false,
 }: DetailPanelProps) {
   const exportFinding = useExportFinding();
@@ -123,7 +126,13 @@ export default function DetailPanel({
           />
         </Suspense>
       </div>
-      <div className="mt-4 flex items-center justify-between gap-3">
+      <div className="mt-4 flex flex-wrap items-end gap-3">
+        <FindingSeverityControl
+          finding={finding}
+          permissionProductId={permissionProductId}
+          onChanged={(severity) => onSeverityChanged?.(finding.id, severity)}
+          isLocked={isStatusEditLocked}
+        />
         <FindingStatusActions
           finding={finding}
           permissionProductId={permissionProductId}

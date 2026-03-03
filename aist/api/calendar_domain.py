@@ -16,7 +16,7 @@ CALENDAR_EVENT_TYPES: tuple[str, ...] = (
     "pipeline_started",
     "pipeline_scheduled",
     "finding_created",
-    "finding_mitigated",
+    "finding_processed",
     "project_created",
 )
 
@@ -111,8 +111,8 @@ class CalendarEventId:
         return cls(event_type="finding_created", token=str(token))
 
     @classmethod
-    def finding_mitigated(cls, day: date_type) -> CalendarEventId:
-        return cls(event_type="finding_mitigated", token=day.isoformat())
+    def finding_processed(cls, day: date_type) -> CalendarEventId:
+        return cls(event_type="finding_processed", token=day.isoformat())
 
     def to_string(self) -> str:
         return f"{self.event_type}:{self.token}"

@@ -12,6 +12,13 @@ export function formatCalendarSummary(summary: Record<string, unknown>) {
   if ("project_id" in summary && typeof summary.project_id === "number") {
     return `Project ID: ${summary.project_id}`;
   }
+  if ("reasons" in summary && typeof summary.reasons === "object" && summary.reasons) {
+    const reasons = summary.reasons as Record<string, unknown>;
+    return Object.entries(reasons)
+      .filter(([, value]) => Number(value) > 0)
+      .map(([key, value]) => `${key.replaceAll("_", " ")}: ${Number(value)}`)
+      .join(" | ");
+  }
   if ("severity" in summary && typeof summary.severity === "object" && summary.severity) {
     const sev = summary.severity as Record<string, unknown>;
     return SEVERITY_ORDER
@@ -25,7 +32,7 @@ export function eventTypeLabel(type: CalendarEventType) {
   if (type === "pipeline_started") return "Pipeline Started";
   if (type === "pipeline_scheduled") return "Pipeline Scheduled";
   if (type === "finding_created") return "Finding Created";
-  if (type === "finding_mitigated") return "Finding Mitigated";
+  if (type === "finding_processed") return "Finding Processed";
   return "Project Created";
 }
 
@@ -72,7 +79,7 @@ export function buildCalendarActionLinks(event: CalendarEvent, selectedProjectId
   if (event.eventType === "finding_created") {
     links.push({ label: "Open findings for this date", to: findingsByDate });
   }
-  if (event.eventType === "finding_mitigated") {
+  if (event.eventType === "finding_processed") {
     const offsetMatch = event.start.match(/(Z|[+-]\d{2}:\d{2})$/);
     const dayBounds = offsetMatch
       ? {
@@ -82,12 +89,11 @@ export function buildCalendarActionLinks(event: CalendarEvent, selectedProjectId
       : { gte: day, lte: day };
     const params = new URLSearchParams({
       ...(project ? { project: String(project) } : {}),
-      status_updated_gte: dayBounds.gte,
-      status_updated_lte: dayBounds.lte,
-      active: "false",
+      processed_gte: dayBounds.gte,
+      processed_lte: dayBounds.lte,
     });
     links.push({
-      label: "Open mitigated findings for this date",
+      label: "Open processed findings for this date",
       to: `/findings?${params.toString()}`,
     });
   }

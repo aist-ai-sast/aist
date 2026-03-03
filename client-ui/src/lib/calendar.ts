@@ -28,7 +28,7 @@ export function mapCalendarEventToUi(event: CalendarEvent): CalendarUiEvent {
   });
   const compactTitle = (() => {
     if (event.eventType === "finding_created") return `Findings ${event.count}`;
-    if (event.eventType === "finding_mitigated") return `Mitigated ${event.count}`;
+    if (event.eventType === "finding_processed") return `Processed ${event.count}`;
     if (event.eventType === "pipeline_scheduled") {
       return summary.project_name ? `${localTime} ${summary.project_name}` : `${localTime} Scheduled`;
     }

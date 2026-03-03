@@ -4,6 +4,7 @@ import { fetchBlob, fetchJson } from "./api";
 import { getRoute } from "./routes";
 
 export type FindingCloseReason = "mitigated" | "false_positive" | "out_of_scope" | "duplicate";
+export type FindingSeverity = "Critical" | "High" | "Medium" | "Low" | "Info";
 
 export function useUpdateFindingStatus() {
   const queryClient = useQueryClient();
@@ -60,6 +61,28 @@ export function useCloseFinding() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["findings"] });
       queryClient.invalidateQueries({ queryKey: ["finding"] });
+    },
+  });
+}
+
+export function useUpdateFindingSeverity() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      severity,
+    }: {
+      id: number;
+      severity: FindingSeverity;
+    }) => fetchJson(getRoute("finding_detail_url", { id }), {
+      method: "PATCH",
+      body: JSON.stringify({ severity }),
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["findings"] });
+      queryClient.invalidateQueries({ queryKey: ["findings-page"] });
+      queryClient.invalidateQueries({ queryKey: ["finding"] });
+      queryClient.invalidateQueries({ queryKey: ["finding-timeline"] });
     },
   });
 }

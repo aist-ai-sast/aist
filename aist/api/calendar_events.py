@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date as date_type
 from datetime import datetime, time, timedelta
@@ -8,8 +7,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 from croniter import croniter
-from django.db.models import Count, DateTimeField
-from django.db.models.functions import Coalesce
+from django.db.models import Count
 from django.urls import reverse
 from django.utils import timezone
 from dojo.authorization.roles_permissions import Permissions
@@ -26,10 +24,10 @@ from aist.api.calendar_domain import (
     CalendarEventId,
     CalendarRequestContext,
     SeverityBucket,
-    SeveritySummary,
     build_calendar_request_context,
 )
 from aist.api.common import CommaSeparatedListField, TimezoneNameField
+from aist.api.finding_event_stream import FindingEventStream
 from aist.api.schema import AISTApiTag
 from aist.queries import (
     get_authorized_aist_launch_schedules,
@@ -220,13 +218,13 @@ class CalendarEventFactory:
             link=None,
         )
 
-    def finding_mitigated_aggregate(self, day: date_type, bucket: SeverityBucket) -> CalendarEventData:
+    def finding_processed_aggregate(self, day: date_type, bucket, reasons: dict[str, int]) -> CalendarEventData:
         start_of_day = self._day_start(day)
         is_future = self._is_future(start_of_day)
         return CalendarEventData(
-            id=CalendarEventId.finding_mitigated(day).to_string(),
-            event_type="finding_mitigated",
-            title=f"Findings mitigated: {bucket.total}",
+            id=CalendarEventId.finding_processed(day).to_string(),
+            event_type="finding_processed",
+            title=f"Findings processed: {bucket.total}",
             start=start_of_day,
             end=None,
             is_all_day=True,
@@ -234,7 +232,7 @@ class CalendarEventFactory:
             count=bucket.total,
             is_future=is_future,
             color_variant=self._aggregate_variant(future=is_future),
-            summary={"severity": bucket.severity.to_dict(), "active": False},
+            summary={"severity": bucket.severity.to_dict(), "reasons": reasons},
             link=None,
         )
 
@@ -289,6 +287,7 @@ class BaseCalendarService:
         self.ctx = context
         self.repo = repository
         self.factory = CalendarEventFactory(tzinfo=context.tzinfo, now_local=context.now_local)
+        self.finding_events = FindingEventStream(findings=self.repo.findings, tzinfo=self.ctx.tzinfo)
 
     def _list_project_created(self) -> list[CalendarEventData]:
         rows = self.repo.projects.filter(created__gte=self.ctx.start, created__lt=self.ctx.end).order_by("created")
@@ -320,40 +319,19 @@ class BaseCalendarService:
         return events
 
     def _list_finding_created(self) -> list[CalendarEventData]:
-        findings_qs = (
-            self.repo.findings.annotate(event_at=Coalesce("date", "created", output_field=DateTimeField()))
-            .filter(event_at__gte=self.ctx.start, event_at__lt=self.ctx.end)
-            .distinct()
-        )
+        findings_qs = self.finding_events.list_created(start=self.ctx.start, end=self.ctx.end)
         if self.ctx.grouping == "none":
             rows = findings_qs.order_by("event_at", "id")[: self.ctx.limit]
             return [self.factory.finding_created_single(finding, finding.event_at) for finding in rows]
-
-        by_day: dict[date_type, SeverityBucket] = defaultdict(SeverityBucket.empty)
-        rows = findings_qs.values("severity", "event_at").order_by("event_at", "id")
-        for row in rows:
-            event_day = timezone.localtime(row["event_at"], self.ctx.tzinfo).date()
-            bucket = by_day[event_day]
-            bucket.total += 1
-            bucket.severity.add(str(row.get("severity") or ""))
-
+        by_day = self.finding_events.aggregate_created_by_day(start=self.ctx.start, end=self.ctx.end)
         return [self.factory.finding_created_aggregate(day, by_day[day]) for day in sorted(by_day)]
 
-    def _list_finding_mitigated(self) -> list[CalendarEventData]:
-        mitigated_qs = (
-            self.repo.findings.filter(active=False)
-            .exclude(last_status_update__isnull=True)
-            .filter(last_status_update__gte=self.ctx.start, last_status_update__lt=self.ctx.end)
-            .distinct()
-        )
-        by_day: dict[date_type, SeverityBucket] = defaultdict(SeverityBucket.empty)
-        for row in mitigated_qs.values("severity", "last_status_update").order_by("last_status_update"):
-            event_day = timezone.localtime(row["last_status_update"], self.ctx.tzinfo).date()
-            bucket = by_day[event_day]
-            bucket.total += 1
-            bucket.severity.add(str(row.get("severity") or ""))
-
-        return [self.factory.finding_mitigated_aggregate(day, by_day[day]) for day in sorted(by_day)]
+    def _list_finding_processed(self) -> list[CalendarEventData]:
+        by_day = self.finding_events.aggregate_processed_by_day(start=self.ctx.start, end=self.ctx.end)
+        return [
+            self.factory.finding_processed_aggregate(day, by_day[day].severity, by_day[day].reasons)
+            for day in sorted(by_day)
+        ]
 
     def _detail_project_created(self, token: str) -> CalendarEventData | None:
         try:
@@ -387,13 +365,13 @@ class BaseCalendarService:
         day = _parse_day_token(token)
         if day is None:
             return self._detail_single_finding_created(token)
-        return self._detail_finding_by_day(day=day, mitigated=False)
+        return self._detail_finding_by_day(day=day, processed=False)
 
-    def _detail_finding_mitigated(self, token: str) -> CalendarEventData | None:
+    def _detail_finding_processed(self, token: str) -> CalendarEventData | None:
         day = _parse_day_token(token)
         if day is None:
             return None
-        return self._detail_finding_by_day(day=day, mitigated=True)
+        return self._detail_finding_by_day(day=day, processed=True)
 
     def _detail_single_finding_created(self, token: str) -> CalendarEventData | None:
         try:
@@ -406,32 +384,25 @@ class BaseCalendarService:
         event_at = finding.date or finding.created
         return self.factory.finding_created_single(finding, event_at)
 
-    def _detail_finding_by_day(self, *, day: date_type, mitigated: bool) -> CalendarEventData | None:
+    def _detail_finding_by_day(self, *, day: date_type, processed: bool) -> CalendarEventData | None:
         day_start = timezone.make_aware(datetime.combine(day, time.min), self.ctx.tzinfo)
         day_end = timezone.make_aware(datetime.combine(day + timedelta(days=1), time.min), self.ctx.tzinfo)
 
-        if mitigated:
-            day_qs = (
-                self.repo.findings.filter(active=False)
-                .exclude(last_status_update__isnull=True)
-                .filter(last_status_update__gte=day_start, last_status_update__lt=day_end)
-            )
+        if processed:
+            processed_bucket = self.finding_events.aggregate_processed_for_range(start=day_start, end=day_end)
         else:
-            day_qs = self.repo.findings.annotate(event_at=Coalesce("date", "created", output_field=DateTimeField())).filter(
-                event_at__gte=day_start,
-                event_at__lt=day_end,
-            )
-
-        if not day_qs.exists():
+            bucket = self.finding_events.aggregate_created_for_range(start=day_start, end=day_end)
+        if processed and processed_bucket is None:
+            return None
+        if not processed and bucket is None:
             return None
 
-        severity = SeveritySummary.empty()
-        for row in day_qs.values("severity").iterator():
-            severity.add(str(row.get("severity") or ""))
-        bucket = SeverityBucket(total=int(day_qs.count()), severity=severity)
-
-        if mitigated:
-            return self.factory.finding_mitigated_aggregate(day, bucket)
+        if processed:
+            return self.factory.finding_processed_aggregate(
+                day,
+                processed_bucket.severity,
+                processed_bucket.reasons,
+            )
         return self.factory.finding_created_aggregate(day, bucket)
 
 
@@ -443,7 +414,7 @@ class CalendarEventListService(BaseCalendarService):
             "pipeline_started": self._list_pipeline_started,
             "pipeline_scheduled": self._list_pipeline_scheduled,
             "finding_created": self._list_finding_created,
-            "finding_mitigated": self._list_finding_mitigated,
+            "finding_processed": self._list_finding_processed,
         }
 
     def list_events(self) -> list[CalendarEventData]:
@@ -462,7 +433,7 @@ class CalendarEventDetailService(BaseCalendarService):
             "pipeline_started": self._detail_pipeline_started,
             "pipeline_scheduled": self._detail_pipeline_scheduled,
             "finding_created": self._detail_finding_created,
-            "finding_mitigated": self._detail_finding_mitigated,
+            "finding_processed": self._detail_finding_processed,
         }
 
     def get_event_detail(self, event_id: CalendarEventId) -> CalendarEventData | None:

@@ -1,10 +1,10 @@
 import { useState } from "react";
 
-import type { AIResponse, Finding } from "../types";
+import type { AIResponse, Finding, FindingTimelineEvent } from "../types";
 import CodeSnippet from "./CodeSnippet";
 import DescriptionBlock from "./DescriptionBlock";
 import { useAddFindingNote } from "../lib/mutations";
-import { useFinding, useFindingNotes } from "../lib/queries";
+import { useFinding, useFindingNotes, useFindingTimeline } from "../lib/queries";
 import PermissionGate from "./PermissionGate";
 import { useToast } from "./ToastProvider";
 import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
@@ -20,13 +20,14 @@ type FindingDetailTabsProps = {
   onToggleCwe?: (cwe: string) => void;
 };
 
-type TabId = "overview" | "ai" | "code" | "notes";
+type TabId = "overview" | "ai" | "code" | "notes" | "history";
 
 const tabs: Array<{ id: TabId; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "ai", label: "AI Assessment" },
   { id: "code", label: "Code" },
   { id: "notes", label: "Notes" },
+  { id: "history", label: "History" },
 ];
 
 const verdictMeta: Record<NonNullable<AIResponse["verdict"]>, { label: string; className: string }> = {
@@ -42,6 +43,13 @@ const verdictMeta: Record<NonNullable<AIResponse["verdict"]>, { label: string; c
     label: "Uncertain",
     className: "border-amber-400/40 bg-amber-400/10 text-amber-200",
   },
+};
+
+const EMBEDDED_HISTORY_ITEMS_LIMIT = 8;
+const HISTORY_BADGE_LABEL: Record<FindingTimelineEvent["eventType"], string> = {
+  finding_created: "Created",
+  finding_processed: "Processed",
+  finding_note_added: "Comment",
 };
 
 function formatScore(value?: number) {
@@ -73,6 +81,7 @@ export default function FindingDetailTabs({
   const noteItems = notesQuery.data ?? [];
   const displayNotes = embedded ? noteItems.slice(0, 5) : noteItems;
   const detailQuery = useFinding(finding.id);
+  const timelineQuery = useFindingTimeline(finding.id);
   const resolvedTags =
     finding.tags && finding.tags.length > 0
       ? finding.tags
@@ -317,6 +326,58 @@ export default function FindingDetailTabs({
               </div>
             ) : null}
           </div>
+        </div>
+      ) : null}
+
+      {tab === "history" ? (
+        <div className="mt-4 space-y-3">
+          {timelineQuery.isLoading ? (
+            <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-sm text-slate-400">
+              Loading history...
+            </div>
+          ) : timelineQuery.isError ? (
+            <div className="rounded-xl border border-danger-500/30 bg-night-900 px-4 py-3 text-sm text-danger-200">
+              Failed to load history.
+            </div>
+          ) : timelineQuery.data && timelineQuery.data.length > 0 ? (
+            <div className="space-y-0 overflow-hidden rounded-xl border border-night-500 bg-night-900">
+              {(embedded ? timelineQuery.data.slice(0, EMBEDDED_HISTORY_ITEMS_LIMIT) : timelineQuery.data).map((event) => (
+                <div
+                  key={event.id}
+                  className="grid grid-cols-[20px_minmax(0,1fr)] gap-3 border-b border-night-500/80 px-4 py-3 last:border-b-0"
+                >
+                  <div className="relative flex justify-center">
+                    <span className="mt-1.5 inline-block h-2.5 w-2.5 rounded-full bg-brand-500/90" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                      <span className="rounded-full border border-night-500 bg-night-800 px-2 py-0.5 text-[11px] uppercase tracking-[0.12em] text-slate-300">
+                        {HISTORY_BADGE_LABEL[event.eventType]}
+                      </span>
+                      <span>{event.owner || "System"}</span>
+                      <span>•</span>
+                      <span>{new Date(event.happenedAt).toLocaleString()}</span>
+                    </div>
+                    <div className="mt-2 text-sm text-slate-100 break-words">{event.details || "Updated"}</div>
+                    {event.eventType === "finding_note_added" ? null : (
+                      <div className="mt-2 text-xs text-slate-400">
+                        Severity: <span className="text-slate-200">{event.severity || "Unknown"}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-sm text-slate-400">
+              No history yet.
+            </div>
+          )}
+          {embedded && timelineQuery.data && timelineQuery.data.length > EMBEDDED_HISTORY_ITEMS_LIMIT ? (
+            <div className="text-xs text-slate-400">
+              Showing latest {EMBEDDED_HISTORY_ITEMS_LIMIT} events. Open full detail for complete history.
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

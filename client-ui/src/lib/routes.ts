@@ -9,6 +9,7 @@ type RouteMap = {
   me_url: string;
   me_change_password_url: string;
   findings_list_url: string;
+  finding_timeline_url: string;
   finding_detail_url: string;
   finding_notes_url: string;
   finding_close_url: string;

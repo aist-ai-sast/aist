@@ -6,6 +6,7 @@ import type {
   CalendarView,
   Finding,
   FindingFilters,
+  FindingTimelineEvent,
   Note,
   PipelineSummary,
   ProductSummary,
@@ -138,6 +139,33 @@ type CalendarEventsApiResponse = {
   events: CalendarEventApi[];
 };
 
+type FindingTimelineEventApi = {
+  id: string;
+  event_type: FindingTimelineEvent["eventType"];
+  happened_at: string;
+  finding_id: number;
+  title: string;
+  severity: string;
+  project_ids?: number[];
+  processed_reason?: string | null;
+  owner?: string | null;
+  details?: string | null;
+  link: string;
+};
+
+type FindingTimelineApiResponse = {
+  events: FindingTimelineEventApi[];
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const FINDING_HISTORY_RANGE_DAYS = 3650;
+const FINDING_TIMELINE_LIMIT = 300;
+const FINDING_TIMELINE_EVENT_TYPES: FindingTimelineEvent["eventType"][] = [
+  "finding_created",
+  "finding_processed",
+  "finding_note_added",
+];
+
 type ListResponse<T> = { results?: T[]; count?: number; next?: string | null; previous?: string | null };
 
 function buildFindingsParams(
@@ -153,6 +181,10 @@ function buildFindingsParams(
     ...(filters.createdLte ? { created_lte: filters.createdLte } : {}),
     ...(filters.statusUpdatedGte ? { status_updated_gte: filters.statusUpdatedGte } : {}),
     ...(filters.statusUpdatedLte ? { status_updated_lte: filters.statusUpdatedLte } : {}),
+    ...(filters.processedGte ? { processed_gte: filters.processedGte } : {}),
+    ...(filters.processedLte ? { processed_lte: filters.processedLte } : {}),
+    ...(filters.mitigatedGte ? { mitigated_gte: filters.mitigatedGte } : {}),
+    ...(filters.mitigatedLte ? { mitigated_lte: filters.mitigatedLte } : {}),
     ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
     ...(filters.file ? { file: filters.file } : {}),
     ...(filters.aiStatus ? { ai_status: filters.aiStatus } : {}),
@@ -718,5 +750,43 @@ export function useCalendarEventDetail(eventId?: string, projectId?: number, tim
       } satisfies CalendarEvent;
     },
     enabled: Boolean(eventId),
+  });
+}
+
+export function useFindingTimeline(findingId?: number) {
+  return useQuery({
+    queryKey: ["finding-timeline", findingId],
+    queryFn: async () => {
+      if (!findingId) return [];
+      const now = new Date();
+      const end = now;
+      const start = new Date(now.getTime() - (FINDING_HISTORY_RANGE_DAYS * DAY_MS));
+      const params = new URLSearchParams({
+        start: start.toISOString(),
+        end: end.toISOString(),
+        finding_id: String(findingId),
+        limit: String(FINDING_TIMELINE_LIMIT),
+      });
+      for (const eventType of FINDING_TIMELINE_EVENT_TYPES) {
+        params.append("event_types", eventType);
+      }
+      const payload = await fetchJson<FindingTimelineApiResponse>(
+        `${getRoute("finding_timeline_url")}?${params.toString()}`,
+      );
+      return (payload.events ?? []).map((event): FindingTimelineEvent => ({
+        id: event.id,
+        eventType: event.event_type,
+        happenedAt: event.happened_at,
+        findingId: event.finding_id,
+        title: event.title,
+        severity: event.severity,
+        projectIds: event.project_ids ?? [],
+        processedReason: event.processed_reason ?? null,
+        owner: event.owner ?? null,
+        details: event.details ?? null,
+        link: event.link,
+      }));
+    },
+    enabled: Boolean(findingId),
   });
 }

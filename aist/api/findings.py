@@ -4,7 +4,7 @@ import csv
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from io import BytesIO, StringIO
 from urllib.parse import urlsplit
 
@@ -28,6 +28,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from aist.api.common import API_SEVERITY_VALUES
+from aist.api.finding_event_stream import FindingEventStream
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.findings_bulk_lock import (
@@ -131,6 +132,10 @@ class AISTFindingFilter(ApiFindingFilter):
     created_lte = django_filters.IsoDateTimeFilter(method="filter_created_lte")
     status_updated_gte = django_filters.IsoDateTimeFilter(method="filter_status_updated_gte")
     status_updated_lte = django_filters.IsoDateTimeFilter(method="filter_status_updated_lte")
+    processed_gte = django_filters.IsoDateTimeFilter(method="filter_processed_gte")
+    processed_lte = django_filters.IsoDateTimeFilter(method="filter_processed_lte")
+    mitigated_gte = django_filters.IsoDateTimeFilter(method="filter_mitigated_gte")
+    mitigated_lte = django_filters.IsoDateTimeFilter(method="filter_mitigated_lte")
     project_version = django_filters.CharFilter(field_name="aist_project_versions__version", lookup_expr="exact")
     file = django_filters.CharFilter(field_name="file_path", lookup_expr="icontains")
     ai_status = django_filters.ChoiceFilter(
@@ -193,6 +198,62 @@ class AISTFindingFilter(ApiFindingFilter):
         value = self._normalize_datetime_bound("status_updated_lte", value, upper=True)
         return queryset.filter(last_status_update__lte=value)
 
+    def _resolve_processed_bounds(
+        self,
+        *,
+        lower: datetime | None = None,
+        upper: datetime | None = None,
+    ) -> tuple[datetime, datetime]:
+        form_data = getattr(self, "form", None)
+        cleaned = getattr(form_data, "cleaned_data", {}) if form_data is not None else {}
+        lower_value = lower or cleaned.get("processed_gte")
+        upper_value = upper or cleaned.get("processed_lte")
+        if lower_value is None:
+            lower_value = timezone.now() - timedelta(days=3650)
+        if upper_value is None:
+            upper_value = timezone.now() + timedelta(days=1)
+        lower_value = self._normalize_datetime_bound("processed_gte", lower_value, upper=False)
+        upper_value = self._normalize_datetime_bound("processed_lte", upper_value, upper=True)
+        return lower_value, upper_value
+
+    def _filter_processed_between(self, queryset, *, lower: datetime | None = None, upper: datetime | None = None):
+        start, end = self._resolve_processed_bounds(lower=lower, upper=upper)
+        if end <= start:
+            return queryset.none()
+        stream = FindingEventStream(findings=queryset, tzinfo=timezone.get_current_timezone())
+        finding_ids = stream.processed_finding_ids(start=start, end=end)
+        if not finding_ids:
+            return queryset.none()
+        return queryset.filter(id__in=finding_ids)
+
+    def filter_processed_gte(self, queryset, name, value):
+        if not value:
+            return queryset
+        return self._filter_processed_between(
+            queryset,
+            lower=self._normalize_datetime_bound("processed_gte", value, upper=False),
+        )
+
+    def filter_processed_lte(self, queryset, name, value):
+        if not value:
+            return queryset
+        return self._filter_processed_between(
+            queryset,
+            upper=self._normalize_datetime_bound("processed_lte", value, upper=True),
+        )
+
+    def filter_mitigated_gte(self, queryset, name, value):
+        if not value:
+            return queryset
+        value = self._normalize_datetime_bound("mitigated_gte", value, upper=False)
+        return queryset.filter(mitigated__gte=value)
+
+    def filter_mitigated_lte(self, queryset, name, value):
+        if not value:
+            return queryset
+        value = self._normalize_datetime_bound("mitigated_lte", value, upper=True)
+        return queryset.filter(mitigated__lte=value)
+
     def filter_ai_status(self, queryset, name, value):
         status_value = (value or "").strip().lower()
         if not status_value:
@@ -240,6 +301,10 @@ class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
             OpenApiParameter(name="created_lte", required=False, type=str),
             OpenApiParameter(name="status_updated_gte", required=False, type=str),
             OpenApiParameter(name="status_updated_lte", required=False, type=str),
+            OpenApiParameter(name="processed_gte", required=False, type=str),
+            OpenApiParameter(name="processed_lte", required=False, type=str),
+            OpenApiParameter(name="mitigated_gte", required=False, type=str),
+            OpenApiParameter(name="mitigated_lte", required=False, type=str),
             OpenApiParameter(name="project_version", required=False, type=str),
             OpenApiParameter(name="file", required=False, type=str),
             OpenApiParameter(name="ordering", required=False, type=str, enum=FINDING_API_CHOICES.ordering),
