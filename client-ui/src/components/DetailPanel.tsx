@@ -1,6 +1,6 @@
 import { Suspense, lazy } from "react";
 import type { AIResponse, Finding } from "../types";
-import { useExportFinding } from "../lib/mutations";
+import { type FindingCloseReason, useExportFinding } from "../lib/mutations";
 import { useToast } from "./ToastProvider";
 import FindingStatusActions from "./FindingStatusActions";
 import FindingSeverityControl from "./FindingSeverityControl";
@@ -18,7 +18,7 @@ type DetailPanelProps = {
   onToggleTag?: (tag: string) => void;
   selectedCwe?: string;
   onToggleCwe?: (cwe: string) => void;
-  onCloseApplied?: (findingId: number, reason: "mitigated" | "false_positive" | "out_of_scope" | "duplicate") => void;
+  onCloseApplied?: (findingId: number, reason: FindingCloseReason) => void;
   onReopened?: (findingId: number) => void;
   onSeverityChanged?: (findingId: number, severity: "Critical" | "High" | "Medium" | "Low" | "Info") => void;
   isStatusEditLocked?: boolean;

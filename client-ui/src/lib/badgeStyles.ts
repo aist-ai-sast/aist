@@ -26,6 +26,25 @@ export function severityBarClass(severity: Severity) {
   return SEVERITY_BAR_CLASSES[severity];
 }
 
+const FINDING_STATUS_BADGE_CLASSES = {
+  Mitigated: "border-emerald-400/40 bg-emerald-400/10 text-emerald-300",
+  "Risk Accepted": "border-amber-400/40 bg-amber-400/10 text-amber-300",
+  "False Positive": "border-purple-400/40 bg-purple-400/10 text-purple-300",
+  "Out of Scope": "border-slate-400/40 bg-slate-400/10 text-slate-300",
+  Duplicate: "border-slate-400/40 bg-slate-400/10 text-slate-300",
+  Active: "border-night-500 bg-night-900 text-slate-200",
+  Inactive: "border-night-500 bg-night-900 text-slate-200",
+  "Non-Active": "border-night-500 bg-night-900 text-slate-200",
+  "Under Review": "border-sky-400/40 bg-sky-400/10 text-sky-300",
+  Verified: "border-brand-500/40 bg-brand-500/10 text-brand-300",
+} as const;
+
+export type FindingStatusBadge = keyof typeof FINDING_STATUS_BADGE_CLASSES;
+
+export function findingStatusBadgeClass(status: FindingStatusBadge) {
+  return FINDING_STATUS_BADGE_CLASSES[status];
+}
+
 export function pipelineStatusBadgeClass(status: string) {
   const upper = status.toUpperCase();
   if (upper.includes("FAIL")) return "border-danger-500/50 text-danger-500 bg-danger-500/10";

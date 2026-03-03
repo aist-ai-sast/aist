@@ -18,6 +18,8 @@ import { formatProjectVersionText } from "../lib/projectVersion";
 import { getRoute } from "../lib/routes";
 import { formatDateForUI } from "../lib/dateDisplay";
 import PageErrorState from "../components/PageErrorState";
+import { findingStatusBadgeClass } from "../lib/badgeStyles";
+import { getFindingStatusBadges } from "../lib/findingStatus";
 
 export default function FindingDetailPage() {
   const params = useParams();
@@ -174,36 +176,11 @@ export default function FindingDetailPage() {
               {finding.severity}
             </span>
             <AiVerdictBadge verdict={aiResponse?.verdict} />
-            {finding.isMitigated ? (
-              <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-300">
-                Mitigated
+            {getFindingStatusBadges(finding).map((status) => (
+              <span key={status} className={`rounded-full border px-3 py-1 text-xs ${findingStatusBadgeClass(status)}`}>
+                {status}
               </span>
-            ) : null}
-            {finding.riskAccepted ? (
-              <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1 text-xs text-amber-300">
-                Risk Accepted
-              </span>
-            ) : null}
-            {finding.falsePositive ? (
-              <span className="rounded-full border border-purple-400/40 bg-purple-400/10 px-3 py-1 text-xs text-purple-300">
-                False Positive
-              </span>
-            ) : null}
-            {finding.outOfScope ? (
-              <span className="rounded-full border border-slate-400/40 bg-slate-400/10 px-3 py-1 text-xs text-slate-300">
-                Out of Scope
-              </span>
-            ) : null}
-            {finding.duplicate ? (
-              <span className="rounded-full border border-slate-400/40 bg-slate-400/10 px-3 py-1 text-xs text-slate-300">
-                Duplicate
-              </span>
-            ) : null}
-            {!finding.isMitigated && !finding.riskAccepted && !finding.falsePositive && !finding.outOfScope && !finding.duplicate ? (
-              <span className="rounded-full border border-night-500 bg-night-900 px-3 py-1 text-xs text-slate-200">
-                {finding.active ? "Active" : "Non-Active"}
-              </span>
-            ) : null}
+            ))}
           </div>
         </div>
         <div className="flex items-end gap-3">

@@ -1,5 +1,5 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import FilterPanel from "../components/FilterPanel";
 import FindingCard from "../components/FindingCard";
 import SegmentedSortControl from "../components/SegmentedSortControl";
@@ -18,6 +18,15 @@ import SelectField from "../components/SelectField";
 import TextInput from "../components/TextInput";
 import { ApiError, toUserMessage } from "../lib/api";
 import { type FindingCloseReason, useBulkFindingStatus } from "../lib/mutations";
+import {
+  buildFindingsFilterSearch,
+  DEFAULT_FINDINGS_FILTERS,
+  type FindingStatusFilter,
+  parseFindingsFiltersFromSearch,
+  toFindingStatusFilter,
+  toFindingsApiFilters,
+} from "../lib/findingsFilterUrl";
+import { useDebouncedValue } from "../lib/useDebouncedValue";
 
 const DetailPanel = lazy(() => import("../components/DetailPanel"));
 
@@ -34,24 +43,31 @@ const BULK_CLOSE_REASON_OPTIONS: { value: string; label: string }[] = [
 ];
 
 export default function FindingsPage() {
-  const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>();
-  const [selectedSeverities, setSelectedSeverities] = useState<Severity[]>([]);
-  const [selectedStatus, setSelectedStatus] = useState<string>("All");
-  const [selectedRisk, setSelectedRisk] = useState<RiskState[]>([]);
-  const [selectedAiResponse, setSelectedAiResponse] = useState<string>("All");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const initialUrlFiltersRef = useRef<ReturnType<typeof parseFindingsFiltersFromSearch> | null>(null);
+  if (!initialUrlFiltersRef.current) {
+    initialUrlFiltersRef.current = parseFindingsFiltersFromSearch(new URLSearchParams(location.search));
+  }
+  const initialUrlFilters = initialUrlFiltersRef.current;
+  const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>(initialUrlFilters.projectId);
+  const [selectedSeverities, setSelectedSeverities] = useState<Severity[]>(initialUrlFilters.severities);
+  const [selectedStatus, setSelectedStatus] = useState<FindingStatusFilter>(initialUrlFilters.status);
+  const [selectedRisk, setSelectedRisk] = useState<RiskState[]>(initialUrlFilters.risk);
+  const [selectedAiResponse, setSelectedAiResponse] = useState<string>(initialUrlFilters.aiStatus);
   const [selectedSort, setSelectedSort] = useState<FindingsSortKey>("severity");
   const [selectedSortDirection, setSelectedSortDirection] = useState<"asc" | "desc">("desc");
-  const [selectedCwe, setSelectedCwe] = useState<string>("");
-  const [selectedFile, setSelectedFile] = useState<string>("");
-  const [selectedProjectVersion, setSelectedProjectVersion] = useState<string>("");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [selectedPipelineId, setSelectedPipelineId] = useState<string | undefined>();
-  const [createdFrom, setCreatedFrom] = useState<string>("");
-  const [createdTo, setCreatedTo] = useState<string>("");
-  const [statusUpdatedFrom, setStatusUpdatedFrom] = useState<string>("");
-  const [statusUpdatedTo, setStatusUpdatedTo] = useState<string>("");
-  const [mitigatedFrom, setMitigatedFrom] = useState<string>("");
-  const [mitigatedTo, setMitigatedTo] = useState<string>("");
+  const [selectedCwe, setSelectedCwe] = useState<string>(initialUrlFilters.cwe);
+  const [selectedFile, setSelectedFile] = useState<string>(initialUrlFilters.file);
+  const [selectedProjectVersion, setSelectedProjectVersion] = useState<string>(initialUrlFilters.projectVersion);
+  const [selectedTags, setSelectedTags] = useState<string[]>(initialUrlFilters.tags);
+  const [selectedPipelineId, setSelectedPipelineId] = useState<string | undefined>(initialUrlFilters.pipelineId);
+  const [createdFrom, setCreatedFrom] = useState<string>(initialUrlFilters.createdFrom);
+  const [createdTo, setCreatedTo] = useState<string>(initialUrlFilters.createdTo);
+  const [statusUpdatedFrom, setStatusUpdatedFrom] = useState<string>(initialUrlFilters.statusUpdatedFrom);
+  const [statusUpdatedTo, setStatusUpdatedTo] = useState<string>(initialUrlFilters.statusUpdatedTo);
+  const [mitigatedFrom, setMitigatedFrom] = useState<string>(initialUrlFilters.mitigatedFrom);
+  const [mitigatedTo, setMitigatedTo] = useState<string>(initialUrlFilters.mitigatedTo);
   const [findingOverrides, setFindingOverrides] = useState<Record<number, Partial<Finding>>>({});
   const [selectedFindingIds, setSelectedFindingIds] = useState<number[]>([]);
   const [bulkEditMode, setBulkEditMode] = useState<boolean>(false);
@@ -59,44 +75,44 @@ export default function FindingsPage() {
   const [bulkCloseReason, setBulkCloseReason] = useState<FindingCloseReason>("mitigated");
   const [bulkReasonNote, setBulkReasonNote] = useState<string>("");
   const [bulkLockedFindingIds, setBulkLockedFindingIds] = useState<number[]>([]);
+  const hasHydratedStatusFromUrl = useRef(false);
   const toast = useToast();
-  const location = useLocation();
   const searchParams = useMemo(
     () => new URLSearchParams(location.search),
     [location.search],
   );
   const [pageSize, setPageSize] = useState<number>(50);
   const [pageIndex, setPageIndex] = useState<number>(0);
+  const debouncedFile = useDebouncedValue(selectedFile, 300);
+  const debouncedCwe = useDebouncedValue(selectedCwe, 300);
+  const debouncedProjectVersion = useDebouncedValue(selectedProjectVersion, 300);
+  const debouncedTags = useDebouncedValue(selectedTags, 300);
   const projectsQuery = useProjects();
   const ordering = buildFindingsOrdering(selectedSort, selectedSortDirection);
   const bulkStatusMutation = useBulkFindingStatus();
 
-  const findingsQuery = useFindingsPage({
+  const findingsQuery = useFindingsPage(toFindingsApiFilters({
     projectId: selectedProjectId,
     pipelineId: selectedPipelineId,
-    createdGte: createdFrom || undefined,
-    createdLte: createdTo || undefined,
-    statusUpdatedGte: statusUpdatedFrom || undefined,
-    statusUpdatedLte: statusUpdatedTo || undefined,
-    processedGte: statusUpdatedFrom || undefined,
-    processedLte: statusUpdatedTo || undefined,
-    mitigatedGte: mitigatedFrom || undefined,
-    mitigatedLte: mitigatedTo || undefined,
-    aiStatus:
-      selectedAiResponse === "All"
-        ? undefined
-        : (selectedAiResponse as "has_ai" | "no_ai" | "ai_tp" | "ai_fp" | "ai_u"),
-    projectVersion: selectedProjectVersion || undefined,
-    file: selectedFile || undefined,
-    severities: selectedSeverities.length ? selectedSeverities : undefined,
-    status: selectedStatus === "Active" ? "enabled" : selectedStatus === "Non-Active" ? "disabled" : undefined,
-    riskStates: selectedRisk.length ? selectedRisk : undefined,
-    cwe: selectedCwe ? selectedCwe : undefined,
-    tags: selectedTags.length ? selectedTags : undefined,
+    createdFrom,
+    createdTo,
+    statusUpdatedFrom,
+    statusUpdatedTo,
+    mitigatedFrom,
+    mitigatedTo,
+    projectVersion: selectedProjectVersion,
+    file: selectedFile,
+    cwe: selectedCwe,
+    severities: selectedSeverities,
+    tags: selectedTags,
+    status: selectedStatus,
+    risk: selectedRisk,
+    aiStatus: selectedAiResponse,
+  }, {
     limit: pageSize,
     offset: pageIndex * pageSize,
     ordering,
-  });
+  }));
 
   const projects = projectsQuery.data ?? [];
   const aistProjectForFilters = projects.find((project) => project.id === selectedProjectId);
@@ -165,7 +181,7 @@ export default function FindingsPage() {
 
   const applyCloseState = (
     findingId: number,
-    reason: "mitigated" | "false_positive" | "out_of_scope" | "duplicate",
+    reason: FindingCloseReason,
   ) => {
     setFindingOverrides((current) => ({
       ...current,
@@ -187,6 +203,7 @@ export default function FindingsPage() {
         ...current[findingId],
         active: true,
         isMitigated: false,
+        riskAccepted: false,
         falsePositive: false,
         outOfScope: false,
         duplicate: false,
@@ -208,99 +225,102 @@ export default function FindingsPage() {
   };
 
   useEffect(() => {
-    const projectRaw = searchParams.get("project") ?? searchParams.get("project_id");
-    const projectParsed = projectRaw ? Number(projectRaw) : NaN;
-    setSelectedProjectId(Number.isFinite(projectParsed) ? projectParsed : undefined);
-
-    const pipeline = searchParams.get("pipeline") ?? searchParams.get("pipeline_id");
-    setSelectedPipelineId(pipeline || undefined);
-    setCreatedFrom(searchParams.get("created_from") ?? searchParams.get("created_gte") ?? "");
-    setCreatedTo(searchParams.get("created_to") ?? searchParams.get("created_lte") ?? "");
-    setStatusUpdatedFrom(
-      searchParams.get("processed_from")
-      ?? searchParams.get("processed_gte")
-      ?? searchParams.get("status_updated_from")
-      ?? searchParams.get("status_updated_gte")
-      ?? "",
-    );
-    setStatusUpdatedTo(
-      searchParams.get("processed_to")
-      ?? searchParams.get("processed_lte")
-      ?? searchParams.get("status_updated_to")
-      ?? searchParams.get("status_updated_lte")
-      ?? "",
-    );
-    setMitigatedFrom(
-      searchParams.get("mitigated_from") ?? searchParams.get("mitigated_gte") ?? "",
-    );
-    setMitigatedTo(
-      searchParams.get("mitigated_to") ?? searchParams.get("mitigated_lte") ?? "",
-    );
-    setSelectedProjectVersion(searchParams.get("project_version") ?? "");
-    setSelectedFile(searchParams.get("file") ?? "");
-    setSelectedCwe(searchParams.get("cwe") ?? "");
-
-    const severities = (searchParams.get("severity") ?? "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean) as Severity[];
-    setSelectedSeverities(severities);
-
-    const tags = (searchParams.get("tags") ?? "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    setSelectedTags(tags);
-
-    const active = (searchParams.get("active") ?? "").toLowerCase();
-    if (active === "true" || active === "1") {
-      setSelectedStatus("Active");
-    } else if (active === "false" || active === "0") {
-      setSelectedStatus("Non-Active");
-    } else {
-      const status = (searchParams.get("status") ?? "").toLowerCase();
-      if (status === "active" || status === "enabled") {
-        setSelectedStatus("Active");
-      } else if (status === "non-active" || status === "disabled") {
-        setSelectedStatus("Non-Active");
-      } else {
-        setSelectedStatus("All");
-      }
-    }
-
-    const nextRisk: RiskState[] = [];
-    const riskAccepted = (searchParams.get("risk_accepted") ?? "").toLowerCase();
-    const underReview = (searchParams.get("under_review") ?? "").toLowerCase();
-    const isMitigated = (searchParams.get("is_mitigated") ?? "").toLowerCase();
-    if (riskAccepted === "true" || riskAccepted === "1") nextRisk.push("risk_accepted");
-    if (underReview === "true" || underReview === "1") nextRisk.push("under_review");
-    if (isMitigated === "true" || isMitigated === "1") nextRisk.push("mitigated");
-    setSelectedRisk(nextRisk);
-
-    setSelectedAiResponse(searchParams.get("ai_status") || "All");
+    const parsed = parseFindingsFiltersFromSearch(searchParams);
+    setSelectedProjectId(parsed.projectId);
+    setSelectedPipelineId(parsed.pipelineId);
+    setCreatedFrom(parsed.createdFrom);
+    setCreatedTo(parsed.createdTo);
+    setStatusUpdatedFrom(parsed.statusUpdatedFrom);
+    setStatusUpdatedTo(parsed.statusUpdatedTo);
+    setMitigatedFrom(parsed.mitigatedFrom);
+    setMitigatedTo(parsed.mitigatedTo);
+    setSelectedProjectVersion(parsed.projectVersion);
+    setSelectedFile(parsed.file);
+    setSelectedCwe(parsed.cwe);
+    setSelectedSeverities(parsed.severities);
+    setSelectedTags(parsed.tags);
+    setSelectedStatus(parsed.status);
+    setSelectedRisk(parsed.risk);
+    setSelectedAiResponse(parsed.aiStatus);
+    hasHydratedStatusFromUrl.current = true;
   }, [searchParams]);
+
+  useEffect(() => {
+    if (!hasHydratedStatusFromUrl.current) {
+      return;
+    }
+    const nextSearch = buildFindingsFilterSearch({
+      projectId: selectedProjectId,
+      pipelineId: selectedPipelineId,
+      createdFrom,
+      createdTo,
+      statusUpdatedFrom,
+      statusUpdatedTo,
+      mitigatedFrom,
+      mitigatedTo,
+      projectVersion: debouncedProjectVersion,
+      file: debouncedFile,
+      cwe: debouncedCwe,
+      severities: selectedSeverities,
+      tags: debouncedTags,
+      status: selectedStatus,
+      risk: selectedRisk,
+      aiStatus: selectedAiResponse,
+    }).toString();
+    const currentSearch = location.search.startsWith("?")
+      ? location.search.slice(1)
+      : location.search;
+    if (nextSearch === currentSearch) return;
+    navigate(
+      {
+        pathname: location.pathname,
+        search: nextSearch ? `?${nextSearch}` : "",
+      },
+      { replace: true },
+    );
+  }, [
+    createdFrom,
+    createdTo,
+    location.pathname,
+    location.search,
+    mitigatedFrom,
+    mitigatedTo,
+    navigate,
+    selectedAiResponse,
+    debouncedCwe,
+    debouncedFile,
+    debouncedProjectVersion,
+    debouncedTags,
+    selectedPipelineId,
+    selectedProjectId,
+    selectedRisk,
+    selectedSeverities,
+    selectedStatus,
+    statusUpdatedFrom,
+    statusUpdatedTo,
+  ]);
 
   const handleProjectChange = (projectId?: number) => {
     setSelectedProjectId(projectId);
     setSelectedProjectVersion("");
   };
   const clearAllFilters = () => {
-    setSelectedProjectId(undefined);
-    setSelectedSeverities([]);
-    setSelectedStatus("All");
-    setSelectedRisk([]);
-    setSelectedAiResponse("All");
-    setSelectedCwe("");
-    setSelectedFile("");
-    setSelectedProjectVersion("");
-    setSelectedTags([]);
-    setSelectedPipelineId(undefined);
-    setCreatedFrom("");
-    setCreatedTo("");
-    setStatusUpdatedFrom("");
-    setStatusUpdatedTo("");
-    setMitigatedFrom("");
-    setMitigatedTo("");
+    setSelectedProjectId(DEFAULT_FINDINGS_FILTERS.projectId);
+    setSelectedSeverities(DEFAULT_FINDINGS_FILTERS.severities);
+    setSelectedStatus(DEFAULT_FINDINGS_FILTERS.status);
+    setSelectedRisk(DEFAULT_FINDINGS_FILTERS.risk);
+    setSelectedAiResponse(DEFAULT_FINDINGS_FILTERS.aiStatus);
+    setSelectedCwe(DEFAULT_FINDINGS_FILTERS.cwe);
+    setSelectedFile(DEFAULT_FINDINGS_FILTERS.file);
+    setSelectedProjectVersion(DEFAULT_FINDINGS_FILTERS.projectVersion);
+    setSelectedTags(DEFAULT_FINDINGS_FILTERS.tags);
+    setSelectedPipelineId(DEFAULT_FINDINGS_FILTERS.pipelineId);
+    setCreatedFrom(DEFAULT_FINDINGS_FILTERS.createdFrom);
+    setCreatedTo(DEFAULT_FINDINGS_FILTERS.createdTo);
+    setStatusUpdatedFrom(DEFAULT_FINDINGS_FILTERS.statusUpdatedFrom);
+    setStatusUpdatedTo(DEFAULT_FINDINGS_FILTERS.statusUpdatedTo);
+    setMitigatedFrom(DEFAULT_FINDINGS_FILTERS.mitigatedFrom);
+    setMitigatedTo(DEFAULT_FINDINGS_FILTERS.mitigatedTo);
   };
 
   const selectedFindingsCount = selectedFindingIds.length;
@@ -471,7 +491,7 @@ export default function FindingsPage() {
             setSelectedProjectVersion(value);
           }}
           selectedStatus={selectedStatus}
-          onStatusChange={setSelectedStatus}
+          onStatusChange={(value) => setSelectedStatus(toFindingStatusFilter(value))}
           selectedRisk={selectedRisk}
           onRiskChange={setSelectedRisk}
           selectedCwe={selectedCwe}
