@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.http import QueryDict
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
@@ -19,16 +20,16 @@ class DummyConfig:
         return ["python"]
 
     def get_supported_analyzers(self):
-        return ["semgrep"]
+        return ["semgrep", "snyk", "bearer"]
 
     def get_analyzers_time_class(self):
         return ["slow"]
 
     def get_filtered_analyzers(self, **_kwargs):
-        return []
+        return ["semgrep", "snyk", "bearer"]
 
     def get_names(self, _filtered):
-        return []
+        return list(_filtered)
 
 
 class OneOffActionsTests(TestCase):
@@ -148,6 +149,46 @@ class OneOffActionsTests(TestCase):
 
         detail_resp = self.client.get(expected_location)
         self.assertEqual(detail_resp.status_code, 200)
+
+    @patch("celery.app.task.Task.apply_async")
+    def test_start_pipeline_keeps_explicit_analyzers_selection(self, mock_apply_async):
+        mock_apply_async.return_value = SimpleNamespace(id="celery-apply-analyzers")
+
+        with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):
+            url = reverse("aist:start_pipeline")
+            payload = {
+                "project": self.project.id,
+                "project_version": self.pv.id,
+                "log_level": "INFO",
+                "time_class_level": "slow",
+                "analyzers": ["bearer"],
+                "ai_mode": "MANUAL",
+                "one_off_actions": "[]",
+            }
+            resp = self.client.post(url, data=payload)
+            self.assertEqual(resp.status_code, 302)
+
+        task_args = mock_apply_async.call_args.kwargs.get("args", ())
+        self.assertGreaterEqual(len(task_args), 2)
+        params = task_args[1]
+        self.assertEqual(params.get("analyzers"), ["bearer"])
+
+    def test_start_pipeline_recomputes_default_analyzers_when_language_changed(self):
+        with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):
+            query_data = QueryDict("", mutable=True)
+            query_data.update(
+                {
+                    "project": str(self.project.id),
+                    "time_class_level": "slow",
+                },
+            )
+            query_data.setlist("languages", ["go"])
+            query_data["selection_signature"] = "stale-signature"
+
+            from aist.forms import AISTPipelineRunForm
+
+            form = AISTPipelineRunForm(query_data)
+            self.assertEqual(form.data.getlist("analyzers"), ["semgrep", "snyk", "bearer"])
 
     @patch("aist.celery_signals.get_action_handler")
     def test_one_off_action_runs_once(self, mock_get_handler):

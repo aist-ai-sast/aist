@@ -152,6 +152,11 @@ SINGLE_USER_SESSION = env.bool("DD_SINGLE_USER_SESSION", False)  # noqa: F405
 # Keep regular logout local to the current browser session.
 LOGOUT_ALL_SESSIONS = env.bool("DD_LOGOUT_ALL_SESSIONS", False)  # noqa: F405
 
+# Explicitly control SMTP TLS/SSL from env. In this fork DD_EMAIL_URL parsing does
+# not reliably map TLS flag into EMAIL_USE_TLS, so keep a deterministic override.
+EMAIL_USE_TLS = env.bool("DD_EMAIL_USE_TLS", default=bool(globals().get("EMAIL_USE_TLS", False)))  # noqa: F405
+EMAIL_USE_SSL = env.bool("DD_EMAIL_USE_SSL", default=bool(globals().get("EMAIL_USE_SSL", False)))  # noqa: F405
+
 AIST_CANONICAL_DEDUPE_SCAN_TYPES = (
     "Snyk Code Scan",
     "SnykCode Scan (Snyk Code Scan)",

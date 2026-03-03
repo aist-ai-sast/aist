@@ -410,11 +410,12 @@ class ActionsTests(TestCase):
         EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
 
         kwargs = mock_send.call_args.kwargs
-        self.assertIn("AIST Pipeline Summary", kwargs["description"])
-        self.assertIn("Findings total: 3", kwargs["description"])
-        self.assertIn("False positives: 1", kwargs["description"])
-        self.assertIn("Project version: GIT_HASH:main", kwargs["description"])
-        self.assertIn("Severity: Critical: 1 | High: 1 | Medium: 0 | Low: 1 | Info: 0", kwargs["description"])
+        self.assertIn("**AIST Pipeline Summary**", kwargs["description"])
+        self.assertIn("**Findings total:** 3", kwargs["description"])
+        self.assertIn("**False positives:** 1", kwargs["description"])
+        self.assertIn("**Project version:** GIT_HASH:main", kwargs["description"])
+        self.assertIn("**Severity:** Critical: 1 | High: 1 | Medium: 0 | Low: 1 | Info: 0", kwargs["description"])
+        self.assertIn("**Findings:** [Open findings](", kwargs["description"])
 
     @patch("aist.actions.install_pipeline_logging")
     def test_write_log_action_with_csv_flag_logs_simple_message(self, mock_install):

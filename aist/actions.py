@@ -65,34 +65,28 @@ class BaseAction:
 
         duration = self._pipeline_duration(pipeline)
         findings_url = self._build_pipeline_findings_url(pipeline)
+        rows = [
+            ("Status", new_status),
+            ("Project", self._get_project_name(pipeline)),
+            ("Project version", version_text),
+            ("Branch", self._get_branch(pipeline)),
+            ("Commit", self._get_commit(pipeline)),
+            ("Duration", duration),
+            ("Findings total", str(total_findings)),
+            ("False positives", str(false_positive_findings)),
+            ("Severity", severity_text),
+        ]
 
         if for_slack:
-            return (
-                f"*AIST Pipeline Summary* (`{pipeline.id}`)\n"
-                f"*Status:* {new_status}\n"
-                f"*Project:* {self._get_project_name(pipeline)}\n"
-                f"*Project version:* {version_text}\n"
-                f"*Branch:* {self._get_branch(pipeline)}\n"
-                f"*Commit:* {self._get_commit(pipeline)}\n"
-                f"*Duration:* {duration}\n"
-                f"*Findings total:* {total_findings}\n"
-                f"*False positives:* {false_positive_findings}\n"
-                f"*Severity:* {severity_text}\n"
-                f"*Findings:* {findings_url}"
-            )
-        return (
-            f"AIST Pipeline Summary ({pipeline.id})\n"
-            f"Status: {new_status}\n"
-            f"Project: {self._get_project_name(pipeline)}\n"
-            f"Project version: {version_text}\n"
-            f"Branch: {self._get_branch(pipeline)}\n"
-            f"Commit: {self._get_commit(pipeline)}\n"
-            f"Duration: {duration}\n"
-            f"Findings total: {total_findings}\n"
-            f"False positives: {false_positive_findings}\n"
-            f"Severity: {severity_text}\n"
-            f"Findings: {findings_url}"
-        )
+            lines = [f"*AIST Pipeline Summary* (`{pipeline.id}`)"]
+            lines.extend(f"*{label}:* {value}" for label, value in rows)
+            lines.append(f"*Findings:* {findings_url}")
+            return "\n".join(lines)
+
+        lines = [f"**AIST Pipeline Summary** (`{pipeline.id}`)", ""]
+        lines.extend(f"**{label}:** {value}" for label, value in rows)
+        lines.append(f"**Findings:** [Open findings]({findings_url})")
+        return "\n".join(lines)
 
     @staticmethod
     def _get_project_name(pipeline: AISTPipeline) -> str:

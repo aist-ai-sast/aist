@@ -74,6 +74,12 @@ services:
       PRIVATE_KEY: "${PRIVATE_KEY:-}"
       DD_DATABASE_URL: ${DD_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/defectdojo}
       DD_CELERY_BROKER_URL: ${DD_CELERY_BROKER_URL:-redis://valkey:6379/0}
+      DD_EMAIL_USE_TLS: "${DD_EMAIL_USE_TLS:-}"
+      DD_EMAIL_USE_SSL: "${DD_EMAIL_USE_SSL:-}"
+      DD_EMAIL_URL: "${DD_EMAIL_URL:-}"
+      DD_EMAIL_BACKEND: "${DD_EMAIL_BACKEND:-django.core.mail.backends.smtp.EmailBackend}"
+      DD_DEFAULT_FROM_EMAIL: "${DD_DEFAULT_FROM_EMAIL:-}"
+      DD_SERVER_EMAIL: "${DD_SERVER_EMAIL:-}"
       DD_SECRET_KEY: "${DD_SECRET_KEY:-hhZCp@D28z!n@NED*yB!ROMt+WzsY*iq}"
       DD_CREDENTIAL_AES_256_KEY: "${DD_CREDENTIAL_AES_256_KEY:-&91a*agLqesc*0DJ+2*bAbsUZfR*4nLw}"
       DD_DATABASE_READINESS_TIMEOUT: "${DD_DATABASE_READINESS_TIMEOUT:-30}"
@@ -135,6 +141,11 @@ services:
       DD_CELERY_LOG_LEVEL: "${DD_CELERY_LOG_LEVEL:-INFO}"
       DD_DATABASE_URL: ${DD_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/defectdojo}
       DD_CELERY_BROKER_URL: ${DD_CELERY_BROKER_URL:-redis://valkey:6379/0}
+      DD_EMAIL_USE_TLS: "${DD_EMAIL_USE_TLS:-}"
+      DD_EMAIL_USE_SSL: "${DD_EMAIL_USE_SSL:-}"
+      DD_EMAIL_URL: "${DD_EMAIL_URL:-}"
+      DD_DEFAULT_FROM_EMAIL: "${DD_DEFAULT_FROM_EMAIL:-}"
+      DD_SERVER_EMAIL: "${DD_SERVER_EMAIL:-}"
       DD_SECRET_KEY: "${DD_SECRET_KEY:-hhZCp@D28z!n@NED*yB!ROMt+WzsY*iq}"
       DD_SITE_URL: "${DD_SITE_URL:-http://localhost:8080}"
       DD_CSRF_TRUSTED_ORIGINS: "${DD_CSRF_TRUSTED_ORIGINS:-[]}"

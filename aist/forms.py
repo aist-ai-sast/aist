@@ -169,6 +169,7 @@ class _AISTPipelineArgsBaseForm(forms.Form):
         posted_sig = self.data.get(self.add_prefix("selection_signature")) or ""
         new_sig = _signature(project_id, langs_union, time_class)
         self.initial["selection_signature"] = new_sig
+        posted_analyzers = self.data.getlist(self.add_prefix("analyzers"))
 
         defaults = []
         if cfg and proj:
@@ -182,13 +183,14 @@ class _AISTPipelineArgsBaseForm(forms.Form):
             )
             defaults = cfg.get_names(filtered)
 
-        if posted_sig != new_sig:
+        # Keep explicit user selection on submit; only inject defaults when analyzers are absent.
+        if posted_sig != new_sig and not posted_analyzers:
             qd = self.data.copy()
             qd.setlist(self.add_prefix("analyzers"), defaults)
             self.data = qd
             self.initial["analyzers"] = defaults
         else:
-            self.initial["analyzers"] = self.data.getlist(self.add_prefix("analyzers")) or defaults
+            self.initial["analyzers"] = posted_analyzers or defaults
 
     def _resolve_project_for_dynamic_defaults(self) -> AISTProject | None:
         """
