@@ -6,6 +6,7 @@ from aist.api import (
     AISTAuthLogoutAPI,
     AISTCalendarEventDetailAPI,
     AISTCalendarEventsAPI,
+    AISTCweDetailAPI,
     AISTFindingBulkStatusAPI,
     AISTFindingExportAPI,
     AISTFindingListAPI,
@@ -182,6 +183,7 @@ urlpatterns = [
     ),
     path("projects/gitlab/list/", GitlabProjectsListAPI.as_view(), name="gitlab_projects_list"),
     path("findings/tags/", AvailableFindingTagsAPI.as_view(), name="finding_tags"),
+    path("cwe/<int:cwe_id>/", AISTCweDetailAPI.as_view(), name="cwe_detail"),
     path(
         "projects/<int:project_id>/gitlab-token/",
         ProjectGitlabTokenUpdateAPI.as_view(),

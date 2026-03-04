@@ -1,7 +1,9 @@
 import { Link, useParams } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import FindingDetailTabs from "../components/FindingDetailTabs";
 import AiVerdictBadge from "../components/AiVerdictBadge";
+import CweTooltip from "../components/CweTooltip";
+import SkeletonBlock from "../components/SkeletonBlock";
 import {
   useAiFindingResponses,
   useAiResponse,
@@ -27,6 +29,10 @@ export default function FindingDetailPage() {
   const findingQuery = useFinding(findingId);
   const projectsQuery = useProjects();
   const [localFindingOverride, setLocalFindingOverride] = useState<Partial<NonNullable<typeof findingQuery.data>>>({});
+  // Clear optimistic override when server data changes after a mutation.
+  useEffect(() => {
+    setLocalFindingOverride({});
+  }, [findingQuery.dataUpdatedAt]);
   const finding = findingQuery.data ? { ...findingQuery.data, ...localFindingOverride } : undefined;
   const findingProjectVersionQuery = useFindingProjectVersion(findingId);
   const exportFinding = useExportFinding();
@@ -51,12 +57,8 @@ export default function FindingDetailPage() {
     finding?.projectVersionType ?? findingProjectVersionQuery.data?.versionType;
   const resolvedProjectVersion =
     finding?.projectVersion ?? findingProjectVersionQuery.data?.version ?? normalizedMetaVersion;
-  const pageError =
-    findingQuery.error
-    ?? projectsQuery.error
-    ?? findingProjectVersionQuery.error
-    ?? aiResponsesQuery.error
-    ?? metaQuery.error;
+  // Only block on the primary finding error; secondary query failures degrade gracefully.
+  const pageError = findingQuery.error ?? projectsQuery.error;
   const createdLabel = formatDateForUI(finding?.createdAt) ?? formatDateForUI(finding?.date);
   const findingsFilterLink = ({
     projectVersion,
@@ -74,11 +76,7 @@ export default function FindingDetailPage() {
   };
 
   if (findingQuery.isLoading) {
-    return (
-      <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-        Loading finding...
-      </div>
-    );
+    return <SkeletonBlock />;
   }
 
   if (pageError) {
@@ -114,10 +112,10 @@ export default function FindingDetailPage() {
             </span>
             {finding.cwe ? (
               <span className="inline-flex items-center gap-1">
-                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" aria-hidden="true">
                   <path fill="currentColor" d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Zm0 2.2 6 2.2V11c0 4.1-2.7 8-6 9.2-3.3-1.2-6-5.1-6-9.2V6.4l6-2.2Z" />
                 </svg>
-                CWE: {finding.cwe}
+                <CweTooltip cwe={finding.cwe} />
               </span>
             ) : null}
             {resolvedProjectVersion ? (
@@ -156,6 +154,25 @@ export default function FindingDetailPage() {
                 </svg>
                 Created: {createdLabel}
               </span>
+            ) : null}
+            {finding.lastStatusUpdate ? (
+              <span className="inline-flex items-center gap-1">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                  <path fill="currentColor" d="M12 4V1L8 5l4 4V6a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8Z" />
+                </svg>
+                Updated: {formatDateForUI(finding.lastStatusUpdate)}
+              </span>
+            ) : null}
+            {aiResponse?.pipelineId ? (
+              <Link
+                to={`${getRoute("ui_pipelines_path")}?pipeline=${aiResponse.pipelineId}`}
+                className="aist-clickable-text inline-flex items-center gap-1"
+              >
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                  <path fill="currentColor" d="M4 6h2v2H4V6Zm0 4h2v2H4v-2Zm0 4h2v2H4v-2Zm4-8h12v2H8V6Zm0 4h12v2H8v-2Zm0 4h12v2H8v-2Z" />
+                </svg>
+                View pipeline
+              </Link>
             ) : null}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">

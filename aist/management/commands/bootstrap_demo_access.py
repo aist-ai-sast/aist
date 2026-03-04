@@ -19,6 +19,8 @@ from dojo.models import (
 )
 
 from aist.models import (
+    AISTAIFindingResponse,
+    AISTAIResponse,
     AISTPipeline,
     AISTProject,
     AISTProjectLaunchConfig,
@@ -66,6 +68,20 @@ class DemoFindingTemplate:
     vuln_id: str
     description: str
     mitigation: str
+
+
+@dataclass(frozen=True, slots=True)
+class DemoAIProfile:
+    label: str
+    verdict: str
+    uncertainty_level: float | None
+    uncertainty_spread: float | None
+    impact_score: float | None
+    exploitability_score: float | None
+    epss_score: float | None
+    exploit_code_maturity: str
+    references: tuple[str, ...]
+    reasoning: str
 
 
 ORG_NAMES = [
@@ -206,6 +222,91 @@ DEMO_FINDING_TEMPLATES = [
         mitigation="Return generic error messages and log details server-side only.",
     ),
 ]
+
+DEMO_AI_PROFILES = (
+    DemoAIProfile(
+        label="high-confidence-tp",
+        verdict=AISTAIFindingResponse.Verdict.TRUE_POSITIVE,
+        uncertainty_level=0.08,
+        uncertainty_spread=0.05,
+        impact_score=9.2,
+        exploitability_score=8.8,
+        epss_score=0.93,
+        exploit_code_maturity="high",
+        references=(
+            "https://owasp.org/Top10/A03_2021-Injection/",
+            "https://cwe.mitre.org/data/definitions/89.html",
+        ),
+        reasoning="Strong evidence indicates the issue is exploitable and directly reachable by untrusted input.",
+    ),
+    DemoAIProfile(
+        label="medium-confidence-tp",
+        verdict=AISTAIFindingResponse.Verdict.TRUE_POSITIVE,
+        uncertainty_level=0.44,
+        uncertainty_spread=0.18,
+        impact_score=6.1,
+        exploitability_score=5.7,
+        epss_score=0.42,
+        exploit_code_maturity="functional",
+        references=(
+            "https://owasp.org/www-project-cheat-sheets/",
+        ),
+        reasoning="Likely true positive with partial exploit path confidence; remediation is still recommended.",
+    ),
+    DemoAIProfile(
+        label="low-confidence-uncertain",
+        verdict=AISTAIFindingResponse.Verdict.UNCERTAIN,
+        uncertainty_level=0.86,
+        uncertainty_spread=0.64,
+        impact_score=3.2,
+        exploitability_score=2.6,
+        epss_score=0.08,
+        exploit_code_maturity="proof_of_concept",
+        references=(),
+        reasoning="Signal is weak and may require manual triage with runtime context before a final verdict.",
+    ),
+    DemoAIProfile(
+        label="high-confidence-fp",
+        verdict=AISTAIFindingResponse.Verdict.FALSE_POSITIVE,
+        uncertainty_level=0.11,
+        uncertainty_spread=0.07,
+        impact_score=1.3,
+        exploitability_score=1.1,
+        epss_score=0.01,
+        exploit_code_maturity="unproven",
+        references=(
+            "https://owasp.org/www-community/vulnerabilities/False_Positive",
+        ),
+        reasoning="Pattern appears non-exploitable in this code path; scanner result is likely a false positive.",
+    ),
+    DemoAIProfile(
+        label="medium-confidence-uncertain",
+        verdict=AISTAIFindingResponse.Verdict.UNCERTAIN,
+        uncertainty_level=0.58,
+        uncertainty_spread=0.24,
+        impact_score=4.8,
+        exploitability_score=3.9,
+        epss_score=0.17,
+        exploit_code_maturity="functional",
+        references=(
+            "https://cwe.mitre.org/",
+            "https://nvd.nist.gov/",
+        ),
+        reasoning="Conflicting static signals detected; additional validation is needed before closure or acceptance.",
+    ),
+    DemoAIProfile(
+        label="sparse-data-uncertain",
+        verdict=AISTAIFindingResponse.Verdict.UNCERTAIN,
+        uncertainty_level=None,
+        uncertainty_spread=None,
+        impact_score=None,
+        exploitability_score=None,
+        epss_score=None,
+        exploit_code_maturity="",
+        references=(),
+        reasoning="Insufficient context from source artifact to produce quantitative confidence metrics.",
+    ),
+)
 
 
 class Command(BaseCommand):
@@ -505,6 +606,7 @@ class Command(BaseCommand):
                 schedule=schedule,
                 now=now,
             )
+            self._ensure_demo_ai_responses(project=project)
 
     def _ensure_project_findings(self, *, spec: DemoProjectSpec, dojo_test: Test, reporter, base_date):
         finding_ids: list[int] = []
@@ -633,3 +735,89 @@ class Command(BaseCommand):
             if queue_updates:
                 queue_item.save(update_fields=queue_updates)
             PipelineLaunchQueue.objects.filter(pk=queue_item.pk).update(created=run_timestamp)
+
+    def _ensure_demo_ai_responses(self, *, project: AISTProject) -> None:
+        latest_pipeline = (
+            AISTPipeline.objects.filter(project=project)
+            .order_by("-created", "-updated", "-id")
+            .first()
+        )
+        if latest_pipeline is None:
+            return
+
+        findings = list(
+            Finding.objects
+            .filter(test__engagement__product=project.product)
+            .order_by("id"),
+        )
+        if not findings:
+            return
+
+        assigned = [
+            (finding, DEMO_AI_PROFILES[index % len(DEMO_AI_PROFILES)])
+            for index, finding in enumerate(findings)
+        ]
+
+        payload_results = {
+            "true_positives": [],
+            "false_positives": [],
+            "uncertain": [],
+        }
+        for finding, profile in assigned:
+            entry = {
+                "title": f"{profile.label}: {finding.title}",
+                "reasoning": profile.reasoning,
+                "originalFinding": {"id": finding.id},
+                "references": list(profile.references),
+                "epssScore": profile.epss_score,
+                "impactScore": profile.impact_score,
+                "exploitabilityScore": profile.exploitability_score,
+                "uncertaintyLevel": profile.uncertainty_level,
+                "uncertaintySpread": profile.uncertainty_spread,
+                "exploitCodeMaturity": profile.exploit_code_maturity,
+            }
+            if profile.verdict == AISTAIFindingResponse.Verdict.TRUE_POSITIVE:
+                payload_results["true_positives"].append(entry)
+            elif profile.verdict == AISTAIFindingResponse.Verdict.FALSE_POSITIVE:
+                payload_results["false_positives"].append(entry)
+            else:
+                payload_results["uncertain"].append(entry)
+
+        payload = {
+            "generated_by": "bootstrap_demo_access",
+            "profile_version": 1,
+            "results": payload_results,
+        }
+        source_response = (
+            AISTAIResponse.objects
+            .filter(pipeline=latest_pipeline, payload__generated_by="bootstrap_demo_access")
+            .order_by("-created")
+            .first()
+        )
+        if source_response is None:
+            source_response = AISTAIResponse.objects.create(
+                pipeline=latest_pipeline,
+                payload=payload,
+            )
+        else:
+            source_response.payload = payload
+            source_response.save(update_fields=["payload"])
+
+        for finding, profile in assigned:
+            AISTAIFindingResponse.objects.update_or_create(
+                pipeline=latest_pipeline,
+                finding=finding,
+                defaults={
+                    "source_response": source_response,
+                    "verdict": profile.verdict,
+                    "title": f"{profile.label}: {finding.title}"[:512],
+                    "summary": profile.reasoning,
+                    "references": list(profile.references),
+                    "epss_score": profile.epss_score,
+                    "impact_score": profile.impact_score,
+                    "exploitability_score": profile.exploitability_score,
+                    "uncertainty_level": profile.uncertainty_level,
+                    "uncertainty_spread": profile.uncertainty_spread,
+                    "exploit_code_maturity": profile.exploit_code_maturity,
+                },
+            )

@@ -103,6 +103,12 @@ class AISTFindingListItemSerializer(dojo_serializers.FindingSerializer):
     project_version_type = serializers.SerializerMethodField()
     project_id = serializers.SerializerMethodField()
     created = serializers.SerializerMethodField()
+    is_regression = serializers.SerializerMethodField()
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_is_regression(self, obj) -> bool:
+        annotation = getattr(obj, "aist_annotation", None)
+        return bool(annotation and annotation.is_regression)
 
     @extend_schema_field(OpenApiTypes.STR)
     def get_project_version(self, obj) -> str | None:
@@ -317,7 +323,7 @@ class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
         queryset = (
             self.get_authorized_queryset()
             .select_related("test__engagement")
-            .prefetch_related("tags", "aist_project_versions")
+            .prefetch_related("tags", "aist_project_versions", "aist_annotation")
         )
         filterset = AISTFindingFilter(data=request.query_params, queryset=queryset, request=request)
         if not filterset.is_valid():
@@ -432,7 +438,7 @@ class AISTFindingExportAPI(AuthorizedQuerySetMixin, APIView):
         finding = get_object_or_404(
             self.get_authorized_queryset()
             .select_related("test__engagement__product")
-            .prefetch_related("tags", "aist_project_versions"),
+            .prefetch_related("tags", "aist_project_versions", "aist_annotation"),
             id=finding_id,
         )
         project_version, project_version_type, _project_id = _pick_project_version_info(finding)

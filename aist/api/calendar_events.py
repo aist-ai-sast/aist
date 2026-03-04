@@ -264,7 +264,7 @@ class CalendarEventsRepository:
             Finding.objects.filter(test__aist_pipelines__id__in=pipeline_ids)
             .order_by()
             .values("test__aist_pipelines__id")
-            .annotate(total=Count("id"))
+            .annotate(total=Count("id", distinct=True))
         )
         return {
             str(row["test__aist_pipelines__id"]): int(row["total"])
@@ -307,7 +307,12 @@ class BaseCalendarService:
 
         for schedule in self.repo.schedules.filter(enabled=True):
             occurrences = 0
-            iterator = croniter(schedule.cron_expression, range_start_server)
+            try:
+                iterator = croniter(schedule.cron_expression, range_start_server)
+            except (ValueError, KeyError):
+                # Skip schedules with malformed cron expressions rather than
+                # aborting the entire calendar response.
+                continue
             while occurrences < MAX_SCHEDULE_OCCURRENCES_PER_SCHEDULE:
                 next_run_server = _ensure_aware(iterator.get_next(datetime), server_tz)
                 if next_run_server >= range_end_server:
@@ -321,7 +326,7 @@ class BaseCalendarService:
     def _list_finding_created(self) -> list[CalendarEventData]:
         findings_qs = self.finding_events.list_created(start=self.ctx.start, end=self.ctx.end)
         if self.ctx.grouping == "none":
-            rows = findings_qs.order_by("event_at", "id")[: self.ctx.limit]
+            rows = findings_qs.order_by("event_at", "id")[: self.ctx.limit + 1]
             return [self.factory.finding_created_single(finding, finding.event_at) for finding in rows]
         by_day = self.finding_events.aggregate_created_by_day(start=self.ctx.start, end=self.ctx.end)
         return [self.factory.finding_created_aggregate(day, by_day[day]) for day in sorted(by_day)]
@@ -390,19 +395,13 @@ class BaseCalendarService:
 
         if processed:
             processed_bucket = self.finding_events.aggregate_processed_for_range(start=day_start, end=day_end)
-        else:
-            bucket = self.finding_events.aggregate_created_for_range(start=day_start, end=day_end)
-        if processed and processed_bucket is None:
-            return None
-        if not processed and bucket is None:
-            return None
+            if processed_bucket is None:
+                return None
+            return self.factory.finding_processed_aggregate(day, processed_bucket.severity, processed_bucket.reasons)
 
-        if processed:
-            return self.factory.finding_processed_aggregate(
-                day,
-                processed_bucket.severity,
-                processed_bucket.reasons,
-            )
+        bucket = self.finding_events.aggregate_created_for_range(start=day_start, end=day_end)
+        if bucket is None:
+            return None
         return self.factory.finding_created_aggregate(day, bucket)
 
 
@@ -575,17 +574,10 @@ class AISTCalendarEventDetailAPI(APIView):
         if not parsed_event:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        context = build_calendar_request_context(
-            {
-                "start": timezone.now(),
-                "end": timezone.now() + timedelta(days=1),
-                "view": "day",
-                "grouping": "auto",
-                "limit": 1,
-                "event_types": [parsed_event.event_type],
-                "project_id": params.validated_data.get("project_id", []),
-                "timezone": params.validated_data.get("timezone", ""),
-            },
+        context = _build_calendar_detail_context(
+            tz_name=str(params.validated_data.get("timezone") or ""),
+            project_ids=list(params.validated_data.get("project_id", [])),
+            event_type=parsed_event.event_type,
         )
         repository = CalendarEventsRepository(user=request.user, project_filter=context.project_ids)
         service = CalendarEventDetailService(context=context, repository=repository)
@@ -593,6 +585,31 @@ class AISTCalendarEventDetailAPI(APIView):
         if not event:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(event.to_dict(), status=status.HTTP_200_OK)
+
+
+def _build_calendar_detail_context(
+    *,
+    tz_name: str,
+    project_ids: list[int],
+    event_type: str,
+) -> CalendarRequestContext:
+    """
+    Build a CalendarRequestContext for single-event detail lookups.
+
+    Detail handlers only access tzinfo, project_ids, and now_local.
+    The time range, view, grouping, limit, and event_types fields are not used.
+    """
+    now = timezone.now()
+    return build_calendar_request_context({
+        "start": now,
+        "end": now,
+        "view": "day",
+        "grouping": "none",
+        "limit": 1,
+        "event_types": [event_type],
+        "project_id": project_ids,
+        "timezone": tz_name,
+    })
 
 
 def _ensure_aware(value: datetime, tzinfo) -> datetime:

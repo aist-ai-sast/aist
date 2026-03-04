@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import type { AIResponse, Finding, FindingTimelineEvent } from "../types";
 import CodeSnippet from "./CodeSnippet";
+import CweTooltip from "./CweTooltip";
 import DescriptionBlock from "./DescriptionBlock";
 import { useAddFindingNote } from "../lib/mutations";
 import { useFinding, useFindingNotes, useFindingTimeline } from "../lib/queries";
@@ -57,11 +58,39 @@ function formatScore(value?: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
-function formatConfidence(uncertaintyLevel?: number) {
-  if (typeof uncertaintyLevel !== "number" || Number.isNaN(uncertaintyLevel)) return "n/a";
-  const bounded = Math.max(0, Math.min(1, uncertaintyLevel));
-  return `${Math.round((1 - bounded) * 100)}%`;
+type RiskBadge = { value: string; label: string; className: string };
+
+function formatEpss(value?: number): RiskBadge | null {
+  if (typeof value !== "number" || Number.isNaN(value)) return null;
+  const pct = Math.round(value * 100);
+  if (pct >= 20) return { value: `${pct}%`, label: "High",   className: "border-danger-500/40 bg-danger-500/10 text-danger-200" };
+  if (pct >= 5)  return { value: `${pct}%`, label: "Medium", className: "border-amber-400/40 bg-amber-400/10 text-amber-200" };
+  return           { value: `${pct}%`, label: "Low",    className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" };
 }
+
+function formatCvss(value?: number): RiskBadge | null {
+  if (typeof value !== "number" || Number.isNaN(value)) return null;
+  const display = Number.isInteger(value) ? String(value) : value.toFixed(1);
+  if (value >= 7) return { value: display, label: "High",   className: "border-danger-500/40 bg-danger-500/10 text-danger-200" };
+  if (value >= 4) return { value: display, label: "Medium", className: "border-amber-400/40 bg-amber-400/10 text-amber-200" };
+  return            { value: display, label: "Low",    className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" };
+}
+
+function confidenceMeta(uncertaintyLevel?: number): { text: string; className: string } {
+  if (typeof uncertaintyLevel !== "number" || Number.isNaN(uncertaintyLevel)) {
+    return { text: "n/a", className: "border-night-500 bg-night-800 text-slate-300" };
+  }
+  const pct = Math.round((1 - Math.max(0, Math.min(1, uncertaintyLevel))) * 100);
+  if (pct >= 70) return { text: `${pct}% confidence`, className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" };
+  if (pct >= 50) return { text: `${pct}% confidence`, className: "border-night-500 bg-night-800 text-slate-300" };
+  return           { text: `${pct}% confidence`, className: "border-amber-400/40 bg-amber-400/10 text-amber-200" };
+}
+
+function refLabel(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ""); }
+  catch { return url; }
+}
+
 
 export default function FindingDetailTabs({
   finding,
@@ -144,7 +173,7 @@ export default function FindingDetailTabs({
             </div>
           </div>
 
-          {finding.cwe ? (
+          {finding.cwe && embedded ? (
             <div>
               <div className="text-xs uppercase tracking-[0.2em] text-slate-400">CWE</div>
               <div className="mt-2">
@@ -158,7 +187,7 @@ export default function FindingDetailTabs({
                   ].join(" ")}
                   onClick={() => onToggleCwe?.(String(finding.cwe))}
                 >
-                  {finding.cwe}
+                  <CweTooltip cwe={finding.cwe} />
                 </button>
               </div>
             </div>
@@ -171,7 +200,6 @@ export default function FindingDetailTabs({
           {aiResponse ? (
             <div className="space-y-4 rounded-2xl border border-night-500 bg-night-900/80 p-4 text-sm text-slate-200">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs uppercase tracking-[0.2em] text-slate-400">AI Assessment</span>
                 {aiResponse.verdict ? (
                   <span
                     className={[
@@ -182,17 +210,33 @@ export default function FindingDetailTabs({
                     {verdictMeta[aiResponse.verdict].label}
                   </span>
                 ) : null}
-                <span className="rounded-full border border-night-500 bg-night-800 px-3 py-1 text-xs text-slate-300">
-                  Confidence: {formatConfidence(aiResponse.uncertaintyLevel)}
-                </span>
+                {(() => {
+                  const cm = confidenceMeta(aiResponse.uncertaintyLevel);
+                  return (
+                    <span className={`rounded-full border px-3 py-1 text-xs font-medium ${cm.className}`}>
+                      {cm.text}
+                    </span>
+                  );
+                })()}
               </div>
+
+              {typeof aiResponse.uncertaintyLevel === "number" && aiResponse.uncertaintyLevel > 0.5 ? (
+                <div className="flex items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                  Low confidence — manual review recommended
+                </div>
+              ) : null}
 
               {aiResponse.title ? (
                 <div className="text-base font-semibold text-white">{aiResponse.title}</div>
               ) : null}
 
               <div>
-                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Executive Summary</div>
+                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Summary</div>
                 <div className="mt-2 rounded-xl border border-night-500 bg-night-800/70 px-4 py-3 leading-relaxed text-slate-200">
                   {aiResponse.reasoning}
                 </div>
@@ -200,44 +244,45 @@ export default function FindingDetailTabs({
 
               <div>
                 <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Risk Signals</div>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                  <div className="rounded-xl border border-night-500 bg-night-800 px-3 py-2 text-xs">
-                    <div className="text-slate-400">EPSS</div>
-                    <div className="mt-1 text-sm font-semibold text-white">{formatScore(aiResponse.epssScore)}</div>
-                  </div>
-                  <div className="rounded-xl border border-night-500 bg-night-800 px-3 py-2 text-xs">
-                    <div className="text-slate-400">Impact</div>
-                    <div className="mt-1 text-sm font-semibold text-white">{formatScore(aiResponse.impactScore)}</div>
-                  </div>
-                  <div className="rounded-xl border border-night-500 bg-night-800 px-3 py-2 text-xs">
-                    <div className="text-slate-400">Exploitability</div>
-                    <div className="mt-1 text-sm font-semibold text-white">{formatScore(aiResponse.exploitabilityScore)}</div>
-                  </div>
-                  <div className="rounded-xl border border-night-500 bg-night-800 px-3 py-2 text-xs">
-                    <div className="text-slate-400">Uncertainty</div>
-                    <div className="mt-1 text-sm font-semibold text-white">{formatScore(aiResponse.uncertaintyLevel)}</div>
-                  </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                  {([
+                    { label: "Exploit Probability", badge: formatEpss(aiResponse.epssScore), sub: "next 30 days" },
+                    { label: "Impact",              badge: formatCvss(aiResponse.impactScore),        sub: "CVSS subscore" },
+                    { label: "Exploitability",      badge: formatCvss(aiResponse.exploitabilityScore), sub: "CVSS subscore" },
+                  ] as const).map(({ label, badge, sub }) => (
+                    <div key={label} className="rounded-xl border border-night-500 bg-night-800 px-3 py-2 text-xs">
+                      <div className="text-slate-400">{label}</div>
+                      {badge ? (
+                        <div className="mt-1 flex items-center gap-1.5">
+                          <span className="text-sm font-semibold text-white">{badge.value}</span>
+                          <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${badge.className}`}>{badge.label}</span>
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-sm font-semibold text-white">n/a</div>
+                      )}
+                      <div className="mt-0.5 text-[10px] text-slate-500">{sub}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
 
               {aiResponse.references?.length ? (
                 <div>
                   <div className="text-xs uppercase tracking-[0.2em] text-slate-400">References</div>
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+                  <div className="mt-2 flex flex-wrap gap-2">
                     {aiResponse.references.map((ref) => (
-                      <li key={ref} className="text-slate-300">
-                        <a
-                          href={ref}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-brand-200 underline-offset-2 transition hover:text-brand-100 hover:underline"
-                          title={ref}
-                        >
-                          {ref}
-                        </a>
-                      </li>
+                      <a
+                        key={ref}
+                        href={ref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={ref}
+                        className="rounded-full border border-night-500 bg-night-800 px-2.5 py-1 text-xs text-brand-200 transition hover:border-brand-600/40 hover:text-brand-100"
+                      >
+                        {refLabel(ref)}
+                      </a>
                     ))}
-                  </ul>
+                  </div>
                 </div>
               ) : null}
 
@@ -283,15 +328,15 @@ export default function FindingDetailTabs({
                         { id: finding.id, entry: note },
                         {
                           onSuccess: () => {
-                            toast.push("Notes added.", "success");
+                            setNote("");
+                            toast.push("Note added.", "success");
                           },
                           onError: (error) => {
                             const message = error instanceof Error ? error.message : String(error);
-                            toast.push(`Notes failed: ${message}`, "error");
+                            toast.push(`Failed to add note: ${message}`, "error");
                           },
                         },
                       );
-                      setNote("");
                     }
                   }}
                   disabled={!note.trim()}
@@ -347,7 +392,8 @@ export default function FindingDetailTabs({
                   className="grid grid-cols-[20px_minmax(0,1fr)] gap-3 border-b border-night-500/80 px-4 py-3 last:border-b-0"
                 >
                   <div className="relative flex justify-center">
-                    <span className="mt-1.5 inline-block h-2.5 w-2.5 rounded-full bg-brand-500/90" />
+                    <span className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-night-400/60 last:hidden" aria-hidden="true" />
+                    <span className="relative mt-1.5 inline-block h-2.5 w-2.5 rounded-full bg-brand-500/90" />
                   </div>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">

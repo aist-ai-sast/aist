@@ -10,6 +10,7 @@ from aist.api.account import (
 )
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.calendar_events import AISTCalendarEventDetailAPI, AISTCalendarEventsAPI
+from aist.api.cwe import AISTCweDetailAPI
 from aist.api.files import ProjectVersionFileBlobAPI
 from aist.api.findings import (
     AISTFindingBulkStatusAPI,

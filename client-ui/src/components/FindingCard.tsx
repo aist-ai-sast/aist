@@ -97,6 +97,11 @@ export default function FindingCard({
             {finding.severity}
           </span>
           <AiVerdictBadge verdict={finding.aiVerdict} />
+          {finding.isRegression ? (
+            <span className="rounded-full border border-orange-500/40 bg-orange-500/10 px-3 py-1 text-xs font-medium text-orange-200">
+              Regression
+            </span>
+          ) : null}
           {getFindingStatusBadges(finding).map((status) => (
             <span key={status} className={`rounded-full border px-3 py-1 text-xs ${findingStatusBadgeClass(status)}`}>
               {status}
@@ -142,7 +147,7 @@ export default function FindingCard({
           </svg>
           <span className="truncate">File: {finding.filePath}</span>
         </button>
-        <span>{finding.line && finding.line > 0 ? `Line ${finding.line}` : "Line not provided"}</span>
+        {finding.line && finding.line > 0 ? <span>Line {finding.line}</span> : null}
         {finding.projectVersion ? (
           <button
             type="button"
@@ -188,6 +193,14 @@ export default function FindingCard({
             Created {createdLabel}
           </span>
         ) : null}
+        {finding.lastStatusUpdate ? (
+          <span className="inline-flex items-center gap-1">
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+              <path fill="currentColor" d="M12 4V1L8 5l4 4V6a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8Z" />
+            </svg>
+            Updated {new Date(finding.lastStatusUpdate).toLocaleDateString()}
+          </span>
+        ) : null}
       </div>
       <div className="mt-3">
         {isOpen ? (
@@ -208,9 +221,6 @@ export default function FindingCard({
             line={finding.line}
           />
         )}
-      </div>
-      <div className="mt-4 text-xs text-slate-400">
-        {isOpen ? "Click to collapse." : "Click to view details."}
       </div>
     </article>
   );

@@ -154,3 +154,4 @@ docs/.hugo_build.lock
 !client-ui/src/lib/
 !client-ui/src/lib/**
 /triage/
+/.claude/

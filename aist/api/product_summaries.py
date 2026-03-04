@@ -10,7 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from aist.api.common import API_SEVERITY_VALUES, empty_severity_counts
+from aist.api.common import API_SEVERITY_VALUES, compute_risk_score, empty_severity_counts
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.models import AISTPipeline
@@ -29,6 +29,7 @@ class AISTProductSummaryRowSerializer(serializers.Serializer):
     risk = serializers.JSONField()
     last_pipeline = serializers.JSONField()
     last_sync = serializers.DateTimeField(allow_null=True)
+    risk_score = serializers.JSONField()
 
 
 class AISTProductSummaryAPI(AuthorizedQuerySetMixin, APIView):
@@ -115,6 +116,7 @@ class AISTProductSummaryAPI(AuthorizedQuerySetMixin, APIView):
                         "updated": project.last_pipeline_updated,
                     },
                     "last_sync": last_pipeline_at,
+                    "risk_score": compute_risk_score(severity),
                 },
             )
 

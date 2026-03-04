@@ -40,7 +40,7 @@ type FindingApi = {
   duplicate?: boolean;
   found_by?: number[];
   last_status_update?: string;
-  description?: string;
+  is_regression?: boolean;
   finding_meta?: { name: string; value: string }[];
 };
 
@@ -64,6 +64,10 @@ type ProductSummaryApi = {
     under_review: number;
     mitigated: number;
   };
+  risk_score?: {
+    score: number;
+    label: "critical" | "high" | "medium" | "low";
+  } | null;
   last_pipeline?: {
     id?: string | null;
     status?: string | null;
@@ -227,6 +231,8 @@ function mapFindingApiToUi(item: FindingApi): Finding {
     cwe: item.cwe ?? null,
     tags: normalizeTags(item.tags),
     testId: item.test ?? null,
+    lastStatusUpdate: item.last_status_update ?? undefined,
+    isRegression: item.is_regression ?? false,
     riskStates: [
       item.risk_accepted ? "risk_accepted" : null,
       item.under_review ? "under_review" : null,
@@ -294,6 +300,7 @@ export function useProductSummaries() {
           underReview: item.risk?.under_review ?? 0,
           mitigated: item.risk?.mitigated ?? 0,
         },
+        riskScore: item.risk_score ?? undefined,
         lastPipeline: item.last_pipeline ?? null,
         lastSync: item.last_sync ?? null,
       }));
@@ -574,6 +581,25 @@ export function useFindingTags() {
       return Array.from(new Set(cleaned));
     },
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+export type CweMeta = {
+  title: string;
+  description: string;
+  impact: string;
+  url: string;
+};
+
+export function useCweMeta(cweId: number | null | undefined) {
+  return useQuery({
+    queryKey: ["cwe-meta", cweId],
+    queryFn: async () => {
+      if (!cweId) return null;
+      return fetchJson<CweMeta>(getRoute("cwe_detail_url", { cwe_id: cweId }));
+    },
+    enabled: Boolean(cweId),
+    staleTime: 24 * 60 * 60 * 1000, // 24 h — CWE data is static
   });
 }
 

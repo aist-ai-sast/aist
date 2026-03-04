@@ -372,7 +372,7 @@ class DashboardSummaryViewTests(TestCase):
         self.finding_mitigated.save(update_fields=["cwe", "updated"])
 
         with patch(
-            "aist.views.summaries._fetch_cwe_meta_from_cwe2",
+            "aist.views.summaries.fetch_cwe_meta",
             return_value={
                 "title": "Improper Neutralization of Input During Web Page Generation",
                 "description": "Improper neutralization of untrusted input in generated output.",

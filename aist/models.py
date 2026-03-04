@@ -995,3 +995,31 @@ class AISTLaunchConfigAction(models.Model):
     def set_secret_config(self, value: dict | None) -> None:
         data = value or {}
         self.secret_config = json.dumps(data, separators=(",", ":"))
+
+
+class AISTFindingAnnotation(models.Model):
+    """Per-finding AIST-level flags that cannot be stored on the vendor Finding model."""
+
+    finding = models.OneToOneField(
+        Finding,
+        on_delete=models.CASCADE,
+        related_name="aist_annotation",
+        db_index=True,
+    )
+    is_regression = models.BooleanField(
+        default=False,
+        help_text="True when the finding re-appeared after being previously mitigated.",
+    )
+    regression_detected_at = models.DateTimeField(null=True, blank=True)
+
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Finding annotation"
+        indexes = [
+            models.Index(fields=["is_regression"], name="aist_annotation_regression_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"Annotation(finding={self.finding_id}, regression={self.is_regression})"

@@ -56,6 +56,8 @@ export type Finding = {
   projectVersion?: string;
   projectVersionType?: ProjectVersionType;
   sourceFileLink?: string;
+  lastStatusUpdate?: string;
+  isRegression?: boolean;
 };
 
 export type AIResponse = {
@@ -91,6 +93,11 @@ export type Project = {
   name: string;
 };
 
+export type RiskScore = {
+  score: number;
+  label: "critical" | "high" | "medium" | "low";
+};
+
 export type ProductSummary = {
   projectId: number;
   productId: number;
@@ -105,6 +112,7 @@ export type ProductSummary = {
     underReview: number;
     mitigated: number;
   };
+  riskScore?: RiskScore;
   lastPipeline?: {
     id?: string | null;
     status?: string | null;

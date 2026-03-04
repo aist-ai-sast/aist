@@ -16,6 +16,7 @@ type RouteMap = {
   finding_bulk_status_url: string;
   finding_export_url: string;
   finding_tags_url: string;
+  cwe_detail_url: string;
   test_detail_url: string;
   engagement_detail_url: string;
   projects_list_url: string;

@@ -15,6 +15,7 @@ import PaginationBar from "../components/PaginationBar";
 import { buildFindingsOrdering, FINDINGS_SORT_OPTIONS, type FindingsSortKey } from "../lib/findingsSort";
 import PageErrorState from "../components/PageErrorState";
 import SelectField from "../components/SelectField";
+import SkeletonBlock from "../components/SkeletonBlock";
 import TextInput from "../components/TextInput";
 import { ApiError, toUserMessage } from "../lib/api";
 import { type FindingCloseReason, useBulkFindingStatus } from "../lib/mutations";
@@ -82,7 +83,11 @@ export default function FindingsPage() {
     [location.search],
   );
   const [pageSize, setPageSize] = useState<number>(50);
-  const [pageIndex, setPageIndex] = useState<number>(0);
+  const [pageIndex, setPageIndex] = useState<number>(() => {
+    const raw = new URLSearchParams(location.search).get("page");
+    const parsed = raw ? Number(raw) - 1 : 0;
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  });
   const debouncedFile = useDebouncedValue(selectedFile, 300);
   const debouncedCwe = useDebouncedValue(selectedCwe, 300);
   const debouncedProjectVersion = useDebouncedValue(selectedProjectVersion, 300);
@@ -100,11 +105,11 @@ export default function FindingsPage() {
     statusUpdatedTo,
     mitigatedFrom,
     mitigatedTo,
-    projectVersion: selectedProjectVersion,
-    file: selectedFile,
-    cwe: selectedCwe,
+    projectVersion: debouncedProjectVersion,
+    file: debouncedFile,
+    cwe: debouncedCwe,
     severities: selectedSeverities,
-    tags: selectedTags,
+    tags: debouncedTags,
     status: selectedStatus,
     risk: selectedRisk,
     aiStatus: selectedAiResponse,
@@ -155,6 +160,7 @@ export default function FindingsPage() {
 
   const tagsQuery = useFindingTagsByProject(selectedProjectId);
   const availableTags = tagsQuery.data ?? [];
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [expandedIds, setExpandedIds] = useState<number[]>([]);
   const pageError = projectsQuery.error ?? findingsQuery.error ?? tagsQuery.error;
 
@@ -177,7 +183,7 @@ export default function FindingsPage() {
 
   useEffect(() => {
     setPageIndex(0);
-  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, selectedCwe, selectedTags, selectedAiResponse, selectedPipelineId, createdFrom, createdTo, statusUpdatedFrom, statusUpdatedTo, mitigatedFrom, mitigatedTo, selectedFile, selectedProjectVersion, ordering, pageSize]);
+  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, debouncedCwe, debouncedTags, selectedAiResponse, selectedPipelineId, createdFrom, createdTo, statusUpdatedFrom, statusUpdatedTo, mitigatedFrom, mitigatedTo, debouncedFile, debouncedProjectVersion, ordering, pageSize]);
 
   const applyCloseState = (
     findingId: number,
@@ -242,6 +248,9 @@ export default function FindingsPage() {
     setSelectedStatus(parsed.status);
     setSelectedRisk(parsed.risk);
     setSelectedAiResponse(parsed.aiStatus);
+    const rawPage = searchParams.get("page");
+    const parsedPage = rawPage ? Number(rawPage) - 1 : 0;
+    setPageIndex(Number.isFinite(parsedPage) && parsedPage >= 0 ? parsedPage : 0);
     hasHydratedStatusFromUrl.current = true;
   }, [searchParams]);
 
@@ -249,7 +258,7 @@ export default function FindingsPage() {
     if (!hasHydratedStatusFromUrl.current) {
       return;
     }
-    const nextSearch = buildFindingsFilterSearch({
+    const filterParams = buildFindingsFilterSearch({
       projectId: selectedProjectId,
       pipelineId: selectedPipelineId,
       createdFrom,
@@ -266,7 +275,9 @@ export default function FindingsPage() {
       status: selectedStatus,
       risk: selectedRisk,
       aiStatus: selectedAiResponse,
-    }).toString();
+    });
+    if (pageIndex > 0) filterParams.set("page", String(pageIndex + 1));
+    const nextSearch = filterParams.toString();
     const currentSearch = location.search.startsWith("?")
       ? location.search.slice(1)
       : location.search;
@@ -286,6 +297,7 @@ export default function FindingsPage() {
     mitigatedFrom,
     mitigatedTo,
     navigate,
+    pageIndex,
     selectedAiResponse,
     debouncedCwe,
     debouncedFile,
@@ -358,19 +370,23 @@ export default function FindingsPage() {
       toast.push("Reason is required.", "error");
       return;
     }
+    // Capture mutable state values at call-time so async callbacks are not
+    // affected by state changes that may occur while the request is in-flight.
+    const capturedAction = bulkAction;
+    const capturedCloseReason = bulkCloseReason;
 
     setBulkLockedFindingIds(findingIds);
     bulkStatusMutation.mutate(
       {
         findingIds,
-        action: bulkAction,
+        action: capturedAction,
         reason,
-        closeReason: bulkAction === "close" ? bulkCloseReason : undefined,
+        closeReason: capturedAction === "close" ? capturedCloseReason : undefined,
       },
       {
         onSuccess: (result) => {
           const changedIds = new Set(result.updated_ids);
-          if (bulkAction === "reopen") {
+          if (capturedAction === "reopen") {
             setFindingOverrides((current) => {
               const next = { ...current };
               for (const findingId of changedIds) {
@@ -392,10 +408,10 @@ export default function FindingsPage() {
                 next[findingId] = {
                   ...next[findingId],
                   active: false,
-                  isMitigated: bulkCloseReason === "mitigated",
-                  falsePositive: bulkCloseReason === "false_positive",
-                  outOfScope: bulkCloseReason === "out_of_scope",
-                  duplicate: bulkCloseReason === "duplicate",
+                  isMitigated: capturedCloseReason === "mitigated",
+                  falsePositive: capturedCloseReason === "false_positive",
+                  outOfScope: capturedCloseReason === "out_of_scope",
+                  duplicate: capturedCloseReason === "duplicate",
                 };
               }
               return next;
@@ -445,8 +461,8 @@ export default function FindingsPage() {
       finding.aiVerdict ?? "",
     ]);
     const csv = [headers, ...rows]
-      .map((row) => row.map((value) => `"${String(value).replace(/\"/g, '""')}"`).join(","))
-      .join("\n");
+      .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""').replace(/\r?\n/g, " ")}"`).join(","))
+      .join("\r\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = window.URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -460,11 +476,7 @@ export default function FindingsPage() {
   };
 
   if (projectsQuery.isLoading) {
-    return (
-      <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-        Loading findings...
-      </div>
-    );
+    return <SkeletonBlock />;
   }
 
   if (pageError) {
@@ -473,7 +485,7 @@ export default function FindingsPage() {
 
   return (
     <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <div className="aist-scrollbar lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto">
+      <div className={["aist-scrollbar lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto", filterPanelOpen ? "" : "hidden lg:block"].join(" ").trim()}>
         <FilterPanel
           products={projects}
           selectedProjectId={selectedProjectId}
@@ -507,7 +519,32 @@ export default function FindingsPage() {
 
       <div className="flex min-h-0 min-w-0 flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs uppercase tracking-[0.2em] text-slate-400">
-          <span>Findings · Total {findingsQuery.data?.count ?? 0}</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="aist-icon-button h-8 px-2 text-xs lg:hidden"
+              aria-label={filterPanelOpen ? "Hide filters" : "Show filters"}
+              onClick={() => setFilterPanelOpen((open) => !open)}
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                <path fill="currentColor" d="M10 18h4v-2h-4v2Zm-7-10v2h18V8H3Zm3 7h12v-2H6v2Z" />
+              </svg>
+              Filters
+            </button>
+            <span className="flex items-center gap-1.5">
+              Findings · Total {findingsQuery.data?.count ?? 0}
+              {findingsQuery.isFetching && !findingsQuery.isLoading ? (
+                <svg
+                  className="h-3.5 w-3.5 animate-spin text-brand-400"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-label="Refreshing"
+                >
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="40 20" strokeLinecap="round" />
+                </svg>
+              ) : null}
+            </span>
+          </div>
           <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-end">
             <button
               className="aist-icon-button h-10 w-full sm:w-auto text-xs font-semibold uppercase tracking-[0.14em]"
@@ -615,12 +652,27 @@ export default function FindingsPage() {
         ) : null}
         <div className="flex min-h-[calc(100vh-280px)] flex-col">
           {findingsQuery.isLoading ? (
-            <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-              Loading findings...
+            <div className="space-y-4">
+              <SkeletonBlock />
+              <SkeletonBlock />
+              <SkeletonBlock />
             </div>
           ) : findings.length === 0 ? (
-            <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
-              No findings match the current filters.
+            <div className="flex flex-col items-center gap-4 rounded-2xl border border-night-500 bg-night-700 px-6 py-12 text-center">
+              <svg viewBox="0 0 24 24" className="h-10 w-10 text-slate-600" aria-hidden="true">
+                <path fill="currentColor" d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z" />
+              </svg>
+              <div>
+                <p className="text-sm font-medium text-slate-300">No findings match the current filters</p>
+                <p className="mt-1 text-xs text-slate-500">Try adjusting or clearing your filters to see more results.</p>
+              </div>
+              <button
+                type="button"
+                className="aist-icon-button h-9 px-4 text-xs font-semibold uppercase tracking-[0.14em]"
+                onClick={clearAllFilters}
+              >
+                Clear filters
+              </button>
             </div>
           ) : (
             <div className="min-h-0 flex-1 pr-2">

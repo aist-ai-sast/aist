@@ -4,12 +4,12 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from django.db.models import DateTimeField, QuerySet, TextField
-from django.db.models.functions import Cast, Coalesce
+from django.db.models import DateTimeField, QuerySet
+from django.db.models.functions import Coalesce
 from django.utils import timezone
-from dojo.pghistory_models import DojoEvents
 
 from aist.api.calendar_domain import SeverityBucket
+from aist.api.finding_history import severity_changed_events
 
 if TYPE_CHECKING:
     from datetime import date as date_type
@@ -78,18 +78,13 @@ class FindingEventStream:
         )
 
     def list_severity_changed_events(self, *, start: datetime, end: datetime) -> QuerySet:
-        finding_ids = self.findings.annotate(id_text=Cast("id", output_field=TextField())).values("id_text")
-        return (
-            DojoEvents.objects.filter(
-                pgh_obj_model__endswith=".Finding",
-                pgh_label="update",
-                pgh_created_at__gte=start,
-                pgh_created_at__lt=end,
-                pgh_obj_id__in=finding_ids,
-            )
-            .filter(pgh_diff__has_key="severity")
-            .order_by("-pgh_created_at", "-pgh_id")
-        )
+        """
+        Return FindingEvent rows where severity changed within [start, end),
+        scoped to authorized findings.  Each row exposes direct model fields
+        (severity, title, pgh_obj_id as int, pgh_created_at).
+        """
+        finding_ids = self.findings.values("id")
+        return severity_changed_events(finding_ids, start, end)
 
     def aggregate_created_by_day(self, *, start: datetime, end: datetime) -> dict[date_type, SeverityBucket]:
         return self._aggregate_by_day(
@@ -111,13 +106,13 @@ class FindingEventStream:
             event_day = timezone.localtime(event_at, self.tzinfo).date()
             by_day[event_day].add(severity=str(row.get("severity") or ""), reason=reason)
 
-        for row in self.list_severity_changed_events(start=start, end=end).values("pgh_data", "pgh_created_at"):
+        # severity_changed_events rows expose direct fields (no pgh_data wrapping)
+        for row in self.list_severity_changed_events(start=start, end=end).values("severity", "pgh_created_at"):
             event_at = row.get("pgh_created_at")
             if not event_at:
                 continue
             event_day = timezone.localtime(event_at, self.tzinfo).date()
-            pgh_data = row.get("pgh_data") or {}
-            by_day[event_day].add(severity=str(pgh_data.get("severity") or ""), reason="severity_changed")
+            by_day[event_day].add(severity=str(row.get("severity") or ""), reason="severity_changed")
         return by_day
 
     def aggregate_created_for_range(self, *, start: datetime, end: datetime) -> SeverityBucket | None:
@@ -138,9 +133,8 @@ class FindingEventStream:
                 reason=self._status_processed_reason(row),
             )
             has_values = True
-        for row in self.list_severity_changed_events(start=start, end=end).values("pgh_data"):
-            pgh_data = row.get("pgh_data") or {}
-            processed.add(severity=str(pgh_data.get("severity") or ""), reason="severity_changed")
+        for row in self.list_severity_changed_events(start=start, end=end).values("severity"):
+            processed.add(severity=str(row.get("severity") or ""), reason="severity_changed")
             has_values = True
         return processed if has_values else None
 
@@ -149,8 +143,11 @@ class FindingEventStream:
             self.list_status_processed(start=start, end=end)
             .values_list("id", flat=True),
         )
-        severity_event_ids = self.list_severity_changed_events(start=start, end=end).values_list("pgh_obj_id", flat=True)
-        ids.update(int(item) for item in severity_event_ids if item is not None)
+        # pgh_obj_id is an integer FK on FindingEvent (not text as in DojoEvents)
+        severity_event_ids = self.list_severity_changed_events(start=start, end=end).values_list(
+            "pgh_obj_id", flat=True,
+        )
+        ids.update(item for item in severity_event_ids if item is not None)
         return ids
 
     def timeline_rows(self, *, start: datetime, end: datetime, limit: int) -> list[FindingTimelineRow]:
@@ -195,23 +192,23 @@ class FindingEventStream:
         end: datetime,
         limit: int,
     ) -> list[FindingTimelineRow]:
+        # FindingEvent rows expose direct fields; pgh_obj_id is an int FK
         rows = self.list_severity_changed_events(start=start, end=end).values(
             "pgh_obj_id",
-            "pgh_data",
+            "severity",
+            "title",
             "pgh_created_at",
         )[:limit]
-        finding_ids = {int(row["pgh_obj_id"]) for row in rows if row.get("pgh_obj_id") is not None}
+        finding_ids = {row["pgh_obj_id"] for row in rows if row.get("pgh_obj_id") is not None}
         project_map = self._project_ids_by_finding(finding_ids)
         timeline: list[FindingTimelineRow] = []
         for row in rows:
-            finding_id_raw = row.get("pgh_obj_id")
+            finding_id = row.get("pgh_obj_id")
             happened_at = row.get("pgh_created_at")
-            if finding_id_raw is None or not happened_at:
+            if finding_id is None or not happened_at:
                 continue
-            finding_id = int(finding_id_raw)
-            pgh_data = row.get("pgh_data") or {}
-            title = str(pgh_data.get("title") or f"Finding {finding_id}")
-            severity = str(pgh_data.get("severity") or "")
+            title = str(row.get("title") or f"Finding {finding_id}")
+            severity = str(row.get("severity") or "")
             timeline.append(
                 FindingTimelineRow(
                     event_type="finding_processed",

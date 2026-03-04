@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Suspense, lazy, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import Sidebar from "./components/Sidebar";
 import Topbar from "./components/Topbar";
@@ -32,9 +33,22 @@ try {
   routeBootstrapError = error as Error;
 }
 
-function RequireAuth({ children, forceLogin }: { children: React.ReactNode; forceLogin: boolean }) {
+function RequireAuth({
+  children,
+  forceLogin,
+  onLoginSuccess,
+}: {
+  children: React.ReactNode;
+  forceLogin: boolean;
+  onLoginSuccess: () => void;
+}) {
   const auth = useAuthStatus(!forceLogin);
   const toast = useToast();
+
+  const handleLoginSuccess = () => {
+    toast.push("Session active.", "success");
+    onLoginSuccess();
+  };
 
   if (!forceLogin && auth.isLoading) {
     return (
@@ -45,14 +59,7 @@ function RequireAuth({ children, forceLogin }: { children: React.ReactNode; forc
   }
 
   if (forceLogin) {
-    return (
-      <LoginPage
-        onSuccess={() => {
-          toast.push("Session active.", "success");
-          window.location.reload();
-        }}
-      />
-    );
+    return <LoginPage onSuccess={handleLoginSuccess} />;
   }
 
   if (auth.isError) {
@@ -70,28 +77,14 @@ function RequireAuth({ children, forceLogin }: { children: React.ReactNode; forc
         </div>
       );
     }
-    return (
-      <LoginPage
-        onSuccess={() => {
-          toast.push("Session active.", "success");
-          window.location.reload();
-        }}
-      />
-    );
+    return <LoginPage onSuccess={handleLoginSuccess} />;
   }
 
   return <>{children}</>;
 }
 
 export default function App() {
-  if (routeBootstrapError) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-night-800 px-6 text-sm text-slate-300">
-        Client portal routes are not available. Ensure the server template is serving the UI.
-      </div>
-    );
-  }
-
+  const queryClient = useQueryClient();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [forceLogin, setForceLogin] = useState(false);
 
@@ -101,9 +94,29 @@ export default function App() {
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handler);
   }, []);
 
+  if (routeBootstrapError) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-night-800 px-6 text-sm text-slate-300">
+        <span>Client portal routes are not available. Ensure the server template is serving the UI.</span>
+        <button
+          type="button"
+          className="text-brand-200 hover:underline"
+          onClick={() => window.location.reload()}
+        >
+          Reload page
+        </button>
+      </div>
+    );
+  }
+
+  const handleLoginSuccess = () => {
+    setForceLogin(false);
+    void queryClient.invalidateQueries({ queryKey: ["auth-status"] });
+  };
+
   return (
     <div className="min-h-screen bg-night-800 text-slate-100">
-      <RequireAuth forceLogin={forceLogin}>
+      <RequireAuth forceLogin={forceLogin} onLoginSuccess={handleLoginSuccess}>
         <div
           className="grid min-h-screen lg:grid-cols-[var(--sidebar-width)_1fr]"
           style={

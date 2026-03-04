@@ -19,6 +19,7 @@ from aist.models import (
     TestDeduplicationProgress,
 )
 from aist.tasks.ai import auto_push_to_ai_if_configured
+from aist.tasks.regression import detect_regressions_for_pipeline
 from aist.utils.pipeline import finish_pipeline, is_terminal_pipeline_status, set_pipeline_status
 
 DEDUP_POLL_SLEEP_S = getattr(settings, "AIST_DEDUP_POLL_SLEEP_S", 3)
@@ -92,6 +93,11 @@ def _pipeline_ai_config(pipeline: AISTPipeline) -> dict:
 
 def _release_pipeline_after_dedup(pipeline: AISTPipeline) -> None:
     set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
+    test_ids = list(pipeline.tests.values_list("id", flat=True))
+    try:
+        detect_regressions_for_pipeline(pipeline_id=pipeline.id, test_ids=test_ids)
+    except Exception:
+        logger.exception("Regression detection failed (pipeline_id=%s); continuing.", pipeline.id)
     ai = _pipeline_ai_config(pipeline)
     if (ai.get("mode") == "AUTO_DEFAULT") and ai.get("filter_snapshot"):
         auto_push_to_ai_if_configured.delay(pipeline.id)

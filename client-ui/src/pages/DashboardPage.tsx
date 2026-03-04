@@ -1,6 +1,6 @@
 import ReactECharts from "echarts-for-react";
 import { type ReactNode, useCallback, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import PageErrorState from "../components/PageErrorState";
 import SelectField from "../components/SelectField";
@@ -748,6 +748,28 @@ export default function DashboardPage() {
 
       {dashboard.isLoading ? (
         <DashboardSkeleton />
+      ) : dashboard.data && kpi?.total_findings === 0 ? (
+        <div className="flex flex-col items-center gap-4 rounded-2xl border border-night-500 bg-night-700/80 px-6 py-16 text-center">
+          <svg viewBox="0 0 24 24" className="h-12 w-12 text-slate-600" aria-hidden="true">
+            <path fill="currentColor" d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Zm0 2.18 7 3.12V11c0 4.52-3.07 8.77-7 9.93-3.93-1.16-7-5.41-7-9.93V6.3l7-3.12Z" />
+          </svg>
+          <div>
+            <p className="text-sm font-semibold text-slate-300">No findings yet</p>
+            <p className="mt-1 text-xs text-slate-500">
+              {kpi?.projects_count === 0
+                ? "Set up a project and run a scan pipeline to start analysing your code."
+                : "Run a scan pipeline on your projects to start seeing results here."}
+            </p>
+          </div>
+          {kpi?.projects_count === 0 ? (
+            <Link
+              to={getRoute("ui_products_path")}
+              className="aist-icon-button h-9 px-4 text-xs font-semibold uppercase tracking-[0.14em]"
+            >
+              Set up a project
+            </Link>
+          ) : null}
+        </div>
       ) : (
         <>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

@@ -62,6 +62,10 @@ def _build_routes() -> dict[str, Any]:
         ),
         "ai_finding_responses_url": reverse("aist_api:ai_finding_responses"),
         "finding_tags_url": reverse("aist_api:finding_tags"),
+        "cwe_detail_url": _replace_int_placeholder(
+            reverse("aist_api:cwe_detail", kwargs={"cwe_id": 0}),
+            "cwe_id",
+        ),
         "project_version_file_url": _replace_str_placeholder(
             _replace_int_placeholder(
                 reverse(

@@ -1,30 +1,33 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import timedelta
+from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from django.contrib.auth import get_user_model
-from django.db.models import TextField
-from django.db.models.functions import Cast
 from django.urls import reverse
+from django.utils import timezone
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
-from dojo.pghistory_models import DojoEvents
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from aist.api.calendar_domain import build_calendar_request_context
 from aist.api.common import CommaSeparatedListField, TimezoneNameField
 from aist.api.finding_event_stream import FindingEventStream
+from aist.api.finding_history import history_events_with_users
 from aist.api.schema import AISTApiTag
 from aist.queries import get_authorized_findings
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 TIMELINE_EVENT_TYPES = ("finding_created", "finding_processed", "finding_note_added")
 MAX_TIMELINE_RANGE_DAYS = 93
 MAX_FINDING_HISTORY_RANGE_DAYS = 3650
-STATUS_DIFF_KEYS = frozenset({"active", "is_mitigated", "false_p", "out_of_scope", "duplicate"})
 SYSTEM_OWNER = "System"
 HISTORY_DETAIL_BY_EVENT_TYPE = {
     "finding_created": "Finding created",
@@ -38,6 +41,27 @@ HISTORY_DETAIL_BY_PROCESSED_REASON = {
     "duplicate": "Processed as duplicate",
     "resolved": "Processed as resolved",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineRequestContext:
+    start: datetime
+    end: datetime
+    limit: int
+    project_ids: set[int]
+    tzinfo: object
+
+
+def _build_timeline_context(validated_data: dict) -> TimelineRequestContext:
+    tz_name = str(validated_data.get("timezone") or "").strip()
+    tzinfo = ZoneInfo(tz_name) if tz_name else timezone.get_current_timezone()
+    return TimelineRequestContext(
+        start=validated_data["start"],
+        end=validated_data["end"],
+        limit=validated_data["limit"],
+        project_ids=set(validated_data.get("project_id", [])),
+        tzinfo=tzinfo,
+    )
 
 
 class FindingTimelineQuerySerializer(serializers.Serializer):
@@ -107,43 +131,40 @@ class AISTFindingTimelineAPI(APIView):
         ).strip()
         return full_name or (user_row.get("username") or SYSTEM_OWNER)
 
-    @staticmethod
-    def _is_status_update(diff: dict) -> bool:
-        return bool(STATUS_DIFF_KEYS.intersection(diff.keys()))
-
     def _build_event_owner_index(self, *, findings, start, end) -> dict[tuple[str, int, int], int | None]:
-        finding_ids = findings.annotate(id_text=Cast("id", output_field=TextField())).values("id_text")
-        event_rows = list(
-            DojoEvents.objects.filter(
-                pgh_obj_model__endswith=".Finding",
-                pgh_obj_id__in=finding_ids,
-                pgh_created_at__gte=start,
-                pgh_created_at__lt=end,
-            )
-            .values("pgh_obj_id", "pgh_label", "pgh_created_at", "pgh_diff", "user")
-            .order_by("-pgh_created_at", "-pgh_id"),
-        )
+        """
+        Build a (event_type, finding_id, timestamp_int) -> user_id lookup.
+
+        Uses FindingEvent (dojo_findingevent) directly instead of the heavy
+        DojoEvents CTE.  Context users are fetched in a single batch query.
+
+        For status-based processed events, two keys are stored: one for
+        pgh_created_at and one for last_status_update (the field used by the
+        timeline row's happened_at).  This covers the common case where
+        pgh_created_at and last_status_update differ by microseconds.
+        """
+        finding_ids = findings.values("id")
+        event_rows = history_events_with_users(finding_ids, start, end)
+
         owner_index: dict[tuple[str, int, int], int | None] = {}
         for row in event_rows:
-            finding_id_raw = row.get("pgh_obj_id")
+            finding_id = row.get("pgh_obj_id")
             happened_at = row.get("pgh_created_at")
-            if finding_id_raw is None or happened_at is None:
+            if finding_id is None or happened_at is None:
                 continue
-            finding_id = int(finding_id_raw)
             ts = int(happened_at.timestamp())
-            diff = row.get("pgh_diff") or {}
-            label = str(row.get("pgh_label") or "")
             user_id = row.get("user")
+            label = str(row.get("pgh_label") or "")
             if label == "insert":
                 owner_index["finding_created", finding_id, ts] = user_id
-                continue
-            if not isinstance(diff, dict):
-                continue
-            if "severity" in diff:
+            else:
+                # All updates are potential finding_processed events.
                 owner_index["finding_processed", finding_id, ts] = user_id
-                continue
-            if self._is_status_update(diff):
-                owner_index["finding_processed", finding_id, ts] = user_id
+                # Also index by last_status_update so that status-based
+                # timeline rows (whose happened_at = last_status_update) match.
+                lsu = row.get("last_status_update")
+                if lsu is not None:
+                    owner_index.setdefault(("finding_processed", finding_id, int(lsu.timestamp())), user_id)
         return owner_index
 
     @staticmethod
@@ -230,20 +251,11 @@ class AISTFindingTimelineAPI(APIView):
         )
         if not params.is_valid():
             return Response(params.errors, status=status.HTTP_400_BAD_REQUEST)
-        authorized_findings = params.fields["finding_id"].queryset
+        # Fix #2: build authorized findings directly instead of reaching into serializer internals
+        authorized_findings = get_authorized_findings(Permissions.Finding_View, user=request.user)
 
-        context = build_calendar_request_context(
-            {
-                "start": params.validated_data["start"],
-                "end": params.validated_data["end"],
-                "view": "month",
-                "grouping": "none",
-                "limit": params.validated_data["limit"],
-                "event_types": ["finding_created"],
-                "project_id": params.validated_data["project_id"],
-                "timezone": params.validated_data.get("timezone", ""),
-            },
-        )
+        # Fix #3: use purpose-built context instead of the calendar one
+        context = _build_timeline_context(params.validated_data)
 
         findings = authorized_findings
         if context.project_ids:
@@ -253,10 +265,12 @@ class AISTFindingTimelineAPI(APIView):
         finding = None
         if finding_obj:
             findings = findings.filter(id=finding_obj.id)
-            finding = findings.first()
+            finding = finding_obj  # Fix #5: PrimaryKeyRelatedField already resolved the instance
 
         stream = FindingEventStream(findings=findings, tzinfo=context.tzinfo)
         rows = stream.timeline_rows(start=context.start, end=context.end, limit=context.limit + 1)
+        # Fix #6: detect stream saturation before allowed_types filter trims the list
+        stream_saturated = len(rows) > context.limit
         allowed_types = set(params.validated_data["event_types"])
         owner_index = self._build_event_owner_index(findings=findings, start=context.start, end=context.end)
         row_finding_ids = {int(row.finding_id) for row in rows}
@@ -305,13 +319,17 @@ class AISTFindingTimelineAPI(APIView):
                     "link": reverse("finding-detail", args=[row.finding_id]),
                 },
             )
+        # Fix #7: track notes saturation separately so truncated is accurate
+        notes_saturated = False
         if finding:
-            payload.extend(self._note_events(finding=finding, allowed_types=allowed_types, limit=context.limit + 1))
+            notes = self._note_events(finding=finding, allowed_types=allowed_types, limit=context.limit + 1)
+            notes_saturated = len(notes) > context.limit
+            payload.extend(notes)
             payload.sort(
                 key=lambda item: (item.get("happened_at", ""), item.get("id", "")),
                 reverse=True,
             )
-        truncated = len(payload) > context.limit
+        truncated = stream_saturated or notes_saturated
         return Response(
             {
                 "range": {
