@@ -10,6 +10,7 @@ from django.utils import timezone
 from dojo.models import Finding, Test
 
 from aist.actions import build_one_off_action, get_action_handler
+from aist.launch_data import PipelineLaunchData
 from aist.models import (
     AISTLaunchConfigAction,
     AISTPipeline,
@@ -164,7 +165,7 @@ def refresh_on_finding_delete(sender, instance, **kwargs):
 
 
 def _get_launch_config_id_from_pipeline(pipeline: AISTPipeline) -> int | None:
-    launch_config_id = (pipeline.launch_data or {}).get("launch_config_id")
+    launch_config_id = PipelineLaunchData(pipeline.launch_data).launch_config_id
     if launch_config_id:
         return int(launch_config_id)
 
@@ -193,8 +194,8 @@ def _update_action_run(
         locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
         if not locked:
             return
-        launch_data = locked.launch_data or {}
-        runs = launch_data.get("action_runs") or []
+        ld = PipelineLaunchData(locked.launch_data)
+        runs = ld.action_runs
         updated_at = timezone.now().isoformat()
 
         payload = {
@@ -213,8 +214,8 @@ def _update_action_run(
         else:
             runs.append(payload)
 
-        launch_data["action_runs"] = runs
-        locked.launch_data = launch_data
+        ld.action_runs = runs
+        locked.launch_data = ld.as_dict()
         locked.save(update_fields=["launch_data", "updated"])
 
 
@@ -223,11 +224,11 @@ def _mark_one_off_done(pipeline_id: str, action_id: str) -> None:
         locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
         if not locked:
             return
-        launch_data = locked.launch_data or {}
-        done_ids = set(launch_data.get("one_off_actions_done") or [])
+        ld = PipelineLaunchData(locked.launch_data)
+        done_ids = set(ld.one_off_actions_done)
         done_ids.add(action_id)
-        launch_data["one_off_actions_done"] = list(done_ids)
-        locked.launch_data = launch_data
+        ld.one_off_actions_done = list(done_ids)
+        locked.launch_data = ld.as_dict()
         locked.save(update_fields=["launch_data"])
 
 
@@ -294,9 +295,9 @@ def on_pipeline_status_changed(sender, pipeline_id=None, old_status=None, new_st
     if not locked:
         return
 
-    launch_data = locked.launch_data or {}
-    one_off_actions = launch_data.get("one_off_actions") or []
-    done_ids = set(launch_data.get("one_off_actions_done") or [])
+    ld = PipelineLaunchData(locked.launch_data)
+    one_off_actions = ld.one_off_actions
+    done_ids = set(ld.one_off_actions_done)
 
     for action_payload in one_off_actions:
         if not isinstance(action_payload, dict):

@@ -18,6 +18,7 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.models import CWE, Finding
 
 from aist.api.common import API_SEVERITY_VALUES, empty_severity_counts
+from aist.launch_data import PipelineLaunchData
 from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects, get_authorized_findings
 from aist.utils.cwe_lookup import fetch_cwe_meta, load_cwe_fixture_lookup, trim_text
@@ -426,7 +427,7 @@ def pipeline_summary(request: HttpRequest) -> HttpResponse:
     results: list[dict[str, Any]] = []
     for pipeline in page:
         refs = resolve_project_version_git_refs(pipeline.project_version)
-        action_runs = (pipeline.launch_data or {}).get("action_runs") or []
+        action_runs = PipelineLaunchData(pipeline.launch_data).action_runs
         actions = [
             {
                 "source": item.get("source"),

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, OperationalError
-from django.test import TestCase
+from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
@@ -1675,6 +1675,40 @@ class AISTUIApiTests(AISTApiBase):
         self.assertTrue(
             "organization" in resp.data.get("errors", {}) or "organization" in resp.data,
         )
+
+    def test_project_update_view_accepts_organization_id_from_form(self):
+        org = Organization.objects.create(name="Org UI Edit")
+        org_pt = org.ensure_product_type()
+        self.product.prod_type = org_pt
+        self.product.save(update_fields=["prod_type"])
+        Product_Type_Member.objects.create(
+            product_type=org_pt,
+            user=self.user,
+            role=self.role_maintainer,
+        )
+        admin_user = get_user_model().objects.create_superuser(
+            username="ui-admin",
+            email="ui-admin@example.com",
+            password="pass",  # noqa: S106
+        )
+        ui_client = Client()
+        ui_client.force_login(admin_user)
+        url = reverse("aist:aist_project_update", kwargs={"project_id": self.project.id})
+        resp = ui_client.post(
+            url,
+            data={
+                "script_path": "scripts/ui-new.sh",
+                "supported_languages": "python, go",
+                "compilable": "on",
+                "organization": str(org.id),
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.organization_id, org.id)
+        self.assertEqual(self.project.script_path, "scripts/ui-new.sh")
+        self.assertEqual(self.project.supported_languages, ["python", "go"])
+        self.assertTrue(self.project.compilable)
 
     def test_pipeline_stop_api(self):
         pipeline = AISTPipeline.objects.create(

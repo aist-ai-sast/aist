@@ -1,3 +1,4 @@
+import logging
 import time
 from datetime import timedelta
 
@@ -18,9 +19,9 @@ from aist.models import (
     ProcessedFinding,
     TestDeduplicationProgress,
 )
-from aist.tasks.ai import auto_push_to_ai_if_configured
-from aist.tasks.regression import detect_regressions_for_pipeline
 from aist.utils.pipeline import finish_pipeline, is_terminal_pipeline_status, set_pipeline_status
+
+logger = logging.getLogger(__name__)
 
 DEDUP_POLL_SLEEP_S = getattr(settings, "AIST_DEDUP_POLL_SLEEP_S", 3)
 DEDUP_STALE_TIMEOUT_S = getattr(settings, "AIST_DEDUP_STALE_TIMEOUT_S", 600)
@@ -87,20 +88,10 @@ def _requeue_missing_findings(*, test_id: int, batch_size: int, logger) -> int:
     return total
 
 
-def _pipeline_ai_config(pipeline: AISTPipeline) -> dict:
-    return (pipeline.launch_data or {}).get("ai") or {}
-
-
 def _release_pipeline_after_dedup(pipeline: AISTPipeline) -> None:
-    set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
-    test_ids = list(pipeline.tests.values_list("id", flat=True))
-    try:
-        detect_regressions_for_pipeline(pipeline_id=pipeline.id, test_ids=test_ids)
-    except Exception:
-        logger.exception("Regression detection failed (pipeline_id=%s); continuing.", pipeline.id)
-    ai = _pipeline_ai_config(pipeline)
-    if (ai.get("mode") == "AUTO_DEFAULT") and ai.get("filter_snapshot"):
-        auto_push_to_ai_if_configured.delay(pipeline.id)
+    from aist.tasks.enrich import make_enrich_chord  # noqa: PLC0415
+    set_pipeline_status(pipeline, AISTStatus.FINDING_POSTPROCESSING)
+    make_enrich_chord(pipeline_id=pipeline.id).apply_async()
 
 
 def _ensure_dedup_tracking_rows(test_ids: list[int]) -> None:

@@ -29,6 +29,7 @@ from aist.api.calendar_domain import (
 from aist.api.common import CommaSeparatedListField, TimezoneNameField
 from aist.api.finding_event_stream import FindingEventStream
 from aist.api.schema import AISTApiTag
+from aist.launch_data import PipelineLaunchData
 from aist.queries import (
     get_authorized_aist_launch_schedules,
     get_authorized_aist_pipelines,
@@ -115,7 +116,7 @@ class CalendarEventFactory:
         finished = self._to_local(pipeline.updated)
         is_future = self._is_future(started)
         refs = resolve_project_version_git_refs(pipeline.project_version)
-        action_runs = (pipeline.launch_data or {}).get("action_runs") or []
+        action_runs = PipelineLaunchData(pipeline.launch_data).action_runs
         actions = [
             {
                 "source": run.get("source"),

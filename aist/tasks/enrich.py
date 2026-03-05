@@ -7,10 +7,10 @@ from celery import chain, chord, shared_task
 from django.db import transaction
 from dojo.models import DojoMeta, Finding, Test
 
+from aist.launch_data import PipelineLaunchData
 from aist.link_builder import LinkBuilder
 from aist.logging_transport import get_redis, install_pipeline_logging
 from aist.models import AISTPipeline, AISTStatus
-from aist.tasks.dedup import watch_deduplication
 from aist.utils.pipeline import set_pipeline_status
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,9 @@ def after_upload_enrich_and_watch(results: list[int],
                                   test_ids: list[int],
                                   log_level,
                                   async_user=None) -> None:
+    from aist.tasks.ai import auto_push_to_ai_if_configured  # noqa: PLC0415
+    from aist.tasks.regression import detect_regressions_for_pipeline  # noqa: PLC0415
+
     logger = install_pipeline_logging(pipeline_id, log_level)
     enriched = sum(int(v or 0) for v in results)
 
@@ -40,14 +43,21 @@ def after_upload_enrich_and_watch(results: list[int],
             tests = list(Test.objects.filter(id__in=test_ids))
             pipeline.tests.set(tests, clear=True)
 
-        set_pipeline_status(pipeline, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
+        set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
 
-    logger.info("Enrichment finished: %s findings enriched. Waiting for deduplication.", enriched)
-    res = watch_deduplication.delay(pipeline_id=pipeline_id, log_level=log_level)
+    logger.info("Enrichment finished: %s findings enriched.", enriched)
 
-    with transaction.atomic():
-        pipeline.watch_dedup_task_id = res.id
-        pipeline.save(update_fields=["watch_dedup_task_id", "updated"])
+    pipeline = AISTPipeline.objects.get(id=pipeline_id)
+    try:
+        detect_regressions_for_pipeline(
+            pipeline_id=pipeline_id,
+            test_ids=list(pipeline.tests.values_list("id", flat=True)),
+        )
+    except Exception:
+        logger.exception("Regression detection failed (pipeline_id=%s); continuing.", pipeline_id)
+    ai = PipelineLaunchData(pipeline.launch_data).ai
+    if (ai.get("mode") == "AUTO_DEFAULT") and ai.get("filter_snapshot"):
+        auto_push_to_ai_if_configured.delay(pipeline_id)
 
 
 @shared_task(bind=False)
@@ -137,48 +147,50 @@ def enrich_finding_batch(
     return processed
 
 
-def make_enrich_chord(
-    *,
-    finding_ids: list[int],
-    trim_path: str,
-    pipeline_id: str,
-    test_ids: list[int],
-    log_level: str,
-    project_version_descriptor: dict[str, Any],
-):
+def make_enrich_chord(*, pipeline_id: str):
     """
-    Build a Celery chord that:
-      1) splits findings into K chunks (K ~= number of active workers),
-      2) runs one batch task per chunk,
-      3) increments progress by the processed count per chunk,
-      4) aggregates results in the chord body.
+    Build a Celery chord that enriches all post-dedup findings for the pipeline.
+
+    Fetches all required parameters directly from the pipeline and its launch_data,
+    so callers only need to supply pipeline_id.
+
+    Steps:
+      1) Re-fetch finding IDs from DB (reflects post-dedup state).
+      2) Split findings into K chunks (K ~= number of active workers).
+      3) Initialize Redis progress (total = live finding count, done = 0).
+      4) Run one batch task per chunk, aggregate in chord body.
 
     Returns:
-        celery.canvas.Signature: A chord signature ready to dispatch/replace.
+        celery.canvas.Signature: A chord (or simple task) signature ready to dispatch.
 
     """
-    workers = int(os.getenv("DD_CELERY_WORKER_AUTOSCALE_MAX", "4") or 4)
+    pipeline = AISTPipeline.objects.get(id=pipeline_id)
+    ld = PipelineLaunchData(pipeline.launch_data)
+    log_level = ld.log_level
+    test_ids = list(pipeline.tests.values_list("id", flat=True))
+    trim_path = ld.trim_path
+    project_version_descriptor = ld.project_version_descriptor
+
+    # Re-fetch finding IDs after dedup — duplicates may have been deleted.
+    finding_ids = list(Finding.objects.filter(test_id__in=test_ids).values_list("id", flat=True))
+
     logger = install_pipeline_logging(pipeline_id, log_level)
-    logger.info(f"Number of workers for enrichment available: {workers}")
-
-    # Edge case: no findings -> return body-only path (caller's code can skip).
     total = len(finding_ids)
-    if total == 0:
-        return after_upload_enrich_and_watch.s(pipeline_id, test_ids, log_level)
+    logger.info("Enrichment scheduled: %s findings across %s tests", total, len(test_ids))
 
-    # 2) Compute number of chunks and perform the split.
-    #    We never create more chunks than findings or workers.
+    # Edge case: no findings after dedup → skip chord, go straight to callback.
+    if total == 0:
+        return after_upload_enrich_and_watch.si([], pipeline_id, test_ids, log_level)
+
+    workers = int(os.getenv("DD_CELERY_WORKER_AUTOSCALE_MAX", "4") or 4)
     k = max(1, min(workers, total))
     chunk_size = ceil(total / k)
     chunks = [finding_ids[i: i + chunk_size] for i in range(0, total, chunk_size)]
 
-    # 3) Initialize progress in Redis (total = number of findings, done = 0).
-    #    report_enrich_done will HINCRBY "done" by the processed count for each chunk.
+    # Initialize progress in Redis: UI reads aist:progress:<pipeline_id>:enrich.
     redis = get_redis()
     redis.hset(f"aist:progress:{pipeline_id}:enrich", mapping={"total": total, "done": 0})
-    logger.info(f"Passing project_version_descriptor {project_version_descriptor}")
 
-    # 4) Build the chord header: one batch chain per chunk.
     header = [
         chain(
             enrich_finding_batch.s(chunk, trim_path, project_version_descriptor),
@@ -186,9 +198,5 @@ def make_enrich_chord(
         )
         for chunk in chunks
     ]
-
-    # 5) Build the chord body, which already sums the batch results and continues the pipeline.
     body = after_upload_enrich_and_watch.s(pipeline_id, test_ids, log_level)
-
-    # 6) Return the chord signature. The caller can `raise self.replace(sig)`.
     return chord(header, body)

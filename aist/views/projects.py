@@ -11,7 +11,12 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.utils import add_breadcrumb
 
 from aist.ai_filter import get_ai_filter_reference
-from aist.api.projects import default_analyzers_payload, project_meta_payload, update_project_from_payload
+from aist.api.projects import (
+    ProjectUpdateRequestSerializer,
+    default_analyzers_payload,
+    project_meta_payload,
+    update_project_from_payload,
+)
 from aist.forms import AISTLaunchConfigForm, AISTProjectVersionForm
 from aist.models import AISTLaunchConfigAction, AISTProject, AISTStatus
 from aist.queries import (
@@ -107,7 +112,11 @@ def aist_project_update_view(request: HttpRequest, project_id: int) -> HttpRespo
     )
     user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
 
-    payload, errors = update_project_from_payload(project=project, payload=request.POST)
+    serializer = ProjectUpdateRequestSerializer(data=request.POST, context={"request": request})
+    if not serializer.is_valid():
+        return JsonResponse({"ok": False, "errors": serializer.errors}, status=400)
+
+    payload, errors = update_project_from_payload(project=project, payload=serializer.validated_data)
     if errors:
         if errors.get("__all__") == "config not loaded":
             return HttpResponseBadRequest("config not loaded")

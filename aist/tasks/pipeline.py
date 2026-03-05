@@ -5,10 +5,11 @@ from django.db import transaction
 from django.utils import timezone
 from dojo.models import Finding, Test
 
-from aist.logging_transport import get_redis, install_pipeline_logging
+from aist.launch_data import PipelineLaunchData
+from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionType
 from aist.pipeline_args import PipelineArguments
-from aist.tasks.enrich import make_enrich_chord
+from aist.tasks.dedup import watch_deduplication
 from aist.utils.pipeline import (
     finish_pipeline,
     get_project_build_path,
@@ -35,29 +36,17 @@ from aist.internal_upload import upload_results_internal  # noqa: E402
 MSG_PROJECT_BUILD_PATH_NOT_SET = "Project build path for AIST is not setup"
 
 
-def postprocess_findings(
-    pipeline_id,
-    finding_ids,
-    trim_path,
-    test_ids,
-    log_level,
-    project_version_descriptor,
-):
+def postprocess_findings(pipeline_id, log_level):
     with transaction.atomic():
         pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-        set_pipeline_status(pipeline, AISTStatus.FINDING_POSTPROCESSING)
+        set_pipeline_status(pipeline, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
 
-    redis = get_redis()
-    redis.hset(f"aist:progress:{pipeline_id}:enrich", mapping={"total": len(finding_ids), "done": 0})
+    res = watch_deduplication.delay(pipeline_id=pipeline_id, log_level=log_level)
 
-    return make_enrich_chord(
-        finding_ids=finding_ids,
-        trim_path=trim_path,
-        pipeline_id=pipeline_id,
-        test_ids=test_ids,
-        log_level=log_level,
-        project_version_descriptor=project_version_descriptor,
-    )
+    with transaction.atomic():
+        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        pipeline.watch_dedup_task_id = res.id
+        pipeline.save(update_fields=["watch_dedup_task_id", "updated"])
 
 
 @shared_task(bind=True)
@@ -114,7 +103,6 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
         project_name = params.project_name
         languages = params.languages
         project_version = params.project_version
-        project_version_descriptor = params.build_project_version_descriptor()
         output_dir = params.output_dir
         rebuild_images = params.rebuild_images
         analyzers = params.analyzers
@@ -126,7 +114,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
                                                     params.project_version.get("version", "default"))
 
         logger.info("Starting configure_project_run_analyses")
-        launch_data = configure_project_run_analyses(
+        ld = PipelineLaunchData(configure_project_run_analyses(
             script_path=script_path,
             output_dir=output_dir,
             languages=languages,
@@ -143,20 +131,17 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
             analyzers=analyzers,
             pipeline_id=pipeline_id,
             additional_env=params.additional_environments,
-        )
+        ))
 
-        launch_data["languages"] = languages
-        launch_data["ai"] = {
+        ld.languages = languages
+        ld.ai = {
             "mode": getattr(params, "ai_mode", "MANUAL"),
             "filter_snapshot": getattr(params, "ai_filter_snapshot", None),
         }
         if launch_config_id:
-            launch_data["launch_config_id"] = launch_config_id
+            ld.launch_config_id = launch_config_id
 
-        git_meta = (launch_data or {}).get("git") or {}
-        resolved_commit = (git_meta.get("resolved_commit") or "").strip()
-
-        if resolved_commit:
+        if ld.resolved_commit:
             with transaction.atomic():
                 p2 = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
                 pipeline_update_fields = ["updated"]
@@ -164,19 +149,18 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
                 pv_id = p2.project_version_id
                 if pv_id:
                     resolved_version = params.resolve_effective_project_version(
-                        resolved_commit=resolved_commit,
+                        resolved_commit=ld.resolved_commit,
                     )
                     if resolved_version and p2.project_version_id != resolved_version.id:
                         p2.project_version = resolved_version
                         pipeline_update_fields.append("project_version")
-                    if resolved_version:
-                        project_version_descriptor = params.build_project_version_descriptor()
 
                 p2.save(update_fields=pipeline_update_fields)
 
         with transaction.atomic():
             pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-            pipeline.launch_data = launch_data
+            ld.merge(params.enrich_config())
+            pipeline.launch_data = ld.as_dict()
             set_pipeline_status(
                 pipeline,
                 AISTStatus.UPLOADING_RESULTS,
@@ -184,15 +168,12 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
             )
         logger.info("Upload step starting")
 
-        repo_path = launch_data.get("project_path", project_build_path)
-        trim_path = launch_data.get("trim_path", "")
-
         results = upload_results_internal(
-            output_dir=launch_data.get("output_dir", output_dir),
-            analyzers_cfg_path=launch_data.get("tmp_analyzer_config_path"),
+            output_dir=ld.output_dir or output_dir,
+            analyzers_cfg_path=ld.tmp_analyzer_config_path,
             product_name=project_name,
-            repo_path=repo_path,
-            trim_path=trim_path,
+            repo_path=ld.project_path or project_build_path,
+            trim_path=ld.trim_path,
             pipeline_id=pipeline_id,
             log_level=log_level,
         )
@@ -215,9 +196,9 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
         with transaction.atomic():
             pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
             pipeline.tests.set(tests, clear=True)
-            launch_data = pipeline.launch_data or {}
-            launch_data["imported_test_ids"] = test_ids
-            pipeline.launch_data = launch_data
+            ld = PipelineLaunchData(pipeline.launch_data)
+            ld.imported_test_ids = test_ids
+            pipeline.launch_data = ld.as_dict()
             pipeline.save(update_fields=["launch_data", "updated"])
 
         if test_ids and pipeline and pipeline.project_version_id:
@@ -247,11 +228,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
                 logger.info("No findings to enrich; Finishing pipeline")
                 finish_pipeline(pipeline)
         else:
-            raise self.replace(
-                postprocess_findings(
-                    pipeline_id, finding_ids, trim_path, test_ids, log_level, project_version_descriptor,
-                ),
-            )
+            postprocess_findings(pipeline_id, log_level)
     except Ignore:
         raise
     except Exception:

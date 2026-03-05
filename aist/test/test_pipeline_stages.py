@@ -8,12 +8,8 @@ from django.test import RequestFactory, TestCase
 
 from aist.tasks.ai import push_request_to_ai as _push_request_to_ai
 from aist.tasks.dedup import watch_deduplication as _watch_deduplication
-from aist.tasks.enrich import (
-    after_upload_enrich_and_watch as _after_upload_enrich_and_watch,
-)
-from aist.tasks.enrich import (
-    make_enrich_chord as _make_enrich_chord,
-)
+from aist.tasks.enrich import after_upload_enrich_and_watch as _after_upload_enrich_and_watch
+from aist.tasks.enrich import make_enrich_chord as _make_enrich_chord
 from aist.views.ai import send_request_to_ai as _send_request_to_ai
 
 # ---- Messages / constants ----------------------------------------------------
@@ -48,14 +44,13 @@ def _mk_pipeline(**overrides):
 
 
 def _call_after_upload_enrich(*, enriched_count_list, pipeline, test_ids, log_level="INFO"):
-    # Patched dependencies via context managers (no inline imports -> no PLC0415)
-    with patch("aist.tasks.enrich.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
+    with patch("aist.tasks.enrich.install_pipeline_logging", return_value=DummyLogger()), \
          patch("aist.tasks.enrich.AISTPipeline") as mock_model, \
-         patch("aist.tasks.enrich.watch_deduplication") as mock_watch:
+         patch("aist.tasks.ai.auto_push_to_ai_if_configured") as mock_auto_push, \
+         patch("aist.tasks.regression.detect_regressions_for_pipeline") as mock_regression:
 
         mock_model.objects.select_for_update().get.return_value = pipeline
-        mock_res = SimpleNamespace(id="celery-123")
-        mock_watch.delay.return_value = mock_res
+        mock_model.objects.get.return_value = pipeline
 
         _after_upload_enrich_and_watch(
             results=enriched_count_list,
@@ -63,35 +58,50 @@ def _call_after_upload_enrich(*, enriched_count_list, pipeline, test_ids, log_le
             test_ids=test_ids,
             log_level=log_level,
         )
-        return mock_watch, pipeline, mock_res
+        return mock_auto_push, mock_regression, pipeline
 
 
 class AfterUploadEnrichTests(TestCase):
-    def test_sets_waiting_and_triggers_watcher(self):
-        pipeline = _mk_pipeline(status="UPLOADING_RESULTS")
+    def test_sets_waiting_confirmation_and_triggers_regression(self):
+        pipeline = _mk_pipeline(status="FINDING_POSTPROCESSING")
         test_ids = [10, 20, 30]
 
-        mock_watch, pipeline, _ = _call_after_upload_enrich(
+        mock_auto_push, mock_regression, pipeline = _call_after_upload_enrich(
             enriched_count_list=[1, 0, 1],
             pipeline=pipeline,
             test_ids=test_ids,
         )
 
-        self.assertEqual(pipeline.status, "WAITING_DEDUPLICATION_TO_FINISH")
-        mock_watch.delay.assert_called_once_with(
-            pipeline_id=pipeline.id, log_level="INFO",
+        self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
+        mock_regression.assert_called_once()
+        mock_auto_push.delay.assert_not_called()
+
+    def test_auto_pushes_when_ai_mode_auto_default(self):
+        pipeline = _mk_pipeline(
+            status="FINDING_POSTPROCESSING",
+            launch_data={"ai": {"mode": "AUTO_DEFAULT", "filter_snapshot": {"limit": 10}}},
         )
-        pipeline.save.assert_any_call(update_fields=["watch_dedup_task_id", "updated"])
+
+        mock_auto_push, _, pipeline = _call_after_upload_enrich(
+            enriched_count_list=[1],
+            pipeline=pipeline,
+            test_ids=[5],
+        )
+
+        self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
+        mock_auto_push.delay.assert_called_once_with(pipeline.id)
 
 # ---- watch_deduplication ----------------------------------------------------
 
 
 def _call_watch_dedup(*, pipeline, progress_qs=None, remaining_counts=None, duplicate_exists_seq=None):
-    with patch("aist.tasks.dedup.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
+    mock_chord_sig = MagicMock()
+    with patch("aist.tasks.dedup.install_pipeline_logging", return_value=DummyLogger()), \
          patch("aist.tasks.dedup.AISTPipeline") as mock_model, \
          patch("aist.tasks.dedup.TestDeduplicationProgress") as mock_progress, \
          patch("aist.tasks.dedup.AISTTestMeta") as mock_meta, \
-         patch("aist.tasks.dedup.Finding") as mock_finding:
+         patch("aist.tasks.dedup.Finding") as mock_finding, \
+         patch("aist.tasks.enrich.make_enrich_chord", return_value=mock_chord_sig):
         mock_model.objects.get.return_value = pipeline
         if progress_qs is None:
             progress_qs = MagicMock()
@@ -114,7 +124,7 @@ def _call_watch_dedup(*, pipeline, progress_qs=None, remaining_counts=None, dupl
         mock_findings_qs.exists.side_effect = [*duplicate_exists_seq, duplicate_exists_seq[-1]]
         mock_finding.objects.filter.return_value = mock_findings_qs
         _watch_deduplication.run(pipeline_id=pipeline.id, log_level="INFO")
-        return pipeline
+        return pipeline, mock_chord_sig
 
 
 class WatchDeduplicationTests(TestCase):
@@ -128,19 +138,19 @@ class WatchDeduplicationTests(TestCase):
             _call_watch_dedup(pipeline=pipeline)
         mock_finish.assert_called_once_with(pipeline, degraded=True)
 
-    def test_complete_dedup_sets_waiting_confirmation(self):
+    def test_complete_dedup_triggers_enrich(self):
         tests_mgr = MagicMock()
         tests_mgr.exists.return_value = True
         tests_mgr.filter().count.return_value = 0
         tests_mgr.values_list.return_value = [1]
         pipeline = _mk_pipeline(status="WAITING_DEDUPLICATION_TO_FINISH", tests=tests_mgr)
 
-        _call_watch_dedup(pipeline=pipeline, remaining_counts=[0])
+        pipeline, mock_chord_sig = _call_watch_dedup(pipeline=pipeline, remaining_counts=[0])
 
-        self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
-        pipeline.save.assert_any_call(update_fields=["status", "updated"])
+        self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
+        mock_chord_sig.apply_async.assert_called_once()
 
-    def test_stale_retries_exhausted_releases_pipeline(self):
+    def test_stale_retries_exhausted_triggers_enrich(self):
         tests_mgr = MagicMock()
         tests_mgr.exists.return_value = True
         tests_mgr.filter().count.return_value = 1
@@ -167,20 +177,16 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.__iter__.return_value = iter([])
         progress_qs.update = MagicMock()
 
-        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
-        self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
+        pipeline, mock_chord_sig = _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
+        self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
+        mock_chord_sig.apply_async.assert_called_once()
 
-    @patch("aist.tasks.dedup.auto_push_to_ai_if_configured")
-    def test_timeout_releases_and_auto_pushes(self, mock_auto_push):
+    def test_timeout_triggers_enrich(self):
         tests_mgr = MagicMock()
         tests_mgr.exists.return_value = True
         tests_mgr.filter().count.return_value = 1
         tests_mgr.values_list.return_value = [1]
-        pipeline = _mk_pipeline(
-            status="WAITING_DEDUPLICATION_TO_FINISH",
-            tests=tests_mgr,
-            launch_data={"ai": {"mode": "AUTO_DEFAULT", "filter_snapshot": {"limit": 10}}},
-        )
+        pipeline = _mk_pipeline(status="WAITING_DEDUPLICATION_TO_FINISH", tests=tests_mgr)
 
         progress_qs = MagicMock()
         mock_started = MagicMock()
@@ -202,21 +208,16 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.__iter__.return_value = iter([])
         progress_qs.update = MagicMock()
 
-        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
-        self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
-        mock_auto_push.delay.assert_called_once_with(pipeline.id)
+        pipeline, mock_chord_sig = _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
+        self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
+        mock_chord_sig.apply_async.assert_called_once()
 
-    @patch("aist.tasks.dedup.auto_push_to_ai_if_configured")
-    def test_retries_exhausted_releases_and_auto_pushes(self, mock_auto_push):
+    def test_retries_exhausted_triggers_enrich(self):
         tests_mgr = MagicMock()
         tests_mgr.exists.return_value = True
         tests_mgr.filter().count.return_value = 1
         tests_mgr.values_list.return_value = [1]
-        pipeline = _mk_pipeline(
-            status="WAITING_DEDUPLICATION_TO_FINISH",
-            tests=tests_mgr,
-            launch_data={"ai": {"mode": "AUTO_DEFAULT", "filter_snapshot": {"limit": 10}}},
-        )
+        pipeline = _mk_pipeline(status="WAITING_DEDUPLICATION_TO_FINISH", tests=tests_mgr)
 
         progress_qs = MagicMock()
         mock_started = MagicMock()
@@ -238,26 +239,27 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.__iter__.return_value = iter([])
         progress_qs.update = MagicMock()
 
-        _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
-        self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
-        mock_auto_push.delay.assert_called_once_with(pipeline.id)
+        pipeline, mock_chord_sig = _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
+        self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
+        mock_chord_sig.apply_async.assert_called_once()
 
     @patch("aist.tasks.dedup.async_dupe_delete")
-    def test_waits_for_duplicate_cleanup_before_waiting_confirmation(self, mock_async_dupe_delete):
+    def test_waits_for_duplicate_cleanup_before_enrich(self, mock_async_dupe_delete):
         tests_mgr = MagicMock()
         tests_mgr.exists.return_value = True
         tests_mgr.filter().count.return_value = 0
         tests_mgr.values_list.return_value = [1]
         pipeline = _mk_pipeline(status="WAITING_DEDUPLICATION_TO_FINISH", tests=tests_mgr)
 
-        _call_watch_dedup(
+        pipeline, mock_chord_sig = _call_watch_dedup(
             pipeline=pipeline,
             remaining_counts=[0],
             duplicate_exists_seq=[True, False],
         )
 
-        self.assertEqual(pipeline.status, "WAITING_CONFIRMATION_TO_PUSH_TO_AI")
+        self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
         mock_async_dupe_delete.delay.assert_called_once_with()
+        mock_chord_sig.apply_async.assert_called_once()
 
 # ---- push_request_to_ai -----------------------------------------------------
 
@@ -327,25 +329,88 @@ class SendRequestToAITests(TestCase):
 
 
 def test_make_enrich_chord_initializes_progress():
-    """Ensure progress hash is initialized in make_enrich_chord()."""
-    with patch("aist.tasks.enrich.get_redis") as mock_get_redis:
+    """Ensure progress hash is initialized from DB-fetched findings."""
+    pipeline = _mk_pipeline(
+        id="pipeline-xyz",
+        launch_data={
+            "trim_path": "",
+            "log_level": "INFO",
+            "project_version_descriptor": {},
+        },
+    )
+    pipeline.tests = MagicMock()
+    pipeline.tests.values_list.return_value = [101]
+
+    with patch("aist.tasks.enrich.AISTPipeline") as mock_pipeline_model, \
+         patch("aist.tasks.enrich.Finding") as mock_finding_model, \
+         patch("aist.tasks.enrich.get_redis") as mock_get_redis, \
+         patch("aist.tasks.enrich.install_pipeline_logging", return_value=DummyLogger()):
+        mock_pipeline_model.objects.get.return_value = pipeline
+        mock_finding_model.objects.filter.return_value.values_list.return_value = [1, 2, 3]
         mock_redis = MagicMock()
         mock_get_redis.return_value = mock_redis
 
-        sig = _make_enrich_chord(
-            finding_ids=[1, 2, 3],
-            repo_url="https://git",
-            ref="main",
-            trim_path="",
-            pipeline_id="pipeline-xyz",
-            test_ids=[101],
-            log_level="INFO",
-            project_version_descriptor={},
-        )
+        sig = _make_enrich_chord(pipeline_id="pipeline-xyz")
+
         if sig is None:
-            msg = MSG_EXPECTED_SIGNATURE  # satisfy EM101/TRY003
+            msg = MSG_EXPECTED_SIGNATURE
             raise AssertionError(msg)
         mock_redis.hset.assert_called_with(
             "aist:progress:pipeline-xyz:enrich",
             mapping={"total": 3, "done": 0},
         )
+
+
+def test_make_enrich_chord_uses_post_dedup_finding_ids():
+    """Ensure make_enrich_chord re-fetches finding IDs from DB (post-dedup)."""
+    pipeline = _mk_pipeline(
+        id="pipeline-dedup",
+        launch_data={
+            "trim_path": "/src/",
+            "log_level": "DEBUG",
+            "project_version_descriptor": {"version": "abc"},
+        },
+    )
+    pipeline.tests = MagicMock()
+    pipeline.tests.values_list.return_value = [10, 20]
+
+    with patch("aist.tasks.enrich.AISTPipeline") as mock_pipeline_model, \
+         patch("aist.tasks.enrich.Finding") as mock_finding_model, \
+         patch("aist.tasks.enrich.get_redis") as mock_get_redis, \
+         patch("aist.tasks.enrich.install_pipeline_logging", return_value=DummyLogger()):
+        mock_pipeline_model.objects.get.return_value = pipeline
+        # Simulate 5 findings surviving dedup (originally could be more)
+        mock_finding_model.objects.filter.return_value.values_list.return_value = [1, 2, 3, 4, 5]
+        mock_get_redis.return_value = MagicMock()
+
+        _make_enrich_chord(pipeline_id="pipeline-dedup")
+
+        # Verify Finding was queried for test_ids from pipeline.tests
+        mock_finding_model.objects.filter.assert_called_once_with(test_id__in=[10, 20])
+
+
+def test_make_enrich_chord_empty_findings_returns_direct_callback():
+    """When no findings survive dedup, return a direct callback signature (not a chord)."""
+    pipeline = _mk_pipeline(
+        id="pipeline-empty",
+        launch_data={"log_level": "INFO", "project_version_descriptor": {}},
+    )
+    pipeline.tests = MagicMock()
+    pipeline.tests.values_list.return_value = [5]
+
+    with patch("aist.tasks.enrich.AISTPipeline") as mock_pipeline_model, \
+         patch("aist.tasks.enrich.Finding") as mock_finding_model, \
+         patch("aist.tasks.enrich.get_redis") as mock_get_redis, \
+         patch("aist.tasks.enrich.install_pipeline_logging", return_value=DummyLogger()):
+        mock_pipeline_model.objects.get.return_value = pipeline
+        mock_finding_model.objects.filter.return_value.values_list.return_value = []
+        mock_redis = MagicMock()
+        mock_get_redis.return_value = mock_redis
+
+        sig = _make_enrich_chord(pipeline_id="pipeline-empty")
+
+        if sig is None:
+            msg = MSG_EXPECTED_SIGNATURE
+            raise AssertionError(msg)
+        # Redis progress must NOT be set when there are no findings
+        mock_redis.hset.assert_not_called()

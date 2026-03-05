@@ -9,7 +9,7 @@ from django.test import TestCase
 from django.utils import timezone
 from dojo.models import Finding, Role
 
-from aist.management.commands.bootstrap_demo_access import DEMO_PROJECTS, DEMO_USERS
+from aist.management.commands.bootstrap_demo_access import DEMO_PROJECTS, DEMO_USERS, ORG_NAMES
 from aist.models import (
     AISTPipeline,
     AISTProject,
@@ -34,6 +34,8 @@ class BootstrapDemoAccessCommandTests(TestCase):
 
     def test_command_creates_demo_projects_findings_schedules_and_queue_history(self):
         call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        self.assertFalse(Organization.objects.filter(name__in=ORG_NAMES, product_type__isnull=True).exists())
 
         projects = AISTProject.objects.filter(
             product__name__in=[spec.product_name for spec in DEMO_PROJECTS],
@@ -77,6 +79,14 @@ class BootstrapDemoAccessCommandTests(TestCase):
             launch_config = AISTProjectLaunchConfig.objects.get(
                 project=project,
                 name=spec.launch_config_name,
+            )
+            self.assertEqual(launch_config.params.get("ai_mode"), "AUTO_DEFAULT")
+            self.assertEqual(
+                launch_config.params.get("ai_filter_snapshot"),
+                {
+                    "limit": 50,
+                    "severity": [{"comparison": "EQUALS", "value": "HIGH"}],
+                },
             )
             schedule = LaunchSchedule.objects.get(launch_config=launch_config)
             self.assertEqual(schedule.cron_expression, spec.cron_expression)

@@ -9,6 +9,7 @@ from django.db import transaction
 from dojo.models import Finding
 
 from aist.ai_filter import apply_ai_filter
+from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTPipeline, AISTStatus
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
@@ -58,8 +59,7 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
             product = getattr(project, "product", None)
             project_name = getattr(product, "name", None) or getattr(project, "project_name", "")
 
-            launch_data = pipeline.launch_data or {}
-            languages = _csv(launch_data.get("languages") or [])
+            languages = _csv(PipelineLaunchData(pipeline.launch_data).languages)
             callback_url = build_callback_url(pipeline_id)
 
             payload: dict[str, Any] = {
@@ -107,7 +107,7 @@ def auto_push_to_ai_if_configured(pipeline_id: str, async_user=None):
             finish_pipeline(pipeline, degraded=True)
             return
 
-        ai = (pipeline.launch_data or {}).get("ai") or {}
+        ai = PipelineLaunchData(pipeline.launch_data).ai
         snap = ai.get("filter_snapshot")
 
         if not snap or not ai:

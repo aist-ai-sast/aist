@@ -90,6 +90,14 @@ ORG_NAMES = [
     "Helios Core",
 ]
 
+
+def demo_ai_filter_snapshot() -> dict:
+    return {
+        "limit": 50,
+        "severity": [{"comparison": "EQUALS", "value": "HIGH"}],
+    }
+
+
 DEMO_USERS = [
     DemoUserSpec("org_reader", "Org", "Reader", "org_reader@example.local", "Reader"),
     DemoUserSpec("org_writer", "Org", "Writer", "org_writer@example.local", "Writer"),
@@ -410,6 +418,7 @@ class Command(BaseCommand):
                 name=org_name,
                 defaults={"description": f"Demo organization {idx}"},
             )
+            org.ensure_product_type()
             organizations.append(org)
         return organizations
 
@@ -518,6 +527,7 @@ class Command(BaseCommand):
                         "time_class_level": "normal",
                         "log_level": "INFO",
                         "ai_mode": "AUTO_DEFAULT",
+                        "ai_filter_snapshot": demo_ai_filter_snapshot(),
                     },
                     "is_default": True,
                 },
@@ -529,6 +539,7 @@ class Command(BaseCommand):
                 "time_class_level": "normal",
                 "log_level": "INFO",
                 "ai_mode": "AUTO_DEFAULT",
+                "ai_filter_snapshot": demo_ai_filter_snapshot(),
             }
             if launch_config.params != desired_params:
                 launch_config.params = desired_params

@@ -18,6 +18,7 @@ from dojo.utils import add_breadcrumb
 from aist.ai_filter import apply_ai_filter, get_ai_filter_reference
 from aist.api.launch_configs import ACTION_CREATE_SERIALIZERS
 from aist.forms import AISTPipelineRunForm
+from aist.launch_data import PipelineLaunchData
 from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus, VersionType
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects
 from aist.tasks import run_sast_pipeline
@@ -133,7 +134,7 @@ def _build_findings_context(request: HttpRequest, pipeline: AISTPipeline) -> dic
     )
     base_total = base_qs.count()
 
-    launch_ai = (pipeline.launch_data or {}).get("ai") or {}
+    launch_ai = PipelineLaunchData(pipeline.launch_data).ai
     ai_filter_snapshot = launch_ai.get("filter_snapshot")
     ai_filter_available = bool(ai_filter_snapshot)
     ai_filter_pretty = json.dumps(ai_filter_snapshot, indent=2, sort_keys=True) if ai_filter_snapshot else ""
@@ -397,10 +398,10 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                     None,
                 )
                 if one_off_actions:
-                    launch_data = p.launch_data or {}
-                    launch_data["one_off_actions"] = one_off_actions
-                    launch_data["one_off_actions_done"] = []
-                    p.launch_data = launch_data
+                    ld = PipelineLaunchData(p.launch_data)
+                    ld.one_off_actions = one_off_actions
+                    ld.one_off_actions_done = []
+                    p.launch_data = ld.as_dict()
                     p.save(update_fields=["launch_data"])
             # Launch the Celery task and record its id on the pipeline.
             async_result = run_sast_pipeline.delay(p.id, params)

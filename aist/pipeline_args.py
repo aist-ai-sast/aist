@@ -50,6 +50,20 @@ class PipelineArguments:
         base["excluded_paths"] = self.project.get_excluded_paths()
         return base
 
+    def enrich_config(self) -> dict:
+        """
+        Fields to persist in launch_data for the enrichment stage.
+
+        Single source of truth: adding a new enrichment parameter means
+        updating only this method (and the reader in enrich.py).
+        Must be called after resolve_effective_project_version() so that
+        project_version reflects the final resolved state.
+        """
+        return {
+            "project_version_descriptor": self.build_project_version_descriptor(),
+            "log_level": self.log_level,
+        }
+
     def resolve_effective_project_version(
         self,
         *,

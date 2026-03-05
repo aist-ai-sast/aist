@@ -9,6 +9,7 @@ from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from dojo.models import DojoMeta, Finding, Test
 
+from aist.launch_data import PipelineLaunchData
 from aist.link_builder import LinkBuilder
 from aist.models import AISTPipeline, AISTProjectVersion, VersionType
 
@@ -127,8 +128,7 @@ def _get_pipeline(pipeline_id: str) -> AISTPipeline | None:
 
 
 def _get_imported_test_ids(pipeline: AISTPipeline) -> list[int]:
-    launch_data = pipeline.launch_data or {}
-    imported_ids = _normalize_ids(launch_data.get("imported_test_ids") or [])
+    imported_ids = _normalize_ids(PipelineLaunchData(pipeline.launch_data).imported_test_ids)
     if imported_ids:
         return imported_ids
     return sorted(set(pipeline.tests.values_list("id", flat=True)))
