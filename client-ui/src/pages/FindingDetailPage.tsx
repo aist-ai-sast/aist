@@ -93,7 +93,7 @@ export default function FindingDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="rounded-2xl border border-night-500 bg-night-700/90 p-5">
         <div>
           <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
             Finding Detail
@@ -200,7 +200,7 @@ export default function FindingDetailPage() {
             ))}
           </div>
         </div>
-        <div className="flex items-end gap-3">
+        <div className="mt-4 flex flex-wrap items-end gap-3">
           <FindingSeverityControl
             finding={finding}
             permissionProductId={aistProject?.productId}
