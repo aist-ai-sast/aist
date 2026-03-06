@@ -6,6 +6,7 @@ export type ProjectVersionType = "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH";
 export type FindingFilters = {
   projectId?: number;
   pipelineId?: string;
+  title?: string;
   createdGte?: string;
   createdLte?: string;
   statusUpdatedGte?: string;

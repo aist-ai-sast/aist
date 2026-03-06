@@ -7,6 +7,7 @@ describe("parseFindingsFiltersFromSearch", () => {
     const params = new URLSearchParams({
       project: "17",
       pipeline_id: "pipe-1",
+      title: "SQL Injection",
       created_gte: "2026-03-01",
       created_lte: "2026-03-05",
       processed_gte: "2026-03-02",
@@ -29,6 +30,7 @@ describe("parseFindingsFiltersFromSearch", () => {
     expect(parsed).toEqual({
       projectId: 17,
       pipelineId: "pipe-1",
+      title: "SQL Injection",
       createdFrom: "2026-03-01",
       createdTo: "2026-03-05",
       statusUpdatedFrom: "2026-03-02",
@@ -52,6 +54,7 @@ describe("buildFindingsFilterSearch", () => {
     const query = buildFindingsFilterSearch({
       projectId: 42,
       pipelineId: "abc",
+      title: "XSS",
       createdFrom: "2026-03-01",
       createdTo: "2026-03-02",
       statusUpdatedFrom: "2026-03-03",
@@ -69,7 +72,7 @@ describe("buildFindingsFilterSearch", () => {
     });
 
     expect(query.toString()).toBe(
-      "project_id=42&pipeline_id=abc&created_gte=2026-03-01&created_lte=2026-03-02&processed_gte=2026-03-03&processed_lte=2026-03-04&mitigated_gte=2026-03-05&mitigated_lte=2026-03-06&project_version=release&file=src%2Fmain.ts&cwe=79&severity=Critical%2CHigh&tags=a%2Cb&active=true&risk_accepted=true&is_mitigated=true&ai_status=ai_u",
+      "project_id=42&pipeline_id=abc&title=XSS&created_gte=2026-03-01&created_lte=2026-03-02&processed_gte=2026-03-03&processed_lte=2026-03-04&mitigated_gte=2026-03-05&mitigated_lte=2026-03-06&project_version=release&file=src%2Fmain.ts&cwe=79&severity=Critical%2CHigh&tags=a%2Cb&active=true&risk_accepted=true&is_mitigated=true&ai_status=ai_u",
     );
   });
 });
@@ -80,6 +83,7 @@ describe("toFindingsApiFilters", () => {
       {
         projectId: 11,
         pipelineId: "p-1",
+        title: "Path Traversal",
         createdFrom: "2026-03-01",
         createdTo: "2026-03-02",
         statusUpdatedFrom: "2026-03-03",
@@ -101,6 +105,7 @@ describe("toFindingsApiFilters", () => {
     expect(filters).toEqual({
       projectId: 11,
       pipelineId: "p-1",
+      title: "Path Traversal",
       createdGte: "2026-03-01",
       createdLte: "2026-03-02",
       statusUpdatedGte: "2026-03-03",

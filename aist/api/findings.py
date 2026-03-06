@@ -313,6 +313,7 @@ class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
             OpenApiParameter(name="mitigated_lte", required=False, type=str),
             OpenApiParameter(name="project_version", required=False, type=str),
             OpenApiParameter(name="file", required=False, type=str),
+            OpenApiParameter(name="title", required=False, type=str),
             OpenApiParameter(name="ordering", required=False, type=str, enum=FINDING_API_CHOICES.ordering),
             OpenApiParameter(name="limit", required=False, type=int),
             OpenApiParameter(name="offset", required=False, type=int),

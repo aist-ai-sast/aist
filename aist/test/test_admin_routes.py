@@ -73,6 +73,9 @@ class AdminRouteTests(TestCase):
         paths = body.get("paths", {})
         self.assertIn("/api/v2/aist/findings/", paths)
         self.assertNotIn("/api/v2/findings/", paths)
+        findings_get = paths["/api/v2/aist/findings/"].get("get", {})
+        parameter_names = {param.get("name") for param in findings_get.get("parameters", [])}
+        self.assertIn("title", parameter_names)
 
     def test_swagger_urls_are_available_for_superuser(self):
         user = get_user_model().objects.create_superuser(

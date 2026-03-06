@@ -6,6 +6,7 @@ const RISK_ORDER: RiskState[] = ["risk_accepted", "under_review", "mitigated"];
 export type FindingsFilterUrlState = {
   projectId?: number;
   pipelineId?: string;
+  title: string;
   createdFrom: string;
   createdTo: string;
   statusUpdatedFrom: string;
@@ -27,6 +28,7 @@ export type FindingStatusFilter = FindingsFilterUrlState["status"];
 export const DEFAULT_FINDINGS_FILTERS: FindingsFilterUrlState = {
   projectId: undefined,
   pipelineId: undefined,
+  title: "",
   createdFrom: "",
   createdTo: "",
   statusUpdatedFrom: "",
@@ -100,6 +102,7 @@ export function parseFindingsFiltersFromSearch(params: URLSearchParams): Finding
   return {
     projectId,
     pipelineId: params.get("pipeline") ?? params.get("pipeline_id") ?? undefined,
+    title: params.get("title") ?? "",
     createdFrom: params.get("created_from") ?? params.get("created_gte") ?? "",
     createdTo: params.get("created_to") ?? params.get("created_lte") ?? "",
     statusUpdatedFrom:
@@ -131,6 +134,7 @@ export function buildFindingsFilterSearch(state: FindingsFilterUrlState): URLSea
   const params = new URLSearchParams();
   if (state.projectId) params.set("project_id", String(state.projectId));
   if (state.pipelineId) params.set("pipeline_id", state.pipelineId);
+  if (state.title) params.set("title", state.title);
   if (state.createdFrom) params.set("created_gte", state.createdFrom);
   if (state.createdTo) params.set("created_lte", state.createdTo);
   if (state.statusUpdatedFrom) params.set("processed_gte", state.statusUpdatedFrom);
@@ -162,6 +166,7 @@ export function toFindingsApiFilters(
   return {
     projectId: state.projectId,
     pipelineId: state.pipelineId,
+    title: state.title || undefined,
     createdGte: state.createdFrom || undefined,
     createdLte: state.createdTo || undefined,
     statusUpdatedGte: state.statusUpdatedFrom || undefined,

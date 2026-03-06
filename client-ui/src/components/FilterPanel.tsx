@@ -19,6 +19,8 @@ type FilterPanelProps = {
   onCreatedToChange: (value: string) => void;
   selectedProjectVersion: string;
   onProjectVersionChange: (value: string) => void;
+  selectedTitle: string;
+  onTitleChange: (value: string) => void;
   selectedStatus: string;
   onStatusChange: (value: string) => void;
   selectedRisk: string[];
@@ -47,6 +49,8 @@ export default function FilterPanel({
   onCreatedToChange,
   selectedProjectVersion,
   onProjectVersionChange,
+  selectedTitle,
+  onTitleChange,
   selectedStatus,
   onStatusChange,
   selectedRisk,
@@ -124,6 +128,20 @@ export default function FilterPanel({
             value={selectedFile}
             onChange={(event) => onFileChange(event.target.value)}
             placeholder="e.g. src/app/main.py"
+          />
+        </div>
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">Title</label>
+            {selectedTitle ? (
+              <FilterClearButton onClick={() => onTitleChange("")} />
+            ) : null}
+          </div>
+          <TextInput
+            className="mt-2"
+            value={selectedTitle}
+            onChange={(event) => onTitleChange(event.target.value)}
+            placeholder="e.g. SQL Injection"
           />
         </div>
         <div>

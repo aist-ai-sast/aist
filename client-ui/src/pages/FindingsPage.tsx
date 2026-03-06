@@ -60,6 +60,7 @@ export default function FindingsPage() {
   const [selectedSortDirection, setSelectedSortDirection] = useState<"asc" | "desc">("desc");
   const [selectedCwe, setSelectedCwe] = useState<string>(initialUrlFilters.cwe);
   const [selectedFile, setSelectedFile] = useState<string>(initialUrlFilters.file);
+  const [selectedTitle, setSelectedTitle] = useState<string>(initialUrlFilters.title);
   const [selectedProjectVersion, setSelectedProjectVersion] = useState<string>(initialUrlFilters.projectVersion);
   const [selectedTags, setSelectedTags] = useState<string[]>(initialUrlFilters.tags);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | undefined>(initialUrlFilters.pipelineId);
@@ -89,6 +90,7 @@ export default function FindingsPage() {
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
   });
   const debouncedFile = useDebouncedValue(selectedFile, 300);
+  const debouncedTitle = useDebouncedValue(selectedTitle, 300);
   const debouncedCwe = useDebouncedValue(selectedCwe, 300);
   const debouncedProjectVersion = useDebouncedValue(selectedProjectVersion, 300);
   const debouncedTags = useDebouncedValue(selectedTags, 300);
@@ -106,6 +108,7 @@ export default function FindingsPage() {
     mitigatedFrom,
     mitigatedTo,
     projectVersion: debouncedProjectVersion,
+    title: debouncedTitle,
     file: debouncedFile,
     cwe: debouncedCwe,
     severities: selectedSeverities,
@@ -183,7 +186,7 @@ export default function FindingsPage() {
 
   useEffect(() => {
     setPageIndex(0);
-  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, debouncedCwe, debouncedTags, selectedAiResponse, selectedPipelineId, createdFrom, createdTo, statusUpdatedFrom, statusUpdatedTo, mitigatedFrom, mitigatedTo, debouncedFile, debouncedProjectVersion, ordering, pageSize]);
+  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, debouncedCwe, debouncedTags, selectedAiResponse, selectedPipelineId, createdFrom, createdTo, statusUpdatedFrom, statusUpdatedTo, mitigatedFrom, mitigatedTo, debouncedFile, debouncedProjectVersion, debouncedTitle, ordering, pageSize]);
 
   const applyCloseState = (
     findingId: number,
@@ -241,6 +244,7 @@ export default function FindingsPage() {
     setMitigatedFrom(parsed.mitigatedFrom);
     setMitigatedTo(parsed.mitigatedTo);
     setSelectedProjectVersion(parsed.projectVersion);
+    setSelectedTitle(parsed.title);
     setSelectedFile(parsed.file);
     setSelectedCwe(parsed.cwe);
     setSelectedSeverities(parsed.severities);
@@ -268,6 +272,7 @@ export default function FindingsPage() {
       mitigatedFrom,
       mitigatedTo,
       projectVersion: debouncedProjectVersion,
+      title: debouncedTitle,
       file: debouncedFile,
       cwe: debouncedCwe,
       severities: selectedSeverities,
@@ -302,6 +307,7 @@ export default function FindingsPage() {
     debouncedCwe,
     debouncedFile,
     debouncedProjectVersion,
+    debouncedTitle,
     debouncedTags,
     selectedPipelineId,
     selectedProjectId,
@@ -324,6 +330,7 @@ export default function FindingsPage() {
     setSelectedAiResponse(DEFAULT_FINDINGS_FILTERS.aiStatus);
     setSelectedCwe(DEFAULT_FINDINGS_FILTERS.cwe);
     setSelectedFile(DEFAULT_FINDINGS_FILTERS.file);
+    setSelectedTitle(DEFAULT_FINDINGS_FILTERS.title);
     setSelectedProjectVersion(DEFAULT_FINDINGS_FILTERS.projectVersion);
     setSelectedTags(DEFAULT_FINDINGS_FILTERS.tags);
     setSelectedPipelineId(DEFAULT_FINDINGS_FILTERS.pipelineId);
@@ -494,6 +501,8 @@ export default function FindingsPage() {
           onSeveritiesChange={setSelectedSeverities}
           selectedFile={selectedFile}
           onFileChange={setSelectedFile}
+          selectedTitle={selectedTitle}
+          onTitleChange={setSelectedTitle}
           createdFrom={createdFrom}
           onCreatedFromChange={setCreatedFrom}
           createdTo={createdTo}

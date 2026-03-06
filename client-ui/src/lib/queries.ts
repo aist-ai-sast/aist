@@ -181,6 +181,7 @@ function buildFindingsParams(
     ...(pagination?.offset !== undefined ? { offset: String(pagination.offset) } : {}),
     ...(filters.projectId ? { project_id: String(filters.projectId) } : {}),
     ...(filters.pipelineId ? { pipeline_id: filters.pipelineId } : {}),
+    ...(filters.title ? { title: filters.title } : {}),
     ...(filters.createdGte ? { created_gte: filters.createdGte } : {}),
     ...(filters.createdLte ? { created_lte: filters.createdLte } : {}),
     ...(filters.statusUpdatedGte ? { status_updated_gte: filters.statusUpdatedGte } : {}),
