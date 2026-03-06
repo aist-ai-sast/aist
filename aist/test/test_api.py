@@ -1306,6 +1306,8 @@ class AISTFindingBulkStatusTests(AISTApiBase):
     def setUp(self):
         super().setUp()
         self.client.force_login(self.user)
+        self.product.enable_full_risk_acceptance = True
+        self.product.save(update_fields=["enable_full_risk_acceptance"])
         self.engagement = Engagement.objects.create(
             name="Engage bulk finding",
             target_start=timezone.now(),
@@ -1382,6 +1384,113 @@ class AISTFindingBulkStatusTests(AISTApiBase):
         self.assertFalse(self.finding_a.is_mitigated)
         self.assertFalse(self.finding_a.false_p)
         self.assertTrue(self.finding_a.notes.filter(entry="Bulk status update: Reopened after validation").exists())
+
+    def test_bulk_risk_accept_sets_status_and_creates_risk_acceptance(self):
+        resp = self.client.post(
+            reverse("aist_api:finding_bulk_status"),
+            data={
+                "finding_ids": [self.finding_a.id, self.finding_b.id],
+                "action": "risk_accept",
+                "reason": "Accepted for temporary business risk.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["updated_count"], 2)
+
+        self.finding_a.refresh_from_db()
+        self.finding_b.refresh_from_db()
+        self.assertTrue(self.finding_a.risk_accepted)
+        self.assertFalse(self.finding_a.active)
+        self.assertTrue(self.finding_b.risk_accepted)
+        self.assertFalse(self.finding_b.active)
+        self.assertTrue(
+            self.finding_a.notes.filter(entry="Bulk status update: Accepted for temporary business risk.").exists(),
+        )
+
+        ra_a = Risk_Acceptance.objects.filter(accepted_findings=self.finding_a).first()
+        self.assertIsNotNone(ra_a)
+        self.assertEqual(ra_a.accepted_by, self.user.get_username())
+        self.assertEqual(ra_a.decision_details, "Accepted for temporary business risk.")
+        self.assertTrue(ra_a.reactivate_expired)
+
+        self.assertEqual(
+            Risk_Acceptance.objects.filter(accepted_findings=self.finding_b).count(),
+            1,
+        )
+
+    def test_bulk_risk_accept_cross_product_rolls_back_when_one_product_disabled(self):
+        # Create a second product with full risk acceptance disabled and a
+        # finding belonging to it.  The bulk request mixes findings from both
+        # products: the disabled product causes a 403 from our pre-flight check
+        # and neither finding should be modified.
+        other_engagement = Engagement.objects.create(
+            name="Engage other product",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.other_product,
+        )
+        other_test_type = Test_Type.objects.create(name="Semgrep other product")
+        other_test = Test.objects.create(
+            engagement=other_engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=other_test_type,
+        )
+        other_finding = Finding.objects.create(
+            test=other_test,
+            title="Other product finding",
+            severity="High",
+            date=timezone.now(),
+            reporter=self.user,
+            active=True,
+        )
+        Product_Type_Member.objects.create(
+            product_type=self.other_prod_type,
+            user=self.user,
+            role=self.role_maintainer,
+        )
+        self.other_product.enable_full_risk_acceptance = False
+        self.other_product.save(update_fields=["enable_full_risk_acceptance"])
+
+        resp = self.client.post(
+            reverse("aist_api:finding_bulk_status"),
+            data={
+                "finding_ids": [self.finding_a.id, other_finding.id],
+                "action": "risk_accept",
+                "reason": "Cross-product bulk accept",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 403)
+        self.finding_a.refresh_from_db()
+        other_finding.refresh_from_db()
+        # Neither finding should have been modified.
+        self.assertTrue(self.finding_a.active)
+        self.assertFalse(self.finding_a.risk_accepted)
+        self.assertTrue(other_finding.active)
+        self.assertFalse(other_finding.risk_accepted)
+
+    def test_bulk_risk_accept_requires_product_setting(self):
+        self.product.enable_full_risk_acceptance = False
+        self.product.save(update_fields=["enable_full_risk_acceptance"])
+
+        resp = self.client.post(
+            reverse("aist_api:finding_bulk_status"),
+            data={
+                "finding_ids": [self.finding_a.id],
+                "action": "risk_accept",
+                "reason": "Try risk accept while disabled",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 403)
+        self.finding_a.refresh_from_db()
+        self.assertFalse(self.finding_a.risk_accepted)
+        self.assertTrue(self.finding_a.active)
 
     def test_bulk_status_returns_423_when_finding_is_locked(self):
         owner_token = f"owner-{self.finding_a.id}"

@@ -9,6 +9,7 @@ import {
   useFindingTagsByProject,
   useFindingsPage,
   useProjects,
+  useRiskApprovalStatus,
 } from "../lib/queries";
 import { useToast } from "../components/ToastProvider";
 import PaginationBar from "../components/PaginationBar";
@@ -34,6 +35,7 @@ const DetailPanel = lazy(() => import("../components/DetailPanel"));
 const BULK_ACTION_OPTIONS: { value: string; label: string }[] = [
   { value: "close", label: "Close Findings" },
   { value: "reopen", label: "Reopen Findings" },
+  { value: "risk_accept", label: "Risk Accept Findings" },
 ];
 
 const BULK_CLOSE_REASON_OPTIONS: { value: string; label: string }[] = [
@@ -73,7 +75,7 @@ export default function FindingsPage() {
   const [findingOverrides, setFindingOverrides] = useState<Record<number, Partial<Finding>>>({});
   const [selectedFindingIds, setSelectedFindingIds] = useState<number[]>([]);
   const [bulkEditMode, setBulkEditMode] = useState<boolean>(false);
-  const [bulkAction, setBulkAction] = useState<"close" | "reopen">("close");
+  const [bulkAction, setBulkAction] = useState<"close" | "reopen" | "risk_accept">("close");
   const [bulkCloseReason, setBulkCloseReason] = useState<FindingCloseReason>("mitigated");
   const [bulkReasonNote, setBulkReasonNote] = useState<string>("");
   const [bulkLockedFindingIds, setBulkLockedFindingIds] = useState<number[]>([]);
@@ -160,6 +162,15 @@ export default function FindingsPage() {
       };
     });
   }, [findingsQuery.data, projectsById, aiVerdictMap, findingOverrides]);
+
+  // When bulk risk accept is selected, use the first visible finding as a
+  // product-level proxy to check whether full risk acceptance is enabled.
+  // This avoids a dedicated product-level endpoint: findings on the page all
+  // belong to the same product when a project filter is active, and it's a
+  // best-effort check even without a filter.
+  const firstFindingId = bulkAction === "risk_accept" ? findings[0]?.id : undefined;
+  const bulkRiskApprovalQuery = useRiskApprovalStatus(firstFindingId);
+  const bulkRiskAcceptEnabled = bulkRiskApprovalQuery.data?.enabled ?? true;
 
   const tagsQuery = useFindingTagsByProject(selectedProjectId);
   const availableTags = tagsQuery.data ?? [];
@@ -345,7 +356,20 @@ export default function FindingsPage() {
   const selectedFindingsCount = selectedFindingIds.length;
   const selectedFindingIdsSet = useMemo(() => new Set(selectedFindingIds), [selectedFindingIds]);
   const bulkLockedFindingIdsSet = useMemo(() => new Set(bulkLockedFindingIds), [bulkLockedFindingIds]);
-  const canRunBulkAction = selectedFindingsCount > 0 && bulkReasonNote.trim().length > 0 && !bulkStatusMutation.isPending;
+  const selectableVisibleFindingIds = useMemo(
+    () => findings.filter((finding) => !bulkLockedFindingIdsSet.has(finding.id)).map((finding) => finding.id),
+    [bulkLockedFindingIdsSet, findings],
+  );
+  const allVisibleSelected = useMemo(
+    () => selectableVisibleFindingIds.length > 0
+      && selectableVisibleFindingIds.every((id) => selectedFindingIdsSet.has(id)),
+    [selectableVisibleFindingIds, selectedFindingIdsSet],
+  );
+  const canRunBulkAction =
+    selectedFindingsCount > 0 &&
+    bulkReasonNote.trim().length > 0 &&
+    !bulkStatusMutation.isPending &&
+    (bulkAction !== "risk_accept" || bulkRiskAcceptEnabled);
   const bulkControlLabelClass = "mb-1 block text-xs uppercase tracking-[0.18em] text-slate-400";
   const toggleBulkFindingSelection = (findingId: number, checked: boolean) => {
     setSelectedFindingIds((current) => {
@@ -363,6 +387,16 @@ export default function FindingsPage() {
         setBulkReasonNote("");
       }
       return next;
+    });
+  };
+  const toggleSelectAllVisible = (checked: boolean) => {
+    setSelectedFindingIds((current) => {
+      const next = new Set(current);
+      for (const findingId of selectableVisibleFindingIds) {
+        if (checked) next.add(findingId);
+        else next.delete(findingId);
+      }
+      return [...next];
     });
   };
 
@@ -400,6 +434,24 @@ export default function FindingsPage() {
                 next[findingId] = {
                   ...next[findingId],
                   active: true,
+                  isMitigated: false,
+                  falsePositive: false,
+                  outOfScope: false,
+                  duplicate: false,
+                };
+              }
+              return next;
+            });
+          } else if (capturedAction === "risk_accept") {
+            setFindingOverrides((current) => {
+              const next = { ...current };
+              for (const findingId of changedIds) {
+                next[findingId] = {
+                  ...next[findingId],
+                  active: false,
+                  riskAccepted: true,
+                  // Clear any prior close-reason flags so the card displays
+                  // "Risk Accepted" rather than a stale mitigated/FP/etc. state.
                   isMitigated: false,
                   falsePositive: false,
                   outOfScope: false,
@@ -610,7 +662,7 @@ export default function FindingsPage() {
                 <SelectField
                   label="BULK ACTION"
                   value={bulkAction}
-                  onChange={(value) => setBulkAction(value as "close" | "reopen")}
+                  onChange={(value) => setBulkAction(value as "close" | "reopen" | "risk_accept")}
                   options={BULK_ACTION_OPTIONS}
                   hideLabel
                 />
@@ -628,13 +680,46 @@ export default function FindingsPage() {
                 </div>
               ) : null}
               <div className="min-w-[260px] flex-[2]">
-                <label className={bulkControlLabelClass}>REASON</label>
+                <label className={bulkControlLabelClass}>
+                  {bulkAction === "risk_accept" ? "JUSTIFICATION" : "REASON"}
+                </label>
                 <TextInput
                   value={bulkReasonNote}
                   onChange={(event) => setBulkReasonNote(event.target.value)}
-                  placeholder="Enter reason for audit log"
+                  placeholder={bulkAction === "risk_accept" ? "Enter risk justification" : "Enter reason for audit log"}
                 />
               </div>
+              {bulkAction === "risk_accept" ? (
+                <div className="w-full">
+                  {!bulkRiskAcceptEnabled ? (
+                    <div className="flex items-center gap-2 rounded-xl border border-danger-500/30 bg-danger-500/8 px-3 py-2 text-xs text-danger-300">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 3 5 6v6c0 4.2 2.8 8.1 7 9 4.2-.9 7-4.8 7-9V6l-7-3Z" />
+                        <path d="M12 8v4M12 16h.01" />
+                      </svg>
+                      Full risk acceptance is not enabled for this product. Contact your product owner to enable it.
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/8 px-3 py-2 text-xs text-amber-300">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 3 5 6v6c0 4.2 2.8 8.1 7 9 4.2-.9 7-4.8 7-9V6l-7-3Z" />
+                        <path d="m9.5 12 1.7 1.7 3.3-3.4" />
+                      </svg>
+                      Risk Accept is a compliance decision recorded under your name. Ensure the justification meets your policy requirements before applying.
+                    </div>
+                  )}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="aist-icon-button h-10 text-xs font-semibold uppercase tracking-[0.14em] disabled:opacity-50"
+                disabled={selectableVisibleFindingIds.length === 0 || bulkStatusMutation.isPending}
+                onClick={() => toggleSelectAllVisible(!allVisibleSelected)}
+              >
+                {allVisibleSelected
+                  ? `Deselect Visible (${selectableVisibleFindingIds.length})`
+                  : `Select Visible (${selectableVisibleFindingIds.length})`}
+              </button>
               <button
                 className="aist-icon-button h-10 text-xs font-semibold uppercase tracking-[0.14em] disabled:opacity-50"
                 disabled={selectedFindingsCount === 0 || bulkStatusMutation.isPending}

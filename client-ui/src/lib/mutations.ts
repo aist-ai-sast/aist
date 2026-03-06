@@ -158,7 +158,7 @@ export function useBulkFindingStatus() {
       closeReason,
     }: {
       findingIds: number[];
-      action: "close" | "reopen";
+      action: "close" | "reopen" | "risk_accept";
       reason: string;
       closeReason?: FindingCloseReason;
     }) => {

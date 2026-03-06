@@ -657,7 +657,7 @@ class AISTFindingBulkStatusRequestSerializer(serializers.Serializer):
         allow_empty=False,
         max_length=max_batch_size,
     )
-    action = serializers.ChoiceField(choices=("close", "reopen"))
+    action = serializers.ChoiceField(choices=("close", "reopen", "risk_accept"))
     close_reason = serializers.ChoiceField(
         choices=("mitigated", "false_positive", "out_of_scope", "duplicate"),
         required=False,
@@ -692,6 +692,9 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
         requested_ids = normalize_finding_ids(serializer.validated_data["finding_ids"])
+        action = serializer.validated_data["action"]
+        # risk_accept requires a stricter permission than the default Finding_Edit.
+        risk_permission = Permissions.Risk_Acceptance if action == "risk_accept" else None
         if not requested_ids:
             return Response(
                 {"detail": "finding_ids must contain at least one valid id."},
@@ -702,15 +705,33 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
         # Verify all findings are accessible before acquiring any markers so we
         # never mark findings the user cannot edit.
         authorized_ids = set(
-            self.get_authorized_queryset()
+            self.get_authorized_queryset(permission=risk_permission)
             .filter(id__in=requested_ids)
             .values_list("id", flat=True),
         )
         if len(authorized_ids) != len(requested_ids):
             return Response(
                 {"detail": "Some findings are unavailable."},
-                status=status.HTTP_404_NOT_FOUND,
+                status=status.HTTP_403_FORBIDDEN,
             )
+
+        # --- Product feature pre-check for risk_accept ---
+        # Fail fast before acquiring locks so the error is returned without
+        # touching the lock cache.  The vendor RiskAcceptanceSerializer also
+        # enforces this inside its create(), but relying solely on that would
+        # make security conditional on vendor implementation details.
+        if action == "risk_accept":
+            disabled_count = (
+                self.get_authorized_queryset(permission=risk_permission)
+                .filter(id__in=requested_ids)
+                .exclude(test__engagement__product__enable_full_risk_acceptance=True)
+                .count()
+            )
+            if disabled_count:
+                return Response(
+                    {"detail": "Full risk acceptance is not enabled for one or more products."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         # --- UX pre-check (read-only cache query) ---
         # Fast early exit that returns the specific IDs currently in-flight so
@@ -729,7 +750,6 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
         owner_token = str(uuid.uuid4())
         acquired_ids, _ = acquire_bulk_locks(requested_ids, owner_token)
 
-        action = serializer.validated_data["action"]
         close_reason = serializer.validated_data.get("close_reason")
         reason_note = serializer.validated_data["reason"]
         bulk_note_entry = f"Bulk status update: {reason_note}"
@@ -742,7 +762,7 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
                 # - a count mismatch after the lock means a finding was deleted
                 #   or became inaccessible between the pre-check and now.
                 findings = list(
-                    self.get_authorized_queryset()
+                    self.get_authorized_queryset(permission=risk_permission)
                     .select_for_update(nowait=True)
                     .select_related("test__engagement__product")
                     .filter(id__in=requested_ids),
@@ -757,6 +777,14 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
                         _bulk_reopen_finding(
                             finding=finding,
                             user=request.user,
+                            note_entry=bulk_note_entry,
+                        )
+                    elif action == "risk_accept":
+                        _bulk_accept_risk_finding(
+                            finding=finding,
+                            user=request.user,
+                            justification=reason_note,
+                            request=request,
                             note_entry=bulk_note_entry,
                         )
                     else:
@@ -810,6 +838,35 @@ def _bulk_close_finding(*, finding, user, close_reason: str, note_entry: str) ->
         note_entry=note_entry,
     )
     finding.save()
+
+
+def _bulk_accept_risk_finding(*, finding, user, justification: str, request, note_entry: str) -> None:
+    # One Risk_Acceptance record is created per finding rather than a single
+    # record covering the whole batch.  This allows each finding to be revoked
+    # individually without affecting others and matches the single-finding flow.
+    # Tradeoff: for large batches (approaching max_batch_size=500) this produces
+    # N DB inserts.  Acceptable because bulk risk-accept is a rare, deliberate
+    # action and each call is already inside a single atomic transaction.
+    accepted_by = user.get_username()
+    risk_payload = {
+        "name": f"AIST Bulk Risk Approval for finding #{finding.id}",
+        "recommendation": Risk_Acceptance.TREATMENT_ACCEPT,
+        "decision": Risk_Acceptance.TREATMENT_ACCEPT,
+        "decision_details": justification,
+        "accepted_by": accepted_by,
+        "owner": user.id,
+        "accepted_findings": [finding.id],
+        "reactivate_expired": True,
+        "restart_sla_expired": False,
+        "expiration_date": None,
+    }
+    serializer = dojo_serializers.RiskAcceptanceSerializer(
+        data=risk_payload,
+        context={"request": request},
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    _add_bulk_note(finding=finding, user=user, note_entry=note_entry)
 
 
 def _add_bulk_note(*, finding, user, note_entry: str) -> None:
