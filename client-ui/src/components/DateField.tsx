@@ -43,57 +43,59 @@ export default function DateField({
             </svg>
           </button>
         </Popover.Trigger>
-        <Popover.Content
-          align="start"
-          sideOffset={8}
-          className="rounded-2xl border border-night-500 bg-night-900 p-3 shadow-panel"
-        >
-          <DayPicker
-            mode="single"
-            selected={selectedDate}
-            onSelect={(date) => {
-              if (!date) {
-                onChange("");
-              } else {
-                onChange(format(date, "yyyy-MM-dd"));
-              }
-              setOpen(false);
-            }}
-            classNames={{
-              months: "flex flex-col gap-4",
-              month: "space-y-2",
-              caption: "flex justify-between items-center text-slate-200 text-sm",
-              nav: "flex items-center gap-2",
-              nav_button:
-                "rounded-lg border border-night-500 bg-night-700 px-2 py-1 text-xs text-slate-200 hover:border-brand-600/60",
-              table: "w-full border-collapse",
-              head_row: "flex",
-              head_cell: "w-8 text-[10px] uppercase tracking-[0.12em] text-slate-500",
-              row: "flex w-full",
-              cell: "w-8 h-8 flex items-center justify-center text-xs text-slate-200",
-              day: "w-7 h-7 rounded-lg hover:bg-night-700",
-              day_selected: "bg-brand-500 text-night-900",
-              day_today: "border border-brand-600/60",
-              day_outside: "text-slate-600",
-            }}
-          />
-          <div className="mt-3 flex items-center justify-between">
-            <button
-              type="button"
-              className="text-xs text-slate-400 hover:text-slate-200"
-              onClick={() => onChange("")}
-            >
-              Clear
-            </button>
-            <button
-              type="button"
-              className="text-xs text-slate-400 hover:text-slate-200"
-              onClick={() => setOpen(false)}
-            >
-              Close
-            </button>
-          </div>
-        </Popover.Content>
+        <Popover.Portal>
+          <Popover.Content
+            align="start"
+            sideOffset={8}
+            className="z-[1700] rounded-2xl border border-night-500 bg-night-900 p-3 shadow-panel"
+          >
+            <DayPicker
+              mode="single"
+              selected={selectedDate}
+              onSelect={(date) => {
+                if (!date) {
+                  onChange("");
+                } else {
+                  onChange(format(date, "yyyy-MM-dd"));
+                }
+                setOpen(false);
+              }}
+              classNames={{
+                months: "flex flex-col gap-4",
+                month: "space-y-2",
+                caption: "flex justify-between items-center text-slate-200 text-sm",
+                nav: "flex items-center gap-2",
+                nav_button:
+                  "rounded-lg border border-night-500 bg-night-700 px-2 py-1 text-xs text-slate-200 hover:border-brand-600/60",
+                table: "w-full border-collapse",
+                head_row: "flex",
+                head_cell: "w-8 text-[10px] uppercase tracking-[0.12em] text-slate-500",
+                row: "flex w-full",
+                cell: "w-8 h-8 flex items-center justify-center text-xs text-slate-200",
+                day: "w-7 h-7 rounded-lg hover:bg-night-700",
+                day_selected: "bg-brand-500 text-night-900",
+                day_today: "border border-brand-600/60",
+                day_outside: "text-slate-600",
+              }}
+            />
+            <div className="mt-3 flex items-center justify-between">
+              <button
+                type="button"
+                className="text-xs text-slate-400 hover:text-slate-200"
+                onClick={() => onChange("")}
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                className="text-xs text-slate-400 hover:text-slate-200"
+                onClick={() => setOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+          </Popover.Content>
+        </Popover.Portal>
       </Popover.Root>
     </div>
   );

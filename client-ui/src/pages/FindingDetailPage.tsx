@@ -215,6 +215,7 @@ export default function FindingDetailPage() {
               setLocalFindingOverride({
                 active: false,
                 isMitigated: reason === "mitigated",
+                riskAccepted: reason === "risk_accepted",
                 falsePositive: reason === "false_positive",
                 outOfScope: reason === "out_of_scope",
                 duplicate: reason === "duplicate",
@@ -224,6 +225,7 @@ export default function FindingDetailPage() {
               setLocalFindingOverride({
                 active: true,
                 isMitigated: false,
+                riskAccepted: false,
                 falsePositive: false,
                 outOfScope: false,
                 duplicate: false,

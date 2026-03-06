@@ -11,6 +11,7 @@ from aist.api import (
     AISTFindingExportAPI,
     AISTFindingListAPI,
     AISTFindingNotesAPI,
+    AISTFindingRiskApprovalAPI,
     AISTFindingTimelineAPI,
     AISTMeAPI,
     AISTMeChangePasswordAPI,
@@ -148,6 +149,7 @@ urlpatterns = [
     path("findings/timeline/", AISTFindingTimelineAPI.as_view(), name="finding_timeline"),
     path("findings/bulk-status/", AISTFindingBulkStatusAPI.as_view(), name="finding_bulk_status"),
     path("findings/<int:finding_id>/notes/", AISTFindingNotesAPI.as_view(), name="finding_notes"),
+    path("findings/<int:finding_id>/risk-approval/", AISTFindingRiskApprovalAPI.as_view(), name="finding_risk_approval"),
     path("findings/<int:finding_id>/export/", AISTFindingExportAPI.as_view(), name="finding_export"),
     path(
         "projects_version/<int:project_version_id>/files/blob/<path:subpath>",

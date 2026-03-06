@@ -779,6 +779,54 @@ export function useCalendarEventDetail(eventId?: string, projectId?: number, tim
   });
 }
 
+export type RiskApprovalCurrent = {
+  id: number;
+  acceptedBy: string;
+  expirationDate: string | null;
+  reactivateExpired: boolean;
+  decisionDetails: string;
+  created: string;
+};
+
+export type RiskApprovalStatus = {
+  enabled: boolean;
+  current: RiskApprovalCurrent | null;
+};
+
+export function useRiskApprovalStatus(findingId?: number) {
+  return useQuery({
+    queryKey: ["risk-approval-status", findingId],
+    queryFn: async () => {
+      if (!findingId) return null;
+      const data = await fetchJson<{
+        enabled: boolean;
+        current: {
+          id: number;
+          accepted_by: string;
+          expiration_date: string | null;
+          reactivate_expired: boolean;
+          decision_details: string;
+          created: string;
+        } | null;
+      }>(getRoute("finding_risk_approval_url", { finding_id: findingId }));
+      return {
+        enabled: data.enabled,
+        current: data.current
+          ? {
+              id: data.current.id,
+              acceptedBy: data.current.accepted_by,
+              expirationDate: data.current.expiration_date,
+              reactivateExpired: data.current.reactivate_expired,
+              decisionDetails: data.current.decision_details,
+              created: data.current.created,
+            }
+          : null,
+      } satisfies RiskApprovalStatus;
+    },
+    enabled: Boolean(findingId),
+  });
+}
+
 export function useFindingTimeline(findingId?: number) {
   return useQuery({
     queryKey: ["finding-timeline", findingId],

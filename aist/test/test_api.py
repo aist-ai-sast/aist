@@ -19,6 +19,7 @@ from dojo.models import (
     Product_Member,
     Product_Type,
     Product_Type_Member,
+    Risk_Acceptance,
     Role,
     SLA_Configuration,
     Test,
@@ -481,6 +482,118 @@ class AISTFindingAuthorizationTests(AISTApiBase):
             reverse("aist_api:finding_notes", kwargs={"finding_id": self.other_finding.id}),
         )
         self.assertEqual(resp.status_code, 404)
+
+    def test_finding_risk_approval_creates_risk_acceptance_and_sets_status(self):
+        response = self.client.post(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
+            data={
+                "justification": "Credential is revoked, monitoring is enabled, and remediation is scheduled.",
+                "accepted_by": "Security Manager",
+                "expiration_date": "2026-12-31",
+                "reactivate_expired": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+
+        self.own_finding.refresh_from_db()
+        self.assertTrue(self.own_finding.risk_accepted)
+        self.assertFalse(self.own_finding.active)
+
+        risk_acceptance = Risk_Acceptance.objects.get(id=response.data["id"])
+        self.assertIn(self.own_finding, risk_acceptance.accepted_findings.all())
+        self.assertEqual(risk_acceptance.decision_details, "Credential is revoked, monitoring is enabled, and remediation is scheduled.")
+
+    def test_finding_risk_approval_denies_other_product_finding(self):
+        response = self.client.post(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.other_finding.id}),
+            data={"justification": "Not accessible from this account."},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_finding_risk_approval_requires_justification(self):
+        response = self.client.post(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
+            data={"justification": ""},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("justification", response.data)
+
+    def test_finding_risk_approval_respects_product_full_risk_acceptance_setting(self):
+        self.product.enable_full_risk_acceptance = False
+        self.product.save(update_fields=["enable_full_risk_acceptance"])
+
+        response = self.client.post(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
+            data={"justification": "Attempt while full RA is disabled."},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_finding_risk_approval_get_returns_enabled_and_no_current(self):
+        response = self.client.get(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.data["enabled"])
+        self.assertIsNone(response.data["current"])
+
+    def test_finding_risk_approval_get_reflects_disabled_product_setting(self):
+        self.product.enable_full_risk_acceptance = False
+        self.product.save(update_fields=["enable_full_risk_acceptance"])
+
+        response = self.client.get(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["enabled"])
+        self.assertIsNone(response.data["current"])
+
+    def test_finding_risk_approval_get_returns_current_approval_after_post(self):
+        self.client.post(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
+            data={
+                "justification": "Accepted for business reasons.",
+                "accepted_by": "Risk Owner",
+                "expiration_date": "2027-01-01",
+                "reactivate_expired": True,
+            },
+            format="json",
+        )
+        response = self.client.get(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(response.data["current"])
+        self.assertEqual(response.data["current"]["accepted_by"], "Risk Owner")
+        self.assertEqual(response.data["current"]["decision_details"], "Accepted for business reasons.")
+        self.assertEqual(str(response.data["current"]["expiration_date"]), "2027-01-01")
+
+    def test_finding_risk_approval_delete_revokes_and_reactivates(self):
+        self.client.post(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
+            data={"justification": "Temporary acceptance."},
+            format="json",
+        )
+        self.own_finding.refresh_from_db()
+        self.assertFalse(self.own_finding.active)
+
+        response = self.client.delete(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
+        )
+        self.assertEqual(response.status_code, 204, response.content)
+
+        self.own_finding.refresh_from_db()
+        self.assertTrue(self.own_finding.active)
+        self.assertFalse(self.own_finding.risk_accepted)
+
+    def test_finding_risk_approval_delete_returns_404_when_no_approval(self):
+        response = self.client.delete(
+            reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_finding_list_does_not_grant_access_via_product_member_only(self):
         isolated_type = Product_Type.objects.create(name="Isolated Finding PT")

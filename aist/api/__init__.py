@@ -17,6 +17,7 @@ from aist.api.findings import (
     AISTFindingExportAPI,
     AISTFindingListAPI,
     AISTFindingNotesAPI,
+    AISTFindingRiskApprovalAPI,
 )
 from aist.api.github_integration import (
     GithubConnectCallbackAPI,
@@ -86,10 +87,12 @@ __all__ = [
     "AISTAuthLogoutAllAPI",
     "AISTCalendarEventDetailAPI",
     "AISTCalendarEventsAPI",
+    "AISTCweDetailAPI",
     "AISTFindingBulkStatusAPI",
     "AISTFindingExportAPI",
     "AISTFindingListAPI",
     "AISTFindingNotesAPI",
+    "AISTFindingRiskApprovalAPI",
     "AISTFindingTimelineAPI",
     "AISTMeAPI",
     "AISTMeChangePasswordAPI",

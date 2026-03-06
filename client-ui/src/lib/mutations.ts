@@ -65,6 +65,67 @@ export function useCloseFinding() {
   });
 }
 
+export function useRiskApproveFinding() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      justification,
+      acceptedBy,
+      expirationDate,
+      reactivateExpired,
+    }: {
+      id: number;
+      justification: string;
+      acceptedBy?: string;
+      expirationDate?: string;
+      reactivateExpired?: boolean;
+    }) => {
+      const payload: Record<string, unknown> = {
+        justification,
+      };
+      if (acceptedBy && acceptedBy.trim()) {
+        payload.accepted_by = acceptedBy.trim();
+      }
+      if (expirationDate) {
+        payload.expiration_date = expirationDate;
+      }
+      if (reactivateExpired !== undefined) {
+        payload.reactivate_expired = reactivateExpired;
+      }
+      return fetchJson(getRoute("finding_risk_approval_url", { finding_id: id }), {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["findings"] });
+      queryClient.invalidateQueries({ queryKey: ["finding"] });
+      queryClient.invalidateQueries({ queryKey: ["finding-timeline", variables.id] });
+      queryClient.invalidateQueries({ queryKey: ["finding-notes", variables.id] });
+      queryClient.invalidateQueries({ queryKey: ["risk-approval-status", variables.id] });
+    },
+  });
+}
+
+export function useRevokeRiskApproval() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id }: { id: number }) => {
+      return fetchJson(getRoute("finding_risk_approval_url", { finding_id: id }), {
+        method: "DELETE",
+      });
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["findings"] });
+      queryClient.invalidateQueries({ queryKey: ["finding"] });
+      queryClient.invalidateQueries({ queryKey: ["finding-timeline", variables.id] });
+      queryClient.invalidateQueries({ queryKey: ["finding-notes", variables.id] });
+      queryClient.invalidateQueries({ queryKey: ["risk-approval-status", variables.id] });
+    },
+  });
+}
+
 export function useUpdateFindingSeverity() {
   const queryClient = useQueryClient();
   return useMutation({

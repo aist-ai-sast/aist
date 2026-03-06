@@ -17,7 +17,7 @@ from dojo.api_v2 import serializers as dojo_serializers
 from dojo.authorization.roles_permissions import Permissions
 from dojo.filters import ApiFindingFilter
 from dojo.finding import helper as finding_helper
-from dojo.models import Notes
+from dojo.models import Notes, Risk_Acceptance
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_field
 from openpyxl import Workbook
@@ -518,6 +518,133 @@ class AISTFindingExportAPI(AuthorizedQuerySetMixin, APIView):
         response = HttpResponse(csv_buffer.getvalue(), content_type="text/csv; charset=utf-8")
         response["Content-Disposition"] = f'attachment; filename="aist_finding_{finding.id}.csv"'
         return response
+
+
+class AISTFindingRiskApprovalRequestSerializer(serializers.Serializer):
+    max_justification_length = 4096
+
+    justification = serializers.CharField(
+        allow_blank=False,
+        trim_whitespace=True,
+        max_length=max_justification_length,
+    )
+    accepted_by = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        trim_whitespace=True,
+        max_length=200,
+    )
+    expiration_date = serializers.DateField(required=False, allow_null=True)
+    reactivate_expired = serializers.BooleanField(required=False, default=True)
+
+
+class AISTRiskApprovalCurrentSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    accepted_by = serializers.CharField(allow_blank=True, default="")
+    expiration_date = serializers.DateField(allow_null=True)
+    reactivate_expired = serializers.BooleanField()
+    decision_details = serializers.CharField(allow_blank=True, default="")
+    created = serializers.DateTimeField()
+
+
+class AISTRiskApprovalStatusSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+    current = AISTRiskApprovalCurrentSerializer(allow_null=True)
+
+
+class AISTFindingRiskApprovalAPI(AuthorizedQuerySetMixin, APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = AISTFindingRiskApprovalRequestSerializer
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_findings,
+        permission=Permissions.Risk_Acceptance,
+    )
+
+    @extend_schema(
+        tags=[AISTApiTag.FINDINGS.value],
+        summary="Get risk approval status for finding",
+        responses={200: AISTRiskApprovalStatusSerializer},
+    )
+    def get(self, request, finding_id: int):
+        finding = self.get_authorized_object(id=finding_id)
+        enabled = finding.test.engagement.product.enable_full_risk_acceptance
+        risk_acceptance = Risk_Acceptance.objects.filter(accepted_findings=finding).first()
+        current = None
+        if risk_acceptance:
+            current = {
+                "id": risk_acceptance.id,
+                "accepted_by": risk_acceptance.accepted_by or "",
+                "expiration_date": risk_acceptance.expiration_date.date() if risk_acceptance.expiration_date else None,
+                "reactivate_expired": risk_acceptance.reactivate_expired,
+                "decision_details": risk_acceptance.decision_details or "",
+                "created": risk_acceptance.created,
+            }
+        return Response(AISTRiskApprovalStatusSerializer({"enabled": enabled, "current": current}).data)
+
+    @extend_schema(
+        tags=[AISTApiTag.FINDINGS.value],
+        summary="Create risk approval for finding",
+        request=AISTFindingRiskApprovalRequestSerializer,
+        responses={201: dojo_serializers.RiskAcceptanceSerializer},
+    )
+    def post(self, request, finding_id: int):
+        finding = self.get_authorized_object(id=finding_id)
+        input_serializer = self.serializer_class(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        accepted_by = input_serializer.validated_data.get("accepted_by") or request.user.get_username()
+        expiration_date = input_serializer.validated_data.get("expiration_date")
+        expiration_date_dt = None
+        if expiration_date:
+            expiration_date_dt = timezone.make_aware(datetime.combine(expiration_date, time.max))
+
+        risk_payload = {
+            "name": f"AIST Risk Approval for finding #{finding.id}",
+            "recommendation": Risk_Acceptance.TREATMENT_ACCEPT,
+            "decision": Risk_Acceptance.TREATMENT_ACCEPT,
+            "decision_details": input_serializer.validated_data["justification"],
+            "accepted_by": accepted_by,
+            "owner": request.user.id,
+            "accepted_findings": [finding.id],
+            "reactivate_expired": input_serializer.validated_data.get("reactivate_expired", True),
+            "restart_sla_expired": False,
+            "expiration_date": expiration_date_dt,
+        }
+        serializer = dojo_serializers.RiskAcceptanceSerializer(
+            data=risk_payload,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        risk_acceptance = serializer.save()
+
+        return Response(
+            dojo_serializers.RiskAcceptanceSerializer(
+                risk_acceptance,
+                context={"request": request},
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(
+        tags=[AISTApiTag.FINDINGS.value],
+        summary="Revoke risk approval for finding",
+        responses={204: None, 404: None},
+    )
+    def delete(self, request, finding_id: int):
+        finding = self.get_authorized_object(id=finding_id)
+        risk_acceptance = Risk_Acceptance.objects.filter(accepted_findings=finding).first()
+        if not risk_acceptance:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        risk_acceptance.accepted_findings.remove(finding)
+        finding.risk_accepted = False
+        finding.active = True
+        finding.save(update_fields=["risk_accepted", "active"])
+
+        if not risk_acceptance.accepted_findings.exists():
+            risk_acceptance.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AISTFindingBulkStatusRequestSerializer(serializers.Serializer):
