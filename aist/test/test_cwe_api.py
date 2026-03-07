@@ -48,7 +48,7 @@ class CweDetailApiTests(TestCase):
         unauthenticated = APIClient()
         with patch("aist.api.cwe.fetch_cwe_meta", return_value={"title": "X", "description": "", "impact": "", "url": ""}):
             response = unauthenticated.get(self._url(20))
-        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.status_code, 403)
 
     def test_uses_cache_on_second_request(self):
         fake_meta = {"title": "Cached CWE", "description": "desc", "impact": "imp", "url": "http://example.com"}

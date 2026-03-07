@@ -97,6 +97,18 @@ def clear_aist_duplicate_tags(finding: Finding) -> None:
         _clear_tag(finding, tag)
 
 
+def _canonical_root_candidate(finding: Finding) -> Finding:
+    if finding.duplicate and finding.duplicate_finding:
+        return finding.duplicate_finding
+    return finding
+
+
+def _prepare_root_for_set_duplicate(finding: Finding) -> Finding:
+    if finding.duplicate and finding.duplicate_finding_id is None:
+        finding.duplicate = False
+    return finding
+
+
 def _resolve_scope_for_targets(target_findings: list[Finding]) -> list[Finding]:
     if not target_findings:
         return []
@@ -190,7 +202,7 @@ def run_canonical_dedupe(
                 if score.score > best_score:
                     best_score = score.score
                     best_verdict = score.verdict
-                    best_root = previous.duplicate_finding if previous.duplicate else previous
+                    best_root = _canonical_root_candidate(previous)
 
             decisions[finding.id] = CanonicalMatchDecision(
                 verdict=best_verdict,
@@ -209,7 +221,7 @@ def run_canonical_dedupe(
                     summary.conflicts += 1
                 if apply and not dry_run:
                     try:
-                        set_duplicate(finding, best_root)
+                        set_duplicate(finding, _prepare_root_for_set_duplicate(best_root))
                         summary.applied_duplicates += 1
                     except Exception:
                         summary.conflicts += 1
@@ -226,7 +238,7 @@ def run_canonical_dedupe(
                         summary.candidates += 1
                         continue
                     try:
-                        set_duplicate(finding, best_root)
+                        set_duplicate(finding, _prepare_root_for_set_duplicate(best_root))
                         summary.promoted_candidates += 1
                         summary.applied_duplicates += 1
                         _clear_tag(finding, AIST_DEDUPE_CANDIDATE_TAG)

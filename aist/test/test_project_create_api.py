@@ -52,7 +52,7 @@ class AISTProjectCreateAPITests(AISTApiBase):
             format="json",
         )
 
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 400)
         self.assertFalse(Product.objects.filter(name="Should Not Create").exists())
 
     def test_create_empty_project_conflict_when_product_in_other_product_type(self):

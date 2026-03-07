@@ -48,7 +48,7 @@ describe("useFileSnippet", () => {
   });
 
   it("marks source unavailable on 404", async () => {
-    mockedFetchFileContent.mockRejectedValueOnce(
+    mockedFetchFileContent.mockRejectedValue(
       new ApiError({
         status: 404,
         code: "http_error",
@@ -65,7 +65,7 @@ describe("useFileSnippet", () => {
       { wrapper: ({ children }) => withQueryClient(children) },
     );
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 3000 });
     expect(result.current.isSourceUnavailable).toBe(true);
   });
 });

@@ -3,7 +3,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from celery.exceptions import Ignore
 from django.utils import timezone
 from dojo.models import Engagement, Finding, Test, Test_Type
 
@@ -62,6 +61,10 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                 additional_environments={},
                 ai_mode="MANUAL",
                 ai_filter_snapshot=None,
+                enrich_config=lambda: {
+                    "project_version_descriptor": {"id": version_b.id, "version": "develop"},
+                    "log_level": "INFO",
+                },
             )
 
             with self.assertRaises(ValueError):
@@ -133,6 +136,13 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                     **project_version_state,
                     "excluded_paths": [],
                 },
+                enrich_config=lambda: {
+                    "project_version_descriptor": {
+                        **project_version_state,
+                        "excluded_paths": [],
+                    },
+                    "log_level": "INFO",
+                },
             )
             mock_configure.return_value = {
                 "git": {"resolved_commit": resolved_commit},
@@ -195,7 +205,6 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
             patch("aist.tasks.pipeline.configure_project_run_analyses") as mock_configure,
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[SimpleNamespace(test_id=dd_test.id)]),
             patch("aist.tasks.pipeline.postprocess_findings", return_value=SimpleNamespace()) as mock_postprocess,
-            patch("aist.tasks.pipeline.run_sast_pipeline.replace", side_effect=Ignore()),
         ):
             project_version_state = {"id": branch.id, "version": "main", "type": VersionType.GIT_BRANCH}
 
@@ -238,6 +247,13 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                     **project_version_state,
                     "excluded_paths": [],
                 },
+                enrich_config=lambda: {
+                    "project_version_descriptor": {
+                        **project_version_state,
+                        "excluded_paths": [],
+                    },
+                    "log_level": "INFO",
+                },
             )
             mock_configure.return_value = {
                 "git": {"resolved_commit": resolved_commit},
@@ -247,8 +263,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                 "tmp_analyzer_config_path": "/aist-analyzers.yml",
             }
 
-            with self.assertRaises(Ignore):
-                run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id})
+            run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id})
 
         pipeline.refresh_from_db()
         branch.refresh_from_db()
@@ -258,8 +273,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
         self.assertEqual(hash_version.version, resolved_commit)
         self.assertTrue(hash_version.findings.filter(id=finding.id).exists())
         self.assertTrue(branch.findings.filter(id=finding.id).exists())
-        self.assertEqual(mock_postprocess.call_args.args[5]["id"], hash_version.id)
-        self.assertEqual(mock_postprocess.call_args.args[5]["type"], VersionType.GIT_HASH)
+        mock_postprocess.assert_called_once_with(pipeline.id, "INFO")
 
     def test_branch_launch_ignores_missing_finding_ids_before_m2m_and_postprocess(self):
         branch = AISTProjectVersion.objects.create(
@@ -307,7 +321,6 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
             patch("aist.tasks.pipeline.configure_project_run_analyses") as mock_configure,
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[SimpleNamespace(test_id=dd_test.id)]),
             patch("aist.tasks.pipeline.postprocess_findings", return_value=SimpleNamespace()) as mock_postprocess,
-            patch("aist.tasks.pipeline.run_sast_pipeline.replace", side_effect=Ignore()),
             patch("aist.tasks.pipeline.Finding.objects.filter") as mock_finding_filter,
         ):
             project_version_state = {"id": branch.id, "version": "main", "type": VersionType.GIT_BRANCH}
@@ -357,6 +370,13 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                     **project_version_state,
                     "excluded_paths": [],
                 },
+                enrich_config=lambda: {
+                    "project_version_descriptor": {
+                        **project_version_state,
+                        "excluded_paths": [],
+                    },
+                    "log_level": "INFO",
+                },
             )
             mock_configure.return_value = {
                 "git": {"resolved_commit": resolved_commit},
@@ -366,8 +386,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                 "tmp_analyzer_config_path": "/aist-analyzers.yml",
             }
 
-            with self.assertRaises(Ignore):
-                run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id})
+            run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id})
 
         pipeline.refresh_from_db()
         branch.refresh_from_db()
@@ -378,4 +397,4 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
         self.assertFalse(hash_version.findings.filter(id=missing_finding_id).exists())
         self.assertTrue(branch.findings.filter(id=finding.id).exists())
         self.assertFalse(branch.findings.filter(id=missing_finding_id).exists())
-        self.assertEqual(mock_postprocess.call_args.args[1], [finding.id])
+        mock_postprocess.assert_called_once_with(pipeline.id, "INFO")

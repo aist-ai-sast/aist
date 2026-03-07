@@ -67,6 +67,7 @@ describe("mapCalendarEventToUi", () => {
       "fc-aist-past-event",
       "fc-aist-single-event",
       "fc-aist-type-pipeline_started",
+      "fc-aist-pipeline-status-other",
     ]);
     expect(uiEvent.title).toContain("Started");
     expect(uiEvent.extendedProps.link).toBe("/pipelines?project=13");

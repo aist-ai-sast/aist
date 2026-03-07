@@ -38,7 +38,7 @@ describe("CodeSnippet", () => {
     expect(screen.queryByText("Code snippet unavailable.")).toBeNull();
     expect(screen.getByText("Line is not provided by scanner; showing file content.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Jump to line" })).toBeNull();
-    expect(screen.getByTestId("monaco-mock")).toBeTruthy();
+    expect(await screen.findByTestId("monaco-mock")).toBeTruthy();
   });
 
   it("shows jump to line when highlight is available", () => {

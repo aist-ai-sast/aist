@@ -76,7 +76,7 @@ services:
       DD_CELERY_BROKER_URL: ${DD_CELERY_BROKER_URL:-redis://valkey:6379/0}
       DD_EMAIL_USE_TLS: "${DD_EMAIL_USE_TLS:-}"
       DD_EMAIL_USE_SSL: "${DD_EMAIL_USE_SSL:-}"
-      DD_EMAIL_URL: "${DD_EMAIL_URL:-}"
+      DD_EMAIL_URL: "${DD_EMAIL_URL:-smtp://mailhog:1025}"
       DD_EMAIL_BACKEND: "${DD_EMAIL_BACKEND:-django.core.mail.backends.smtp.EmailBackend}"
       DD_DEFAULT_FROM_EMAIL: "${DD_DEFAULT_FROM_EMAIL:-}"
       DD_SERVER_EMAIL: "${DD_SERVER_EMAIL:-}"
@@ -143,7 +143,7 @@ services:
       DD_CELERY_BROKER_URL: ${DD_CELERY_BROKER_URL:-redis://valkey:6379/0}
       DD_EMAIL_USE_TLS: "${DD_EMAIL_USE_TLS:-}"
       DD_EMAIL_USE_SSL: "${DD_EMAIL_USE_SSL:-}"
-      DD_EMAIL_URL: "${DD_EMAIL_URL:-}"
+      DD_EMAIL_URL: "${DD_EMAIL_URL:-smtp://mailhog:1025}"
       DD_DEFAULT_FROM_EMAIL: "${DD_DEFAULT_FROM_EMAIL:-}"
       DD_SERVER_EMAIL: "${DD_SERVER_EMAIL:-}"
       DD_SECRET_KEY: "${DD_SECRET_KEY:-hhZCp@D28z!n@NED*yB!ROMt+WzsY*iq}"

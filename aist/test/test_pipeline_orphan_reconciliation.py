@@ -49,6 +49,11 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
         return dd_test, finding
 
     def _pipeline_params(self, pv_id: int) -> SimpleNamespace:
+        descriptor = {
+            "id": self.pv.id,
+            "type": self.pv.version_type,
+            "excluded_paths": [],
+        }
         return SimpleNamespace(
             project_version={"id": pv_id, "version": "main"},
             project_name="test_product",
@@ -64,10 +69,10 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             ai_mode="MANUAL",
             ai_filter_snapshot=None,
             resolve_effective_project_version=lambda **_kwargs: self.pv,
-            build_project_version_descriptor=lambda: {
-                "id": self.pv.id,
-                "type": self.pv.version_type,
-                "excluded_paths": [],
+            build_project_version_descriptor=lambda: descriptor,
+            enrich_config=lambda: {
+                "project_version_descriptor": descriptor,
+                "log_level": "INFO",
             },
         )
 

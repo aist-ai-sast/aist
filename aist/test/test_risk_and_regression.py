@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from django.contrib.auth import get_user_model
-from django.test import Client, TestCase
+from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
@@ -25,6 +25,7 @@ from aist.tasks.regression import detect_regressions_for_pipeline
 
 
 class RiskScoreUnitTests(TestCase):
+
     """Unit tests for compute_risk_score()."""
 
     def test_all_zeros_returns_score_zero_and_low(self):
@@ -38,19 +39,19 @@ class RiskScoreUnitTests(TestCase):
         self.assertEqual(result["label"], "low")
 
     def test_medium_threshold_15_gives_medium_label(self):
-        # 5 High × 5 = 25 → medium (≥15, <40)
+        # 5 High x 5 = 25 -> medium (>=15, <40)
         result = compute_risk_score({"Critical": 0, "High": 5, "Medium": 0, "Low": 0, "Info": 0})
         self.assertEqual(result["score"], 25)
         self.assertEqual(result["label"], "medium")
 
     def test_high_threshold_gives_high_label(self):
-        # 8 High × 5 = 40 → high (≥40)
+        # 8 High x 5 = 40 -> high (>=40)
         result = compute_risk_score({"Critical": 0, "High": 8, "Medium": 0, "Low": 0, "Info": 0})
         self.assertEqual(result["score"], 40)
         self.assertEqual(result["label"], "high")
 
     def test_critical_threshold_gives_critical_label(self):
-        # 7 Criticals × 10 = 70 → critical (≥70)
+        # 7 Criticals x 10 = 70 -> critical (>=70)
         result = compute_risk_score({"Critical": 7, "High": 0, "Medium": 0, "Low": 0, "Info": 0})
         self.assertEqual(result["score"], 70)
         self.assertEqual(result["label"], "critical")
@@ -65,6 +66,7 @@ class RiskScoreUnitTests(TestCase):
 
 
 class ProductSummaryRiskScoreApiTests(TestCase):
+
     """Integration tests: risk_score appears in /api/v2/aist/product-summaries/ response."""
 
     def setUp(self):
@@ -98,7 +100,7 @@ class ProductSummaryRiskScoreApiTests(TestCase):
             )
 
     def _url(self):
-        return reverse("product_summary")
+        return reverse("client_product_summary")
 
     def test_risk_score_in_response(self):
         response = self.client.get(self._url())
@@ -107,7 +109,7 @@ class ProductSummaryRiskScoreApiTests(TestCase):
         self.assertEqual(len(results), 1)
         rs = results[0]["risk_score"]
         self.assertIsNotNone(rs)
-        self.assertEqual(rs["score"], 20)   # 2 × 10
+        self.assertEqual(rs["score"], 20)   # 2 x 10
         self.assertEqual(rs["label"], "medium")
 
     def test_zero_findings_gives_low_risk(self):
@@ -129,6 +131,7 @@ class ProductSummaryRiskScoreApiTests(TestCase):
 
 
 class RegressionDetectionTests(TestCase):
+
     """Tests for detect_regressions_for_pipeline()."""
 
     def setUp(self):

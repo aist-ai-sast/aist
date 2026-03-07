@@ -17,7 +17,7 @@ _RISK_WEIGHTS: dict[str, int] = {"Critical": 10, "High": 5, "Medium": 2, "Low": 
 
 def compute_risk_score(severity: dict[str, int]) -> dict:
     """
-    Return a dict with ``score`` (0–100 int) and ``label`` string.
+    Return a dict with ``score`` (0-100 int) and ``label`` string.
 
     Formula: weighted sum of active severity counts, capped at 100.
     Weights: Critical=10, High=5, Medium=2, Low=1.

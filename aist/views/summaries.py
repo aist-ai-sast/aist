@@ -17,7 +17,7 @@ from django.views.decorators.http import require_GET
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import CWE, Finding
 
-from aist.api.common import API_SEVERITY_VALUES, empty_severity_counts
+from aist.api.common import API_SEVERITY_VALUES, compute_risk_score, empty_severity_counts
 from aist.launch_data import PipelineLaunchData
 from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects, get_authorized_findings
@@ -341,6 +341,7 @@ def product_summary(request: HttpRequest) -> HttpResponse:
                 "findings_total": row.get("total", 0),
                 "findings_active": active_count,
                 "severity": severity,
+                "risk_score": compute_risk_score(severity),
                 "risk": {
                     "risk_accepted": row.get("risk_accepted", 0),
                     "under_review": row.get("under_review", 0),

@@ -7,6 +7,8 @@ from django.db import transaction
 from django.utils import timezone
 from dojo.models import Finding
 
+from aist.models import AISTFindingAnnotation
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,8 +20,6 @@ def detect_regressions_for_pipeline(pipeline_id: str, test_ids: list[int]) -> in
 
     Returns the number of regressions detected.
     """
-    from aist.models import AISTFindingAnnotation  # local import to avoid circular
-
     if not test_ids:
         return 0
 
@@ -28,7 +28,7 @@ def detect_regressions_for_pipeline(pipeline_id: str, test_ids: list[int]) -> in
         Finding.objects
         .filter(test_id__in=test_ids)
         .values_list("test__engagement__product_id", flat=True)
-        .distinct()
+        .distinct(),
     )
     if not product_ids:
         return 0
@@ -42,7 +42,7 @@ def detect_regressions_for_pipeline(pipeline_id: str, test_ids: list[int]) -> in
             hash_code__isnull=False,
         )
         .exclude(test_id__in=test_ids)
-        .values_list("hash_code", flat=True)
+        .values_list("hash_code", flat=True),
     )
     if not mitigated_hashes:
         return 0
@@ -55,7 +55,7 @@ def detect_regressions_for_pipeline(pipeline_id: str, test_ids: list[int]) -> in
             active=True,
             hash_code__in=mitigated_hashes,
         )
-        .values_list("id", flat=True)
+        .values_list("id", flat=True),
     )
     if not regression_findings:
         return 0
@@ -64,7 +64,7 @@ def detect_regressions_for_pipeline(pipeline_id: str, test_ids: list[int]) -> in
     count = 0
     with transaction.atomic():
         for finding_id in regression_findings:
-            _, created = AISTFindingAnnotation.objects.update_or_create(
+            _, _created = AISTFindingAnnotation.objects.update_or_create(
                 finding_id=finding_id,
                 defaults={"is_regression": True, "regression_detected_at": now},
             )

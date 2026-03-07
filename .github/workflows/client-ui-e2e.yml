@@ -1,23 +1,85 @@
 name: Client UI e2e tests
 
 on:
+  push:
+    branches:
+      - master
   workflow_dispatch:
     inputs:
       base_url:
         description: "Client UI base URL (for example https://127.0.0.1:8443)"
-        required: true
+        required: false
         type: string
 
 jobs:
   playwright-e2e:
     name: Playwright e2e
     runs-on: ubuntu-latest
+    env:
+      COMPOSE_FILES: -f docker-compose.yml -f docker-compose.integration.yml
+      DJANGO_VERSION: debian
+      NGINX_VERSION: alpine
+      DD_DATABASE_USER: aist
+      DD_DATABASE_PASSWORD: aist
+      DD_TEST_DATABASE_NAME: test_aist
+      DD_TEST_DATABASE_URL: postgresql://aist:aist@postgres:5432/test_aist
+      DD_HTTP_PORT: "8080"
+      DD_TLS_PORT: "8443"
+      GENERATE_TLS_CERTIFICATE: "false"
+      USE_TLS: "false"
+      DD_ALLOWED_HOSTS: localhost,127.0.0.1,host.docker.internal,nginx,[::1]
+      DD_CSRF_TRUSTED_ORIGINS: '["http://127.0.0.1:8080","http://host.docker.internal:8080","http://nginx:8080"]'
+      DD_SESSION_COOKIE_SECURE: "False"
+      DD_CSRF_COOKIE_SECURE: "False"
+      DD_AIST_AUTH_LOGIN_THROTTLE_RATE: 200/min
+      DD_ADMIN_USER: admin
+      DD_ADMIN_PASSWORD: AdminsLoveIntegrationtests!
+      DD_EMAIL_URL: smtp://user:password@localhost:25
+      AIST_TMP_DIR: /tmp/aist
+      ACME_WEBROOT_HOST: /tmp/aist/acme-webroot
+      NGINX_SSL_HOST_DIR: /tmp/aist/nginx-ssl
     defaults:
       run:
         working-directory: client-ui
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set field encryption key
+        run: |
+          echo "FIELD_ENCRYPTION_KEY=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
+        working-directory: .
+
+      - name: Build app images
+        run: docker compose $COMPOSE_FILES build uwsgi nginx
+        working-directory: .
+
+      - name: Prepare host mount paths
+        run: mkdir -p "$ACME_WEBROOT_HOST" "$NGINX_SSL_HOST_DIR"
+        working-directory: .
+
+      - name: Start database and cache
+        run: docker compose $COMPOSE_FILES up --no-deps -d postgres valkey
+        working-directory: .
+
+      - name: Initialize app
+        run: docker compose $COMPOSE_FILES up --no-deps --exit-code-from initializer initializer
+        working-directory: .
+
+      - name: Seed demo business data
+        run: docker compose $COMPOSE_FILES run --rm --no-deps --entrypoint /bin/bash uwsgi -lc "cd /app && python3 manage.py bootstrap_demo_access --password '${DD_ADMIN_PASSWORD}'"
+        working-directory: .
+
+      - name: Start app
+        run: docker compose $COMPOSE_FILES up --no-deps -d uwsgi nginx
+        working-directory: .
+
+      - name: Wait for app readiness
+        run: |
+          timeout 180 bash -c 'until curl -fsS "http://127.0.0.1:${DD_HTTP_PORT}/"; do sleep 5; done'
+        working-directory: .
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -34,5 +96,17 @@ jobs:
 
       - name: Run e2e tests
         env:
-          PLAYWRIGHT_BASE_URL: ${{ inputs.base_url }}
+          PLAYWRIGHT_BASE_URL: ${{ inputs.base_url || format('http://127.0.0.1:{0}', env.DD_HTTP_PORT) }}
+          PLAYWRIGHT_USERNAME: ${{ env.DD_ADMIN_USER }}
+          PLAYWRIGHT_PASSWORD: ${{ env.DD_ADMIN_PASSWORD }}
         run: npm run test:e2e
+
+      - name: Logs
+        if: always()
+        run: docker compose $COMPOSE_FILES logs --tail="2500"
+        working-directory: .
+
+      - name: Shutdown
+        if: always()
+        run: docker compose $COMPOSE_FILES down
+        working-directory: .

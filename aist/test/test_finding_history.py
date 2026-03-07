@@ -242,7 +242,7 @@ class SeverityChangedEventsTests(FindingHistoryBaseTestCase):
         ).values("severity", "title", "pgh_obj_id", "pgh_created_at").first()
         self.assertIsNotNone(row)
         self.assertEqual(row["severity"], "Critical")
-        self.assertEqual(row["title"], "Field check")
+        self.assertEqual(row["title"], "Field Check")
         self.assertEqual(row["pgh_obj_id"], finding.id)
         self.assertIsNotNone(row["pgh_created_at"])
 
@@ -353,7 +353,7 @@ class HistoryEventsWithUsersTests(FindingHistoryBaseTestCase):
         start, end = timezone.now() - timedelta(hours=1), timezone.now() + timedelta(hours=1)
         finding_ids_qs = Finding.objects.filter(id__in=[f.id for f in findings]).values("id")
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             history_events_with_users(finding_ids_qs, start, end)
 
 

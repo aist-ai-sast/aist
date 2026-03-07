@@ -125,9 +125,12 @@ class TimelineApiBaseTestCase(TestCase):
 
 class TimelineApiBasicTests(TimelineApiBaseTestCase):
     def test_requires_authentication(self):
-        self.client.force_authenticate(user=None)
-        response = self._get_timeline()
-        self.assertEqual(response.status_code, 401)
+        unauthenticated = APIClient()
+        response = unauthenticated.get(
+            self._timeline_url(),
+            data={"start": self._base_range()[0].isoformat(), "end": self._base_range()[1].isoformat()},
+        )
+        self.assertEqual(response.status_code, 403)
 
     def test_returns_200_for_authenticated_user(self):
         response = self._get_timeline()

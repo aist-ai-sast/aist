@@ -998,6 +998,7 @@ class AISTLaunchConfigAction(models.Model):
 
 
 class AISTFindingAnnotation(models.Model):
+
     """Per-finding AIST-level flags that cannot be stored on the vendor Finding model."""
 
     finding = models.OneToOneField(

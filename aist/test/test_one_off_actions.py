@@ -4,14 +4,15 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.http import QueryDict
 from django.contrib.auth import get_user_model
+from django.http import QueryDict
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from dojo.authorization.roles_permissions import Roles
 from dojo.models import Product, Product_Type, Product_Type_Member, Role, SLA_Configuration
 
 from aist.celery_signals import on_pipeline_status_changed
+from aist.forms import AISTPipelineRunForm
 from aist.models import AISTPipeline, AISTProject, AISTProjectVersion, AISTStatus, VersionType
 
 
@@ -184,8 +185,6 @@ class OneOffActionsTests(TestCase):
             )
             query_data.setlist("languages", ["go"])
             query_data["selection_signature"] = "stale-signature"
-
-            from aist.forms import AISTPipelineRunForm
 
             form = AISTPipelineRunForm(query_data)
             self.assertEqual(form.data.getlist("analyzers"), ["semgrep", "snyk", "bearer"])

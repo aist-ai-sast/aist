@@ -1,7 +1,7 @@
 # aist/test/test_api.py
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -813,14 +813,14 @@ class AISTFindingAuthorizationTests(AISTApiBase):
             reporter=self.user,
             active=False,
             is_mitigated=False,
-            last_status_update=processed_outside,
         )
+        Finding.objects.filter(id=outside.id).update(last_status_update=processed_outside)
 
         resp = self.client.get(
             reverse("aist_api:finding_list"),
             data={
-                "processed_gte": (now - timedelta(hours=2)).isoformat(),
-                "processed_lte": (now + timedelta(hours=1)).isoformat(),
+                "processed_gte": (now - timedelta(hours=2)).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "processed_lte": (now + timedelta(hours=1)).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
         )
         self.assertEqual(resp.status_code, 200)
@@ -1566,10 +1566,10 @@ class AISTFindingBulkStatusTests(AISTApiBase):
                 msg = "could not obtain lock on row in relation"
                 raise OperationalError(msg)
 
-        def patched_get_qs(self_view):
+        def patched_get_qs(self_view, *args, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
-                return original_get_qs(self_view)
+                return original_get_qs(self_view, *args, **kwargs)
             return _LockedQS()
 
         with patch.object(AISTFindingBulkStatusAPI, "get_authorized_queryset", patched_get_qs):
@@ -1612,10 +1612,10 @@ class AISTFindingBulkStatusTests(AISTApiBase):
             def __iter__(self):
                 return iter([])
 
-        def patched_get_qs(self_view):
+        def patched_get_qs(self_view, *args, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
-                return original_get_qs(self_view)
+                return original_get_qs(self_view, *args, **kwargs)
             return _DeletedQS()
 
         with patch.object(AISTFindingBulkStatusAPI, "get_authorized_queryset", patched_get_qs):
@@ -1929,7 +1929,7 @@ class AISTUIApiTests(AISTApiBase):
         self.project.refresh_from_db()
         self.assertEqual(self.project.organization_id, org.id)
         self.assertEqual(self.project.script_path, "scripts/ui-new.sh")
-        self.assertEqual(self.project.supported_languages, ["python", "go"])
+        self.assertEqual(sorted(self.project.supported_languages), ["go", "python"])
         self.assertTrue(self.project.compilable)
 
     def test_pipeline_stop_api(self):

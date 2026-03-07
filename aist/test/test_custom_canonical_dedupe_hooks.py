@@ -226,3 +226,33 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
         self.assertTrue(imported.duplicate)
         self.assertEqual(imported.duplicate_finding_id, original.id)
         self.assertIn(AIST_DEDUPE_AUTO_TAG, set(imported.tags.values_list("name", flat=True)))
+
+    def test_batch_hook_uses_previous_finding_as_root_when_duplicate_chain_is_broken(self):
+        semgrep_test = self._create_test("Semgrep JSON Report")
+        snyk_test = self._create_test("Snyk Code Scan")
+        broken_historical = self._create_finding(
+            test=semgrep_test,
+            title="JWT token detected",
+            vuln_id="generic_secrets_security_detected_jwt_token_detected_jwt_token",
+            file_path="src/config.ts",
+            line=122,
+            cwe=321,
+        )
+        Finding.objects.filter(id=broken_historical.id).update(duplicate=True, duplicate_finding=None)
+        broken_historical.refresh_from_db()
+
+        imported = self._create_finding(
+            test=snyk_test,
+            title="Hardcoded non-crypto secret",
+            vuln_id="javascript_hardcodednoncryptosecret",
+            file_path="src/config.ts",
+            line=122,
+            cwe=547,
+        )
+
+        dedupe_batch_of_findings([imported])
+        imported.refresh_from_db()
+
+        self.assertTrue(imported.duplicate)
+        self.assertEqual(imported.duplicate_finding_id, broken_historical.id)
+        self.assertIn(AIST_DEDUPE_AUTO_TAG, set(imported.tags.values_list("name", flat=True)))

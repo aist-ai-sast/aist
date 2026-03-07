@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, act } from "@testing-library/react";
+import "@testing-library/jest-dom/vitest";
+
+import { fireEvent, render, screen, act, cleanup } from "@testing-library/react";
 import type { ChangeEvent, ReactNode } from "react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 import type { Finding } from "../types";
 import type { RiskApprovalStatus } from "../lib/queries";
@@ -121,6 +123,10 @@ function buildFinding(overrides?: Partial<Finding>): Finding {
 }
 
 describe("FindingStatusActions", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     closeMutate.mockReset();
     riskMutate.mockReset();
