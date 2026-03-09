@@ -4,12 +4,11 @@ from mimetypes import guess_type
 from pathlib import Path
 
 import requests
-from django.http import FileResponse, Http404, HttpResponse, HttpResponseServerError
+from django.http import FileResponse, Http404, HttpResponse
 from django.utils.encoding import iri_to_uri
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
-from pipeline.defect_dojo.repo_info import read_repo_params  # type: ignore[import-not-found]
 from rest_framework import generics, serializers
 from rest_framework.permissions import IsAuthenticated
 
@@ -19,7 +18,6 @@ from aist.api.schema import AISTApiTag
 from aist.link_builder import LinkBuilder
 from aist.models import VersionType
 from aist.queries import get_authorized_aist_project_versions
-from aist.utils.pipeline import get_project_build_path
 
 # ----------------------------
 # Module-level error messages
@@ -144,14 +142,6 @@ class ProjectVersionFileBlobAPI(AuthorizedQuerySetMixin, generics.GenericAPIView
             raw_url = link_builder.build_raw_url(repo_obj.host(), ref, subpath)
             return self._return_remote_bytes(raw_url, Path(subpath).name, {})
 
-        # --- Case 3: No repository_info, use local build path + repo_info ---
-        try:
-            repo_path = get_project_build_path(project_version.project.product.name,
-                                               ref or "default")
-        except RuntimeError:
-            return HttpResponseServerError()
-
-        # Read Git metadata from local repo
-        params = read_repo_params(str(repo_path))
-        raw_url = link_builder.build_raw_url(params.repo_url, params.branch_tag or ref, subpath)
-        return self._return_remote_bytes(raw_url, Path(subpath).name, {})
+        # Case 3: No repository_info and no SCM binding — cannot serve file.
+        # Pipeline workspaces are ephemeral (per-run) and not available at request time.
+        raise Http404(ERR_FILE_NOT_FOUND_IN_REPOSITORY)

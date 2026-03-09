@@ -7,7 +7,7 @@ from django.utils import timezone
 from aist.models import AISTProjectVersion, PipelineLaunchQueue
 from aist.pipeline_args import PipelineArguments
 from aist.tasks.pipeline import run_sast_pipeline
-from aist.utils.pipeline import create_pipeline_object
+from aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline
 
 logger = logging.getLogger("aist")
 
@@ -100,6 +100,14 @@ def dispatch_queued_pipelines(async_user=None):
                 getattr(project, "id", None),
                 getattr(sched, "id", None),
                 getattr(item.launch_config, "id", None) if item.launch_config else None,
+            )
+            continue
+
+        if has_unfinished_pipeline(project_version):
+            logger.info(
+                "Dispatcher: unfinished pipeline exists for project_version=%s; skip queue_id=%s",
+                project_version.id,
+                item.id,
             )
             continue
 

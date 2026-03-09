@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
@@ -11,6 +13,7 @@ from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionTyp
 from aist.pipeline_args import PipelineArguments
 from aist.tasks.dedup import watch_deduplication
 from aist.utils.pipeline import (
+    cleanup_project_build_path,
     finish_pipeline,
     get_project_build_path,
     is_terminal_pipeline_status,
@@ -110,8 +113,13 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
         script_path = params.script_path
         dockerfile_path = params.dockerfile_path
 
-        project_build_path = get_project_build_path(project_name or "project",
-                                                    params.project_version.get("version", "default"))
+        project_build_path = get_project_build_path(
+            project_name or "project",
+            params.project_version.get("version", "default"),
+            pipeline_id,
+        )
+        # Isolate output directory per pipeline run to prevent concurrent-write collisions.
+        output_dir = str(Path(output_dir) / pipeline_id)
 
         logger.info("Starting configure_project_run_analyses")
         ld = PipelineLaunchData(configure_project_run_analyses(
@@ -176,6 +184,13 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
             trim_path=ld.trim_path,
             pipeline_id=pipeline_id,
             log_level=log_level,
+        )
+        # Source workspace is no longer needed after upload; clean it up so
+        # per-run directories don't accumulate on disk.
+        cleanup_project_build_path(
+            project_name or "project",
+            params.project_version.get("version", "default"),
+            pipeline_id,
         )
 
         tests: list[Test] = []

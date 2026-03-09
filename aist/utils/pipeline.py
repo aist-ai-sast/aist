@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import uuid
 from pathlib import Path
 
@@ -35,14 +36,44 @@ def has_unfinished_pipeline(project_version) -> bool:
     )
 
 
-def get_project_build_path(project_name, project_version):
+def get_project_build_path(project_name: str, project_version: str, pipeline_id: str) -> str:
+    """
+    Return an isolated workspace path for a single pipeline run.
+
+    Path structure: <AIST_PROJECTS_BUILD_DIR>/<project_name>/<project_version>/runs/<pipeline_id>
+    Each run gets its own directory, eliminating concurrent-checkout races.
+    """
     project_build_path = getattr(settings, "AIST_PROJECTS_BUILD_DIR", None)
     if not project_build_path:
         raise RuntimeError(BUILD_DIR_WARNING)
 
     return str(
-        Path(project_build_path) / (project_name or "project") / (project_version or "default"),
+        Path(project_build_path)
+        / (project_name or "project")
+        / (project_version or "default")
+        / "runs"
+        / pipeline_id,
     )
+
+
+def cleanup_project_build_path(project_name: str, project_version: str, pipeline_id: str) -> None:
+    """Remove the per-pipeline workspace directory created by get_project_build_path."""
+    try:
+        project_build_path = getattr(settings, "AIST_PROJECTS_BUILD_DIR", None)
+        if not project_build_path:
+            return
+        run_dir = (
+            Path(project_build_path)
+            / (project_name or "project")
+            / (project_version or "default")
+            / "runs"
+            / pipeline_id
+        )
+        if run_dir.exists():
+            shutil.rmtree(run_dir)
+            _logger.info("Cleaned up pipeline workspace: %s", run_dir)
+    except Exception:
+        _logger.exception("Failed to clean up pipeline workspace (pipeline_id=%s)", pipeline_id)
 
 
 def set_pipeline_status(
