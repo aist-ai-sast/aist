@@ -1,20 +1,27 @@
 from __future__ import annotations
 
+import logging
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.utils import timezone
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 from aist.ai_filter import validate_and_normalize_filter
-from aist.models import AISTProject, AISTProjectVersion, VersionType
+from aist.models import AISTProject, AISTProjectScript, AISTProjectVersion, VersionType
 from aist.utils.pipeline_imports import _load_analyzers_config
+
+_logger = logging.getLogger(__name__)
 
 # Error messages (for TRY003/EM101/EM102)
 MSG_PROJECT_NOT_FOUND_TPL = "AISTProject with id={} not found"
-MSG_INCORRECT_SCRIPT_PATH = "Incorrect script path for AIST pipeline."
 MSG_DOCKERFILE_NOT_FOUND = "Dockerfile does not exist"
 
 
@@ -236,7 +243,7 @@ class PipelineArguments:
         The dictionary must contain `project_id` instead of `project`.
         """
         try:
-            project = AISTProject.objects.get(id=data["project_id"])
+            project = AISTProject.objects.select_related("active_script").get(id=data["project_id"])
         except AISTProject.DoesNotExist:
             msg = MSG_PROJECT_NOT_FOUND_TPL.format(data["project_id"])
             raise ValueError(msg)
@@ -272,22 +279,20 @@ class PipelineArguments:
             target_languages=self.languages,
             show_only_parent=True,
         )
-        names = cfg.get_names(filtered)
+        names = set(cfg.get_names(filtered))
         profile = self.project.profile
         if not profile:
             # Just default list, by language
-            return names
+            return list(names)
 
         analyzer_profile = profile.get("analyzers", {})
         if analyzer_profile:
             if analyzer_profile.get("exclude"):
-                for name in analyzer_profile.get("exclude"):
-                    names.remove(name)
+                names.difference_update(analyzer_profile.get("exclude"))
             if analyzer_profile.get("include", None):
-                for name in analyzer_profile.get("include"):
-                    names.add(name)
+                names.update(analyzer_profile.get("include"))
 
-        return names
+        return list(names)
 
     @property
     def languages(self) -> list[str]:
@@ -303,13 +308,36 @@ class PipelineArguments:
     def project_name(self) -> str:
         return self.project.product.name
 
-    @property
-    def script_path(self) -> str:
-        script_path = self.pipeline_path / self.project.script_path
-        if not script_path.is_file():
-            msg = MSG_INCORRECT_SCRIPT_PATH
-            raise RuntimeError(msg)
-        return str(script_path)
+    @contextmanager
+    def script_path_context(self) -> Iterator[str]:
+        """
+        Write the active script to a temp file and yield its path.
+        The temp file is removed when the context exits.
+        If active_script is not set, falls back to the shared default automatically.
+        """
+        if not self.project.active_script_id:
+            _logger.warning(
+                "Project %s has no active_script; falling back to shared default.",
+                self.project.id,
+            )
+            script = AISTProjectScript.get_shared_default()
+            self.project.active_script = script
+            self.project.save(update_fields=["active_script", "updated"])
+        script_path = self._write_script_to_temp(self.project.active_script)
+        try:
+            yield script_path
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
+    def _write_script_to_temp(self, script) -> str:
+        """Write script content to an executable temp file and return its path."""
+        with tempfile.NamedTemporaryFile(
+            suffix=".sh", mode="w", encoding="utf-8", delete=False,
+        ) as tmp:
+            tmp.write(script.content)
+            path = tmp.name
+        Path(path).chmod(0o700)
+        return path
 
     @property
     def output_dir(self) -> str:

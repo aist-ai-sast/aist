@@ -4,6 +4,7 @@ from django.contrib.auth.decorators import login_required
 from django.db.models import Prefetch
 from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_POST
 from dojo.authorization.authorization import user_has_permission_or_403
@@ -100,7 +101,6 @@ def aist_project_update_view(request: HttpRequest, project_id: int) -> HttpRespo
     Update editable fields of a single AISTProject.
 
     Expected POST fields:
-    - script_path: str (required)
     - supported_languages: comma-separated string, e.g. "python, c++, java"
     - compilable: "on" / missing (checkbox)
     - profile: JSON string representing an object (optional)
@@ -134,7 +134,6 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
     - One Organization can have many AISTProject objects.
     - Projects without an Organization are shown under the "Others" group.
     - Only fields that are safe to edit from UI are exposed:
-      * script_path
       * supported_languages
       * compilable
       * profile
@@ -143,7 +142,7 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
     # Organizations with their projects prefetched to avoid N+1 queries.
     project_qs = (
         get_authorized_aist_projects(Permissions.Product_View, user=request.user)
-        .select_related("product", "repository")
+        .select_related("product", "repository", "active_script")
         .order_by("product__name", "id")
     )
     organizations = (
@@ -171,5 +170,8 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
             "aist_status_choices": AISTStatus.choices,
             "aist_action_types": AISTLaunchConfigAction.ActionType.choices,
             "ai_filter_reference": get_ai_filter_reference(),
+            # URL template: replace literal "0" with a project id in JS.
+            "active_script_url_template": reverse("aist_api:project_active_script", kwargs={"project_id": 0}),
+            "project_scripts_url_template": reverse("aist_api:project_script_list_create", kwargs={"project_id": 0}),
         },
     )

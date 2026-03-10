@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import uuid
+
 from django.urls import reverse
 from dojo.authorization.roles_permissions import Roles
 from dojo.models import Product, Product_Type, Product_Type_Member, Role
+from rest_framework.test import APIClient
 
-from aist.models import AISTProject, Organization
+from aist.models import AISTProject, AISTProjectScript, Organization
 from aist.test.test_api import AISTApiBase
 
 
@@ -13,18 +16,20 @@ class AISTProjectCreateAPITests(AISTApiBase):
         super().setUp()
         self.url = reverse("aist_api:project_list")
 
-    def test_create_empty_project_success(self):
-        target_pt = Product_Type.objects.create(name="Org PT")
+    def _make_maintainer_org(self, suffix: str) -> Organization:
+        pt = Product_Type.objects.create(name=f"PT {suffix}")
         role_maintainer, _ = Role.objects.get_or_create(id=Roles.Maintainer, defaults={"name": "Maintainer"})
-        Product_Type_Member.objects.create(product_type=target_pt, user=self.user, role=role_maintainer)
-        org = Organization.objects.create(name="Org A", product_type=target_pt)
+        Product_Type_Member.objects.create(product_type=pt, user=self.user, role=role_maintainer)
+        return Organization.objects.create(name=f"Org {suffix}", product_type=pt)
+
+    def test_create_empty_project_success(self):
+        org = self._make_maintainer_org("PT")
 
         resp = self.client.post(
             self.url,
             data={
                 "organization_id": org.id,
                 "product_name": "New Empty Product",
-                "script_path": "input_projects/default_imported_project_no_built.sh",
             },
             format="json",
         )
@@ -32,10 +37,65 @@ class AISTProjectCreateAPITests(AISTApiBase):
         self.assertEqual(resp.status_code, 201)
         self.assertTrue(resp.data["ok"])
         project_id = resp.data["project"]["id"]
-        project = AISTProject.objects.get(id=project_id)
+        project = AISTProject.objects.select_related("active_script").get(id=project_id)
         self.assertEqual(project.organization_id, org.id)
         self.assertEqual(project.product.name, "New Empty Product")
-        self.assertEqual(project.script_path, "input_projects/default_imported_project_no_built.sh")
+        # Default script is always created on project creation.
+        self.assertIsNotNone(project.active_script_id)
+        self.assertGreater(len(project.active_script.content), 0)
+
+    def test_create_project_without_script_uses_shared_default(self):
+        """Projects created without custom script content share the singleton default."""
+        org_a = self._make_maintainer_org("SharedA")
+        org_b = self._make_maintainer_org("SharedB")
+
+        resp_a = self.client.post(self.url, data={"organization_id": org_a.id, "product_name": "Proj A"}, format="json")
+        resp_b = self.client.post(self.url, data={"organization_id": org_b.id, "product_name": "Proj B"}, format="json")
+
+        self.assertEqual(resp_a.status_code, 201)
+        self.assertEqual(resp_b.status_code, 201)
+
+        proj_a = AISTProject.objects.select_related("active_script").get(id=resp_a.data["project"]["id"])
+        proj_b = AISTProject.objects.select_related("active_script").get(id=resp_b.data["project"]["id"])
+
+        # Both projects point to the same shared default instance.
+        self.assertEqual(proj_a.active_script_id, proj_b.active_script_id)
+        self.assertTrue(proj_a.active_script.is_shared)
+
+    def test_shared_default_singleton_exists_after_creation(self):
+        """get_shared_default() returns the same singleton on repeated calls."""
+        org = self._make_maintainer_org("Singleton")
+        self.client.post(self.url, data={"organization_id": org.id, "product_name": "Singleton Proj"}, format="json")
+
+        s1 = AISTProjectScript.get_shared_default()
+        s2 = AISTProjectScript.get_shared_default()
+        self.assertEqual(s1.id, s2.id)
+        self.assertTrue(s1.is_shared)
+        self.assertIsNone(s1.project_id)
+
+    def test_create_project_with_custom_script_content(self):
+        target_pt = Product_Type.objects.create(name="Org SC")
+        role_maintainer, _ = Role.objects.get_or_create(id=Roles.Maintainer, defaults={"name": "Maintainer"})
+        Product_Type_Member.objects.create(product_type=target_pt, user=self.user, role=role_maintainer)
+        org = Organization.objects.create(name="Org SC", product_type=target_pt)
+        custom_content = "#!/bin/bash\necho custom"
+
+        resp = self.client.post(
+            self.url,
+            data={
+                "organization_id": org.id,
+                "product_name": "Custom Script Product",
+                "script_content": custom_content,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        project = AISTProject.objects.select_related("active_script").get(
+            id=resp.data["project"]["id"],
+        )
+        self.assertIsNotNone(project.active_script_id)
+        self.assertEqual(project.active_script.content, custom_content)
 
     def test_create_empty_project_forbidden_without_add_permission(self):
         target_pt = Product_Type.objects.create(name="Reader PT")
@@ -95,3 +155,250 @@ class AISTProjectCreateAPITests(AISTApiBase):
         )
 
         self.assertEqual(resp.status_code, 409)
+
+
+class AISTProjectActiveScriptAPITests(AISTApiBase):
+
+    """Tests for GET /projects/<id>/active_script/ endpoint."""
+
+    def _url(self, project_id: int) -> str:
+        return reverse("aist_api:project_active_script", kwargs={"project_id": project_id})
+
+    def test_returns_shared_default_content(self):
+        """The existing fixture project uses the shared default — endpoint must return it."""
+        # Ensure the project has the shared default as active_script.
+        shared = AISTProjectScript.get_shared_default()
+        self.project.active_script = shared
+        self.project.save(update_fields=["active_script"])
+
+        resp = self.client.get(self._url(self.project.id))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("content", resp.data)
+        self.assertGreater(len(resp.data["content"]), 0)
+        self.assertTrue(resp.data["is_shared"])
+
+    def test_returns_project_specific_script(self):
+        """When a project has a custom script, is_shared must be False."""
+        script = AISTProjectScript.objects.create(
+            project=self.project,
+            content="#!/bin/bash\necho custom",
+            is_shared=False,
+        )
+        self.project.active_script = script
+        self.project.save(update_fields=["active_script"])
+
+        resp = self.client.get(self._url(self.project.id))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["content"], "#!/bin/bash\necho custom")
+        self.assertFalse(resp.data["is_shared"])
+
+    def test_returns_404_when_no_active_script(self):
+        """Project without active_script returns 404."""
+        self.project.active_script = None
+        self.project.save(update_fields=["active_script"])
+
+        resp = self.client.get(self._url(self.project.id))
+
+        self.assertEqual(resp.status_code, 404)
+
+    def test_unauthenticated_returns_403(self):
+        anon = APIClient()
+        resp = anon.get(self._url(self.project.id))
+        self.assertIn(resp.status_code, [401, 403])
+
+
+class AISTProjectScriptScopeAPITests(AISTApiBase):
+
+    """Tests for scope=local / scope=global on POST /projects/<id>/scripts/."""
+
+    def _scripts_url(self, project_id: int) -> str:
+        return reverse("aist_api:project_script_list_create", kwargs={"project_id": project_id})
+
+    def setUp(self):
+        super().setUp()
+        # Point fixture project at the shared default.
+        shared = AISTProjectScript.get_shared_default()
+        self.project.active_script = shared
+        self.project.save(update_fields=["active_script"])
+        self.shared = shared
+
+    # --- scope=local ---
+
+    def test_local_scope_creates_project_specific_script(self):
+        resp = self.client.post(
+            self._scripts_url(self.project.id),
+            data={"content": "#!/bin/bash\necho local", "scope": "local"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        self.assertFalse(resp.data["is_shared"])
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.active_script.content, "#!/bin/bash\necho local")
+        # Shared default unchanged.
+        self.shared.refresh_from_db()
+        self.assertNotEqual(self.shared.content, "#!/bin/bash\necho local")
+
+    def test_local_scope_detaches_project_from_shared_default(self):
+        resp = self.client.post(
+            self._scripts_url(self.project.id),
+            data={"content": "#!/bin/bash\necho mine", "scope": "local"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        self.project.refresh_from_db()
+        # active_script is now a different record than the shared default.
+        self.assertNotEqual(self.project.active_script_id, self.shared.id)
+
+    def test_local_scope_is_default(self):
+        """Omitting scope behaves the same as scope=local."""
+        resp = self.client.post(
+            self._scripts_url(self.project.id),
+            data={"content": "#!/bin/bash\necho default-scope"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        self.assertFalse(resp.data["is_shared"])
+
+    # --- scope=global ---
+
+    def test_global_scope_updates_shared_singleton_in_place(self):
+        new_content = "#!/bin/bash\necho updated-global"
+        resp = self.client.post(
+            self._scripts_url(self.project.id),
+            data={"content": new_content, "scope": "global"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["is_shared"])
+        # The singleton record itself was updated.
+        self.shared.refresh_from_db()
+        self.assertEqual(self.shared.content, new_content)
+
+    def test_global_scope_same_script_id(self):
+        """Global update must not create a new record — it reuses the singleton's PK."""
+        original_id = self.shared.id
+        resp = self.client.post(
+            self._scripts_url(self.project.id),
+            data={"content": "#!/bin/bash\necho still-global", "scope": "global"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["id"], original_id)
+
+    def test_global_scope_propagates_to_other_project(self):
+        """Another project pointing at the shared default also sees the updated content."""
+        other_product = Product.objects.create(
+            name=f"Other Product {uuid.uuid4().hex[:8]}",
+            prod_type=self.prod_type,
+            sla_configuration_id=self.sla.id,
+        )
+        other_project = AISTProject.objects.create(
+            product=other_product,
+            supported_languages=[],
+            compilable=False,
+            profile={},
+            organization=self.project.organization,
+        )
+        other_project.active_script = self.shared
+        other_project.save(update_fields=["active_script"])
+
+        self.client.post(
+            self._scripts_url(self.project.id),
+            data={"content": "#!/bin/bash\necho propagated", "scope": "global"},
+            format="json",
+        )
+
+        other_project.refresh_from_db()
+        # Other project still points to the same shared script — content is updated.
+        self.assertEqual(other_project.active_script_id, self.shared.id)
+        self.shared.refresh_from_db()
+        self.assertEqual(self.shared.content, "#!/bin/bash\necho propagated")
+
+    def test_global_scope_returns_404_when_singleton_missing(self):
+        """scope=global must return 404 (not 500) when no shared default exists."""
+        AISTProjectScript.objects.filter(is_shared=True).delete()
+
+        resp = self.client.post(
+            self._scripts_url(self.project.id),
+            data={"content": "#!/bin/bash\necho x", "scope": "global"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 404)
+
+    def test_script_detail_returns_shared_script(self):
+        """GET /projects/<id>/scripts/<shared_id>/ must work for the shared singleton."""
+        script_url = reverse(
+            "aist_api:project_script_detail",
+            kwargs={"project_id": self.project.id, "script_id": self.shared.id},
+        )
+
+        resp = self.client.get(script_url)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["is_shared"])
+        self.assertIn("content", resp.data)
+
+    def test_script_detail_returns_404_for_other_project_script(self):
+        """A script belonging to a different project must not be visible."""
+        other_product = Product.objects.create(
+            name="Other Product 2",
+            prod_type=self.prod_type,
+            sla_configuration_id=self.sla.id,
+        )
+        other_project = AISTProject.objects.create(
+            product=other_product,
+            supported_languages=[],
+            compilable=False,
+            profile={},
+            organization=self.project.organization,
+        )
+        other_script = AISTProjectScript.objects.create(
+            project=other_project,
+            content="#!/bin/bash\necho other",
+            is_shared=False,
+        )
+
+        script_url = reverse(
+            "aist_api:project_script_detail",
+            kwargs={"project_id": self.project.id, "script_id": other_script.id},
+        )
+        resp = self.client.get(script_url)
+
+        self.assertEqual(resp.status_code, 404)
+
+
+class AISTProjectCreateScriptValidationTests(AISTApiBase):
+
+    """Script content submitted at project creation must be validated."""
+
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("aist_api:project_list")
+        pt = Product_Type.objects.create(name="PT ValScript")
+        role_maintainer, _ = Role.objects.get_or_create(id=Roles.Maintainer, defaults={"name": "Maintainer"})
+        Product_Type_Member.objects.create(product_type=pt, user=self.user, role=role_maintainer)
+        self.org = Organization.objects.create(name="Org ValScript", product_type=pt)
+
+    def test_oversized_script_content_returns_400(self):
+        """A script exceeding the 256 KB limit must be rejected at project creation."""
+        big_content = "x" * (256 * 1024 + 1)
+
+        resp = self.client.post(
+            self.url,
+            data={
+                "organization_id": self.org.id,
+                "product_name": "Too Big Script Project",
+                "script_content": big_content,
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)

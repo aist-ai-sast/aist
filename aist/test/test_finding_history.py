@@ -73,7 +73,6 @@ class FindingHistoryBaseTestCase(TestCase):
         cls.project = AISTProject.objects.create(
             product=cls.product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )

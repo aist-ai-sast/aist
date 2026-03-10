@@ -53,7 +53,6 @@ class DashboardSummaryViewTests(TestCase):
         self.project = AISTProject.objects.create(
             product=self.product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )
@@ -184,7 +183,6 @@ class DashboardSummaryViewTests(TestCase):
         project2 = AISTProject.objects.create(
             product=product2,
             supported_languages=["go"],
-            script_path="scripts/build2.sh",
             compilable=False,
             profile={},
         )
@@ -243,7 +241,6 @@ class DashboardSummaryViewTests(TestCase):
         project_empty = AISTProject.objects.create(
             product=product_empty,
             supported_languages=["java"],
-            script_path="scripts/empty.sh",
             compilable=False,
             profile={},
         )

@@ -20,7 +20,6 @@ class ProjectVersionRefsTests(TestCase):
         self.project = AISTProject.objects.create(
             product=product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )

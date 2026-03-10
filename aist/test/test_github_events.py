@@ -43,7 +43,6 @@ class GithubEventsTests(TestCase):
         self.project = AISTProject.objects.create(
             product=self.product,
             supported_languages=["python"],
-            script_path="input_projects/default_imported_project_no_built.sh",
             compilable=False,
             profile={},
             repository=self.repo,

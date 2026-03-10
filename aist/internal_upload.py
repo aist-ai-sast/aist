@@ -166,6 +166,7 @@ def import_scan_via_default_importer(
     test_title: str,
     repo_params: RepoParams,
     minimum_severity: str,
+    lead=None,
 ) -> tuple[Test, list[Finding]]:
     """
     Import a scan using :class:`DefaultImporter` and return the Test and findings.
@@ -175,9 +176,6 @@ def import_scan_via_default_importer(
     Findings are collected from the created test to allow for
     enrichment and deletion.
     """
-    # Determine a user to act as lead; fall back to the first user
-    User = get_user_model()
-    lead = User.objects.order_by("id").first()
     scan_date = timezone.now()
     environment = Development_Environment.objects.get_or_create(name="Development")[0]
     importer = DefaultImporter(
@@ -219,6 +217,7 @@ def upload_report_internal(
     cfg: ImportConfig,
     pipeline_id: str,
     log_level: str,
+    lead=None,
 ) -> ImportResult:
     """
     Replicate the behaviour of :meth:`SastPipelineDDClient.upload_report` without REST.
@@ -242,6 +241,7 @@ def upload_report_internal(
         test_title=f"{analyzer_name} {scan_type}",
         repo_params=repo_params,
         minimum_severity=cfg.minimum_severity,
+        lead=lead,
     )
     imported_count = len(findings)
     logger.info("Import finished for %s, %d findings", analyzer_name, imported_count)
@@ -265,20 +265,35 @@ def upload_results_internal(
     pipeline_id: str,
     log_level: str,
 ) -> list[ImportResult]:
+    if not (product_name or "").strip():
+        msg = "product_name must not be empty"
+        raise ValueError(msg)
+
     cfg = ImportConfig()
     repo_dir = repo_path
     logger = install_pipeline_logging(pipeline_id, log_level)
     try:
         repo_params = read_repo_params(repo_dir)
     except Exception as exc:
-        logger.warning("Failed to read repository info from %s: %s", repo_dir, exc)
-        # TODO: fill me with some info for local sources
+        logger.warning(
+            "Failed to read repository info from '%s': %s. "
+            "Findings will be imported without commit/branch metadata.",
+            repo_dir,
+            exc,
+        )
         repo_params = RepoParams(commit_hash=None, branch_tag=None, repo_url=None, scm_type=None, local_path=repo_dir)
 
     analyzers_cfg = AnalyzersConfigHelper(analyzers_cfg_path)
     if not analyzers_cfg:
         return []
     analyzers = analyzers_cfg.get_analyzers()
+
+    # Resolve lead user once for the entire import batch to avoid N queries.
+    User = get_user_model()
+    lead = User.objects.order_by("id").first()
+    if lead is None:
+        msg = "No users in the database; cannot import findings (lead required)"
+        raise RuntimeError(msg)
 
     results: list[ImportResult] = []
     for analyzer in analyzers:
@@ -301,6 +316,7 @@ def upload_results_internal(
                 cfg=cfg,
                 pipeline_id=pipeline_id,
                 log_level=log_level,
+                lead=lead,
             )
             results.append(res)
         except Exception as exc:

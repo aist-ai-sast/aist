@@ -83,7 +83,6 @@ class TimelineApiBaseTestCase(TestCase):
         cls.project = AISTProject.objects.create(
             product=cls.product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )
@@ -258,7 +257,6 @@ class TimelineApiFilterTests(TimelineApiBaseTestCase):
         other_project = AISTProject.objects.create(
             product=other_product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )

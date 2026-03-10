@@ -64,7 +64,7 @@
                     <th style="width: 40px;">ID</th>
                     <th>Product</th>
                     <th style="width: 120px;">Pipelines</th>
-                    <th>Script path</th>
+                    <th>Script</th>
                     <th>Supported languages</th>
                     <th>Profile</th>
                     <th style="width: 90px;">Compilable</th>
@@ -76,7 +76,7 @@
                 {% for p in projects %}
                     <tr data-project-id="{{ p.id }}"
                         data-project-name="{{ p.product.name|default_if_none:'' }}"
-                        data-project-script-path="{{ p.script_path|default_if_none:'' }}"
+                        data-project-active-script-id="{{ p.active_script_id|default_if_none:'' }}"
                         data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
                         data-project-langs="{{ p.supported_languages|join:', ' }}"
                         data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
@@ -98,8 +98,12 @@
                                 Pipelines
                             </a>
                         </td>
-                        <td class="script-path-cell">
-                            <code>{{ p.script_path }}</code>
+                        <td class="script-cell">
+                            {% if p.active_script_id %}
+                                <code title="{{ p.active_script.sha256 }}">{{ p.active_script.sha256|slice:":8" }}&hellip;</code>
+                            {% else %}
+                                <span class="text-danger">No script</span>
+                            {% endif %}
                         </td>
                         <td class="langs-cell">
                             {% if p.supported_languages %}
@@ -151,7 +155,7 @@
                         {% for p in org.projects.all %}
                             <tr data-project-id="{{ p.id }}"
                                 data-project-name="{{ p.product.name|default_if_none:'' }}"
-                                data-project-script-path="{{ p.script_path|default_if_none:'' }}"
+                                data-project-active-script-id="{{ p.active_script_id|default_if_none:'' }}"
                                 data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
                                 data-project-langs="{{ p.supported_languages|join:', ' }}"
                                 data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
@@ -173,11 +177,11 @@
                                         Pipelines
                                     </a>
                                 </td>
-                                <td class="script-path-cell">
-                                    {% if p.script_path %}
-                                        <code>{{ p.script_path }}</code>
+                                <td class="script-cell">
+                                    {% if p.active_script_id %}
+                                        <code title="{{ p.active_script.sha256 }}">{{ p.active_script.sha256|slice:":8" }}&hellip;</code>
                                     {% else %}
-                                        <span class="text-muted">–</span>
+                                        <span class="text-danger">No script</span>
                                     {% endif %}
                                 </td>
                                 <td class="langs-cell">
@@ -230,7 +234,7 @@
                         {% for p in unassigned_projects %}
                             <tr data-project-id="{{ p.id }}"
                                 data-project-name="{{ p.product.name|default_if_none:'' }}"
-                                data-project-script-path="{{ p.script_path|default_if_none:'' }}"
+                                data-project-active-script-id="{{ p.active_script_id|default_if_none:'' }}"
                                 data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
                                 data-project-langs="{{ p.supported_languages|join:', ' }}"
                                 data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
@@ -252,11 +256,11 @@
                                         Pipelines
                                     </a>
                                 </td>
-                                <td class="script-path-cell">
-                                    {% if p.script_path %}
-                                        <code>{{ p.script_path }}</code>
+                                <td class="script-cell">
+                                    {% if p.active_script_id %}
+                                        <code title="{{ p.active_script.sha256 }}">{{ p.active_script.sha256|slice:":8" }}&hellip;</code>
                                     {% else %}
-                                        <span class="text-muted">–</span>
+                                        <span class="text-danger">No script</span>
                                     {% endif %}
                                 </td>
                                 <td class="langs-cell">
@@ -523,15 +527,7 @@
                             <label for="empty-project-name">Product name</label>
                             <input type="text" class="form-control" id="empty-project-name" name="product_name" required>
                         </div>
-                        <div class="form-group">
-                            <label for="empty-project-script-path">Script path</label>
-                            <input type="text"
-                                   class="form-control"
-                                   id="empty-project-script-path"
-                                   name="script_path"
-                                   value="input_projects/default_imported_project_no_built.sh"
-                                   required>
-                        </div>
+                        {# Script content is automatically set to the default entrypoint on creation. #}
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
@@ -585,18 +581,6 @@
                             </select>
                             <p class="help-block">
                                 Optional organization used to group projects.
-                            </p>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="ap-script-path">Script path</label>
-                            <input type="text"
-                                   class="form-control"
-                                   id="ap-script-path"
-                                   name="script_path"
-                                   required>
-                            <p class="help-block">
-                                Relative path to the build / analysis script inside the project.
                             </p>
                         </div>
 
@@ -660,6 +644,51 @@
                                        name="compilable">
                                 Project is compilable
                             </label>
+                        </div>
+
+                        <hr class="my-3"/>
+                        <div class="form-group">
+                            <label for="ap-script-content">Entrypoint Script</label>
+                            <div id="ap-script-meta" class="text-muted small mb-1"
+                                 style="font-size:11px;"></div>
+                            <div id="ap-script-loading"
+                                 class="text-muted small"
+                                 style="display:none;">Loading script…</div>
+
+                            {# Scope selector — shown only when the current script is the shared default #}
+                            <div id="ap-script-scope" style="display:none;margin-bottom:8px;">
+                                <div class="radio" style="margin-top:4px;">
+                                    <label>
+                                        <input type="radio" name="ap_script_scope"
+                                               id="ap-scope-global" value="global" checked>
+                                        <strong>Update global script</strong>
+                                        <span class="text-muted small">
+                                            — applies to all projects that use the shared default
+                                        </span>
+                                    </label>
+                                </div>
+                                <div class="radio">
+                                    <label>
+                                        <input type="radio" name="ap_script_scope"
+                                               id="ap-scope-local" value="local">
+                                        <strong>Create project-specific copy</strong>
+                                        <span class="text-muted small">
+                                            — only this project is affected; other projects keep the current global script
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <textarea class="form-control"
+                                      id="ap-script-content"
+                                      name="script_content"
+                                      rows="12"
+                                      style="font-family:Menlo,Monaco,Consolas,'Courier New',monospace;font-size:12px;display:none;"
+                                      placeholder="Shell entrypoint script"></textarea>
+                            <p id="ap-script-help" class="help-block">
+                                Shell entrypoint script executed by the SAST pipeline.
+                                Saving changes creates a new project-specific revision.
+                            </p>
                         </div>
 
                         <hr class="my-3"/>
@@ -900,11 +929,19 @@
             var fieldId = document.getElementById("ap-project-id");
             var fieldProduct = document.getElementById("ap-product-name");
             var fieldOrganization = document.getElementById("ap-organization");
-            var fieldScriptPath = document.getElementById("ap-script-path");
             var fieldLangs = document.getElementById("ap-supported-languages");
             var fieldCompilable = document.getElementById("ap-compilable");
             var fieldProfile = document.getElementById("ap-profile");
             var deleteBtn = document.getElementById("aist-project-delete-btn");
+            var fieldScriptContent = document.getElementById("ap-script-content");
+            var scriptMeta = document.getElementById("ap-script-meta");
+            var scriptLoading = document.getElementById("ap-script-loading");
+            var scriptScopeBlock = document.getElementById("ap-script-scope");
+            var scriptHelp = document.getElementById("ap-script-help");
+            var scopeGlobalRadio = document.getElementById("ap-scope-global");
+            var scopeLocalRadio = document.getElementById("ap-scope-local");
+            var originalScriptContent = "";
+            var currentScriptIsShared = false;
             var gitlabTokenSection = document.getElementById("ap-gitlab-token-section");
             var gitlabTokenEditField = document.getElementById("ap-gitlab-token");
             var gitlabTokenEditToggle = document.getElementById("ap-gitlab-token-toggle");
@@ -952,6 +989,8 @@
             var githubReposUrl = "{% url 'aist_api:github_import_repositories' %}";
             var githubImportExecuteUrl = "{% url 'aist_api:github_import_execute' %}";
             var emptyProjectCreateUrl = "{% url 'aist_api:project_list' %}";
+            var activeScriptUrlTemplate = "{{ active_script_url_template|escapejs }}";
+            var projectScriptsUrlTemplate = "{{ project_scripts_url_template|escapejs }}";
 
 
             var currentRow = null;
@@ -986,7 +1025,6 @@
 
                 var id = row.getAttribute("data-project-id") || "";
                 var name = row.getAttribute("data-project-name") || "";
-                var scriptPath = row.getAttribute("data-project-script-path") || "";
                 var langs = row.getAttribute("data-project-langs") || "";
                 var compilable = row.getAttribute("data-project-compilable") === "true";
                 var orgId = row.getAttribute("data-project-org-id") || "";
@@ -1025,7 +1063,6 @@
                     window.__aistSetCurrentProjectIdForPreset(id);
                 }
                 fieldProduct.value = name;
-                fieldScriptPath.value = scriptPath;
                 fieldLangs.value = langs;
                 fieldCompilable.checked = compilable;
 
@@ -1057,6 +1094,58 @@
                     errorBox.textContent = "";
                 }
 
+                // Reset and async-load the active script content.
+                originalScriptContent = "";
+                currentScriptIsShared = false;
+                if (fieldScriptContent) {
+                    fieldScriptContent.value = "";
+                    fieldScriptContent.style.display = "none";
+                }
+                if (scriptMeta) scriptMeta.textContent = "";
+                if (scriptScopeBlock) scriptScopeBlock.style.display = "none";
+                if (scriptLoading) scriptLoading.style.display = "block";
+
+                var scriptUrl = activeScriptUrlTemplate.replace("/0/", "/" + id + "/");
+                fetch(scriptUrl, {credentials: "same-origin"})
+                    .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, data: d}; }); })
+                    .then(function (result) {
+                        if (scriptLoading) scriptLoading.style.display = "none";
+                        if (result.ok && result.data && result.data.content != null) {
+                            originalScriptContent = result.data.content;
+                            currentScriptIsShared = !!result.data.is_shared;
+                            if (fieldScriptContent) {
+                                fieldScriptContent.value = result.data.content;
+                                fieldScriptContent.style.display = "";
+                            }
+                            if (scriptMeta && result.data.sha256) {
+                                var sharedBadge = currentScriptIsShared
+                                    ? ' <span class="label label-default">shared default</span>' : "";
+                                scriptMeta.innerHTML = "sha256: " + result.data.sha256.slice(0, 12) + "…" + sharedBadge;
+                            }
+                            // Show scope selector only for shared default; default to "global".
+                            if (scriptScopeBlock) {
+                                if (currentScriptIsShared) {
+                                    scriptScopeBlock.style.display = "block";
+                                    if (scopeGlobalRadio) scopeGlobalRadio.checked = true;
+                                    if (scriptHelp) scriptHelp.textContent =
+                                        "Select scope above: update the shared default or fork a project-specific copy.";
+                                } else {
+                                    scriptScopeBlock.style.display = "none";
+                                    if (scriptHelp) scriptHelp.textContent =
+                                        "Saving changes creates a new project-specific revision.";
+                                }
+                            }
+                        } else {
+                            if (fieldScriptContent) fieldScriptContent.style.display = "";
+                            if (scriptMeta) scriptMeta.textContent = "No script loaded.";
+                        }
+                    })
+                    .catch(function () {
+                        if (scriptLoading) scriptLoading.style.display = "none";
+                        if (fieldScriptContent) fieldScriptContent.style.display = "";
+                        if (scriptMeta) scriptMeta.textContent = "Failed to load script.";
+                    });
+
                 if (window.jQuery && window.jQuery.fn.modal) {
                     window.jQuery(modal).modal("show");
                 } else if (modal && modal.classList) {
@@ -1068,7 +1157,6 @@
             function applyRowUpdate(row, payload) {
                 if (!row || !payload) return;
 
-                row.setAttribute("data-project-script-path", payload.script_path || "");
                 row.setAttribute("data-project-compilable", payload.compilable ? "true" : "false");
                 row.setAttribute("data-project-langs", (payload.supported_languages || []).join(", "));
                 row.setAttribute("data-project-profile", JSON.stringify(payload.profile || {}));
@@ -1080,13 +1168,6 @@
                     "data-project-org-name",
                     payload.organization_name || ""
                 );
-
-                var scriptCell = row.querySelector(".script-path-cell");
-                if (scriptCell) {
-                    scriptCell.innerHTML = payload.script_path
-                        ? "<code>" + payload.script_path + "</code>"
-                        : "<span class=\"text-muted\">–</span>";
-                }
 
                 var langsCell = row.querySelector(".langs-cell");
                 if (langsCell) {
@@ -1255,105 +1336,164 @@
                     var updateUrl = currentRow.getAttribute("data-update-url");
                     if (!updateUrl) return;
 
-                    var formData = new FormData(form);
-
                     var csrf = getCsrfToken();
-                    var headers = {
-                        "X-Requested-With": "XMLHttpRequest"
+                    var jsonHeaders = {
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Content-Type": "application/json"
                     };
-                    if (csrf) {
-                        headers["X-CSRFToken"] = csrf;
-                    }
+                    if (csrf) jsonHeaders["X-CSRFToken"] = csrf;
 
-                    fetch(updateUrl, {
-                        method: "POST",
-                        credentials: "same-origin",
-                        headers: headers,
-                        body: formData
-                    }).then(function (resp) {
-                        return resp.json().then(function (data) {
-                            return {ok: resp.ok, data: data};
-                        });
-                    }).then(function (result) {
-                        if (!result.ok || !result.data.ok) {
-                            var msg = "Failed to update project.";
-                            if (result.data && result.data.errors) {
-                                msg = Object.values(result.data.errors).join(" ");
-                            }
-                            if (errorBox) {
-                                errorBox.textContent = msg;
-                                errorBox.style.display = "block";
-                            }
-                            return;
-                        }
+                    // Helper: save project settings, then optionally the GitLab token.
+                    function doProjectSave() {
+                        var formData = new FormData(form);
+                        var formHeaders = {"X-Requested-With": "XMLHttpRequest"};
+                        if (csrf) formHeaders["X-CSRFToken"] = csrf;
 
-                        applyRowUpdate(currentRow, result.data.project);
-
-                        var gitlabToken = gitlabTokenEditField ? (gitlabTokenEditField.value || "").trim() : "";
-                        if (!gitlabToken || currentRepoType !== "GITLAB") {
-                            if (window.jQuery && window.jQuery.fn.modal) {
-                                window.jQuery(modal).modal("hide");
-                            } else if (modal && modal.classList) {
-                                modal.classList.remove("in");
-                                modal.style.display = "none";
-                            }
-                            showGlobalAlert("Project has been updated.", "success");
-                            return;
-                        }
-
-                        var tokenUrl = gitlabTokenUpdateUrlTemplate.replace("0", String(fieldId.value || ""));
-                        var tokenHeaders = {
-                            "X-Requested-With": "XMLHttpRequest",
-                            "Content-Type": "application/json"
-                        };
-                        if (csrf) {
-                            tokenHeaders["X-CSRFToken"] = csrf;
-                        }
-
-                        fetch(tokenUrl, {
+                        fetch(updateUrl, {
                             method: "POST",
                             credentials: "same-origin",
-                            headers: tokenHeaders,
-                            body: JSON.stringify({gitlab_api_token: gitlabToken})
+                            headers: formHeaders,
+                            body: formData
                         }).then(function (resp) {
                             return resp.json().then(function (data) {
                                 return {ok: resp.ok, data: data};
                             });
-                        }).then(function (tokenResult) {
-                            if (!tokenResult.ok || !tokenResult.data || tokenResult.data.ok !== true) {
-                                var errMsg = "Failed to update GitLab token.";
-                                if (tokenResult.data && tokenResult.data.detail) {
-                                    errMsg = tokenResult.data.detail;
+                        }).then(function (result) {
+                            if (!result.ok || !result.data.ok) {
+                                var msg = "Failed to update project.";
+                                if (result.data && result.data.errors) {
+                                    msg = Object.values(result.data.errors).join(" ");
                                 }
                                 if (errorBox) {
-                                    errorBox.textContent = errMsg;
+                                    errorBox.textContent = msg;
                                     errorBox.style.display = "block";
                                 }
                                 return;
                             }
 
-                            if (gitlabTokenEditField) {
-                                gitlabTokenEditField.value = "";
+                            applyRowUpdate(currentRow, result.data.project);
+
+                            var gitlabToken = gitlabTokenEditField ? (gitlabTokenEditField.value || "").trim() : "";
+                            if (!gitlabToken || currentRepoType !== "GITLAB") {
+                                if (window.jQuery && window.jQuery.fn.modal) {
+                                    window.jQuery(modal).modal("hide");
+                                } else if (modal && modal.classList) {
+                                    modal.classList.remove("in");
+                                    modal.style.display = "none";
+                                }
+                                showGlobalAlert("Project has been updated.", "success");
+                                return;
                             }
-                            if (window.jQuery && window.jQuery.fn.modal) {
-                                window.jQuery(modal).modal("hide");
-                            } else if (modal && modal.classList) {
-                                modal.classList.remove("in");
-                                modal.style.display = "none";
-                            }
-                            showGlobalAlert("Project and GitLab token updated.", "success");
+
+                            var tokenUrl = gitlabTokenUpdateUrlTemplate.replace("0", String(fieldId.value || ""));
+                            fetch(tokenUrl, {
+                                method: "POST",
+                                credentials: "same-origin",
+                                headers: jsonHeaders,
+                                body: JSON.stringify({gitlab_api_token: gitlabToken})
+                            }).then(function (resp) {
+                                return resp.json().then(function (data) {
+                                    return {ok: resp.ok, data: data};
+                                });
+                            }).then(function (tokenResult) {
+                                if (!tokenResult.ok || !tokenResult.data || tokenResult.data.ok !== true) {
+                                    var errMsg = "Failed to update GitLab token.";
+                                    if (tokenResult.data && tokenResult.data.detail) {
+                                        errMsg = tokenResult.data.detail;
+                                    }
+                                    if (errorBox) {
+                                        errorBox.textContent = errMsg;
+                                        errorBox.style.display = "block";
+                                    }
+                                    return;
+                                }
+                                if (gitlabTokenEditField) gitlabTokenEditField.value = "";
+                                if (window.jQuery && window.jQuery.fn.modal) {
+                                    window.jQuery(modal).modal("hide");
+                                } else if (modal && modal.classList) {
+                                    modal.classList.remove("in");
+                                    modal.style.display = "none";
+                                }
+                                showGlobalAlert("Project and GitLab token updated.", "success");
+                            }).catch(function () {
+                                if (errorBox) {
+                                    errorBox.textContent = "Unexpected error while updating GitLab token.";
+                                    errorBox.style.display = "block";
+                                }
+                            });
                         }).catch(function () {
                             if (errorBox) {
-                                errorBox.textContent = "Unexpected error while updating GitLab token.";
+                                errorBox.textContent = "Unexpected error while saving project.";
                                 errorBox.style.display = "block";
                             }
                         });
-                    }).catch(function () {
-                        if (errorBox) {
-                            errorBox.textContent = "Unexpected error while saving project.";
-                            errorBox.style.display = "block";
-                        }
-                    });
+                    }
+
+                    // Determine the scope chosen by the user.
+                    var chosenScope = "local";
+                    if (currentScriptIsShared && scopeGlobalRadio && scopeGlobalRadio.checked) {
+                        chosenScope = "global";
+                    }
+
+                    // If script content changed (or scope forces a write), save the script first.
+                    var newScript = fieldScriptContent ? fieldScriptContent.value : "";
+                    var scriptChanged = newScript && newScript !== originalScriptContent;
+                    // For global scope, always write even if content is identical
+                    // so the caller gets a fresh response (edge-case: no-op but safe).
+                    var shouldSaveScript = scriptChanged || (chosenScope === "global" && newScript);
+                    if (shouldSaveScript) {
+                        var scriptsUrl = projectScriptsUrlTemplate.replace("/0/", "/" + String(fieldId.value || "") + "/");
+                        fetch(scriptsUrl, {
+                            method: "POST",
+                            credentials: "same-origin",
+                            headers: jsonHeaders,
+                            body: JSON.stringify({content: newScript, scope: chosenScope})
+                        }).then(function (resp) {
+                            return resp.json().then(function (d) { return {ok: resp.ok, data: d}; });
+                        }).then(function (scriptResult) {
+                            if (!scriptResult.ok) {
+                                var msg = "Failed to save script.";
+                                if (scriptResult.data) {
+                                    msg = extractApiErrorMessage(scriptResult.data, msg);
+                                }
+                                if (errorBox) {
+                                    errorBox.textContent = msg;
+                                    errorBox.style.display = "block";
+                                }
+                                return;
+                            }
+                            originalScriptContent = newScript;
+                            currentScriptIsShared = !!scriptResult.data.is_shared;
+                            // Update script cell and scope UI.
+                            if (currentRow && scriptResult.data && scriptResult.data.sha256) {
+                                var cell = currentRow.querySelector(".script-cell");
+                                if (cell) {
+                                    cell.innerHTML = '<code title="' + scriptResult.data.sha256 + '">' +
+                                        scriptResult.data.sha256.slice(0, 8) + '&hellip;</code>';
+                                }
+                                currentRow.setAttribute("data-project-active-script-id", String(scriptResult.data.id));
+                                if (scriptMeta) {
+                                    var badge = currentScriptIsShared
+                                        ? ' <span class="label label-default">shared default</span>' : "";
+                                    scriptMeta.innerHTML = "sha256: " + scriptResult.data.sha256.slice(0, 12) + "…" + badge;
+                                }
+                                // After creating a local copy, hide the scope selector.
+                                if (!currentScriptIsShared && scriptScopeBlock) {
+                                    scriptScopeBlock.style.display = "none";
+                                    if (scriptHelp) scriptHelp.textContent =
+                                        "Saving changes creates a new project-specific revision.";
+                                }
+                            }
+                            doProjectSave();
+                        }).catch(function () {
+                            if (errorBox) {
+                                errorBox.textContent = "Unexpected error while saving script.";
+                                errorBox.style.display = "block";
+                            }
+                        });
+                    } else {
+                        doProjectSave();
+                    }
                 });
             }
 
@@ -1632,8 +1772,7 @@
                     var formData = new FormData(emptyProjectForm);
                     var payload = {
                         organization_id: Number(formData.get("organization_id")),
-                        product_name: String(formData.get("product_name") || "").trim(),
-                        script_path: String(formData.get("script_path") || "").trim()
+                        product_name: String(formData.get("product_name") || "").trim()
                     };
                     var csrf = getCsrfToken();
                     var headers = {

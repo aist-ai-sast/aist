@@ -85,7 +85,6 @@ class ProductSummaryRiskScoreApiTests(TestCase):
         )
         self.project = AISTProject.objects.create(
             product=self.product, supported_languages=["python"],
-            script_path="s.sh", compilable=False, profile={},
         )
         tt = Test_Type.objects.create(name="RS test type")
         start = timezone.make_aware(datetime(2026, 1, 1))
@@ -119,9 +118,7 @@ class ProductSummaryRiskScoreApiTests(TestCase):
         role, _ = Role.objects.get_or_create(id=Roles.Maintainer, defaults={"name": "Maintainer"})
         Product_Type_Member.objects.create(product_type=pt2, user=self.user, role=role)
         prod2 = Product.objects.create(name="Empty RS", description="d", prod_type=pt2, sla_configuration_id=sla2.id)
-        AISTProject.objects.create(
-            product=prod2, supported_languages=[], script_path="s.sh", compilable=False, profile={},
-        )
+        AISTProject.objects.create(product=prod2, supported_languages=[], compilable=False, profile={})
 
         response = self.client.get(self._url())
         self.assertEqual(response.status_code, 200)

@@ -10,6 +10,7 @@ from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.core import signing
 from django.core.cache import cache
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -27,8 +28,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.projects import _create_and_attach_script
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import AISTProject, Organization, RepositoryInfo, ScmGithubBinding, ScmType
 from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
 from aist.utils.pipeline_imports import _load_analyzers_config
@@ -648,34 +651,36 @@ def _import_github_repository(*, installation_id: int, organization: Organizatio
         binding.installation_id = installation_id
         binding.save(update_fields=["installation_id"])
 
-    aist_project, created_project = AISTProject.objects.get_or_create(
-        product=product,
-        defaults={
-            "supported_languages": supported_languages,
-            "script_path": "input_projects/default_imported_project_no_built.sh",
-            "compilable": False,
-            "profile": {},
-            "repository": repo_info,
-            "organization": organization,
-        },
-    )
+    with transaction.atomic():
+        aist_project, created_project = AISTProject.objects.get_or_create(
+            product=product,
+            defaults={
+                "supported_languages": supported_languages,
+                "compilable": False,
+                "profile": {},
+                "repository": repo_info,
+                "organization": organization,
+            },
+        )
 
-    if not created_project:
-        if aist_project.organization_id and aist_project.organization_id != organization.id:
-            reason = "project_linked_to_another_organization"
-            raise _ImportConflictError(reason)
+        if created_project:
+            _create_and_attach_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
+        else:
+            if aist_project.organization_id and aist_project.organization_id != organization.id:
+                reason = "project_linked_to_another_organization"
+                raise _ImportConflictError(reason)
 
-        updates: list[str] = []
-        if aist_project.organization_id is None:
-            aist_project.organization = organization
-            updates.append("organization")
-        if aist_project.repository_id != repo_info.id:
-            aist_project.repository = repo_info
-            updates.append("repository")
-        if aist_project.supported_languages != supported_languages:
-            aist_project.supported_languages = supported_languages
-            updates.append("supported_languages")
-        if updates:
-            aist_project.save(update_fields=updates)
+            updates: list[str] = []
+            if aist_project.organization_id is None:
+                aist_project.organization = organization
+                updates.append("organization")
+            if aist_project.repository_id != repo_info.id:
+                aist_project.repository = repo_info
+                updates.append("repository")
+            if aist_project.supported_languages != supported_languages:
+                aist_project.supported_languages = supported_languages
+                updates.append("supported_languages")
+            if updates:
+                aist_project.save(update_fields=updates)
 
     return aist_project

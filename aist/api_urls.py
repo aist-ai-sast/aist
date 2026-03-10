@@ -66,7 +66,10 @@ from aist.api.pipelines import (
 )
 from aist.api.projects import (
     AISTDefaultAnalyzersAPI,
+    AISTProjectActiveScriptAPI,
     AISTProjectMetaAPI,
+    AISTProjectScriptDetailAPI,
+    AISTProjectScriptListCreateAPI,
 )
 from aist.api.tags import AvailableFindingTagsAPI
 
@@ -82,6 +85,21 @@ urlpatterns = [
     path("projects/", AISTProjectListAPI.as_view(), name="project_list"),
     path("projects/<int:project_id>/", AISTProjectDetailAPI.as_view(), name="project_detail"),
     path("projects/<int:project_id>/meta/", AISTProjectMetaAPI.as_view(), name="project_meta"),
+    path(
+        "projects/<int:project_id>/scripts/",
+        AISTProjectScriptListCreateAPI.as_view(),
+        name="project_script_list_create",
+    ),
+    path(
+        "projects/<int:project_id>/scripts/<int:script_id>/",
+        AISTProjectScriptDetailAPI.as_view(),
+        name="project_script_detail",
+    ),
+    path(
+        "projects/<int:project_id>/active-script/",
+        AISTProjectActiveScriptAPI.as_view(),
+        name="project_active_script",
+    ),
     path("projects/default-analyzers/", AISTDefaultAnalyzersAPI.as_view(), name="default_analyzers"),
     path("pipelines/start/", PipelineStartAPI.as_view(), name="pipeline_start"),
     path("pipelines/<str:pipeline_id>", PipelineAPI.as_view(), name="pipeline_status"),

@@ -19,7 +19,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
 from django.core.validators import RegexValidator
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from django_github_app.models import Installation
 from dojo.models import Finding, Product, Product_Type, Test
@@ -323,7 +323,13 @@ class AISTProject(models.Model):
 
     product = models.OneToOneField(Product, on_delete=models.CASCADE)
     supported_languages = models.JSONField(default=list, blank=True)
-    script_path = models.CharField(max_length=1024)
+    active_script = models.ForeignKey(
+        "AISTProjectScript",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
     compilable = models.BooleanField(default=False)
     profile = models.JSONField(default=dict, blank=True)
     repository = models.OneToOneField(
@@ -351,11 +357,94 @@ class AISTProject(models.Model):
             excluded_paths.extend(self.profile.get("paths", {}).get("exclude", []))
         return excluded_paths
 
+    def clean(self) -> None:
+        if not self.active_script_id:
+            msg = "AISTProject must have active_script set."
+            raise ValidationError(msg)
+
     def get_launch_schedule(self) -> LaunchSchedule | None:
         try:
             return self.launch_schedule
         except LaunchSchedule.DoesNotExist:
             return None
+
+
+class AISTProjectScript(models.Model):
+
+    """
+    Versioned snapshot of a project's entrypoint script.
+
+    Project-specific revisions are append-only: each new save creates a new row.
+    The shared default (``is_shared=True``, ``project=None``) is the exception —
+    it may be updated in-place via ``scope=global`` so that one edit propagates
+    to all projects that still use it.  Use ``get_shared_default()`` to obtain it.
+    """
+
+    project = models.ForeignKey(
+        AISTProject,
+        on_delete=models.CASCADE,
+        related_name="script_revisions",
+        null=True,   # NULL for the shared default script
+        blank=True,
+    )
+    is_shared = models.BooleanField(
+        default=False,
+        help_text="True for the singleton shared default script (project=None).",
+    )
+    content = models.TextField()
+    sha256 = models.CharField(max_length=64, editable=False)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            # Database-level guarantee: only one shared default can ever exist.
+            # Combined with Django's get_or_create() IntegrityError retry this
+            # makes get_shared_default() race-condition-safe.
+            models.UniqueConstraint(
+                fields=["is_shared"],
+                condition=models.Q(is_shared=True),
+                name="uniq_aistprojectscript_shared_singleton",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        if self.is_shared:
+            return f"Shared default script (sha256={self.sha256[:8]})"
+        return f"Script rev for {self.project} @ {self.created_at} (sha256={self.sha256[:8]})"
+
+    def save(self, *args, **kwargs):
+        self.sha256 = hashlib.sha256(self.content.encode()).hexdigest()
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_shared_default(cls) -> AISTProjectScript:
+        """
+        Return the singleton shared default script, creating it if absent.
+
+        Safe under concurrent access: the partial unique index on is_shared=True
+        ensures only one row can exist.  If two workers race to create the
+        singleton simultaneously, the loser catches IntegrityError and falls
+        back to a plain GET, so callers always receive a valid instance.
+        """
+        from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT  # noqa: PLC0415
+
+        try:
+            script, _ = cls.objects.get_or_create(
+                is_shared=True,
+                defaults={"project": None, "content": DEFAULT_ENTRYPOINT_SCRIPT},
+            )
+        except IntegrityError:
+            # Another worker won the race and already created the singleton.
+            script = cls.objects.get(is_shared=True)
+        return script
 
 
 class VersionType(models.TextChoices):

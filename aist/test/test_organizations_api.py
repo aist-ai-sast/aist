@@ -82,7 +82,6 @@ class OrganizationCreateAPITests(TestCase):
         AISTProject.objects.create(
             product=product,
             organization=visible_org,
-            script_path="scripts/build.sh",
             supported_languages=["python"],
             compilable=False,
             profile={},

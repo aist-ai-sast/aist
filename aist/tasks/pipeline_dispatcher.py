@@ -2,9 +2,10 @@ import logging
 from operator import itemgetter
 
 from celery import current_app, shared_task
+from django.db import transaction
 from django.utils import timezone
 
-from aist.models import AISTProjectVersion, PipelineLaunchQueue
+from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, PipelineLaunchQueue
 from aist.pipeline_args import PipelineArguments
 from aist.tasks.pipeline import run_sast_pipeline
 from aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline
@@ -103,16 +104,37 @@ def dispatch_queued_pipelines(async_user=None):
             )
             continue
 
-        if has_unfinished_pipeline(project_version):
-            logger.info(
-                "Dispatcher: unfinished pipeline exists for project_version=%s; skip queue_id=%s",
-                project_version.id,
-                item.id,
-            )
-            continue
+        # Atomically check and create the pipeline to close the race window
+        # between concurrent dispatcher invocations for the same project_version.
+        pipeline = None
+        with transaction.atomic():
+            # Lock the project_version row so a second dispatcher cannot sneak in
+            # between the duplicate check and the INSERT.
+            pv_locked = AISTProjectVersion.objects.select_for_update().get(id=project_version.id)
+            if has_unfinished_pipeline(pv_locked):
+                logger.info(
+                    "Dispatcher: unfinished pipeline exists for project_version=%s; skip queue_id=%s",
+                    pv_locked.id,
+                    item.id,
+                )
+                continue
+            # Also guard against a pipeline that was just dispatched (status=FINISHED,
+            # run_task_id set) but whose Celery task hasn't transitioned it yet.
+            if AISTPipeline.objects.filter(
+                project_version=pv_locked,
+                status=AISTStatus.FINISHED,
+                run_task_id__isnull=False,
+            ).exists():
+                logger.info(
+                    "Dispatcher: recently dispatched pipeline still pending for project_version=%s; "
+                    "skip queue_id=%s",
+                    pv_locked.id,
+                    item.id,
+                )
+                continue
+            params["launch_config_id"] = item.launch_config_id
+            pipeline = create_pipeline_object(project, pv_locked, None)
 
-        params["launch_config_id"] = item.launch_config_id
-        pipeline = create_pipeline_object(project, project_version, None)
         async_result = run_sast_pipeline.delay(pipeline.id, params)
         logger.info(
             "Dispatcher: dispatch pipeline=%s queue_id=%s project=%s project_version=%s schedule_id=%s launch_config=%s",

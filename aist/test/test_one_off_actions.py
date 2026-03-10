@@ -66,7 +66,6 @@ class OneOffActionsTests(TestCase):
         self.project = AISTProject.objects.create(
             product=self.product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )

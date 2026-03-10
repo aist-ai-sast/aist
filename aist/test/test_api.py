@@ -76,7 +76,6 @@ class AISTApiBase(TestCase):
         self.project = AISTProject.objects.create(
             product=self.product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )
@@ -97,7 +96,6 @@ class AISTApiBase(TestCase):
         self.other_project = AISTProject.objects.create(
             product=self.other_product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )
@@ -348,7 +346,6 @@ class AISTAuthorizationTests(AISTApiBase):
         isolated_project = AISTProject.objects.create(
             product=isolated_product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )
@@ -606,7 +603,6 @@ class AISTFindingAuthorizationTests(AISTApiBase):
         isolated_project = AISTProject.objects.create(
             product=isolated_product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )
@@ -1075,7 +1071,6 @@ class AISTFindingTagsTests(AISTApiBase):
         self.extra_project = AISTProject.objects.create(
             product=self.extra_product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )
@@ -1752,7 +1747,6 @@ class AISTPipelineSummaryTests(AISTApiBase):
         other_project = AISTProject.objects.create(
             product=other_product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
         )
@@ -1783,7 +1777,6 @@ class AISTUIApiTests(AISTApiBase):
             AISTProject.objects.create(
                 product=self.product,
                 supported_languages=["python"],
-                script_path="scripts/another.sh",
                 compilable=False,
                 profile={},
             )
@@ -1793,14 +1786,13 @@ class AISTUIApiTests(AISTApiBase):
         resp = self.client.post(
             url,
             data={
-                "script_path": "scripts/new.sh",
                 "supported_languages": "python, go",
                 "profile": '{"paths": {"exclude": ["vendor/"]}}',
             },
         )
         self.assertEqual(resp.status_code, 200)
         self.project.refresh_from_db()
-        self.assertEqual(self.project.script_path, "scripts/new.sh")
+        self.assertEqual(sorted(self.project.supported_languages), ["go", "python"])
 
     def test_project_update_keeps_organization_when_not_provided(self):
         org = Organization.objects.create(name="Org Keep")
@@ -1819,7 +1811,6 @@ class AISTUIApiTests(AISTApiBase):
         resp = self.client.post(
             url,
             data={
-                "script_path": "scripts/new.sh",
                 "supported_languages": "python",
             },
         )
@@ -1846,7 +1837,6 @@ class AISTUIApiTests(AISTApiBase):
         AISTProject.objects.create(
             product=mismatch_product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
             organization=mismatch_org,
@@ -1856,7 +1846,6 @@ class AISTUIApiTests(AISTApiBase):
         resp = self.client.post(
             url,
             data={
-                "script_path": "scripts/new.sh",
                 "supported_languages": "python",
                 "organization": mismatch_org.id,
             },
@@ -1878,7 +1867,6 @@ class AISTUIApiTests(AISTApiBase):
         AISTProject.objects.create(
             product=hidden_product,
             supported_languages=["python"],
-            script_path="scripts/build.sh",
             compilable=False,
             profile={},
             organization=hidden_org,
@@ -1888,7 +1876,6 @@ class AISTUIApiTests(AISTApiBase):
         resp = self.client.post(
             url,
             data={
-                "script_path": "scripts/new.sh",
                 "supported_languages": "python",
                 "organization": hidden_org.id,
             },
@@ -1919,7 +1906,6 @@ class AISTUIApiTests(AISTApiBase):
         resp = ui_client.post(
             url,
             data={
-                "script_path": "scripts/ui-new.sh",
                 "supported_languages": "python, go",
                 "compilable": "on",
                 "organization": str(org.id),
@@ -1928,7 +1914,6 @@ class AISTUIApiTests(AISTApiBase):
         self.assertEqual(resp.status_code, 200)
         self.project.refresh_from_db()
         self.assertEqual(self.project.organization_id, org.id)
-        self.assertEqual(self.project.script_path, "scripts/ui-new.sh")
         self.assertEqual(sorted(self.project.supported_languages), ["go", "python"])
         self.assertTrue(self.project.compilable)
 

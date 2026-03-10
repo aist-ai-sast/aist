@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -17,6 +18,11 @@ class _DummyLogger:
 
     def exception(self, *args, **kwargs):
         return None
+
+
+@contextmanager
+def _dummy_script_path_context():
+    yield "aist-test-script.sh"
 
 
 class PipelineGitVersionResolutionTests(AISTApiBase):
@@ -55,7 +61,6 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                 rebuild_images=False,
                 analyzers=[],
                 time_class_level="slow",
-                script_path="scripts/build.sh",
                 dockerfile_path="Dockerfile",
                 pipeline_src_path="/aist-src",
                 additional_environments={},
@@ -125,12 +130,12 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                 rebuild_images=False,
                 analyzers=[],
                 time_class_level="slow",
-                script_path="scripts/build.sh",
                 dockerfile_path="Dockerfile",
                 pipeline_src_path="/aist-src",
                 additional_environments={},
                 ai_mode="MANUAL",
                 ai_filter_snapshot=None,
+                script_path_context=_dummy_script_path_context,
                 resolve_effective_project_version=_resolve_effective_project_version,
                 build_project_version_descriptor=lambda: {
                     **project_version_state,
@@ -236,12 +241,12 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                 rebuild_images=False,
                 analyzers=[],
                 time_class_level="slow",
-                script_path="scripts/build.sh",
                 dockerfile_path="Dockerfile",
                 pipeline_src_path="/aist-src",
                 additional_environments={},
                 ai_mode="MANUAL",
                 ai_filter_snapshot=None,
+                script_path_context=_dummy_script_path_context,
                 resolve_effective_project_version=_resolve_effective_project_version,
                 build_project_version_descriptor=lambda: {
                     **project_version_state,
@@ -359,12 +364,12 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                 rebuild_images=False,
                 analyzers=[],
                 time_class_level="slow",
-                script_path="scripts/build.sh",
                 dockerfile_path="Dockerfile",
                 pipeline_src_path="/aist-src",
                 additional_environments={},
                 ai_mode="MANUAL",
                 ai_filter_snapshot=None,
+                script_path_context=_dummy_script_path_context,
                 resolve_effective_project_version=_resolve_effective_project_version,
                 build_project_version_descriptor=lambda: {
                     **project_version_state,

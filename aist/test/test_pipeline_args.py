@@ -6,7 +6,10 @@ Covers:
 - default analyzers when project.profile is empty/absent
 - include/exclude behavior when project.profile['analyzers'] is provided
 """
+from __future__ import annotations
 
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -14,7 +17,7 @@ from django.test import TestCase
 from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.ai_filter import validate_and_normalize_filter
-from aist.models import AISTProject, AISTProjectVersion, VersionType
+from aist.models import AISTProject, AISTProjectScript, AISTProjectVersion, VersionType
 from aist.pipeline_args import PipelineArguments
 
 
@@ -64,7 +67,6 @@ class PipelineArgsProfileTests(TestCase):
         project = AISTProject.objects.create(
             product=self.product,
             supported_languages=["cpp", "python"],
-            script_path="scripts/build_and_scan.sh",
             compilable=True,
             profile={},  # no special analyzers profile
         )
@@ -97,7 +99,6 @@ class PipelineArgsProfileTests(TestCase):
         project = AISTProject.objects.create(
             product=self.product,
             supported_languages=["cpp", "python"],
-            script_path="scripts/build_and_scan.sh",
             compilable=True,
             profile={
                 "analyzers": {
@@ -233,7 +234,6 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
         self.project = AISTProject.objects.create(
             product=self.product,
             supported_languages=["python"],
-            script_path="scripts/build_and_scan.sh",
             compilable=True,
             profile={},
         )
@@ -333,3 +333,118 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
         self.assertEqual(resolved.resolved_from_branch_id, branch.id)
         self.assertEqual(branch.last_resolved_commit, commit)
         self.assertIsNotNone(branch.last_resolved_at)
+
+
+class ScriptFromDBTests(TestCase):
+
+    """User scenario: active_script is set; pipeline writes temp file then removes it."""
+
+    def setUp(self):
+        sla = SLA_Configuration.objects.create(name="SLA db")
+        prod_type = Product_Type.objects.create(name="PT db")
+        self.product = Product.objects.create(
+            name="DB Script Product",
+            description="",
+            prod_type=prod_type,
+            sla_configuration_id=sla.id,
+        )
+
+    def test_active_script_writes_temp_file_and_cleans_up(self):
+        """When active_script is set, a temp file is created then removed after context exits."""
+        script_content = "#!/bin/bash\necho from_db"
+        project = AISTProject.objects.create(
+            product=self.product,
+            supported_languages=[],
+            compilable=False,
+            profile={},
+        )
+        active_script = AISTProjectScript.objects.create(
+            project=project,
+            content=script_content,
+        )
+        project.active_script = active_script
+        project.save(update_fields=["active_script"])
+
+        args = PipelineArguments.__new__(PipelineArguments)
+        args.project = project
+        args.project_version = {}
+        args.pipeline_path = None
+        args.aist_path = Path(tempfile.gettempdir()) / "aist-out"
+
+        temp_path = None
+        with args.script_path_context() as resolved:
+            temp_path = resolved
+            self.assertTrue(Path(resolved).exists())
+            self.assertEqual(Path(resolved).read_text(encoding="utf-8"), script_content)
+
+        self.assertFalse(Path(temp_path).exists())
+
+    def test_no_active_script_falls_back_to_shared_default(self):
+        """When active_script_id is None, script_path_context uses shared default and cleans up temp file."""
+        project = AISTProject.objects.create(
+            product=self.product,
+            supported_languages=[],
+            compilable=False,
+            profile={},
+        )
+
+        args = PipelineArguments.__new__(PipelineArguments)
+        args.project = project
+        args.project_version = {}
+        args.pipeline_path = None
+        args.aist_path = Path(tempfile.gettempdir()) / "aist-out"
+
+        temp_path = None
+        with args.script_path_context() as resolved:
+            temp_path = resolved
+            self.assertTrue(Path(resolved).exists())
+            self.assertGreater(len(Path(resolved).read_text(encoding="utf-8")), 0)
+
+        project.refresh_from_db()
+        self.assertIsNotNone(project.active_script_id)
+        self.assertTrue(project.active_script.is_shared)
+        self.assertFalse(Path(temp_path).exists())
+
+
+class AnalyzersDiscardTests(TestCase):
+
+    """Bug fix: exclude with a name not in the set must NOT raise (use discard not remove)."""
+
+    def setUp(self):
+        sla = SLA_Configuration.objects.create(name="SLA disc")
+        prod_type = Product_Type.objects.create(name="PT disc")
+        self.product = Product.objects.create(
+            name="Discard Test Product",
+            description="",
+            prod_type=prod_type,
+            sla_configuration_id=sla.id,
+        )
+
+    @patch("aist.pipeline_args._load_analyzers_config")
+    def test_exclude_nonexistent_analyzer_does_not_raise(self, load_cfg_mock):
+        load_cfg_mock.return_value = DummyCfg({"cppcheck", "bandit"})
+
+        project = AISTProject.objects.create(
+            product=self.product,
+            supported_languages=["cpp"],
+            compilable=False,
+            profile={
+                "analyzers": {
+                    "exclude": ["semgrep"],  # "semgrep" is not in the config set
+                },
+            },
+        )
+        args = PipelineArguments(
+            project=project,
+            project_version={},
+            selected_analyzers=[],
+            selected_languages=[],
+            log_level="INFO",
+            rebuild_images=False,
+            ai_mode="MANUAL",
+            ai_filter_snapshot=None,
+            time_class_level="slow",
+        )
+        # Should not raise; "semgrep" simply wasn't there to remove
+        result = set(args.analyzers)
+        self.assertEqual(result, {"cppcheck", "bandit"})

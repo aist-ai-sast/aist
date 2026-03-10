@@ -18,7 +18,6 @@ class LaunchConfigCascadeTests(TestCase):
         self.project = AISTProject.objects.create(
             product=self.product,
             supported_languages=[],
-            script_path="/tmp/aist.sh",  # noqa: S108
             compilable=False,
         )
         self.launch_config = AISTProjectLaunchConfig.objects.create(

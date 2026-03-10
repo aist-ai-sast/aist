@@ -204,7 +204,6 @@ class GitlabIntegrationAPITests(TestCase):
         project = AISTProject.objects.create(
             product=product,
             supported_languages=[],
-            script_path="input_projects/default_imported_project_no_built.sh",
             compilable=False,
             profile={},
             repository=repo,
@@ -237,7 +236,6 @@ class GitlabIntegrationAPITests(TestCase):
         project = AISTProject.objects.create(
             product=product,
             supported_languages=[],
-            script_path="input_projects/default_imported_project_no_built.sh",
             compilable=False,
             profile={},
             repository=repo,
@@ -268,7 +266,6 @@ class GitlabIntegrationAPITests(TestCase):
         project = AISTProject.objects.create(
             product=product,
             supported_languages=[],
-            script_path="input_projects/default_imported_project_no_built.sh",
             compilable=False,
             profile={},
             repository=repo,

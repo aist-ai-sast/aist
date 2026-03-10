@@ -1,5 +1,6 @@
 # --- add near other imports in api.py ---
 import gitlab
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from dojo.authorization.authorization import (
     user_has_permission_or_403,
@@ -12,7 +13,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.projects import _create_and_attach_script
 from aist.api.schema import AISTApiTag
+from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import AISTProject, RepositoryInfo, ScmGitlabBinding, ScmType
 from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
 from aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GH flow uses
@@ -144,24 +147,26 @@ class ImportProjectFromGitlabAPI(APIView):
             binding.personal_access_token = token
             binding.save(update_fields=["personal_access_token"])
 
-        aist_project, project_created = AISTProject.objects.get_or_create(
-            product=product,
-            defaults={
-                "supported_languages": langs,
-                "script_path": "input_projects/default_imported_project_no_built.sh",
-                "compilable": False,
-                "profile": {},
-                "repository": repo_info,
-                "organization": organization,
-            },
-        )
-        if not project_created:
-            if aist_project.organization_id and aist_project.organization_id != organization.id:
-                msg = "Project is already linked to another organization."
-                return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)
-            if aist_project.organization_id is None:
-                aist_project.organization = organization
-                aist_project.save(update_fields=["organization"])
+        with transaction.atomic():
+            aist_project, project_created = AISTProject.objects.get_or_create(
+                product=product,
+                defaults={
+                    "supported_languages": langs,
+                    "compilable": False,
+                    "profile": {},
+                    "repository": repo_info,
+                    "organization": organization,
+                },
+            )
+            if project_created:
+                _create_and_attach_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
+            else:
+                if aist_project.organization_id and aist_project.organization_id != organization.id:
+                    msg = "Project is already linked to another organization."
+                    return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)
+                if aist_project.organization_id is None:
+                    aist_project.organization = organization
+                    aist_project.save(update_fields=["organization"])
 
         out = ImportGitlabResponseSerializer({
             "product_id": product.id,

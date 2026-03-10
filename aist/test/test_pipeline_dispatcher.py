@@ -10,9 +10,11 @@ from django.utils import timezone
 from aist.models import (
     AISTPipeline,
     AISTProjectLaunchConfig,
+    AISTProjectVersion,
     AISTStatus,
     LaunchSchedule,
     PipelineLaunchQueue,
+    VersionType,
 )
 from aist.tasks.pipeline_dispatcher import dispatch_queued_pipelines
 from aist.test.test_api import AISTApiBase
@@ -81,11 +83,19 @@ class DispatchQueuedPipelinesTests(AISTApiBase):
     ):
         _, _sched, q1 = self._mk_cfg_sched_and_queue(limit=1)
         _, _, q2 = self._mk_cfg_sched_and_queue(limit=1)
+        pv2 = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_BRANCH,
+            version=f"main-{uuid.uuid4().hex[:6]}",
+        )
 
         mock_current_app.control.inspect.return_value.active.return_value = {"w1": [], "w2": []}
 
-        # normalize_params must include project_version.id because dispatcher resolves it
-        mock_norm.return_value = {"project_version": {"id": self.pv.id}}
+        # Use different project_version values to avoid unfinished-pipeline guard collisions.
+        mock_norm.side_effect = [
+            {"project_version": {"id": self.pv.id}},
+            {"project_version": {"id": pv2.id}},
+        ]
         mock_run_task.delay.return_value = SimpleNamespace(id="celery-1")
 
         def _mk_pipeline(project, pv, _):
@@ -217,16 +227,16 @@ class DispatchQueuedPipelinesTests(AISTApiBase):
         mock_norm.return_value = {"project_version": {"id": self.pv.id}}
         mock_run_task.delay.return_value = SimpleNamespace(id="celery-777")
 
-        pipeline = AISTPipeline.objects.create(
+        mock_create_pipeline.side_effect = lambda project, pv, _: AISTPipeline.objects.create(
             id="pipe-777",
-            project=self.project,
-            project_version=self.pv,
+            project=project,
+            project_version=pv,
             status="SAST_LAUNCHED",
         )
-        mock_create_pipeline.return_value = pipeline
 
         dispatch_queued_pipelines()
 
+        pipeline = AISTPipeline.objects.get(id="pipe-777")
         pipeline.refresh_from_db()
         self.assertEqual(pipeline.run_task_id, "celery-777")
 
@@ -264,8 +274,16 @@ class DispatchQueueCapacityTests(AISTApiBase):
 
         q1 = PipelineLaunchQueue.objects.create(project=self.project, schedule=sched, launch_config=cfg)
         q2 = PipelineLaunchQueue.objects.create(project=self.project, schedule=sched, launch_config=cfg)
+        pv2 = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_BRANCH,
+            version=f"main-{uuid.uuid4().hex[:6]}",
+        )
 
-        mock_normalize.return_value = {"project_version": {"id": self.pv.id}}
+        mock_normalize.side_effect = [
+            {"project_version": {"id": self.pv.id}},
+            {"project_version": {"id": pv2.id}},
+        ]
         mock_run_task.delay.side_effect = [SimpleNamespace(id="celery-1"), SimpleNamespace(id="celery-2")]
 
         # create_pipeline_object should return a saved pipeline (or at least an object with an id)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -21,6 +22,11 @@ class _DummyLogger:
 
     def exception(self, *args, **kwargs):
         return None
+
+
+@contextmanager
+def _dummy_script_path_context():
+    yield "aist-test-script.sh"
 
 
 class PipelineOrphanReconciliationTests(AISTApiBase):
@@ -62,12 +68,12 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             rebuild_images=False,
             analyzers=[],
             time_class_level="slow",
-            script_path="scripts/build.sh",
             dockerfile_path="Dockerfile",
             pipeline_src_path="/aist-src",
             additional_environments={},
             ai_mode="MANUAL",
             ai_filter_snapshot=None,
+            script_path_context=_dummy_script_path_context,
             resolve_effective_project_version=lambda **_kwargs: self.pv,
             build_project_version_descriptor=lambda: descriptor,
             enrich_config=lambda: {

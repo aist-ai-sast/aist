@@ -48,7 +48,6 @@ class DemoProjectSpec:
     organization_name: str
     product_name: str
     supported_languages: tuple[str, ...]
-    script_path: str
     compilable: bool
     project_age_days: int
     finding_distribution: tuple[int, ...]
@@ -111,7 +110,6 @@ DEMO_PROJECTS = [
         organization_name="Nova Payments",
         product_name="Demo AIST Payments API",
         supported_languages=("python", "go"),
-        script_path="services/payments/build.sh",
         compilable=True,
         project_age_days=45,
         finding_distribution=(7, 3, 6, 5, 4),
@@ -126,7 +124,6 @@ DEMO_PROJECTS = [
         organization_name="Acme Platform",
         product_name="Demo AIST Checkout Web",
         supported_languages=("typescript",),
-        script_path="apps/checkout/build.sh",
         compilable=False,
         project_age_days=38,
         finding_distribution=(6, 4, 5, 5, 4),
@@ -141,7 +138,6 @@ DEMO_PROJECTS = [
         organization_name="Acme Platform",
         product_name="Demo AIST Identity Service",
         supported_languages=("java", "kotlin"),
-        script_path="services/identity/gradlew",
         compilable=True,
         project_age_days=60,
         finding_distribution=(8, 5, 4, 6, 3),
@@ -156,7 +152,6 @@ DEMO_PROJECTS = [
         organization_name="Nova Payments",
         product_name="Demo AIST Ledger Worker",
         supported_languages=("rust",),
-        script_path="workers/ledger/build.sh",
         compilable=True,
         project_age_days=52,
         finding_distribution=(7, 4, 6, 4, 5),
@@ -171,7 +166,6 @@ DEMO_PROJECTS = [
         organization_name="Helios Core",
         product_name="Demo AIST Analytics Core",
         supported_languages=("python", "sql"),
-        script_path="analytics/core/build.sh",
         compilable=True,
         project_age_days=70,
         finding_distribution=(5, 7, 4, 6, 3),
@@ -478,7 +472,6 @@ class Command(BaseCommand):
                 product=product,
                 defaults={
                     "supported_languages": list(spec.supported_languages),
-                    "script_path": spec.script_path,
                     "compilable": spec.compilable,
                     "profile": {"team": "application-security", "environment": "demo"},
                     "organization": organization,
@@ -489,9 +482,6 @@ class Command(BaseCommand):
             if project.supported_languages != supported_languages:
                 project.supported_languages = supported_languages
                 project_updates.append("supported_languages")
-            if project.script_path != spec.script_path:
-                project.script_path = spec.script_path
-                project_updates.append("script_path")
             if project.compilable != spec.compilable:
                 project.compilable = spec.compilable
                 project_updates.append("compilable")

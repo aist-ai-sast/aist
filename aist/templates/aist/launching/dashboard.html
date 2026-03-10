@@ -148,6 +148,7 @@
                                     <th>{% trans "Pipeline" %}</th>
                                     <th>{% trans "Age" %}</th>
                                     <th>{% trans "Actions" %}</th>
+                                    <th style="display:none">age_sort</th>
                                 </tr>
                                 </thead>
                                 <tbody></tbody>
@@ -979,6 +980,9 @@
                 }
             });
 
+            var _schedulesNeedsRedraw = false;
+            var _queueNeedsRedraw = false;
+
             function loadSchedules() {
                 var orgId = $("#filter-org").val();
                 var projectId = $("#filter-project").val();
@@ -1030,7 +1034,12 @@
                             ]);
                         });
 
-                        schedulesTable.draw();
+                        if ($("#tab-schedules").hasClass("active")) {
+                            schedulesTable.columns.adjust().draw();
+                            _schedulesNeedsRedraw = false;
+                        } else {
+                            _schedulesNeedsRedraw = true;
+                        }
                     })
                     .catch(function (err) {
                         console.error("Failed to load schedules", err);
@@ -1194,6 +1203,14 @@
                 paging: true,
                 searching: true,
                 order: [[0, "desc"]],
+                columnDefs: [
+                    // Col 6 = "Age" (display). Sort by hidden col 8 (raw seconds).
+                    // If columns are added/removed, update both indices together.
+                    // Current layout: 0=Created, 1=Project, 2=Schedule, 3=LaunchConfig,
+                    //                 4=Status, 5=Pipeline, 6=Age, 7=Actions, 8=age_sort(hidden)
+                    {targets: 6, orderData: [8]},
+                    {targets: 8, visible: false}
+                ],
                 initComplete: function () {
                     moveDataTablesControls(this.api(), $("#queue-filters"));
                 }
@@ -1233,11 +1250,17 @@
                                 queueStatusBadge(!!q.dispatched),
                                 pipelineLink,
                                 fmtAge(q.age_seconds),
-                                deleteBtn
+                                deleteBtn,
+                                q.age_seconds || 0  // hidden sort key for Age column
                             ]);
                         });
 
-                        queueTable.draw();
+                        if ($("#tab-queue").hasClass("active")) {
+                            queueTable.columns.adjust().draw();
+                            _queueNeedsRedraw = false;
+                        } else {
+                            _queueNeedsRedraw = true;
+                        }
                     })
                     .catch(function (err) {
                         console.error("Failed to load queue", err);
@@ -2001,6 +2024,18 @@
                 }).catch(function (err) {
                     alert("Save failed: " + err);
                 });
+            });
+
+            $('a[data-toggle="tab"][href="#tab-schedules"]').on("shown.bs.tab", function () {
+                // Always adjust+draw when tab becomes visible: fixes DataTables rendering
+                // in hidden Bootstrap 3 tabs and flushes any deferred auto-refresh data.
+                schedulesTable.columns.adjust().draw();
+                _schedulesNeedsRedraw = false;
+            });
+
+            $('a[data-toggle="tab"][href="#tab-queue"]').on("shown.bs.tab", function () {
+                queueTable.columns.adjust().draw();
+                _queueNeedsRedraw = false;
             });
 
             $('a[data-toggle="tab"][href="#tab-create"]').on("shown.bs.tab", function () {

@@ -69,8 +69,11 @@ from aist.api.pipelines import (
 )
 from aist.api.project_versions import AISTProjectVersionCreateSerializer, ProjectVersionCreateAPI
 from aist.api.projects import (
+    AISTProjectActiveScriptAPI,
     AISTProjectDetailAPI,
     AISTProjectListAPI,
+    AISTProjectScriptDetailAPI,
+    AISTProjectScriptListCreateAPI,
     AISTProjectSerializer,
 )
 from aist.api.queue import (
@@ -97,8 +100,11 @@ __all__ = [
     "AISTMeAPI",
     "AISTMeChangePasswordAPI",
     "AISTOrganizationSerializer",
+    "AISTProjectActiveScriptAPI",
     "AISTProjectDetailAPI",
     "AISTProjectListAPI",
+    "AISTProjectScriptDetailAPI",
+    "AISTProjectScriptListCreateAPI",
     "AISTProjectSerializer",
     "AISTProjectVersionCreateSerializer",
     "EmailActionCreateSerializer",

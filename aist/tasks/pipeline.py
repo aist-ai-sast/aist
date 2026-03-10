@@ -69,6 +69,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
     launch_config_id = params.get("launch_config_id")
     logger = install_pipeline_logging(pipeline_id, log_level)
     pipeline = None  # ensure defined for exception path
+    workspace_to_cleanup: tuple[str, str, str] | None = None
 
     try:
         with transaction.atomic():
@@ -110,36 +111,35 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
         rebuild_images = params.rebuild_images
         analyzers = params.analyzers
         time_class_level = params.time_class_level
-        script_path = params.script_path
         dockerfile_path = params.dockerfile_path
 
-        project_build_path = get_project_build_path(
-            project_name or "project",
-            params.project_version.get("version", "default"),
-            pipeline_id,
-        )
+        ws_name = project_name or "project"
+        ws_version = params.project_version.get("version", "default")
+        project_build_path = get_project_build_path(ws_name, ws_version, pipeline_id)
+        workspace_to_cleanup = (ws_name, ws_version, pipeline_id)
         # Isolate output directory per pipeline run to prevent concurrent-write collisions.
         output_dir = str(Path(output_dir) / pipeline_id)
 
         logger.info("Starting configure_project_run_analyses")
-        ld = PipelineLaunchData(configure_project_run_analyses(
-            script_path=script_path,
-            output_dir=output_dir,
-            languages=languages,
-            analyzer_config=analyzers_helper,
-            dockerfile_path=dockerfile_path,
-            context_dir=params.pipeline_src_path,
-            image_name=f"project-{project_name}-builder" if project_name else "project-builder",
-            project_path=project_build_path,
-            force_rebuild=False,
-            rebuild_images=rebuild_images,
-            version=project_version,
-            log_level=log_level,
-            min_time_class=time_class_level or "",
-            analyzers=analyzers,
-            pipeline_id=pipeline_id,
-            additional_env=params.additional_environments,
-        ))
+        with params.script_path_context() as script_path:
+            ld = PipelineLaunchData(configure_project_run_analyses(
+                script_path=script_path,
+                output_dir=output_dir,
+                languages=languages,
+                analyzer_config=analyzers_helper,
+                dockerfile_path=dockerfile_path,
+                context_dir=params.pipeline_src_path,
+                image_name=f"project-{project_name}-builder" if project_name else "project-builder",
+                project_path=project_build_path,
+                force_rebuild=False,
+                rebuild_images=rebuild_images,
+                version=project_version,
+                log_level=log_level,
+                min_time_class=time_class_level or "",
+                analyzers=analyzers,
+                pipeline_id=pipeline_id,
+                additional_env=params.additional_environments,
+            ))
 
         ld.languages = languages
         ld.ai = {
@@ -185,13 +185,9 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
             pipeline_id=pipeline_id,
             log_level=log_level,
         )
-        # Source workspace is no longer needed after upload; clean it up so
-        # per-run directories don't accumulate on disk.
-        cleanup_project_build_path(
-            project_name or "project",
-            params.project_version.get("version", "default"),
-            pipeline_id,
-        )
+        # Workspace is no longer needed; mark as cleaned so finally skips it.
+        cleanup_project_build_path(*workspace_to_cleanup)
+        workspace_to_cleanup = None
 
         tests: list[Test] = []
         test_ids = []
@@ -255,3 +251,8 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
             except Exception:
                 logger.exception("Failed to mark pipeline as FINISHED after exception.")
         raise
+    finally:
+        # Guarantee workspace cleanup even when an exception aborts the pipeline
+        # before the normal post-upload cleanup path is reached.
+        if workspace_to_cleanup is not None:
+            cleanup_project_build_path(*workspace_to_cleanup)
