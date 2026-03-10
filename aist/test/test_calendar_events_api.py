@@ -183,6 +183,100 @@ class CalendarEventsApiTests(TestCase):
         self.assertEqual(event["summary"]["severity"]["High"], 1)
         self.assertEqual(event["summary"]["severity"]["Low"], 1)
 
+    def test_finding_created_aggregate_counts_all_findings_with_same_severity_and_date(self):
+        """Regression: findings with identical (severity, date) must not be collapsed by DISTINCT."""
+        test_type = Test_Type.objects.create(name="Calendar same-severity type")
+        engagement = Engagement.objects.create(
+            name="Calendar same-severity engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        same_date = (timezone.now() - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        findings = [
+            Finding.objects.create(
+                test=test,
+                title=f"Same-severity finding {i}",
+                severity="Critical",
+                date=same_date,
+                reporter=self.user,
+            )
+            for i in range(5)
+        ]
+        self.version.findings.add(*findings)
+
+        start, end = self._base_range()
+        response = self.client.get(
+            self._url(),
+            data={
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "view": "month",
+                "event_types": ["finding_created"],
+                "grouping": "auto",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["events"]), 1)
+        event = response.data["events"][0]
+        self.assertEqual(event["count"], 5)
+        self.assertEqual(event["summary"]["severity"]["Critical"], 5)
+
+    def test_finding_created_detail_count_matches_list_count(self):
+        """Regression: detail endpoint must return the same count as the list endpoint."""
+        test_type = Test_Type.objects.create(name="Calendar detail match type")
+        engagement = Engagement.objects.create(
+            name="Calendar detail match engagement",
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            product=self.product,
+        )
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=test_type,
+        )
+        same_date = (timezone.now() - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        findings = [
+            Finding.objects.create(
+                test=test,
+                title=f"Detail match finding {i}",
+                severity="High",
+                date=same_date,
+                reporter=self.user,
+            )
+            for i in range(4)
+        ]
+        self.version.findings.add(*findings)
+
+        start, end = self._base_range()
+        list_resp = self.client.get(
+            self._url(),
+            data={
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "view": "month",
+                "event_types": ["finding_created"],
+                "grouping": "auto",
+            },
+        )
+        self.assertEqual(list_resp.status_code, 200)
+        self.assertEqual(len(list_resp.data["events"]), 1)
+        list_event = list_resp.data["events"][0]
+        list_count = list_event["count"]
+
+        detail_resp = self.client.get(self._detail_url(list_event["id"]))
+        self.assertEqual(detail_resp.status_code, 200)
+        self.assertEqual(detail_resp.data["count"], list_count)
+        self.assertEqual(list_count, 4)
+
     def test_project_id_filter_limits_results(self):
         start, end = self._base_range()
         response = self.client.get(

@@ -15,6 +15,7 @@ type SelectFieldProps = {
   placeholder?: string;
   hideLabel?: boolean;
   showIndicator?: boolean;
+  side?: "top" | "bottom" | "left" | "right";
 };
 
 export default function SelectField({
@@ -26,6 +27,7 @@ export default function SelectField({
   placeholder = "Select",
   hideLabel = false,
   showIndicator = true,
+  side,
 }: SelectFieldProps) {
   return (
     <div>
@@ -55,6 +57,7 @@ export default function SelectField({
         <Select.Portal>
           <Select.Content
             position="popper"
+            side={side}
             className="z-50 overflow-hidden rounded-xl border border-night-500 bg-night-900 shadow-panel"
             style={{ minWidth: "var(--radix-select-trigger-width)" }}
           >

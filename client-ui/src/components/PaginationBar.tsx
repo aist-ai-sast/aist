@@ -49,6 +49,7 @@ export default function PaginationBar({
             value={String(pageSize)}
             onChange={(value) => onPageSizeChange(Number(value))}
             hideLabel
+            side="top"
             options={rowOptions.map((option) => ({
               value: String(option),
               label: `Rows: ${option}`,

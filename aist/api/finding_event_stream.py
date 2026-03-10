@@ -88,7 +88,7 @@ class FindingEventStream:
 
     def aggregate_created_by_day(self, *, start: datetime, end: datetime) -> dict[date_type, SeverityBucket]:
         return self._aggregate_by_day(
-            rows=self.list_created(start=start, end=end).values("severity", "event_at").order_by("event_at"),
+            rows=self.list_created(start=start, end=end).values("id", "severity", "event_at").order_by("event_at"),
             timestamp_field="event_at",
         )
 
@@ -96,7 +96,7 @@ class FindingEventStream:
         by_day: dict[date_type, ProcessedBucket] = defaultdict(ProcessedBucket.empty)
         for row in (
             self.list_status_processed(start=start, end=end)
-            .values("severity", "is_mitigated", "false_p", "out_of_scope", "duplicate", "last_status_update")
+            .values("id", "severity", "is_mitigated", "false_p", "out_of_scope", "duplicate", "last_status_update")
             .order_by("last_status_update")
         ):
             event_at = row.get("last_status_update")
@@ -116,12 +116,13 @@ class FindingEventStream:
         return by_day
 
     def aggregate_created_for_range(self, *, start: datetime, end: datetime) -> SeverityBucket | None:
-        return self._aggregate_for_range(rows=self.list_created(start=start, end=end).values("severity"))
+        return self._aggregate_for_range(rows=self.list_created(start=start, end=end).values("id", "severity"))
 
     def aggregate_processed_for_range(self, *, start: datetime, end: datetime) -> ProcessedBucket | None:
         processed = ProcessedBucket.empty()
         has_values = False
         for row in self.list_status_processed(start=start, end=end).values(
+            "id",
             "severity",
             "is_mitigated",
             "false_p",
