@@ -36,13 +36,14 @@ export function eventTypeLabel(type: CalendarEventType) {
   return "Project Created";
 }
 
-export function formatCalendarDateTime(value: string, allDay: boolean) {
+export function formatCalendarDateTime(value: string, allDay: boolean, timeZone?: string) {
   const date = new Date(value);
   return date.toLocaleString("en-GB", {
     year: "numeric",
     month: "short",
     day: "2-digit",
     ...(allDay ? {} : { hour: "2-digit", minute: "2-digit", hour12: false }),
+    ...(timeZone ? { timeZone } : {}),
   });
 }
 

@@ -13,6 +13,7 @@ import SelectField from "../components/SelectField";
 import { calendarViewToApiView, mapCalendarEventToUi } from "../lib/calendar";
 import { formatCalendarSummary } from "../lib/calendarEventUi";
 import { useCalendarEventDetail, useCalendarEvents, useProjects } from "../lib/queries";
+import { resolveClientTimeZone } from "../lib/timezone";
 import type { CalendarEvent, CalendarEventType, CalendarView } from "../types";
 
 const EVENT_TYPE_META = [
@@ -127,6 +128,7 @@ export default function CalendarPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const projects = useProjects();
+  const clientTimeZone = useMemo(() => resolveClientTimeZone(), []);
   const searchParams = useMemo(
     () => new URLSearchParams(location.search),
     [location.search],
@@ -193,14 +195,14 @@ export default function CalendarPage() {
     eventTypes: eventTypesForQuery,
     projectIds: selectedProjectId ? [selectedProjectId] : [],
     grouping: "auto",
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timezone: clientTimeZone,
     limit: 1200,
   });
 
   const detailQuery = useCalendarEventDetail(
     selectedEventId ?? undefined,
     selectedProjectId,
-    Intl.DateTimeFormat().resolvedOptions().timeZone,
+    clientTimeZone,
   );
 
   const filteredEvents = useMemo(() => {
@@ -220,7 +222,10 @@ export default function CalendarPage() {
       return true;
     });
   }, [events.data, selectedPipelineStatuses]);
-  const uiEvents = useMemo(() => filteredEvents.map(mapCalendarEventToUi), [filteredEvents]);
+  const uiEvents = useMemo(
+    () => filteredEvents.map((event) => mapCalendarEventToUi(event, clientTimeZone)),
+    [filteredEvents, clientTimeZone],
+  );
   const orderedEventIds = useMemo(() => filteredEvents.map((item) => item.id), [filteredEvents]);
   const eventById = useMemo(
     () => new Map(filteredEvents.map((item) => [item.id, item])),
@@ -358,6 +363,7 @@ export default function CalendarPage() {
         <div className="relative rounded-2xl border border-night-500 bg-night-700/80 p-2 lg:p-4">
           <FullCalendar
             plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+            timeZone={clientTimeZone}
             initialView={toFullCalendarView(initialView)}
             initialDate={initialDate}
             headerToolbar={{
@@ -454,6 +460,7 @@ export default function CalendarPage() {
             selectedEvent={selectedEvent}
             selectedProjectId={selectedProjectId}
             isLoading={Boolean(selectedEventId && detailQuery.isLoading && !selectedEvent)}
+            timeZone={clientTimeZone}
             onNavigate={(path) => navigate(path)}
           />
         </aside>

@@ -19,12 +19,13 @@ export function calendarViewToApiView(viewType: string): "day" | "week" | "month
   return "month";
 }
 
-export function mapCalendarEventToUi(event: CalendarEvent): CalendarUiEvent {
+export function mapCalendarEventToUi(event: CalendarEvent, timeZone?: string): CalendarUiEvent {
   const summary = event.summary as { project_name?: string; status?: string };
   const localTime = new Date(event.start).toLocaleTimeString("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+    ...(timeZone ? { timeZone } : {}),
   });
   const compactTitle = (() => {
     if (event.eventType === "finding_created") return `Findings ${event.count}`;

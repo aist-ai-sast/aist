@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CalendarEvent } from "../types";
 import {
   buildCalendarActionLinks,
+  formatCalendarDateTime,
   formatCalendarSummary,
   formatDurationFromSeconds,
   getSeverityDistribution,
@@ -33,6 +34,12 @@ describe("formatDurationFromSeconds", () => {
     expect(formatDurationFromSeconds(1800)).toBe("30 min");
     expect(formatDurationFromSeconds(7200)).toBe("2 h");
     expect(formatDurationFromSeconds(8100)).toBe("2 h 15 min");
+  });
+});
+
+describe("formatCalendarDateTime", () => {
+  it("formats timestamp in provided user timezone", () => {
+    expect(formatCalendarDateTime("2026-03-10T12:00:00Z", false, "Europe/Belgrade")).toContain("13:00");
   });
 });
 

@@ -15,6 +15,7 @@ type Props = {
   selectedEvent: CalendarEvent | null;
   selectedProjectId?: number;
   isLoading?: boolean;
+  timeZone?: string;
   onNavigate: (path: string) => void;
 };
 
@@ -22,7 +23,13 @@ function DetailCard({ children, className = "" }: { children: ReactNode; classNa
   return <div className={`rounded-xl border border-night-500 bg-night-900/70 p-3 ${className}`}>{children}</div>;
 }
 
-export default function CalendarEventDetailsPanel({ selectedEvent, selectedProjectId, isLoading = false, onNavigate }: Props) {
+export default function CalendarEventDetailsPanel({
+  selectedEvent,
+  selectedProjectId,
+  isLoading = false,
+  timeZone,
+  onNavigate,
+}: Props) {
   if (isLoading) {
     return (
       <div className="mt-4 space-y-3 animate-pulse">
@@ -90,7 +97,7 @@ export default function CalendarEventDetailsPanel({ selectedEvent, selectedProje
           ) : null}
         </div>
         <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-300">
-          <span>{formatCalendarDateTime(selectedEvent.start, selectedEvent.isAllDay)}</span>
+          <span>{formatCalendarDateTime(selectedEvent.start, selectedEvent.isAllDay, timeZone)}</span>
           {selectedEvent.eventType === "pipeline_started" ? (
             <span>Duration: {formatDurationFromSeconds(Number(summary.duration_seconds ?? 0)) ?? "—"}</span>
           ) : null}
