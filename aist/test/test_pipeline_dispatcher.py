@@ -18,6 +18,7 @@ from aist.models import (
 )
 from aist.tasks.pipeline_dispatcher import dispatch_queued_pipelines
 from aist.test.test_api import AISTApiBase
+from aist.utils.pipeline import set_pipeline_status
 
 
 def _fake_current_app(active_map):
@@ -408,3 +409,103 @@ class DispatchUnfinishedPipelineGuardTests(AISTApiBase):
 
         q.refresh_from_db()
         self.assertTrue(q.dispatched)
+
+    @patch("aist.tasks.pipeline_dispatcher.current_app")
+    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
+    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
+    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
+    def test_completed_finished_pipeline_without_run_task_id_does_not_block(
+        self, mock_norm, mock_create_pipeline, mock_run_task, mock_current_app,
+    ):
+        """
+        Regression: a completed FINISHED pipeline with run_task_id cleared (normal
+        state after set_pipeline_status reaches terminal) must not block a new dispatch.
+        """
+        AISTPipeline.objects.create(
+            id="completed-pipe",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINISHED,
+            run_task_id=None,  # cleared on completion by set_pipeline_status
+        )
+
+        q = self._mk_queue_item()
+        mock_current_app.control.inspect.return_value.active.return_value = {"w1": []}
+        mock_norm.return_value = {"project_version": {"id": self.pv.id}}
+        mock_run_task.delay.return_value = SimpleNamespace(id="celery-new")
+        mock_create_pipeline.side_effect = lambda project, pv, _: AISTPipeline.objects.create(
+            id=f"new-pipe-{uuid.uuid4().hex[:6]}",
+            project=project,
+            project_version=pv,
+            status=AISTStatus.FINISHED,
+        )
+
+        dispatch_queued_pipelines()
+
+        q.refresh_from_db()
+        self.assertTrue(q.dispatched, "Completed pipeline (run_task_id=None) must not block dispatch")
+
+    @patch("aist.tasks.pipeline_dispatcher.current_app")
+    @patch("aist.tasks.pipeline_dispatcher.logger")
+    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
+    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
+    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
+    def test_race_window_guard_blocks_when_run_task_id_set_but_celery_not_started(
+        self, mock_norm, mock_create_pipeline, mock_run_task, mock_logger, mock_current_app,
+    ):
+        """
+        Race-window guard: a FINISHED pipeline with run_task_id set means the dispatcher
+        just sent it to Celery but Celery hasn't picked it up yet. Must block duplicate.
+        """
+        AISTPipeline.objects.create(
+            id="in-flight-pipe",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINISHED,
+            run_task_id="celery-task-in-flight",
+        )
+
+        q = self._mk_queue_item()
+        mock_current_app.control.inspect.return_value.active.return_value = {"w1": []}
+        mock_norm.return_value = {"project_version": {"id": self.pv.id}}
+
+        dispatch_queued_pipelines()
+
+        q.refresh_from_db()
+        self.assertFalse(q.dispatched, "In-flight pipeline (run_task_id set) must block duplicate dispatch")
+        mock_create_pipeline.assert_not_called()
+        mock_run_task.delay.assert_not_called()
+        mock_logger.info.assert_called()
+
+
+class SetPipelineStatusRunTaskIdTests(AISTApiBase):
+    """set_pipeline_status must clear run_task_id when transitioning to a terminal status."""
+
+    def _mk_pipeline(self, status, run_task_id=None):
+        return AISTPipeline.objects.create(
+            id=uuid.uuid4().hex[:8],
+            project=self.project,
+            project_version=self.pv,
+            status=status,
+            run_task_id=run_task_id,
+        )
+
+    def test_clears_run_task_id_on_transition_to_finished(self):
+        pipeline = self._mk_pipeline(AISTStatus.SAST_LAUNCHED, run_task_id="task-abc")
+        set_pipeline_status(pipeline, AISTStatus.FINISHED)
+        pipeline.refresh_from_db()
+        self.assertIsNone(pipeline.run_task_id)
+        self.assertEqual(pipeline.status, AISTStatus.FINISHED)
+
+    def test_clears_run_task_id_on_transition_to_finished_with_warnings(self):
+        pipeline = self._mk_pipeline(AISTStatus.SAST_LAUNCHED, run_task_id="task-xyz")
+        set_pipeline_status(pipeline, AISTStatus.FINISHED_WITH_WARNINGS)
+        pipeline.refresh_from_db()
+        self.assertIsNone(pipeline.run_task_id)
+        self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
+
+    def test_does_not_clear_run_task_id_on_non_terminal_transition(self):
+        pipeline = self._mk_pipeline(AISTStatus.FINISHED, run_task_id="task-abc")
+        set_pipeline_status(pipeline, AISTStatus.SAST_LAUNCHED)
+        pipeline.refresh_from_db()
+        self.assertEqual(pipeline.run_task_id, "task-abc")

@@ -11,3 +11,7 @@
 - Change of files from vendor is prohibited
 - Don't try to invent solution from scratch, try to use already developed and popular solutions.
 - Implemented solutions must be secure, efficient, flexible and reusable.
+
+## Skills
+### Available skills
+- aist-finding-triage: Analyze new findings in an AIST pipeline, classify TP/FP, and produce complete AISTAIFindingResponse payloads with detailed English reasoning and TP reproduction guidance. (file: /Users/butkevichveronika/work/defect_dojo_fork/django-DefectDojo/.codex/skills/aist-finding-triage/SKILL.md)

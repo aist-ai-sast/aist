@@ -88,6 +88,11 @@ def set_pipeline_status(
 
     pipeline.status = new_status
     update_fields = {"status", "updated"}
+    if is_terminal_pipeline_status(new_status):
+        # Clear run_task_id on completion so the dispatcher's race-window guard
+        # can distinguish completed pipelines from newly dispatched ones.
+        pipeline.run_task_id = None
+        update_fields.add("run_task_id")
     if update_fields_extra:
         update_fields.update(update_fields_extra)
     pipeline.save(update_fields=sorted(update_fields))

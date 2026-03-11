@@ -238,7 +238,7 @@ export default function FindingDetailTabs({
               <div>
                 <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Summary</div>
                 <div className="mt-2 rounded-xl border border-night-500 bg-night-800/70 px-4 py-3 leading-relaxed text-slate-200">
-                  {aiResponse.reasoning}
+                  <DescriptionBlock value={aiResponse.reasoning} />
                 </div>
               </div>
 

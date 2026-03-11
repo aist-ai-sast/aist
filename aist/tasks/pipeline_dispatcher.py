@@ -120,6 +120,8 @@ def dispatch_queued_pipelines(async_user=None):
                 continue
             # Also guard against a pipeline that was just dispatched (status=FINISHED,
             # run_task_id set) but whose Celery task hasn't transitioned it yet.
+            # Old completed pipelines have run_task_id cleared on completion, so this
+            # only matches genuinely in-flight dispatches.
             if AISTPipeline.objects.filter(
                 project_version=pv_locked,
                 status=AISTStatus.FINISHED,
