@@ -263,14 +263,23 @@ def safe_attach_findings_to_version(
         return stats
 
     through_model = pv.findings.through
-    existing_ids = set(Finding.objects.filter(id__in=finding_ids).values_list("id", flat=True))
-    stats.missing_before_insert = len(finding_ids) - len(existing_ids)
-    if not existing_ids:
+    # SELECT FOR UPDATE locks findings against concurrent DELETE.  Django creates FK
+    # constraints as DEFERRABLE INITIALLY DEFERRED, so the FK check happens at COMMIT,
+    # not at INSERT.  Without this lock, a concurrent process (e.g. deduplication) can
+    # delete a finding between our INSERT and our COMMIT, causing a FK violation at
+    # COMMIT time.  The lock is held only for the duration of the INSERT, which is fast.
+    locked_ids = set(
+        Finding.objects.select_for_update()
+        .filter(id__in=finding_ids)
+        .values_list("id", flat=True),
+    )
+    stats.missing_before_insert = len(finding_ids) - len(locked_ids)
+    if not locked_ids:
         return stats
 
     after_count = through_model.objects.filter(
         aistprojectversion_id=pv.id,
-        finding_id__in=list(existing_ids),
+        finding_id__in=list(locked_ids),
     ).count()
     before_count = after_count
 
@@ -285,12 +294,12 @@ def safe_attach_findings_to_version(
             INNER JOIN {finding_table} f ON f.id = src.finding_id
             ON CONFLICT DO NOTHING
             """,
-            [pv.id, list(existing_ids)],
+            [pv.id, list(locked_ids)],
         )
 
     after_count = through_model.objects.filter(
         aistprojectversion_id=pv.id,
-        finding_id__in=list(existing_ids),
+        finding_id__in=list(locked_ids),
     ).count()
     stats.linked = max(after_count - before_count, 0)
     return stats

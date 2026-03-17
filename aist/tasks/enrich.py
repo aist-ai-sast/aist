@@ -104,7 +104,7 @@ def enrich_finding_task(
                     DojoMeta.objects.update_or_create(
                         finding=f,
                         name="sourcefile_link",
-                        value=link,
+                        defaults={"value": link},
                     )
                 except Exception:
                     logger.exception(

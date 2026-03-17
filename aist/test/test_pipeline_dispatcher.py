@@ -479,6 +479,7 @@ class DispatchUnfinishedPipelineGuardTests(AISTApiBase):
 
 
 class SetPipelineStatusRunTaskIdTests(AISTApiBase):
+
     """set_pipeline_status must clear run_task_id when transitioning to a terminal status."""
 
     def _mk_pipeline(self, status, run_task_id=None):

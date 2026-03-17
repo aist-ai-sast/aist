@@ -41,7 +41,11 @@ For `false_positive`, also include:
 
 ## Output format
 
-Return a JSON array, one object per finding:
+Primary outcome: persisted database changes, with one complete `AISTAIFindingResponse` written per finding.
+
+Assistant response: concise human summary of what was written to the database and which `Finding` status changes were applied.
+
+JSON may be used as an internal intermediate format when preparing writes, for example in this shape:
 
 ```json
 [
@@ -91,6 +95,6 @@ TP or FP with one-sentence rationale.
 - Never mention scanner/tool names.
 - Never leave required keys out.
 - Never return non-URL items in `references`.
-- Never output text outside the JSON array.
+- Never treat chat JSON output as a substitute for the required database writes.
 - Never provide abstract PoC text without concrete executable steps.
 - Never return `reasoning` as unstructured plain text.

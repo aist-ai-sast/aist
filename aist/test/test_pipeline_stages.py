@@ -6,10 +6,12 @@ from unittest.mock import MagicMock, patch
 from django.http import JsonResponse
 from django.test import RequestFactory, TestCase
 
+from aist.models import AISTStatus
 from aist.tasks.ai import push_request_to_ai as _push_request_to_ai
 from aist.tasks.dedup import watch_deduplication as _watch_deduplication
 from aist.tasks.enrich import after_upload_enrich_and_watch as _after_upload_enrich_and_watch
 from aist.tasks.enrich import make_enrich_chord as _make_enrich_chord
+from aist.utils.pipeline import finish_pipeline
 from aist.views.ai import send_request_to_ai as _send_request_to_ai
 
 # ---- Messages / constants ----------------------------------------------------
@@ -23,6 +25,7 @@ class DummyLogger:
     def info(self, *a, **kw): pass
     def warning(self, *a, **kw): pass
     def error(self, *a, **kw): pass
+    def exception(self, *a, **kw): pass
 
 
 def _mk_pipeline(**overrides):
@@ -103,6 +106,7 @@ def _call_watch_dedup(*, pipeline, progress_qs=None, remaining_counts=None, dupl
          patch("aist.tasks.dedup.Finding") as mock_finding, \
          patch("aist.tasks.enrich.make_enrich_chord", return_value=mock_chord_sig):
         mock_model.objects.get.return_value = pipeline
+        mock_model.objects.select_for_update.return_value.get.return_value = pipeline
         if progress_qs is None:
             progress_qs = MagicMock()
             progress_qs.filter.return_value = progress_qs
@@ -136,7 +140,7 @@ class WatchDeduplicationTests(TestCase):
 
         with patch("aist.tasks.dedup.finish_pipeline") as mock_finish:
             _call_watch_dedup(pipeline=pipeline)
-        mock_finish.assert_called_once_with(pipeline, degraded=True)
+        mock_finish.assert_called_once_with(pipeline.id, degraded=True)
 
     def test_complete_dedup_triggers_enrich(self):
         tests_mgr = MagicMock()
@@ -145,7 +149,8 @@ class WatchDeduplicationTests(TestCase):
         tests_mgr.values_list.return_value = [1]
         pipeline = _mk_pipeline(status="WAITING_DEDUPLICATION_TO_FINISH", tests=tests_mgr)
 
-        pipeline, mock_chord_sig = _call_watch_dedup(pipeline=pipeline, remaining_counts=[0])
+        with self.captureOnCommitCallbacks(execute=True):
+            pipeline, mock_chord_sig = _call_watch_dedup(pipeline=pipeline, remaining_counts=[0])
 
         self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
         mock_chord_sig.apply_async.assert_called_once()
@@ -177,7 +182,12 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.__iter__.return_value = iter([])
         progress_qs.update = MagicMock()
 
-        pipeline, mock_chord_sig = _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
+        with self.captureOnCommitCallbacks(execute=True):
+            pipeline, mock_chord_sig = _call_watch_dedup(
+                pipeline=pipeline,
+                progress_qs=progress_qs,
+                remaining_counts=[1],
+            )
         self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
         mock_chord_sig.apply_async.assert_called_once()
 
@@ -208,7 +218,12 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.__iter__.return_value = iter([])
         progress_qs.update = MagicMock()
 
-        pipeline, mock_chord_sig = _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
+        with self.captureOnCommitCallbacks(execute=True):
+            pipeline, mock_chord_sig = _call_watch_dedup(
+                pipeline=pipeline,
+                progress_qs=progress_qs,
+                remaining_counts=[1],
+            )
         self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
         mock_chord_sig.apply_async.assert_called_once()
 
@@ -239,7 +254,12 @@ class WatchDeduplicationTests(TestCase):
         progress_qs.__iter__.return_value = iter([])
         progress_qs.update = MagicMock()
 
-        pipeline, mock_chord_sig = _call_watch_dedup(pipeline=pipeline, progress_qs=progress_qs, remaining_counts=[1])
+        with self.captureOnCommitCallbacks(execute=True):
+            pipeline, mock_chord_sig = _call_watch_dedup(
+                pipeline=pipeline,
+                progress_qs=progress_qs,
+                remaining_counts=[1],
+            )
         self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
         mock_chord_sig.apply_async.assert_called_once()
 
@@ -251,11 +271,12 @@ class WatchDeduplicationTests(TestCase):
         tests_mgr.values_list.return_value = [1]
         pipeline = _mk_pipeline(status="WAITING_DEDUPLICATION_TO_FINISH", tests=tests_mgr)
 
-        pipeline, mock_chord_sig = _call_watch_dedup(
-            pipeline=pipeline,
-            remaining_counts=[0],
-            duplicate_exists_seq=[True, False],
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            pipeline, mock_chord_sig = _call_watch_dedup(
+                pipeline=pipeline,
+                remaining_counts=[0],
+                duplicate_exists_seq=[True, False],
+            )
 
         self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
         mock_async_dupe_delete.delay.assert_called_once_with()
@@ -267,23 +288,27 @@ class WatchDeduplicationTests(TestCase):
 class PushRequestToAITests(TestCase):
     def test_does_not_push_when_not_ready(self):
         with patch("aist.tasks.ai.requests.post") as mock_post, \
-             patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
+             patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()), \
              patch("aist.tasks.ai.finish_pipeline") as mock_finish, \
              patch("aist.tasks.ai.AISTPipeline") as mock_model:
             pipeline = _mk_pipeline(status="WAITING_CONFIRMATION_TO_PUSH_TO_AI")
-            mock_model.objects.select_for_update().select_related().get.return_value = pipeline
+            sfu = mock_model.objects.select_for_update.return_value
+            sfu.select_related.return_value.get.return_value = pipeline
+            sfu.get.return_value = pipeline
 
             _push_request_to_ai.run(pipeline_id=pipeline.id, finding_ids=[1, 2], filters={}, log_level="INFO")
 
             mock_post.assert_not_called()
-            mock_finish.assert_called_once_with(pipeline, degraded=True)
+            mock_finish.assert_called_once_with(pipeline.id, degraded=True)
 
     def test_push_success_transitions_to_waiting_result(self):
         with patch("aist.tasks.ai.requests.post") as mock_post, \
-             patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()) as _mock_log, \
+             patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()), \
              patch("aist.tasks.ai.AISTPipeline") as mock_model:
             pipeline = _mk_pipeline(status="PUSH_TO_AI")
-            mock_model.objects.select_for_update().select_related().get.return_value = pipeline
+            sfu = mock_model.objects.select_for_update.return_value
+            sfu.select_related.return_value.get.return_value = pipeline
+            sfu.get.return_value = pipeline
 
             ok_resp = SimpleNamespace(status_code=202, text="ok", raise_for_status=lambda: None)
             mock_post.return_value = ok_resp
@@ -297,6 +322,27 @@ class PushRequestToAITests(TestCase):
 
             self.assertEqual(pipeline.status, "WAITING_RESULT_FROM_AI")
             pipeline.save.assert_any_call(update_fields=["status", "updated"])
+
+    def test_http_failure_calls_finish_pipeline(self):
+        with patch("aist.tasks.ai.requests.post") as mock_post, \
+             patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()), \
+             patch("aist.tasks.ai.finish_pipeline") as mock_finish, \
+             patch("aist.tasks.ai.AISTPipeline") as mock_model:
+            pipeline = _mk_pipeline(status="PUSH_TO_AI")
+            sfu = mock_model.objects.select_for_update.return_value
+            sfu.select_related.return_value.get.return_value = pipeline
+            sfu.get.return_value = pipeline
+
+            mock_post.side_effect = ConnectionError("timeout")
+
+            _push_request_to_ai.run(
+                pipeline_id=pipeline.id,
+                finding_ids=[1],
+                filters={},
+                log_level="INFO",
+            )
+
+            mock_finish.assert_called_once_with(pipeline.id, degraded=True)
 
 # ---- send_request_to_ai (view) ----------------------------------------------
 
@@ -414,3 +460,36 @@ def test_make_enrich_chord_empty_findings_returns_direct_callback():
             raise AssertionError(msg)
         # Redis progress must NOT be set when there are no findings
         mock_redis.hset.assert_not_called()
+
+
+class FinishPipelineTests(TestCase):
+    def test_absorbs_reconciliation_exception_without_propagating(self):
+        """finish_pipeline must not raise even if reconciliation raises."""
+        mock_pipeline = MagicMock()
+        with patch("aist.utils.pipeline.reconcile_pipeline_orphans", side_effect=RuntimeError("boom")), \
+             patch("aist.utils.pipeline.AISTPipeline") as mock_model, \
+             patch("aist.utils.pipeline.set_pipeline_status"), \
+             patch("aist.utils.pipeline.uninstall_pipeline_file_logging"):
+            mock_model.objects.select_for_update.return_value.get.return_value = mock_pipeline
+            # Should not raise
+            finish_pipeline("pipe-x", degraded=False)
+
+    def test_absorbs_status_save_exception_without_propagating(self):
+        """finish_pipeline must not raise even if the status save fails."""
+        with patch("aist.utils.pipeline.reconcile_pipeline_orphans", return_value={"remaining_violations": 0}), \
+             patch("aist.utils.pipeline.AISTPipeline") as mock_model, \
+             patch("aist.utils.pipeline.uninstall_pipeline_file_logging"):
+            mock_model.objects.select_for_update.return_value.get.side_effect = RuntimeError("db error")
+            # Should not raise
+            finish_pipeline("pipe-x", degraded=False)
+
+    def test_degraded_flag_forces_finished_with_warnings(self):
+        """degraded=True must result in FINISHED_WITH_WARNINGS regardless of reconciliation."""
+        mock_pipeline = MagicMock()
+        with patch("aist.utils.pipeline.reconcile_pipeline_orphans", return_value={"remaining_violations": 0}), \
+             patch("aist.utils.pipeline.AISTPipeline") as mock_model, \
+             patch("aist.utils.pipeline.set_pipeline_status") as mock_set_status, \
+             patch("aist.utils.pipeline.uninstall_pipeline_file_logging"):
+            mock_model.objects.select_for_update.return_value.get.return_value = mock_pipeline
+            finish_pipeline("pipe-x", degraded=True)
+            mock_set_status.assert_called_once_with(mock_pipeline, AISTStatus.FINISHED_WITH_WARNINGS)

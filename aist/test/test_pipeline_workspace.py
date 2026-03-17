@@ -11,7 +11,14 @@ from pathlib import Path
 
 from django.test import SimpleTestCase
 
-from aist.utils.pipeline import BUILD_DIR_WARNING, cleanup_project_build_path, get_project_build_path
+from aist.models import AISTPipeline, AISTStatus
+from aist.test.test_api import AISTApiBase
+from aist.utils.pipeline import (
+    BUILD_DIR_WARNING,
+    cleanup_project_build_path,
+    cleanup_terminal_project_build_paths,
+    get_project_build_path,
+)
 
 
 class GetProjectBuildPathTests(SimpleTestCase):
@@ -44,6 +51,14 @@ class GetProjectBuildPathTests(SimpleTestCase):
         with self.settings(AIST_PROJECTS_BUILD_DIR=None), self.assertRaises(RuntimeError) as ctx:
             get_project_build_path("proj", "v1", "pipe-x")
         self.assertIn(BUILD_DIR_WARNING, str(ctx.exception))
+
+    def test_raises_on_path_traversal_in_project_name(self):
+        with self.settings(AIST_PROJECTS_BUILD_DIR="/builds"), self.assertRaises(ValueError):
+            get_project_build_path("../../etc", "v1", "pipe-x")
+
+    def test_raises_on_path_traversal_in_project_version(self):
+        with self.settings(AIST_PROJECTS_BUILD_DIR="/builds"), self.assertRaises(ValueError):
+            get_project_build_path("proj", "../../etc", "pipe-x")
 
 
 class CleanupProjectBuildPathTests(SimpleTestCase):
@@ -81,3 +96,76 @@ class CleanupProjectBuildPathTests(SimpleTestCase):
 
             self.assertFalse((runs / "pipe-remove").exists())
             self.assertTrue((runs / "pipe-keep").exists())
+
+
+class CleanupTerminalProjectBuildPathTests(AISTApiBase):
+    def test_removes_only_terminal_sibling_run_directories(self):
+        with tempfile.TemporaryDirectory() as base:
+            runs = Path(base) / "workspace-project" / self.pv.version / "runs"
+            for pipeline_id in ("pipe-keep-current", "pipe-keep-active", "pipe-drop-finished"):
+                (runs / pipeline_id).mkdir(parents=True, exist_ok=True)
+
+            AISTPipeline.objects.create(
+                id="pipe-keep-current",
+                project=self.project,
+                project_version=self.pv,
+                status=AISTStatus.FINISHED,
+            )
+            AISTPipeline.objects.create(
+                id="pipe-keep-active",
+                project=self.project,
+                project_version=self.pv,
+                status=AISTStatus.SAST_LAUNCHED,
+            )
+            AISTPipeline.objects.create(
+                id="pipe-drop-finished",
+                project=self.project,
+                project_version=self.pv,
+                status=AISTStatus.FINISHED_WITH_WARNINGS,
+            )
+
+            with self.settings(AIST_PROJECTS_BUILD_DIR=base):
+                cleanup_terminal_project_build_paths(
+                    self.project.id,
+                    "workspace-project",
+                    self.pv.version,
+                    keep_pipeline_id="pipe-keep-current",
+                )
+
+            self.assertTrue((runs / "pipe-keep-current").exists())
+            self.assertTrue((runs / "pipe-keep-active").exists())
+            self.assertFalse((runs / "pipe-drop-finished").exists())
+
+    def test_concurrent_calls_do_not_raise(self):
+        """
+        Two pipeline starts race to clean up the same terminal workspace.
+        The second call must silently succeed even though the directory is already gone.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            runs = Path(base) / "workspace-project" / self.pv.version / "runs"
+            (runs / "pipe-done").mkdir(parents=True, exist_ok=True)
+
+            AISTPipeline.objects.create(
+                id="pipe-done",
+                project=self.project,
+                project_version=self.pv,
+                status=AISTStatus.FINISHED,
+            )
+
+            with self.settings(AIST_PROJECTS_BUILD_DIR=base):
+                # First caller removes the workspace.
+                cleanup_terminal_project_build_paths(
+                    self.project.id,
+                    "workspace-project",
+                    self.pv.version,
+                    keep_pipeline_id="pipe-new-a",
+                )
+                # Second concurrent caller finds the directory already gone — must not raise.
+                cleanup_terminal_project_build_paths(
+                    self.project.id,
+                    "workspace-project",
+                    self.pv.version,
+                    keep_pipeline_id="pipe-new-b",
+                )
+
+            self.assertFalse((runs / "pipe-done").exists())

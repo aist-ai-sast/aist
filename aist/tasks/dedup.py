@@ -88,10 +88,17 @@ def _requeue_missing_findings(*, test_id: int, batch_size: int, logger) -> int:
     return total
 
 
-def _release_pipeline_after_dedup(pipeline: AISTPipeline) -> None:
+def _release_pipeline_after_dedup(pipeline_id: str) -> None:
+    """
+    Atomically transition the pipeline to FINDING_POSTPROCESSING and schedule the
+    enrich chord via on_commit so the dispatch only happens if the status change commits.
+    """
     from aist.tasks.enrich import make_enrich_chord  # noqa: PLC0415
-    set_pipeline_status(pipeline, AISTStatus.FINDING_POSTPROCESSING)
-    make_enrich_chord(pipeline_id=pipeline.id).apply_async()
+
+    with transaction.atomic():
+        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        set_pipeline_status(pipeline, AISTStatus.FINDING_POSTPROCESSING)
+        transaction.on_commit(lambda: make_enrich_chord(pipeline_id=pipeline_id).apply_async())
 
 
 def _ensure_dedup_tracking_rows(test_ids: list[int]) -> None:
@@ -151,7 +158,7 @@ def _process_remaining_dedup(
             "Deduplication timeout reached; releasing pipeline (pipeline_id=%s).",
             pipeline_id,
         )
-        _release_pipeline_after_dedup(pipeline)
+        _release_pipeline_after_dedup(pipeline.id)
         return True
 
     has_retries_exhausted = progress_qs.filter(
@@ -163,7 +170,7 @@ def _process_remaining_dedup(
             "Deduplication retries exhausted; releasing pipeline (pipeline_id=%s).",
             pipeline_id,
         )
-        _release_pipeline_after_dedup(pipeline)
+        _release_pipeline_after_dedup(pipeline.id)
         return True
 
     stale_ids = list(
@@ -211,7 +218,7 @@ def _process_duplicate_cleanup(
             "Duplicate cleanup timeout reached; releasing pipeline (pipeline_id=%s).",
             pipeline_id,
         )
-        _release_pipeline_after_dedup(pipeline)
+        _release_pipeline_after_dedup(pipeline.id)
         return True, last_duplicate_delete_trigger_at, True
 
     return False, last_duplicate_delete_trigger_at, True
@@ -233,7 +240,7 @@ def watch_deduplication(self, pipeline_id: str, log_level, async_user=None) -> N
 
     logger = install_pipeline_logging(pipeline_id, log_level)
     if not pipeline.tests.exists():
-        finish_pipeline(pipeline, degraded=True)
+        finish_pipeline(pipeline_id, degraded=True)
         logger.warning("No tests to wait")
         return
 
@@ -286,12 +293,14 @@ def watch_deduplication(self, pipeline_id: str, log_level, async_user=None) -> N
                 _sleep_poll()
                 continue
 
-            _release_pipeline_after_dedup(pipeline)
+            _release_pipeline_after_dedup(pipeline.id)
             return
 
-    except Exception as exc:
-        logger.error("Exception while waiting for deduplication to finish: %s", exc)
-        finish_pipeline(pipeline, degraded=True)
+    except Exception:
+        logger.exception(
+            "Exception while waiting for deduplication to finish (pipeline_id=%s)", pipeline_id,
+        )
+        finish_pipeline(pipeline_id, degraded=True)
 
 
 @shared_task(

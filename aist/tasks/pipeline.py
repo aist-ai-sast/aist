@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid as _uuid
 from pathlib import Path
 
 from celery import shared_task
@@ -13,7 +14,7 @@ from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionTyp
 from aist.pipeline_args import PipelineArguments
 from aist.tasks.dedup import watch_deduplication
 from aist.utils.pipeline import (
-    cleanup_project_build_path,
+    cleanup_terminal_project_build_paths,
     finish_pipeline,
     get_project_build_path,
     is_terminal_pipeline_status,
@@ -39,17 +40,30 @@ from aist.internal_upload import upload_results_internal  # noqa: E402
 MSG_PROJECT_BUILD_PATH_NOT_SET = "Project build path for AIST is not setup"
 
 
-def postprocess_findings(pipeline_id, log_level):
+def postprocess_findings(pipeline_id: str, log_level: str) -> None:
+    """
+    Transition pipeline to WAITING_DEDUPLICATION_TO_FINISH and schedule the watcher task.
+
+    The watcher task ID is saved in the same transaction as the status change so that
+    any code reading watch_dedup_task_id always sees it alongside the new status.
+    The Celery dispatch is deferred to on_commit to avoid dispatching tasks that would
+    run against uncommitted state.
+    """
+    task_id = _uuid.uuid4().hex
     with transaction.atomic():
         pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-        set_pipeline_status(pipeline, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
-
-    res = watch_deduplication.delay(pipeline_id=pipeline_id, log_level=log_level)
-
-    with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-        pipeline.watch_dedup_task_id = res.id
-        pipeline.save(update_fields=["watch_dedup_task_id", "updated"])
+        pipeline.watch_dedup_task_id = task_id
+        set_pipeline_status(
+            pipeline,
+            AISTStatus.WAITING_DEDUPLICATION_TO_FINISH,
+            update_fields_extra=["watch_dedup_task_id"],
+        )
+        transaction.on_commit(
+            lambda: watch_deduplication.apply_async(
+                kwargs={"pipeline_id": pipeline_id, "log_level": log_level},
+                task_id=task_id,
+            ),
+        )
 
 
 @shared_task(bind=True)
@@ -69,7 +83,6 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
     launch_config_id = params.get("launch_config_id")
     logger = install_pipeline_logging(pipeline_id, log_level)
     pipeline = None  # ensure defined for exception path
-    workspace_to_cleanup: tuple[str, str, str] | None = None
 
     try:
         with transaction.atomic():
@@ -116,7 +129,12 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
         ws_name = project_name or "project"
         ws_version = params.project_version.get("version", "default")
         project_build_path = get_project_build_path(ws_name, ws_version, pipeline_id)
-        workspace_to_cleanup = (ws_name, ws_version, pipeline_id)
+        cleanup_terminal_project_build_paths(
+            pipeline.project_id,
+            ws_name,
+            ws_version,
+            keep_pipeline_id=pipeline_id,
+        )
         # Isolate output directory per pipeline run to prevent concurrent-write collisions.
         output_dir = str(Path(output_dir) / pipeline_id)
 
@@ -149,31 +167,21 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
         if launch_config_id:
             ld.launch_config_id = launch_config_id
 
-        if ld.resolved_commit:
-            with transaction.atomic():
-                p2 = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-                pipeline_update_fields = ["updated"]
-
-                pv_id = p2.project_version_id
-                if pv_id:
-                    resolved_version = params.resolve_effective_project_version(
-                        resolved_commit=ld.resolved_commit,
-                    )
-                    if resolved_version and p2.project_version_id != resolved_version.id:
-                        p2.project_version = resolved_version
-                        pipeline_update_fields.append("project_version")
-
-                p2.save(update_fields=pipeline_update_fields)
-
         with transaction.atomic():
             pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+            extra_fields: list[str] = ["launch_data"]
+
+            if ld.resolved_commit and pipeline.project_version_id:
+                resolved_version = params.resolve_effective_project_version(
+                    resolved_commit=ld.resolved_commit,
+                )
+                if resolved_version and pipeline.project_version_id != resolved_version.id:
+                    pipeline.project_version = resolved_version
+                    extra_fields.append("project_version")
+
             ld.merge(params.enrich_config())
             pipeline.launch_data = ld.as_dict()
-            set_pipeline_status(
-                pipeline,
-                AISTStatus.UPLOADING_RESULTS,
-                update_fields_extra=["launch_data"],
-            )
+            set_pipeline_status(pipeline, AISTStatus.UPLOADING_RESULTS, update_fields_extra=extra_fields)
         logger.info("Upload step starting")
 
         results = upload_results_internal(
@@ -185,25 +193,14 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
             pipeline_id=pipeline_id,
             log_level=log_level,
         )
-        # Workspace is no longer needed; mark as cleaned so finally skips it.
-        cleanup_project_build_path(*workspace_to_cleanup)
-        workspace_to_cleanup = None
 
-        tests: list[Test] = []
-        test_ids = []
-        for res in results or []:
-            tid = getattr(res, "test_id", None)
-            if tid:
-                test = Test.objects.filter(id=int(tid)).first()
-                test_ids.append(tid)
-                if test:
-                    tests.append(test)
+        raw_test_ids = [int(res.test_id) for res in (results or []) if getattr(res, "test_id", None)]
+        tests: list[Test] = list(Test.objects.filter(id__in=raw_test_ids)) if raw_test_ids else []
+        test_ids = [t.id for t in tests]
 
         finding_ids: list[int] = list(
             Finding.objects.filter(test_id__in=test_ids).values_list("id", flat=True),
         )
-
-        test_ids = [t.id for t in tests]
         with transaction.atomic():
             pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
             pipeline.tests.set(tests, clear=True)
@@ -234,25 +231,13 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
                         parent_stats.log(logger=logger, pv_id=parent.id, label="Parent PV")
 
         if not finding_ids:
-            with transaction.atomic():
-                pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-                logger.info("No findings to enrich; Finishing pipeline")
-                finish_pipeline(pipeline)
+            logger.info("No findings to enrich; Finishing pipeline")
+            finish_pipeline(pipeline_id)
         else:
             postprocess_findings(pipeline_id, log_level)
     except Ignore:
         raise
     except Exception:
         logger.exception("Exception while running SAST pipeline (pipeline_id=%s)", pipeline_id)
-        if pipeline is not None:
-            try:
-                with transaction.atomic():
-                    finish_pipeline(pipeline, degraded=True)
-            except Exception:
-                logger.exception("Failed to mark pipeline as FINISHED after exception.")
+        finish_pipeline(pipeline_id, degraded=True)
         raise
-    finally:
-        # Guarantee workspace cleanup even when an exception aborts the pipeline
-        # before the normal post-upload cleanup path is reached.
-        if workspace_to_cleanup is not None:
-            cleanup_project_build_path(*workspace_to_cleanup)

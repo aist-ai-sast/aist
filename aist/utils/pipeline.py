@@ -42,18 +42,28 @@ def get_project_build_path(project_name: str, project_version: str, pipeline_id:
 
     Path structure: <AIST_PROJECTS_BUILD_DIR>/<project_name>/<project_version>/runs/<pipeline_id>
     Each run gets its own directory, eliminating concurrent-checkout races.
+
+    Raises ValueError if the computed path escapes the build directory (path traversal guard).
     """
     project_build_path = getattr(settings, "AIST_PROJECTS_BUILD_DIR", None)
     if not project_build_path:
         raise RuntimeError(BUILD_DIR_WARNING)
 
-    return str(
-        Path(project_build_path)
+    base = Path(project_build_path).resolve()
+    run_dir = (
+        base
         / (project_name or "project")
         / (project_version or "default")
         / "runs"
-        / pipeline_id,
+        / pipeline_id
     )
+    resolved = run_dir.resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError:
+        msg = f"Workspace path escapes build directory: {resolved}"
+        raise ValueError(msg)
+    return str(resolved)
 
 
 def cleanup_project_build_path(project_name: str, project_version: str, pipeline_id: str) -> None:
@@ -74,6 +84,38 @@ def cleanup_project_build_path(project_name: str, project_version: str, pipeline
             _logger.info("Cleaned up pipeline workspace: %s", run_dir)
     except Exception:
         _logger.exception("Failed to clean up pipeline workspace (pipeline_id=%s)", pipeline_id)
+
+
+def cleanup_terminal_project_build_paths(
+    project_id: int,
+    project_name: str,
+    project_version: str,
+    *,
+    keep_pipeline_id: str,
+) -> None:
+    """
+    Remove stale per-run workspaces for finished pipelines in the same project/version workspace.
+
+    The currently starting pipeline must always be preserved to avoid deleting the active
+    workspace during duplicate task delivery or concurrent launches.
+
+    Uses SELECT FOR UPDATE SKIP LOCKED so concurrent pipeline starts don't race on the
+    same rows — only one caller claims a batch of terminal pipelines at a time.
+    """
+    with transaction.atomic():
+        terminal_pipeline_ids = list(
+            AISTPipeline.objects.select_for_update(skip_locked=True)
+            .filter(
+                project_id=project_id,
+                status__in=get_terminal_pipeline_statuses(),
+            )
+            .exclude(id=keep_pipeline_id)
+            .values_list("id", flat=True),
+        )
+    # Filesystem cleanup happens outside the transaction to avoid
+    # holding DB locks during potentially slow shutil.rmtree calls.
+    for pipeline_id in terminal_pipeline_ids:
+        cleanup_project_build_path(project_name, project_version, pipeline_id)
 
 
 def set_pipeline_status(
@@ -106,22 +148,49 @@ def set_pipeline_status(
     return True
 
 
-def finish_pipeline(pipeline, *, degraded: bool = False) -> None:
+def finish_pipeline(pipeline_id: str, *, degraded: bool = False) -> None:
+    """
+    Transition pipeline to a terminal status (FINISHED or FINISHED_WITH_WARNINGS).
+
+    Two independent phases so that a reconciliation failure never prevents the status
+    update, and a status-update failure never propagates to the caller:
+
+    Phase 1 - reconciliation: runs its own transactions; exceptions are absorbed and
+    recorded as violations so the pipeline lands in FINISHED_WITH_WARNINGS instead of
+    staying stuck.
+
+    Phase 2 - status save: opens its own transaction.atomic() with a fresh SELECT FOR
+    UPDATE so the pipeline object is never stale, even when called from an exception
+    handler.  All exceptions are absorbed and logged.
+    """
+    # Phase 1: reconciliation - independent transactions managed by reconcile_pipeline_orphans
     try:
-        reconcile_stats = reconcile_pipeline_orphans(pipeline_id=pipeline.id, dry_run=False, logger=_logger)
+        reconcile_stats = reconcile_pipeline_orphans(pipeline_id=pipeline_id, dry_run=False, logger=_logger)
     except Exception:
-        _logger.exception("Pipeline reconciliation failed (pipeline_id=%s)", pipeline.id)
+        _logger.exception("Pipeline reconciliation failed (pipeline_id=%s)", pipeline_id)
         reconcile_stats = {"remaining_violations": 1}
+
     target_status = (
         AISTStatus.FINISHED_WITH_WARNINGS
         if degraded or (reconcile_stats.get("remaining_violations") or 0) > 0
         else AISTStatus.FINISHED
     )
-    set_pipeline_status(pipeline, target_status)
-    transaction.on_commit(lambda: pipeline_finished.send(
-        sender=type(pipeline), pipeline_id=pipeline.id,
-    ))
-    uninstall_pipeline_file_logging(pipeline.id)
+
+    # Phase 2: status update in its own independent transaction
+    try:
+        with transaction.atomic():
+            pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+            if is_terminal_pipeline_status(pipeline.status):
+                # Already finished - skip to avoid overwriting a terminal status
+                # (e.g. FINISHED -> FINISHED_WITH_WARNINGS on a stale degraded=True call).
+                return
+            set_pipeline_status(pipeline, target_status)
+            transaction.on_commit(lambda: pipeline_finished.send(
+                sender=AISTPipeline, pipeline_id=pipeline_id,
+            ))
+        uninstall_pipeline_file_logging(pipeline_id)
+    except Exception:
+        _logger.exception("Failed to set terminal status (pipeline_id=%s)", pipeline_id)
 
 
 def create_pipeline_object(aist_project, project_version, pull_request):
@@ -163,4 +232,4 @@ def stop_pipeline(pipeline: AISTPipeline) -> None:
 
         pipeline.run_task_id = None
         pipeline.watch_dedup_task_id = None
-        finish_pipeline(pipeline)
+    finish_pipeline(pipeline.id)
