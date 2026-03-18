@@ -226,6 +226,41 @@ export function useExportAiResults() {
   });
 }
 
+export function useCreateWorkItem(findingId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: {
+      external_url: string;
+      external_key?: string;
+      title?: string;
+      provider?: number | null;
+    }) => fetchJson(
+      getRoute("finding_work_items_url", { finding_id: findingId }),
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-items", findingId] });
+      queryClient.invalidateQueries({ queryKey: ["findings-page"] });
+      queryClient.invalidateQueries({ queryKey: ["finding", findingId] });
+    },
+  });
+}
+
+export function useDeleteWorkItem(findingId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (linkId: number) => fetchJson(
+      getRoute("work_item_link_detail_url", { finding_id: findingId, link_id: linkId }),
+      { method: "DELETE" },
+    ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-items", findingId] });
+      queryClient.invalidateQueries({ queryKey: ["findings-page"] });
+      queryClient.invalidateQueries({ queryKey: ["finding", findingId] });
+    },
+  });
+}
+
 export function useExportFinding() {
   return useMutation({
     mutationFn: async ({ findingId }: { findingId: number }) => {

@@ -3,6 +3,17 @@ export type Severity = "Critical" | "High" | "Medium" | "Low" | "Info";
 export type AIVerdict = "true_positive" | "false_positive" | "uncertain";
 export type ProjectVersionType = "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH";
 
+export type WorkItemStatusCategory = "OPEN" | "IN_PROGRESS" | "DONE" | "CANCELLED" | "UNKNOWN";
+
+export type WorkItemLink = {
+  id: number;
+  externalKey: string;
+  externalUrl: string;
+  title: string;
+  statusCategory: WorkItemStatusCategory;
+  providerName: string | null;
+};
+
 export type FindingFilters = {
   projectId?: number;
   pipelineId?: string;
@@ -24,6 +35,7 @@ export type FindingFilters = {
   aiVerdict?: AIVerdict;
   cwe?: string;
   tags?: string[];
+  hasWorkItem?: "yes" | "no";
   limit?: number;
   offset?: number;
   ordering?: string;
@@ -59,6 +71,7 @@ export type Finding = {
   sourceFileLink?: string;
   lastStatusUpdate?: string;
   isRegression?: boolean;
+  workItems?: WorkItemLink[];
 };
 
 export type AIResponse = {

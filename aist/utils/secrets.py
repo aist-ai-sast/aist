@@ -100,6 +100,12 @@ def mask_sensitive_text(text: str) -> str:
     return "\n".join(masked_lines)
 
 
+# Keys that look sensitive by Django's heuristics but are NOT secrets.
+# "key" — generic dict key; "external_key" — issue tracker reference (e.g. PROJ-42);
+# "external_id" / "external_url" — issue tracker identifiers, not credentials.
+_NON_SENSITIVE_KEYS: frozenset[str] = frozenset({"key", "external_key", "external_id", "external_url"})
+
+
 def mask_sensitive_data(value: dict | list | tuple | str | None) -> dict | list | tuple | str | None:
     if value is None:
         return None
@@ -108,7 +114,7 @@ def mask_sensitive_data(value: dict | list | tuple | str | None) -> dict | list 
     if isinstance(value, Mapping):
         masked: dict = {}
         for key, item in value.items():
-            if _is_sensitive_key(str(key)) and str(key).lower() != "key":
+            if _is_sensitive_key(str(key)) and str(key).lower() not in _NON_SENSITIVE_KEYS:
                 masked[key] = MASKED_VALUE
             else:
                 masked[key] = mask_sensitive_data(item)

@@ -149,6 +149,72 @@ function KpiCard({ label, value, accent }: { label: string; value: number; accen
   );
 }
 
+const WI_STATUS_COLORS: Record<string, string> = {
+  OPEN: "#fbbf24",
+  IN_PROGRESS: "#4dd4ff",
+  DONE: "#34d399",
+  CANCELLED: "#64748b",
+  UNKNOWN: "#475569",
+};
+const WI_STATUS_LABELS: Record<string, string> = {
+  OPEN: "Open",
+  IN_PROGRESS: "In Progress",
+  DONE: "Done",
+  CANCELLED: "Cancelled",
+  UNKNOWN: "Unknown",
+};
+
+function WorkItemCoverageCard({ coverage }: { coverage: DashboardSummary["work_item_coverage"] }) {
+  const total = Object.values(coverage.by_status).reduce((sum, n) => sum + n, 0);
+  return (
+    <div className="rounded-2xl border border-night-500 bg-night-700/90 p-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Work Item Coverage</div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="text-3xl font-bold text-slate-100">{coverage.coverage_pct}%</span>
+            <span className="text-xs text-slate-400">
+              {coverage.total_linked.toLocaleString()} linked findings
+            </span>
+          </div>
+        </div>
+        {total > 0 ? (
+          <div className="flex flex-wrap gap-3">
+            {Object.entries(coverage.by_status)
+              .filter(([, count]) => count > 0)
+              .map(([status, count]) => (
+                <div key={status} className="flex items-center gap-1.5 text-xs text-slate-300">
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: WI_STATUS_COLORS[status] ?? "#475569" }}
+                  />
+                  {WI_STATUS_LABELS[status] ?? status}: {count}
+                </div>
+              ))}
+          </div>
+        ) : null}
+      </div>
+      {total > 0 ? (
+        <div className="mt-3 flex h-2 overflow-hidden rounded-full bg-night-900">
+          {Object.entries(coverage.by_status)
+            .filter(([, count]) => count > 0)
+            .map(([status, count]) => (
+              <div
+                key={status}
+                className="h-full transition-all"
+                style={{
+                  width: `${(count / total) * 100}%`,
+                  backgroundColor: WI_STATUS_COLORS[status] ?? "#475569",
+                }}
+                title={`${WI_STATUS_LABELS[status] ?? status}: ${count}`}
+              />
+            ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ChartCard({
   title,
   subtitle,
@@ -745,6 +811,10 @@ export default function DashboardPage() {
         />
         <KpiCard label="Projects" value={kpi?.projects_count ?? 0} />
       </div>
+
+      {dashboard.data?.work_item_coverage ? (
+        <WorkItemCoverageCard coverage={dashboard.data.work_item_coverage} />
+      ) : null}
 
       {dashboard.isLoading ? (
         <DashboardSkeleton />

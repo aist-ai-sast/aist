@@ -56,6 +56,25 @@ class SecretsMaskingUtilsTests(AISTApiBase):
         self.assertEqual(masked["key"], "semgrep")
         self.assertEqual(masked["token"], MASKED_VALUE)
 
+    def test_mask_sensitive_data_does_not_mask_work_item_fields(self):
+        # external_key, external_id, external_url are issue tracker identifiers, not secrets
+        payload = {
+            "id": 1,
+            "external_key": "PROJ-42",
+            "external_id": "1234567",
+            "external_url": "https://jira.example.com/browse/PROJ-42",
+            "title": "Fix auth bypass",
+            "status_category": "OPEN",
+        }
+
+        masked = mask_sensitive_data(payload)
+
+        self.assertEqual(masked["external_key"], "PROJ-42")
+        self.assertEqual(masked["external_id"], "1234567")
+        self.assertEqual(masked["external_url"], "https://jira.example.com/browse/PROJ-42")
+        self.assertEqual(masked["title"], "Fix auth bypass")
+        self.assertEqual(masked["status_category"], "OPEN")
+
     def test_mask_sensitive_data_masks_repo_url_credentials_under_non_sensitive_key(self):
         payload = {
             "env": {

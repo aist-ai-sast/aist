@@ -14,6 +14,7 @@ from aist.models import (
     LaunchSchedule,
     Organization,
     PipelineLaunchQueue,
+    WorkItemProvider,
 )
 
 
@@ -132,3 +133,12 @@ def get_authorized_aist_organizations(permission, user=None):
     products = get_authorized_aist_products(permission, user=user)
     orgs_by_projects = Organization.objects.filter(projects__product__in=products).distinct()
     return (orgs_by_product_type | orgs_by_projects).distinct()
+
+
+def get_authorized_work_item_providers(permission, user=None):
+    """Return WorkItemProviders whose organization the user can access."""
+    user = _resolve_user(user)
+    if user is None:
+        return WorkItemProvider.objects.none()
+    orgs = get_authorized_aist_organizations(permission, user=user)
+    return WorkItemProvider.objects.filter(organization__in=orgs)

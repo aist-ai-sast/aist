@@ -31,6 +31,7 @@ from aist.api.common import API_SEVERITY_VALUES
 from aist.api.finding_event_stream import FindingEventStream
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.api.work_items import WorkItemLinkInlineSerializer
 from aist.findings_bulk_lock import (
     acquire_bulk_locks,
     get_locked_finding_ids,
@@ -104,6 +105,7 @@ class AISTFindingListItemSerializer(dojo_serializers.FindingSerializer):
     project_id = serializers.SerializerMethodField()
     created = serializers.SerializerMethodField()
     is_regression = serializers.SerializerMethodField()
+    work_items = WorkItemLinkInlineSerializer(source="work_item_links", many=True, read_only=True)
 
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_regression(self, obj) -> bool:
@@ -148,6 +150,7 @@ class AISTFindingFilter(ApiFindingFilter):
         method="filter_ai_status",
         choices=[(value, value) for value in FINDING_API_CHOICES.ai_status],
     )
+    has_work_item = django_filters.BooleanFilter(method="filter_has_work_item")
     ordering = django_filters.OrderingFilter(
         fields=tuple(
             (field_name, param_name)
@@ -167,6 +170,13 @@ class AISTFindingFilter(ApiFindingFilter):
         if not pipeline:
             return queryset.none()
         return queryset.filter(test__aist_pipelines=pipeline)
+
+    def filter_has_work_item(self, queryset, name, value):
+        if value is True:
+            return queryset.filter(work_item_links__isnull=False).distinct()
+        if value is False:
+            return queryset.filter(work_item_links__isnull=True)
+        return queryset
 
     def _is_date_only_bound(self, key: str) -> bool:
         raw_value = (self.data.get(key) or "").strip()

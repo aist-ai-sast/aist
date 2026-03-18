@@ -1086,6 +1086,136 @@ class AISTLaunchConfigAction(models.Model):
         self.secret_config = json.dumps(data, separators=(",", ":"))
 
 
+class WorkItemProviderType(models.TextChoices):
+    JIRA = "JIRA", "Jira"
+    YOUTRACK = "YOUTRACK", "YouTrack"
+    GITHUB = "GITHUB", "GitHub Issues"
+    GITLAB = "GITLAB", "GitLab Issues"
+    LINEAR = "LINEAR", "Linear"
+    AZURE_DEVOPS = "AZURE_DEVOPS", "Azure DevOps"
+    GENERIC = "GENERIC", "Generic (URL only)"
+
+
+class WorkItemProvider(models.Model):
+
+    """
+    Connection to an external issue tracker, scoped to an Organization.
+
+    Credentials are stored encrypted. ``provider_config`` holds non-secret
+    settings (default project key, field mappings, labels, …).
+
+    When ``sync_enabled=False`` the provider is "manual-only": links can be
+    created and displayed but status is never fetched automatically.
+    """
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="work_item_providers",
+    )
+    provider_type = models.CharField(max_length=32, choices=WorkItemProviderType.choices)
+    name = models.CharField(max_length=255)
+    base_url = models.URLField(
+        max_length=2048,
+        blank=True,
+        help_text="Leave blank for cloud-hosted instances (e.g. jira.atlassian.net).",
+    )
+    # Encrypted PAT / API token. GENERIC providers leave this blank.
+    api_token = EncryptedCharField(max_length=2048, blank=True, default="")
+    # Non-secret configuration: {"default_project_key": "SEC", "labels": ["aist"]}
+    provider_config = models.JSONField(default=dict, blank=True)
+    sync_enabled = models.BooleanField(
+        default=False,
+        help_text="Automatically sync work-item status from the tracker.",
+    )
+    is_active = models.BooleanField(default=True)
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("organization", "name")]
+        ordering = ["organization", "name"]
+
+    def __str__(self) -> str:
+        return f"{self.get_provider_type_display()} - {self.name}"
+
+
+class WorkItemStatusCategory(models.TextChoices):
+    OPEN = "OPEN", "Open"
+    IN_PROGRESS = "IN_PROGRESS", "In Progress"
+    DONE = "DONE", "Done"
+    CANCELLED = "CANCELLED", "Cancelled / Won't Fix"
+    UNKNOWN = "UNKNOWN", "Unknown"
+
+
+class WorkItemLink(models.Model):
+
+    """
+    Associates a Finding with an external work item (Jira ticket, GitHub Issue, …).
+
+    ``provider=None`` means a manual link: the user supplied the URL directly,
+    no automatic sync is performed.  When a provider is set and
+    ``provider.sync_enabled`` is True, a background task will periodically
+    refresh ``raw_status`` / ``status_category`` via the tracker API.
+    """
+
+    finding = models.ForeignKey(
+        Finding,
+        on_delete=models.CASCADE,
+        related_name="work_item_links",
+    )
+    provider = models.ForeignKey(
+        WorkItemProvider,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,  # deleting a provider keeps the URL references
+        related_name="work_item_links",
+    )
+    # Tracker-internal ID (e.g. "10042") and human-readable key (e.g. "SEC-42")
+    external_id = models.CharField(max_length=255, blank=True)
+    external_key = models.CharField(max_length=255, blank=True)
+    external_url = models.URLField(max_length=2048)
+    # Cached from last sync - shown in the UI without extra API calls
+    title = models.CharField(max_length=500, blank=True)
+    raw_status = models.CharField(max_length=255, blank=True)
+    status_category = models.CharField(
+        max_length=16,
+        choices=WorkItemStatusCategory.choices,
+        default=WorkItemStatusCategory.UNKNOWN,
+    )
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    sync_error = models.TextField(blank=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # One finding can have at most one link per (provider, external_key) pair,
+        # which allows multi-tracker scenarios (Jira + GitHub Issues on same finding).
+        # provider=None links are NOT deduplicated by external_key on the DB level
+        # (NULL != NULL in SQL), so application code must guard against duplicates
+        # when provider is None.
+        unique_together = [("finding", "provider", "external_key")]
+        indexes = [
+            models.Index(fields=["finding"], name="work_item_link_finding_idx"),
+            models.Index(
+                fields=["provider", "status_category"],
+                name="work_item_link_prov_status_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        label = self.external_key or self.external_url
+        return f"WorkItemLink({label})"
+
+
 class AISTFindingAnnotation(models.Model):
 
     """Per-finding AIST-level flags that cannot be stored on the vendor Finding model."""

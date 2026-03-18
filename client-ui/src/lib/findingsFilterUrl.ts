@@ -21,6 +21,7 @@ export type FindingsFilterUrlState = {
   status: "All" | "Active" | "Non-Active";
   risk: RiskState[];
   aiStatus: string;
+  hasWorkItem: "all" | "yes" | "no";
 };
 
 export type FindingStatusFilter = FindingsFilterUrlState["status"];
@@ -43,6 +44,7 @@ export const DEFAULT_FINDINGS_FILTERS: FindingsFilterUrlState = {
   status: "All",
   risk: [],
   aiStatus: "All",
+  hasWorkItem: "all",
 };
 
 const FINDING_STATUS_VALUES = new Set<FindingStatusFilter>(["All", "Active", "Non-Active"]);
@@ -127,6 +129,11 @@ export function parseFindingsFiltersFromSearch(params: URLSearchParams): Finding
     status,
     risk: orderByPriority(riskRaw, RISK_ORDER),
     aiStatus: params.get("ai_status") || "All",
+    hasWorkItem: (params.get("has_work_item") === "yes" || params.get("has_work_item") === "true"
+      ? "yes"
+      : params.get("has_work_item") === "no" || params.get("has_work_item") === "false"
+        ? "no"
+        : "all") as FindingsFilterUrlState["hasWorkItem"],
   };
 }
 
@@ -156,6 +163,7 @@ export function buildFindingsFilterSearch(state: FindingsFilterUrlState): URLSea
   if (state.risk.includes("under_review")) params.set("under_review", "true");
   if (state.risk.includes("mitigated")) params.set("is_mitigated", "true");
   if (state.aiStatus && state.aiStatus !== "All") params.set("ai_status", state.aiStatus);
+  if (state.hasWorkItem && state.hasWorkItem !== "all") params.set("has_work_item", state.hasWorkItem);
   return params;
 }
 
@@ -181,6 +189,7 @@ export function toFindingsApiFilters(
       state.aiStatus === "All"
         ? undefined
         : (state.aiStatus as "has_ai" | "no_ai" | "ai_tp" | "ai_fp" | "ai_u"),
+    hasWorkItem: state.hasWorkItem !== "all" ? state.hasWorkItem : undefined,
     severities: state.severities.length ? state.severities : undefined,
     status: state.status === "Active" ? "enabled" : state.status === "Non-Active" ? "disabled" : undefined,
     riskStates: state.risk.length ? state.risk : undefined,

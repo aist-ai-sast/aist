@@ -9,6 +9,7 @@ import { useFinding, useFindingNotes, useFindingTimeline } from "../lib/queries"
 import PermissionGate from "./PermissionGate";
 import { useToast } from "./ToastProvider";
 import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
+import WorkItemsPanel from "./WorkItemsPanel";
 
 type FindingDetailTabsProps = {
   finding: Finding;
@@ -21,7 +22,7 @@ type FindingDetailTabsProps = {
   onToggleCwe?: (cwe: string) => void;
 };
 
-type TabId = "overview" | "ai" | "code" | "notes" | "history";
+type TabId = "overview" | "ai" | "code" | "notes" | "history" | "work_items";
 
 const tabs: Array<{ id: TabId; label: string }> = [
   { id: "overview", label: "Overview" },
@@ -29,6 +30,7 @@ const tabs: Array<{ id: TabId; label: string }> = [
   { id: "code", label: "Code" },
   { id: "notes", label: "Notes" },
   { id: "history", label: "History" },
+  { id: "work_items", label: "Work Items" },
 ];
 
 const verdictMeta: Record<NonNullable<AIResponse["verdict"]>, { label: string; className: string }> = {
@@ -424,6 +426,12 @@ export default function FindingDetailTabs({
               Showing latest {EMBEDDED_HISTORY_ITEMS_LIMIT} events. Open full detail for complete history.
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {tab === "work_items" ? (
+        <div className="mt-4">
+          <WorkItemsPanel findingId={finding.id} />
         </div>
       ) : null}
     </div>

@@ -23,7 +23,7 @@ from dojo.models import (
     Test_Type,
 )
 
-from aist.models import AISTAIFindingResponse, AISTPipeline, AISTProject, AISTStatus
+from aist.models import AISTAIFindingResponse, AISTPipeline, AISTProject, AISTStatus, WorkItemLink, WorkItemStatusCategory
 
 
 class DashboardSummaryViewTests(TestCase):
@@ -389,3 +389,120 @@ class DashboardSummaryViewTests(TestCase):
         self.assertIn("attacker-controlled", distribution[0]["impact"])
         self.assertEqual(distribution[1]["cwe"], 89)
         self.assertEqual(distribution[1]["count"], 1)
+
+    def test_work_item_coverage_zero_when_no_links(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        coverage = response.json()["work_item_coverage"]
+
+        self.assertEqual(coverage["total_linked"], 0)
+        self.assertAlmostEqual(coverage["coverage_pct"], 0.0)
+        # by_status must include all known categories
+        for cat in WorkItemStatusCategory.values:
+            self.assertIn(cat, coverage["by_status"])
+            self.assertEqual(coverage["by_status"][cat], 0)
+
+    def test_work_item_coverage_counts_linked_active_findings(self):
+        # Link two active findings; one inactive finding link must not be counted
+        WorkItemLink.objects.create(
+            finding=self.finding_critical,
+            external_url="https://jira.example.com/PROJ-1",
+            external_key="PROJ-1",
+            status_category=WorkItemStatusCategory.OPEN,
+        )
+        WorkItemLink.objects.create(
+            finding=self.finding_high,
+            external_url="https://jira.example.com/PROJ-2",
+            external_key="PROJ-2",
+            status_category=WorkItemStatusCategory.IN_PROGRESS,
+        )
+        # Link for an inactive (mitigated) finding — must not contribute to coverage
+        WorkItemLink.objects.create(
+            finding=self.finding_mitigated,
+            external_url="https://jira.example.com/PROJ-3",
+            external_key="PROJ-3",
+            status_category=WorkItemStatusCategory.DONE,
+        )
+
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        coverage = response.json()["work_item_coverage"]
+
+        # 2 out of 4 active findings are linked → 50 %
+        self.assertEqual(coverage["total_linked"], 2)
+        self.assertAlmostEqual(coverage["coverage_pct"], 50.0)
+        self.assertEqual(coverage["by_status"][WorkItemStatusCategory.OPEN], 1)
+        self.assertEqual(coverage["by_status"][WorkItemStatusCategory.IN_PROGRESS], 1)
+        self.assertEqual(coverage["by_status"][WorkItemStatusCategory.DONE], 0)
+
+    def test_work_item_coverage_multiple_links_per_finding_count_once(self):
+        # Two links on the same finding — finding must be counted only once for coverage_pct
+        WorkItemLink.objects.create(
+            finding=self.finding_critical,
+            external_url="https://jira.example.com/PROJ-10",
+            external_key="PROJ-10",
+            status_category=WorkItemStatusCategory.OPEN,
+        )
+        WorkItemLink.objects.create(
+            finding=self.finding_critical,
+            external_url="https://jira.example.com/PROJ-11",
+            external_key="PROJ-11",
+            status_category=WorkItemStatusCategory.IN_PROGRESS,
+        )
+
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        coverage = response.json()["work_item_coverage"]
+
+        # 1 distinct active finding linked out of 4 active → 25 %
+        self.assertEqual(coverage["total_linked"], 1)
+        self.assertAlmostEqual(coverage["coverage_pct"], 25.0)
+        # by_status counts individual links (not distinct findings)
+        self.assertEqual(coverage["by_status"][WorkItemStatusCategory.OPEN], 1)
+        self.assertEqual(coverage["by_status"][WorkItemStatusCategory.IN_PROGRESS], 1)
+
+    def test_work_item_coverage_filtered_by_project(self):
+        # Create a second project with its own findings and links
+        product2 = Product.objects.create(
+            name="Coverage Product 2",
+            description="p2",
+            prod_type=self.prod_type,
+            sla_configuration_id=self.sla.id,
+        )
+        AISTProject.objects.create(
+            product=product2,
+            supported_languages=["js"],
+            compilable=False,
+            profile={},
+        )
+        engagement2 = Engagement.objects.create(
+            name="Coverage eng 2",
+            target_start=timezone.make_aware(datetime(2026, 1, 1, 0, 0, 0)),
+            target_end=timezone.make_aware(datetime(2026, 12, 31, 23, 59, 59)),
+            product=product2,
+        )
+        test2 = Test.objects.create(
+            engagement=engagement2,
+            target_start=timezone.make_aware(datetime(2026, 1, 1, 0, 0, 0)),
+            target_end=timezone.make_aware(datetime(2026, 12, 31, 23, 59, 59)),
+            test_type=self.test_type,
+        )
+        finding_p2 = Finding.objects.create(
+            test=test2,
+            title="P2 finding",
+            severity="High",
+            active=True,
+            reporter=self.user,
+        )
+        WorkItemLink.objects.create(
+            finding=finding_p2,
+            external_url="https://jira.example.com/P2-1",
+            external_key="P2-1",
+            status_category=WorkItemStatusCategory.DONE,
+        )
+        # No links on project 1 findings
+        response = self.client.get(self._url(), data={"project_id": self.project.id})
+        self.assertEqual(response.status_code, 200)
+        coverage = response.json()["work_item_coverage"]
+        self.assertEqual(coverage["total_linked"], 0)
+        self.assertAlmostEqual(coverage["coverage_pct"], 0.0)

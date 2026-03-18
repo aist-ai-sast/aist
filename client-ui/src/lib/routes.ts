@@ -2,6 +2,12 @@ type RouteMap = {
   login_url: string;
   login_api_url: string;
   dashboard_summary_url: string;
+  work_item_providers_url: string;
+  finding_work_items_url: string;
+  work_item_link_detail_url: string;
+  work_item_provider_detail_url: string;
+  work_item_provider_validate_url: string;
+  work_item_provider_sync_url: string;
   ui_dashboard_path: string;
   logout_url: string;
   logout_all_devices_url: string;

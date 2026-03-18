@@ -11,9 +11,19 @@ import type {
   PipelineSummary,
   ProductSummary,
   Project,
+  WorkItemLink,
 } from "../types";
 import { fetchJson, normalizeList } from "./api";
 import { getRoute } from "./routes";
+
+type WorkItemLinkApi = {
+  id: number;
+  external_key: string;
+  external_url: string;
+  title: string;
+  status_category: string;
+  provider_name: string | null;
+};
 
 type FindingApi = {
   id: number;
@@ -42,6 +52,7 @@ type FindingApi = {
   last_status_update?: string;
   is_regression?: boolean;
   finding_meta?: { name: string; value: string }[];
+  work_items?: WorkItemLinkApi[];
 };
 
 type AistProjectApi = {
@@ -203,6 +214,8 @@ function buildFindingsParams(
       ? { tags: filters.tags.map((tag) => tag.trim()).filter(Boolean).join(",") }
       : {}),
     ...(filters.ordering ? { ordering: filters.ordering } : {}),
+    ...(filters.hasWorkItem === "yes" ? { has_work_item: "true" } : {}),
+    ...(filters.hasWorkItem === "no" ? { has_work_item: "false" } : {}),
   });
 }
 
@@ -234,6 +247,14 @@ function mapFindingApiToUi(item: FindingApi): Finding {
     testId: item.test ?? null,
     lastStatusUpdate: item.last_status_update ?? undefined,
     isRegression: item.is_regression ?? false,
+    workItems: item.work_items?.map((wi): WorkItemLink => ({
+      id: wi.id,
+      externalKey: wi.external_key,
+      externalUrl: wi.external_url,
+      title: wi.title,
+      statusCategory: (wi.status_category as WorkItemLink["statusCategory"]) ?? "UNKNOWN",
+      providerName: wi.provider_name ?? null,
+    })) ?? [],
     riskStates: [
       item.risk_accepted ? "risk_accepted" : null,
       item.under_review ? "under_review" : null,
@@ -617,6 +638,67 @@ export function useFindingTagsByProject(projectId?: number) {
   });
 }
 
+export type WorkItemProviderSummary = {
+  id: number;
+  name: string;
+  providerType: string;
+  providerTypeDisplay: string;
+  syncEnabled: boolean;
+  hasToken: boolean;
+};
+
+export function useWorkItems(findingId?: number) {
+  return useQuery({
+    queryKey: ["work-items", findingId],
+    queryFn: async () => {
+      if (!findingId) return [] as WorkItemLink[];
+      const payload = await fetchJson<{ results?: WorkItemLinkApi[] } | WorkItemLinkApi[]>(
+        getRoute("finding_work_items_url", { finding_id: findingId }),
+      );
+      const items = Array.isArray(payload) ? payload : (payload.results ?? []);
+      return items.map((wi): WorkItemLink => ({
+        id: wi.id,
+        externalKey: wi.external_key,
+        externalUrl: wi.external_url,
+        title: wi.title,
+        statusCategory: (wi.status_category as WorkItemLink["statusCategory"]) ?? "UNKNOWN",
+        providerName: wi.provider_name ?? null,
+      }));
+    },
+    enabled: Boolean(findingId),
+  });
+}
+
+type WorkItemProviderApi = {
+  id: number;
+  name: string;
+  provider_type: string;
+  provider_type_display: string;
+  sync_enabled: boolean;
+  has_token: boolean;
+};
+
+export function useWorkItemProviders(orgId?: number) {
+  return useQuery({
+    queryKey: ["work-item-providers", orgId],
+    queryFn: async () => {
+      if (!orgId) return [] as WorkItemProviderSummary[];
+      const resolved = getRoute("work_item_providers_url", { org_id: orgId });
+      const payload = await fetchJson<{ results?: WorkItemProviderApi[] } | WorkItemProviderApi[]>(resolved);
+      const items = Array.isArray(payload) ? payload : (payload.results ?? []);
+      return items.map((p): WorkItemProviderSummary => ({
+        id: p.id,
+        name: p.name,
+        providerType: p.provider_type,
+        providerTypeDisplay: p.provider_type_display,
+        syncEnabled: p.sync_enabled,
+        hasToken: p.has_token,
+      }));
+    },
+    enabled: Boolean(orgId),
+  });
+}
+
 export function useAiResponse(aiByFinding: Map<number, AIResponse>, findingId?: number): AIResponse | null {
   if (!findingId) return null;
   return aiByFinding.get(findingId) ?? null;
@@ -733,6 +815,11 @@ export type DashboardSummary = {
       Record<"true_positive" | "false_positive" | "uncertain", number>
     >;
     uncertainty_buckets: Record<"low" | "medium" | "high", number>;
+  };
+  work_item_coverage: {
+    total_linked: number;
+    coverage_pct: number;
+    by_status: Record<string, number>;
   };
 };
 

@@ -130,6 +130,10 @@ CELERY_BEAT_SCHEDULE.update(  # noqa: F405
             "schedule": timedelta(minutes=10),
             "kwargs": {"hours": 24, "batch_size": 200, "dry_run": False},
         },
+        "aist-sync-work-item-providers": {
+            "task": "aist.tasks.work_items.sync_all_work_item_providers",
+            "schedule": timedelta(minutes=15),
+        },
     },
 )
 

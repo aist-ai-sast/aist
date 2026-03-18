@@ -19,7 +19,7 @@ from dojo.models import CWE, Finding
 
 from aist.api.common import API_SEVERITY_VALUES, compute_risk_score, empty_severity_counts
 from aist.launch_data import PipelineLaunchData
-from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus
+from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus, WorkItemLink, WorkItemStatusCategory
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects, get_authorized_findings
 from aist.utils.cwe_lookup import fetch_cwe_meta, load_cwe_fixture_lookup, trim_text
 from aist.utils.project_version_refs import resolve_project_version_git_refs
@@ -541,6 +541,19 @@ def dashboard_summary(request: HttpRequest) -> HttpResponse:
     cwe_distribution = _build_cwe_distribution(findings_qs)
     ai_verdict_analytics = _build_ai_verdict_analytics(pipelines_qs=pipelines_qs, product_ids=product_ids)
 
+    active_finding_ids = findings_qs.filter(active=True).values("id")
+    wi_status_counts = dict(
+        WorkItemLink.objects.filter(finding_id__in=active_finding_ids)
+        .values("status_category")
+        .annotate(n=Count("id"))
+        .values_list("status_category", "n"),
+    )
+    linked_findings_count = (
+        findings_qs.filter(active=True, work_item_links__isnull=False).distinct().count()
+    )
+    total_active = kpi["total_active"]
+    coverage_pct = round(100 * linked_findings_count / total_active, 1) if total_active else 0.0
+
     return JsonResponse(
         {
             "kpi": {
@@ -565,5 +578,10 @@ def dashboard_summary(request: HttpRequest) -> HttpResponse:
             "pipeline_performance_trend": pipeline_performance_trend,
             "cwe_distribution": cwe_distribution,
             "ai_verdict_analytics": ai_verdict_analytics,
+            "work_item_coverage": {
+                "total_linked": linked_findings_count,
+                "coverage_pct": coverage_pct,
+                "by_status": {cat: wi_status_counts.get(cat, 0) for cat in WorkItemStatusCategory.values},
+            },
         },
     )

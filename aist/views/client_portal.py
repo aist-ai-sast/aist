@@ -82,6 +82,36 @@ def _build_routes() -> dict[str, Any]:
             "subpath",
         ),
         "dashboard_summary_url": reverse("client_dashboard_summary"),
+        "work_item_providers_url": _replace_int_placeholder(
+            reverse("aist_api:work_item_provider_list_create", kwargs={"org_id": 0}),
+            "org_id",
+        ),
+        "finding_work_items_url": _replace_int_placeholder(
+            reverse("aist_api:finding_work_item_list_create", kwargs={"finding_id": 0}),
+            "finding_id",
+        ),
+        "work_item_provider_detail_url": _replace_int_placeholder(
+            reverse("aist_api:work_item_provider_detail", kwargs={"provider_id": 0}),
+            "provider_id",
+        ),
+        "work_item_provider_validate_url": _replace_int_placeholder(
+            reverse("aist_api:work_item_provider_validate", kwargs={"provider_id": 0}),
+            "provider_id",
+        ),
+        "work_item_provider_sync_url": _replace_int_placeholder(
+            reverse("aist_api:work_item_provider_sync", kwargs={"provider_id": 0}),
+            "provider_id",
+        ),
+        "work_item_link_detail_url": _replace_int_placeholder(
+            _replace_int_placeholder(
+                reverse(
+                    "aist_api:finding_work_item_detail",
+                    kwargs={"finding_id": 0, "link_id": 0},
+                ),
+                "finding_id",
+            ),
+            "link_id",
+        ),
         "ui_dashboard_path": "/dashboard",
         "ui_findings_path": reverse("findings"),
         "ui_finding_detail_path": "/findings/:id",

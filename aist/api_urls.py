@@ -2,6 +2,12 @@ from django.urls import path
 
 from aist.api import (
     AISTAuthLoginAPI,
+    FindingWorkItemDetailAPI,
+    FindingWorkItemListCreateAPI,
+    WorkItemProviderDetailAPI,
+    WorkItemProviderListCreateAPI,
+    WorkItemProviderSyncAPI,
+    WorkItemProviderValidateAPI,
     AISTAuthLogoutAllAPI,
     AISTAuthLogoutAPI,
     AISTCalendarEventDetailAPI,
@@ -203,6 +209,36 @@ urlpatterns = [
     ),
     path("projects/gitlab/list/", GitlabProjectsListAPI.as_view(), name="gitlab_projects_list"),
     path("findings/tags/", AvailableFindingTagsAPI.as_view(), name="finding_tags"),
+    path(
+        "findings/<int:finding_id>/work-items/",
+        FindingWorkItemListCreateAPI.as_view(),
+        name="finding_work_item_list_create",
+    ),
+    path(
+        "findings/<int:finding_id>/work-items/<int:link_id>/",
+        FindingWorkItemDetailAPI.as_view(),
+        name="finding_work_item_detail",
+    ),
+    path(
+        "organizations/<int:org_id>/work-item-providers/",
+        WorkItemProviderListCreateAPI.as_view(),
+        name="work_item_provider_list_create",
+    ),
+    path(
+        "work-item-providers/<int:provider_id>/",
+        WorkItemProviderDetailAPI.as_view(),
+        name="work_item_provider_detail",
+    ),
+    path(
+        "work-item-providers/<int:provider_id>/validate/",
+        WorkItemProviderValidateAPI.as_view(),
+        name="work_item_provider_validate",
+    ),
+    path(
+        "work-item-providers/<int:provider_id>/sync/",
+        WorkItemProviderSyncAPI.as_view(),
+        name="work_item_provider_sync",
+    ),
     path("cwe/<int:cwe_id>/", AISTCweDetailAPI.as_view(), name="cwe_detail"),
     path(
         "projects/<int:project_id>/gitlab-token/",

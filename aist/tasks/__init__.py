@@ -11,6 +11,7 @@ from aist.tasks.logs import flush_logs_once
 from aist.tasks.pipeline import run_sast_pipeline
 from aist.tasks.pipeline_dispatcher import dispatch_queued_pipelines
 from aist.tasks.reconciliation import reconcile_pipeline_orphans_task, reconcile_recent_orphans_task
+from aist.tasks.work_items import sync_all_work_item_providers, sync_work_item_provider
 
 __all__ = [
     "after_upload_enrich_and_watch",
@@ -25,5 +26,7 @@ __all__ = [
     "reconcile_recent_orphans_task",
     "report_enrich_done",
     "run_sast_pipeline",
+    "sync_all_work_item_providers",
+    "sync_work_item_provider",
     "watch_deduplication",
 ]

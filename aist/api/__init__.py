@@ -83,6 +83,15 @@ from aist.api.queue import (
     PipelineLaunchQueueListAPI,
 )
 from aist.api.timeline_events import AISTFindingTimelineAPI
+from aist.api.work_items import (
+    FindingWorkItemDetailAPI,
+    FindingWorkItemListCreateAPI,
+    WorkItemLinkInlineSerializer,
+    WorkItemProviderDetailAPI,
+    WorkItemProviderListCreateAPI,
+    WorkItemProviderSyncAPI,
+    WorkItemProviderValidateAPI,
+)
 
 __all__ = [
     "AISTAuthLoginAPI",
@@ -154,4 +163,11 @@ __all__ = [
     "SlackActionCreateSerializer",
     "WriteLogActionCreateSerializer",
     "create_launch_config_for_project",
+    "FindingWorkItemDetailAPI",
+    "FindingWorkItemListCreateAPI",
+    "WorkItemLinkInlineSerializer",
+    "WorkItemProviderDetailAPI",
+    "WorkItemProviderListCreateAPI",
+    "WorkItemProviderSyncAPI",
+    "WorkItemProviderValidateAPI",
 ]

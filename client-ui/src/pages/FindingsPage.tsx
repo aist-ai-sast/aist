@@ -66,6 +66,7 @@ export default function FindingsPage() {
   const [selectedProjectVersion, setSelectedProjectVersion] = useState<string>(initialUrlFilters.projectVersion);
   const [selectedTags, setSelectedTags] = useState<string[]>(initialUrlFilters.tags);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | undefined>(initialUrlFilters.pipelineId);
+  const [selectedHasWorkItem, setSelectedHasWorkItem] = useState<"all" | "yes" | "no">(initialUrlFilters.hasWorkItem);
   const [createdFrom, setCreatedFrom] = useState<string>(initialUrlFilters.createdFrom);
   const [createdTo, setCreatedTo] = useState<string>(initialUrlFilters.createdTo);
   const [statusUpdatedFrom, setStatusUpdatedFrom] = useState<string>(initialUrlFilters.statusUpdatedFrom);
@@ -118,6 +119,7 @@ export default function FindingsPage() {
     status: selectedStatus,
     risk: selectedRisk,
     aiStatus: selectedAiResponse,
+    hasWorkItem: selectedHasWorkItem,
   }, {
     limit: pageSize,
     offset: pageIndex * pageSize,
@@ -197,7 +199,7 @@ export default function FindingsPage() {
 
   useEffect(() => {
     setPageIndex(0);
-  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, debouncedCwe, debouncedTags, selectedAiResponse, selectedPipelineId, createdFrom, createdTo, statusUpdatedFrom, statusUpdatedTo, mitigatedFrom, mitigatedTo, debouncedFile, debouncedProjectVersion, debouncedTitle, ordering, pageSize]);
+  }, [selectedProjectId, selectedSeverities, selectedStatus, selectedRisk, debouncedCwe, debouncedTags, selectedAiResponse, selectedHasWorkItem, selectedPipelineId, createdFrom, createdTo, statusUpdatedFrom, statusUpdatedTo, mitigatedFrom, mitigatedTo, debouncedFile, debouncedProjectVersion, debouncedTitle, ordering, pageSize]);
 
   const applyCloseState = (
     findingId: number,
@@ -263,6 +265,7 @@ export default function FindingsPage() {
     setSelectedStatus(parsed.status);
     setSelectedRisk(parsed.risk);
     setSelectedAiResponse(parsed.aiStatus);
+    setSelectedHasWorkItem(parsed.hasWorkItem);
     const rawPage = searchParams.get("page");
     const parsedPage = rawPage ? Number(rawPage) - 1 : 0;
     setPageIndex(Number.isFinite(parsedPage) && parsedPage >= 0 ? parsedPage : 0);
@@ -291,6 +294,7 @@ export default function FindingsPage() {
       status: selectedStatus,
       risk: selectedRisk,
       aiStatus: selectedAiResponse,
+      hasWorkItem: selectedHasWorkItem,
     });
     if (pageIndex > 0) filterParams.set("page", String(pageIndex + 1));
     const nextSearch = filterParams.toString();
@@ -315,6 +319,7 @@ export default function FindingsPage() {
     navigate,
     pageIndex,
     selectedAiResponse,
+    selectedHasWorkItem,
     debouncedCwe,
     debouncedFile,
     debouncedProjectVersion,
@@ -339,6 +344,7 @@ export default function FindingsPage() {
     setSelectedStatus(DEFAULT_FINDINGS_FILTERS.status);
     setSelectedRisk(DEFAULT_FINDINGS_FILTERS.risk);
     setSelectedAiResponse(DEFAULT_FINDINGS_FILTERS.aiStatus);
+    setSelectedHasWorkItem(DEFAULT_FINDINGS_FILTERS.hasWorkItem);
     setSelectedCwe(DEFAULT_FINDINGS_FILTERS.cwe);
     setSelectedFile(DEFAULT_FINDINGS_FILTERS.file);
     setSelectedTitle(DEFAULT_FINDINGS_FILTERS.title);
@@ -574,6 +580,8 @@ export default function FindingsPage() {
           onTagsChange={setSelectedTags}
           selectedAiResponse={selectedAiResponse}
           onAiResponseChange={setSelectedAiResponse}
+          selectedHasWorkItem={selectedHasWorkItem}
+          onHasWorkItemChange={(v) => setSelectedHasWorkItem(v as "all" | "yes" | "no")}
           onClearAll={clearAllFilters}
         />
       </div>

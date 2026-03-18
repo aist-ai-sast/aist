@@ -32,6 +32,8 @@ type FilterPanelProps = {
   onTagsChange: (value: string[]) => void;
   selectedAiResponse: string;
   onAiResponseChange: (value: string) => void;
+  selectedHasWorkItem: string;
+  onHasWorkItemChange: (value: string) => void;
   onClearAll: () => void;
 };
 
@@ -62,6 +64,8 @@ export default function FilterPanel({
   onTagsChange,
   selectedAiResponse,
   onAiResponseChange,
+  selectedHasWorkItem,
+  onHasWorkItemChange,
   onClearAll,
 }: FilterPanelProps) {
   return (
@@ -248,6 +252,25 @@ export default function FilterPanel({
               { value: "ai_tp", label: "AI TP" },
               { value: "ai_fp", label: "AI FP" },
               { value: "ai_u", label: "AI U" },
+            ]}
+          />
+        </div>
+        <div>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <label className="text-xs text-slate-400">Work Item</label>
+            {selectedHasWorkItem !== "all" ? (
+              <FilterClearButton onClick={() => onHasWorkItemChange("all")} />
+            ) : null}
+          </div>
+          <SelectField
+            label="Work Item"
+            hideLabel
+            value={selectedHasWorkItem}
+            onChange={onHasWorkItemChange}
+            options={[
+              { value: "all", label: "All" },
+              { value: "yes", label: "Has work item" },
+              { value: "no", label: "No work item" },
             ]}
           />
         </div>

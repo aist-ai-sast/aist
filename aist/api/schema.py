@@ -18,3 +18,4 @@ class AISTApiTag(StrEnum):
     PRODUCTS = "products"
     PROFILE = "profile"
     PROJECTS = "projects"
+    WORK_ITEMS = "work items"
