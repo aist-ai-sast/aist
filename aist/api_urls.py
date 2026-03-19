@@ -2,12 +2,6 @@ from django.urls import path
 
 from aist.api import (
     AISTAuthLoginAPI,
-    FindingWorkItemDetailAPI,
-    FindingWorkItemListCreateAPI,
-    WorkItemProviderDetailAPI,
-    WorkItemProviderListCreateAPI,
-    WorkItemProviderSyncAPI,
-    WorkItemProviderValidateAPI,
     AISTAuthLogoutAllAPI,
     AISTAuthLogoutAPI,
     AISTCalendarEventDetailAPI,
@@ -23,6 +17,8 @@ from aist.api import (
     AISTMeChangePasswordAPI,
     AISTProjectDetailAPI,
     AISTProjectListAPI,
+    FindingWorkItemDetailAPI,
+    FindingWorkItemListCreateAPI,
     GithubConnectCallbackAPI,
     GithubImportConnectStartAPI,
     GithubImportExecuteAPI,
@@ -39,13 +35,17 @@ from aist.api import (
     LaunchSchedulePreviewAPI,
     LaunchScheduleRunOnceAPI,
     OrganizationCreateAPI,
+    OrgIntegrationDetailAPI,
+    OrgIntegrationListCreateAPI,
+    OrgIntegrationValidateAPI,
     PipelineAPI,
     PipelineLaunchQueueClearDispatchedAPI,
     PipelineLaunchQueueDetailAPI,
     PipelineLaunchQueueListAPI,
     PipelineListAPI,
     PipelineStartAPI,
-    ProjectGitlabTokenUpdateAPI,
+    ProjectIntegrationOverrideAPI,
+    ProjectIntegrationOverrideDetailAPI,
     ProjectLaunchConfigActionDetailAPI,
     ProjectLaunchConfigActionListCreateAPI,
     ProjectLaunchConfigDetailAPI,
@@ -54,6 +54,10 @@ from aist.api import (
     ProjectLaunchScheduleUpsertAPI,
     ProjectVersionCreateAPI,
     ProjectVersionFileBlobAPI,
+    WorkItemProviderDetailAPI,
+    WorkItemProviderListCreateAPI,
+    WorkItemProviderSyncAPI,
+    WorkItemProviderValidateAPI,
 )
 from aist.api.ai import AIDeleteResponseAPI, AIFindingResponseListAPI, AIPipelineCallbackAPI, AISendRequestAPI
 from aist.api.gitlab_integration import ImportProjectFromGitlabAPI
@@ -220,6 +224,31 @@ urlpatterns = [
         name="finding_work_item_detail",
     ),
     path(
+        "organizations/<int:org_id>/integrations/",
+        OrgIntegrationListCreateAPI.as_view(),
+        name="org_integration_list_create",
+    ),
+    path(
+        "integrations/<int:integration_id>/",
+        OrgIntegrationDetailAPI.as_view(),
+        name="org_integration_detail",
+    ),
+    path(
+        "integrations/<int:integration_id>/validate/",
+        OrgIntegrationValidateAPI.as_view(),
+        name="org_integration_validate",
+    ),
+    path(
+        "projects/<int:project_id>/integration-overrides/",
+        ProjectIntegrationOverrideAPI.as_view(),
+        name="project_integration_overrides",
+    ),
+    path(
+        "projects/<int:project_id>/integration-overrides/<str:integration_type>/",
+        ProjectIntegrationOverrideDetailAPI.as_view(),
+        name="project_integration_override_detail",
+    ),
+    path(
         "organizations/<int:org_id>/work-item-providers/",
         WorkItemProviderListCreateAPI.as_view(),
         name="work_item_provider_list_create",
@@ -240,11 +269,6 @@ urlpatterns = [
         name="work_item_provider_sync",
     ),
     path("cwe/<int:cwe_id>/", AISTCweDetailAPI.as_view(), name="cwe_detail"),
-    path(
-        "projects/<int:project_id>/gitlab-token/",
-        ProjectGitlabTokenUpdateAPI.as_view(),
-        name="project_gitlab_token_update",
-    ),
     path(
         "projects/<int:project_id>/launch-configs/",
         ProjectLaunchConfigListCreateAPI.as_view(),

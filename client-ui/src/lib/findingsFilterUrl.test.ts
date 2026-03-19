@@ -45,6 +45,7 @@ describe("parseFindingsFiltersFromSearch", () => {
       status: "Non-Active",
       risk: ["risk_accepted", "under_review"],
       aiStatus: "ai_tp",
+      hasWorkItem: "all",
     });
   });
 });
@@ -117,6 +118,7 @@ describe("toFindingsApiFilters", () => {
       projectVersion: "main",
       file: "src/a.ts",
       aiStatus: "ai_fp",
+      hasWorkItem: undefined,
       severities: ["High"],
       status: "disabled",
       riskStates: ["mitigated"],

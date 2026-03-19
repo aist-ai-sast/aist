@@ -143,7 +143,6 @@
             var actionIncludeCommonSummary = document.getElementById("action-include-common-summary");
             var actionSlackFields = document.getElementById("action-slack-fields");
             var actionSlackChannels = document.getElementById("action-slack-channels");
-            var actionSlackToken = document.getElementById("action-slack-token");
             var actionEmailFields = document.getElementById("action-email-fields");
             var actionEmails = document.getElementById("action-emails");
             var actionLogFields = document.getElementById("action-log-fields");
@@ -308,6 +307,41 @@
                 if (actionLogFields) actionLogFields.style.display = (kind === "WRITE_LOG") ? "block" : "none";
             }
 
+            function toCommaSeparated(val) {
+                if (!val) return "";
+                if (Array.isArray(val)) return val.filter(Boolean).join(", ");
+                return String(val).trim();
+            }
+
+            function prefillActionDefaults() {
+                var defaults = (cachedProjectMeta && cachedProjectMeta.integration_defaults) || {};
+                var slackCfg = defaults["SLACK"] || {};
+                var emailCfg = defaults["EMAIL"] || {};
+                if (actionSlackChannels && !actionSlackChannels.value) {
+                    // project override uses "channels" (list); org default uses "default_channel" (string)
+                    var ch = toCommaSeparated(slackCfg.channels || slackCfg.default_channel);
+                    if (ch) actionSlackChannels.value = ch;
+                }
+                if (actionEmails && !actionEmails.value) {
+                    // project override uses "emails" (list); org default uses "from_email" (string)
+                    var em = toCommaSeparated(emailCfg.emails || emailCfg.from_email);
+                    if (em) actionEmails.value = em;
+                }
+            }
+
+            function showActionModal() {
+                if (actionType) showActionFields(actionType.value);
+                prefillActionDefaults();
+                if (window.bootstrap && window.bootstrap.Modal) {
+                    window.bootstrap.Modal.getOrCreateInstance(actionModal).show();
+                } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+                    window.jQuery(actionModal).modal("show");
+                } else {
+                    actionModal.classList.add("in");
+                    actionModal.style.display = "block";
+                }
+            }
+
             function openActionModal() {
                 if (!actionModal) return;
                 if (scopeKind !== "start") {
@@ -320,15 +354,12 @@
                     actionError.style.display = "none";
                     actionError.textContent = "";
                 }
-                if (actionType) showActionFields(actionType.value);
 
-                if (window.bootstrap && window.bootstrap.Modal) {
-                    window.bootstrap.Modal.getOrCreateInstance(actionModal).show();
-                } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-                    window.jQuery(actionModal).modal("show");
+                var pid = getProjectId();
+                if (pid && !cachedProjectMeta.integration_defaults) {
+                    fetchProjectMeta(pid, function () { showActionModal(); });
                 } else {
-                    actionModal.classList.add("in");
-                    actionModal.style.display = "block";
+                    showActionModal();
                 }
             }
 
@@ -367,6 +398,7 @@
             if (actionType) {
                 actionType.addEventListener("change", function () {
                     showActionFields(actionType.value);
+                    prefillActionDefaults();
                 });
             }
             if (actionIncludeAiCsv && actionIncludeCommonSummary) {
@@ -399,7 +431,6 @@
                         trigger_status: actionTrigger ? actionTrigger.value : "",
                         action_type: actionType ? actionType.value : "",
                         config: {},
-                        secret_config: {},
                     };
 
                     var title = actionTitle ? actionTitle.value.trim() : "";
@@ -413,8 +444,6 @@
                         payload.config.description = description;
                         payload.config.include_ai_csv = includeAiCsv;
                         payload.config.include_common_summary = includeCommonSummary;
-                        var token = actionSlackToken ? actionSlackToken.value.trim() : "";
-                        if (token) payload.secret_config.slack_token = token;
                     } else if (payload.action_type === "SEND_EMAIL") {
                         payload.config.emails = normalizeList(actionEmails ? actionEmails.value : "");
                         payload.config.title = title;
@@ -654,10 +683,13 @@
                 validateVersionRequired();
             }
 
+            var cachedProjectMeta = {};
+
             function fetchProjectMeta(projectId, done) {
                 if (!projectId) {
                     setLanguages([]);
                     rebuildProjectVersionSelect([], projectId);
+                    cachedProjectMeta = {};
                     if (done) done();
                     return;
                 }
@@ -670,11 +702,13 @@
                         return r.json();
                     })
                     .then(function (data) {
+                        cachedProjectMeta = data || {};
                         setLanguages(data && data.supported_languages ? data.supported_languages : []);
                         rebuildProjectVersionSelect(data && data.versions ? data.versions : [], projectId);
                         if (done) done();
                     })
                     .catch(function () {
+                        cachedProjectMeta = {};
                         setLanguages([]);
                         rebuildProjectVersionSelect([], projectId);
                         if (done) done();

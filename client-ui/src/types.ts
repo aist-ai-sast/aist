@@ -12,6 +12,8 @@ export type WorkItemLink = {
   title: string;
   statusCategory: WorkItemStatusCategory;
   providerName: string | null;
+  providerType: string | null;
+  provider: number | null;
 };
 
 export type FindingFilters = {

@@ -1,6 +1,7 @@
 import { useState } from "react";
+import * as Select from "@radix-ui/react-select";
 
-import { useCreateWorkItem, useDeleteWorkItem } from "../lib/mutations";
+import { useCreateWorkItem, useDeleteWorkItem, useUpdateWorkItem } from "../lib/mutations";
 import { useWorkItems } from "../lib/queries";
 import { useToast } from "./ToastProvider";
 import TextInput from "./TextInput";
@@ -35,11 +36,62 @@ const btnPrimary =
 const btnDefault =
   `${btnBase} border-night-500 bg-night-800 text-slate-300 hover:border-night-400`;
 
+const STATUS_OPTIONS: WorkItemStatusCategory[] = ["OPEN", "IN_PROGRESS", "DONE", "CANCELLED", "UNKNOWN"];
+
+function StatusSelect({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: WorkItemStatusCategory;
+  onChange: (v: WorkItemStatusCategory) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Select.Root value={value} onValueChange={(v) => onChange(v as WorkItemStatusCategory)} disabled={disabled}>
+      <Select.Trigger
+        className={[
+          "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide outline-none transition",
+          "cursor-pointer hover:opacity-80 data-[state=open]:opacity-80",
+          statusBadgeClass(value),
+        ].join(" ")}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Select.Value />
+        <Select.Icon>
+          <svg viewBox="0 0 20 20" className="h-2.5 w-2.5 shrink-0" fill="currentColor" aria-hidden="true">
+            <path d="M5.25 7.5 10 12.25 14.75 7.5H5.25Z" />
+          </svg>
+        </Select.Icon>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Content
+          position="popper"
+          className="z-50 overflow-hidden rounded-xl border border-night-500 bg-night-900 shadow-panel"
+        >
+          <Select.Viewport className="p-1">
+            {STATUS_OPTIONS.map((s) => (
+              <Select.Item
+                key={s}
+                value={s}
+                className="cursor-pointer select-none rounded-lg px-3 py-1.5 text-xs text-slate-200 outline-none data-[highlighted]:bg-night-700 data-[state=checked]:bg-night-600"
+              >
+                <Select.ItemText>{STATUS_LABEL[s]}</Select.ItemText>
+              </Select.Item>
+            ))}
+          </Select.Viewport>
+        </Select.Content>
+      </Select.Portal>
+    </Select.Root>
+  );
+}
+
 export default function WorkItemsPanel({ findingId }: WorkItemsPanelProps) {
   const toast = useToast();
   const { data: workItems = [], isLoading } = useWorkItems(findingId);
   const createMutation = useCreateWorkItem(findingId);
   const deleteMutation = useDeleteWorkItem(findingId);
+  const updateMutation = useUpdateWorkItem(findingId);
 
   const [addOpen, setAddOpen] = useState(false);
   const [newUrl, setNewUrl] = useState("");
@@ -80,6 +132,16 @@ export default function WorkItemsPanel({ findingId }: WorkItemsPanelProps) {
     });
   };
 
+  const handleStatusChange = (linkId: number, status_category: string) => {
+    updateMutation.mutate(
+      { linkId, status_category },
+      {
+        onError: (err) =>
+          toast.push(`Failed: ${err instanceof Error ? err.message : String(err)}`, "error"),
+      },
+    );
+  };
+
   return (
     <div className="space-y-3">
       {isLoading ? (
@@ -87,25 +149,33 @@ export default function WorkItemsPanel({ findingId }: WorkItemsPanelProps) {
       ) : workItems.length === 0 ? (
         <div className="text-xs text-slate-400">No linked work items.</div>
       ) : (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-night-500/40 rounded-xl border border-night-500/40 bg-night-800/30 px-3">
           {workItems.map((wi) => (
             <li
               key={wi.id}
-              className="flex items-start justify-between gap-3 rounded-lg border border-night-500 bg-night-800/60 px-3 py-2 text-xs"
+              className="flex items-start justify-between gap-3 py-2 text-xs"
             >
               <div className="min-w-0 flex-1 space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   {wi.externalKey ? (
                     <span className="font-mono text-slate-300">{wi.externalKey}</span>
                   ) : null}
-                  <span
-                    className={[
-                      "rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                      statusBadgeClass(wi.statusCategory),
-                    ].join(" ")}
-                  >
-                    {STATUS_LABEL[wi.statusCategory]}
-                  </span>
+                  {wi.provider === null ? (
+                    <StatusSelect
+                      value={wi.statusCategory}
+                      onChange={(v) => handleStatusChange(wi.id, v)}
+                      disabled={updateMutation.isPending}
+                    />
+                  ) : (
+                    <span
+                      className={[
+                        "rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                        statusBadgeClass(wi.statusCategory),
+                      ].join(" ")}
+                    >
+                      {STATUS_LABEL[wi.statusCategory]}
+                    </span>
+                  )}
                   {wi.providerName ? (
                     <span className="text-slate-500">{wi.providerName}</span>
                   ) : null}

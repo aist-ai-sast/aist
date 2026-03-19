@@ -4,8 +4,9 @@ from unittest.mock import Mock, patch
 
 import gitlab
 from django.test import TestCase
+from dojo.models import Product_Type
 
-from aist.models import RepositoryInfo, ScmGitlabBinding, ScmType
+from aist.models import Organization, OrgIntegration, RepositoryInfo, ScmGitlabBinding, ScmType
 
 
 class GitlabBindingTests(TestCase):
@@ -16,7 +17,17 @@ class GitlabBindingTests(TestCase):
             repo_name="repo",
             base_url="https://gitlab.example.com",
         )
-        self.binding = ScmGitlabBinding.objects.create(scm=self.repo, personal_access_token="token")  # noqa: S106
+        org = Organization.objects.create(
+            name="Binding Test Org",
+            product_type=Product_Type.objects.create(name="Binding PT"),
+        )
+        self.integration = OrgIntegration.objects.create(
+            organization=org,
+            integration_type="GITLAB",
+            name="Test GitLab",
+            secret="token",  # noqa: S106
+        )
+        self.binding = ScmGitlabBinding.objects.create(scm=self.repo, org_integration=self.integration)
 
     @patch("aist.models.gitlab.Gitlab")
     def test_get_project_info_returns_attributes(self, mock_gitlab):

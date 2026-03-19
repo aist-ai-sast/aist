@@ -1,20 +1,11 @@
-import type { Finding, WorkItemStatusCategory } from "../types";
+import type { Finding } from "../types";
 import { formatDateForUI } from "../lib/dateDisplay";
 import { formatProjectVersionText } from "../lib/projectVersion";
 import { findingStatusBadgeClass, severityBadgeClass } from "../lib/badgeStyles";
 import { getFindingStatusBadges } from "../lib/findingStatus";
+import { PROVIDER_ICON_PATHS } from "../lib/providerIcons";
 import AiVerdictBadge from "./AiVerdictBadge";
 import FindingSnippetPreview from "./FindingSnippetPreview";
-
-function workItemStatusClass(status: WorkItemStatusCategory): string {
-  switch (status) {
-    case "DONE": return "border-emerald-500/40 bg-emerald-500/10 text-emerald-300";
-    case "CANCELLED": return "border-slate-500/40 bg-slate-500/10 text-slate-400";
-    case "IN_PROGRESS": return "border-brand-500/40 bg-brand-500/10 text-brand-300";
-    case "OPEN": return "border-amber-400/40 bg-amber-400/10 text-amber-300";
-    default: return "border-night-500 bg-night-800 text-slate-400";
-  }
-}
 
 type FindingCardProps = {
   finding: Finding;
@@ -217,15 +208,15 @@ export default function FindingCard({
             href={wi.externalUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className={[
-              "inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-medium transition hover:opacity-80",
-              workItemStatusClass(wi.statusCategory),
-            ].join(" ")}
+            className="inline-flex items-center gap-1 text-brand-400 hover:text-brand-300 hover:underline"
             onClick={(event) => event.stopPropagation()}
             title={wi.title || wi.externalKey || wi.externalUrl}
           >
             <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0" aria-hidden="true">
-              <path fill="currentColor" d="M10 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4m-4-8h6m0 0v6m0-6L10 14" />
+              <path
+                fill="currentColor"
+                d={PROVIDER_ICON_PATHS[wi.providerType ?? ""] ?? PROVIDER_ICON_PATHS.GENERIC}
+              />
             </svg>
             {wi.externalKey || wi.providerName || "Issue"}
           </a>

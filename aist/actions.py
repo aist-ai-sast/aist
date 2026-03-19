@@ -12,10 +12,10 @@ from django.utils import timezone
 from dojo.models import Finding
 from dojo.notifications.helper import EmailNotificationManger
 
+from aist.integrations.resolver import resolve_integration
 from aist.logging_transport import install_pipeline_logging
-from aist.models import AISTLaunchConfigAction, AISTPipeline
+from aist.models import AISTLaunchConfigAction, AISTPipeline, OrgIntegrationType
 from aist.notifications import AISTSlackNotificationManager
-from aist.utils.action_config import decrypt_action_secret_config
 from aist.utils.export import build_ai_export_csv_text
 from aist.utils.project_version_refs import resolve_project_version_git_refs
 from aist.utils.urls import get_public_base_url
@@ -29,7 +29,6 @@ class BaseAction:
     def __init__(self, action: AISTLaunchConfigAction) -> None:
         self.action = action
         self.config = action.config or {}
-        self.secret_config = action.get_secret_config()
 
     def _build_simple_message(self, *, pipeline: AISTPipeline, new_status: str) -> str:
         project_name = self._get_project_name(pipeline)
@@ -180,8 +179,11 @@ class SlackAction(BaseAction):
             channels = [channels]
         return [c for c in channels if c]
 
-    def _get_token(self, mgr: AISTSlackNotificationManager) -> str | None:
-        return self.secret_config.get("slack_token") or mgr.system_settings.slack_token
+    def _get_token(self, mgr: AISTSlackNotificationManager, *, pipeline: AISTPipeline) -> str | None:
+        resolved = resolve_integration(pipeline.project, OrgIntegrationType.SLACK)
+        if resolved and resolved.integration.secret:
+            return resolved.integration.secret
+        return mgr.system_settings.slack_token
 
     def _build_slack_message(
         self,
@@ -250,7 +252,7 @@ class SlackAction(BaseAction):
             return
 
         mgr = AISTSlackNotificationManager()
-        token = self._get_token(mgr)
+        token = self._get_token(mgr, pipeline=pipeline)
         if not token:
             logger.warning("Slack token missing for action %s", self.action.id)
             return
@@ -370,14 +372,10 @@ class WriteLogAction(BaseAction):
 
 
 class OneOffAction:
-    def __init__(self, *, action_id: str, action_type: str, config: dict, secret_config: dict) -> None:
+    def __init__(self, *, action_id: str, action_type: str, config: dict) -> None:
         self.id = action_id
         self.action_type = action_type
         self.config = config or {}
-        self._secret_config = secret_config or {}
-
-    def get_secret_config(self) -> dict:
-        return self._secret_config
 
 
 def build_one_off_action(action_payload: dict) -> OneOffAction | None:
@@ -388,13 +386,7 @@ def build_one_off_action(action_payload: dict) -> OneOffAction | None:
     if not action_type:
         return None
     config = action_payload.get("config") or {}
-    secret_config = decrypt_action_secret_config(action_payload.get("secret_config") or {})
-    return OneOffAction(
-        action_id=action_id,
-        action_type=action_type,
-        config=config,
-        secret_config=secret_config,
-    )
+    return OneOffAction(action_id=action_id, action_type=action_type, config=config)
 
 
 _ACTION_HANDLERS = {

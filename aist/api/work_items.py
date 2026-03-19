@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from django.shortcuts import get_object_or_404
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
@@ -12,6 +14,8 @@ from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.models import WorkItemLink, WorkItemProvider, WorkItemProviderType, WorkItemStatusCategory
 from aist.queries import get_authorized_aist_organizations, get_authorized_findings, get_authorized_work_item_providers
+from aist.tasks.work_items import sync_work_item_link, sync_work_item_provider
+from aist.work_items.backends import get_backend
 
 # ---------------------------------------------------------------------------
 # Serializers
@@ -114,6 +118,7 @@ class WorkItemLinkInlineSerializer(serializers.ModelSerializer):
     """Lightweight read-only serializer embedded in Finding list responses."""
 
     provider_name = serializers.SerializerMethodField()
+    provider_type = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkItemLink
@@ -124,10 +129,14 @@ class WorkItemLinkInlineSerializer(serializers.ModelSerializer):
             "title",
             "status_category",
             "provider_name",
+            "provider_type",
         ]
 
     def get_provider_name(self, obj) -> str | None:
         return obj.provider.name if obj.provider_id else None
+
+    def get_provider_type(self, obj) -> str | None:
+        return obj.provider.provider_type if obj.provider_id else None
 
 
 class WorkItemLinkCreateSerializer(serializers.ModelSerializer):
@@ -313,15 +322,18 @@ class WorkItemProviderValidateAPI(AuthorizedQuerySetMixin, APIView):
     )
     def post(self, request, provider_id: int):
         provider = self.get_authorized_object(pk=provider_id)
+        valid = False
+        detail = ""
         try:
-            from aist.work_items.backends import get_backend  # noqa: PLC0415
-
             backend = get_backend(provider)
             valid = backend.validate_credentials()
+            if not valid:
+                detail = "Credentials are invalid or the connectivity check failed."
         except NotImplementedError:
-            # No backend for this provider type (e.g. GENERIC)
-            valid = False
-        return Response({"valid": valid})
+            detail = "This provider type does not support credential validation."
+        except Exception as exc:
+            detail = str(exc) or "Validation error."
+        return Response({"valid": valid, "detail": detail})
 
 
 class WorkItemProviderSyncAPI(AuthorizedQuerySetMixin, APIView):
@@ -349,8 +361,6 @@ class WorkItemProviderSyncAPI(AuthorizedQuerySetMixin, APIView):
     )
     def post(self, request, provider_id: int):
         provider = self.get_authorized_object(pk=provider_id)
-        from aist.tasks.work_items import sync_work_item_provider  # noqa: PLC0415
-
         sync_work_item_provider.delay(provider.pk)
         return Response({"queued": True}, status=status.HTTP_202_ACCEPTED)
 
@@ -401,20 +411,40 @@ class FindingWorkItemListCreateAPI(AuthorizedQuerySetMixin, APIView):
     def post(self, request, finding_id: int):
         finding = self._get_finding(finding_id)
 
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+
         # If provider is given, verify user can access it
-        provider_id = request.data.get("provider")
+        provider_id = data.get("provider")
         if provider_id:
             get_object_or_404(
                 get_authorized_work_item_providers(Permissions.Product_View, user=request.user),
                 pk=provider_id,
             )
+        elif data.get("external_url"):
+            # Auto-detect provider from URL hostname matching base_url
+            try:
+                url_host = urlparse(data["external_url"]).netloc.lower()
+            except Exception:
+                url_host = ""
+            if url_host:
+                providers_qs = get_authorized_work_item_providers(Permissions.Product_View, user=request.user)
+                for provider in providers_qs.exclude(base_url=""):
+                    try:
+                        provider_host = urlparse(provider.base_url).netloc.lower()
+                    except Exception:  # noqa: S112
+                        continue
+                    if provider_host and url_host == provider_host:
+                        data["provider"] = provider.pk
+                        break
 
         serializer = WorkItemLinkCreateSerializer(
-            data=request.data,
+            data=data,
             context={"finding": finding, "request": request},
         )
         serializer.is_valid(raise_exception=True)
         link = serializer.save()
+        if link.provider_id:
+            sync_work_item_link.delay(link.pk)
         return Response(
             WorkItemLinkSerializer(link).data,
             status=status.HTTP_201_CREATED,

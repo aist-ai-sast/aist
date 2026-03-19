@@ -13,6 +13,7 @@ from aist.models import (
     AISTProjectVersion,
     LaunchSchedule,
     Organization,
+    OrgIntegration,
     PipelineLaunchQueue,
     WorkItemProvider,
 )
@@ -142,3 +143,12 @@ def get_authorized_work_item_providers(permission, user=None):
         return WorkItemProvider.objects.none()
     orgs = get_authorized_aist_organizations(permission, user=user)
     return WorkItemProvider.objects.filter(organization__in=orgs)
+
+
+def get_authorized_org_integrations(permission, user=None):
+    """Return OrgIntegrations whose organization the user can access."""
+    user = _resolve_user(user)
+    if user is None:
+        return OrgIntegration.objects.none()
+    orgs = get_authorized_aist_organizations(permission, user=user)
+    return OrgIntegration.objects.filter(organization__in=orgs)

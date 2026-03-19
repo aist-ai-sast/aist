@@ -22,7 +22,6 @@ from aist.launch_data import PipelineLaunchData
 from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus, VersionType
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects
 from aist.tasks import run_sast_pipeline
-from aist.utils.action_config import encrypt_action_secret_config
 from aist.utils.http import _fmt_duration, _qs_without
 from aist.utils.pipeline import (
     create_pipeline_object,
@@ -379,7 +378,6 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                     "trigger_status": data["trigger_status"],
                     "action_type": data["action_type"],
                     "config": data.get("config") or {},
-                    "secret_config": encrypt_action_secret_config(data.get("secret_config") or {}),
                 })
 
             with transaction.atomic():

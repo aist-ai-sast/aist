@@ -95,7 +95,6 @@ class OneOffActionsTests(TestCase):
                             "trigger_status": AISTStatus.FINISHED,
                             "action_type": "PUSH_TO_SLACK",
                             "config": {"channels": ["#alerts"], "title": "Hi", "description": "Desc"},
-                            "secret_config": {"slack_token": "xoxb-test"},
                         },
                     ],
                 ),
@@ -111,8 +110,7 @@ class OneOffActionsTests(TestCase):
         self.assertEqual(len(actions), 1)
         stored = actions[0]
         self.assertEqual(stored["action_type"], "PUSH_TO_SLACK")
-        self.assertTrue(stored.get("secret_config"))
-        self.assertNotEqual(stored["secret_config"].get("slack_token"), "xoxb-test")
+        self.assertNotIn("secret_config", stored)
 
     @patch("celery.app.task.Task.apply_async")
     def test_start_pipeline_passes_request_user_to_celery_task(self, mock_apply_async):
@@ -212,7 +210,6 @@ class OneOffActionsTests(TestCase):
                         "trigger_status": AISTStatus.FINISHED,
                         "action_type": "WRITE_LOG",
                         "config": {"level": "INFO"},
-                        "secret_config": {},
                     },
                 ],
                 "one_off_actions_done": [],

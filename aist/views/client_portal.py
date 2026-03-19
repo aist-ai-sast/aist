@@ -82,6 +82,34 @@ def _build_routes() -> dict[str, Any]:
             "subpath",
         ),
         "dashboard_summary_url": reverse("client_dashboard_summary"),
+        "org_integrations_url": _replace_int_placeholder(
+            reverse("aist_api:org_integration_list_create", kwargs={"org_id": 0}),
+            "org_id",
+        ),
+        "org_integration_detail_url": _replace_int_placeholder(
+            reverse("aist_api:org_integration_detail", kwargs={"integration_id": 0}),
+            "integration_id",
+        ),
+        "org_integration_validate_url": _replace_int_placeholder(
+            reverse("aist_api:org_integration_validate", kwargs={"integration_id": 0}),
+            "integration_id",
+        ),
+        "project_integration_overrides_url": _replace_int_placeholder(
+            reverse("aist_api:project_integration_overrides", kwargs={"project_id": 0}),
+            "project_id",
+        ),
+        "project_integration_override_detail_url": _replace_str_placeholder(
+            _replace_int_placeholder(
+                reverse(
+                    "aist_api:project_integration_override_detail",
+                    kwargs={"project_id": 0, "integration_type": "TYPE"},
+                ),
+                "project_id",
+            ),
+            "TYPE",
+            "integration_type",
+        ),
+        "ui_org_integrations_path": "/integrations",
         "work_item_providers_url": _replace_int_placeholder(
             reverse("aist_api:work_item_provider_list_create", kwargs={"org_id": 0}),
             "org_id",

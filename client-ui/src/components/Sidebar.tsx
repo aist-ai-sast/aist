@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { getRoute } from "../lib/routes";
+import { usePermissions } from "../lib/permissions";
 import { ObjectIcons } from "./ObjectIcons";
 
 type SidebarProps = {
@@ -8,14 +9,21 @@ type SidebarProps = {
 };
 
 export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
-  const links = [
+  const permissions = usePermissions();
+  const baseLinks = [
     { to: getRoute("ui_dashboard_path"), label: "Dashboard", icon: ObjectIcons.dashboard },
     { to: `${getRoute("ui_findings_path")}?active=true`, label: "Findings", icon: ObjectIcons.findings },
     { to: getRoute("ui_products_path"), label: "Projects", icon: ObjectIcons.projects },
     { to: getRoute("ui_pipelines_path"), label: "Pipelines", icon: ObjectIcons.pipelines },
     { to: getRoute("ui_calendar_path"), label: "Calendar", icon: ObjectIcons.calendar },
+  ];
+  const adminLinks = permissions.canManageAccess
+    ? [{ to: getRoute("ui_org_integrations_path"), label: "Integrations", icon: ObjectIcons.integrations }]
+    : [];
+  const accountLinks = [
     { to: getRoute("ui_settings_path"), label: "My Account", icon: ObjectIcons.settings },
   ];
+  const links = [...baseLinks, ...adminLinks, ...accountLinks];
   return (
     <aside
       className={[

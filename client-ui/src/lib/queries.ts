@@ -23,6 +23,8 @@ type WorkItemLinkApi = {
   title: string;
   status_category: string;
   provider_name: string | null;
+  provider_type: string | null;
+  provider: number | null;
 };
 
 type FindingApi = {
@@ -254,6 +256,8 @@ function mapFindingApiToUi(item: FindingApi): Finding {
       title: wi.title,
       statusCategory: (wi.status_category as WorkItemLink["statusCategory"]) ?? "UNKNOWN",
       providerName: wi.provider_name ?? null,
+      providerType: wi.provider_type ?? null,
+      provider: wi.provider ?? null,
     })) ?? [],
     riskStates: [
       item.risk_accepted ? "risk_accepted" : null,
@@ -643,6 +647,7 @@ export type WorkItemProviderSummary = {
   name: string;
   providerType: string;
   providerTypeDisplay: string;
+  baseUrl: string;
   syncEnabled: boolean;
   hasToken: boolean;
 };
@@ -663,6 +668,8 @@ export function useWorkItems(findingId?: number) {
         title: wi.title,
         statusCategory: (wi.status_category as WorkItemLink["statusCategory"]) ?? "UNKNOWN",
         providerName: wi.provider_name ?? null,
+        providerType: wi.provider_type ?? null,
+        provider: wi.provider ?? null,
       }));
     },
     enabled: Boolean(findingId),
@@ -674,6 +681,7 @@ type WorkItemProviderApi = {
   name: string;
   provider_type: string;
   provider_type_display: string;
+  base_url?: string;
   sync_enabled: boolean;
   has_token: boolean;
 };
@@ -691,6 +699,7 @@ export function useWorkItemProviders(orgId?: number) {
         name: p.name,
         providerType: p.provider_type,
         providerTypeDisplay: p.provider_type_display,
+        baseUrl: p.base_url ?? "",
         syncEnabled: p.sync_enabled,
         hasToken: p.has_token,
       }));
@@ -950,5 +959,54 @@ export function useFindingTimeline(findingId?: number) {
       }));
     },
     enabled: Boolean(findingId),
+  });
+}
+
+export type OrgIntegration = {
+  id: number;
+  organization: number;
+  integration_type: string;
+  integration_type_display: string;
+  name: string;
+  config: Record<string, unknown>;
+  has_secret: boolean;
+  is_active: boolean;
+  created: string;
+  updated: string;
+};
+
+export type ProjectIntegrationOverride = {
+  id: number;
+  project: number;
+  integration_type: string;
+  org_integration: number | null;
+  config_override: Record<string, unknown>;
+};
+
+export function useProjectIntegrationOverrides(projectId?: number) {
+  return useQuery({
+    queryKey: ["project-integration-overrides", projectId],
+    queryFn: async () => {
+      if (!projectId) return [] as ProjectIntegrationOverride[];
+      const payload = await fetchJson<ProjectIntegrationOverride[] | { results?: ProjectIntegrationOverride[] }>(
+        getRoute("project_integration_overrides_url", { project_id: projectId }),
+      );
+      return Array.isArray(payload) ? payload : (payload.results ?? []);
+    },
+    enabled: Boolean(projectId),
+  });
+}
+
+export function useOrgIntegrations(orgId?: number) {
+  return useQuery({
+    queryKey: ["org-integrations", orgId],
+    queryFn: async () => {
+      if (!orgId) return [] as OrgIntegration[];
+      const payload = await fetchJson<OrgIntegration[] | { results?: OrgIntegration[] }>(
+        getRoute("org_integrations_url", { org_id: orgId }),
+      );
+      return Array.isArray(payload) ? payload : (payload.results ?? []);
+    },
+    enabled: Boolean(orgId),
   });
 }

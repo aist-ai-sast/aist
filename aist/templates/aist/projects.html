@@ -326,60 +326,23 @@
                              style="display:none;"></div>
 
                         <div class="form-group">
-                            <label for="gitlab-url">GitLab URL</label>
-                            <input type="url"
-                                   class="form-control"
-                                   id="gitlab-url"
-                                   name="gitlab_url"
-                                   placeholder="https://gitlab.example.com"
-                                   required>
-                            <p class="help-block">
-                                Base URL of your GitLab instance (without trailing slash).
-                            </p>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="gitlab-token">GitLab personal access token</label>
-                            <div class="input-group">
-                                <input type="password"
-                                       class="form-control"
-                                       id="gitlab-token"
-                                       name="gitlab_token"
-                                       autocomplete="off"
-                                       required>
-                                <span class="input-group-btn">
-            <button type="button"
-                    class="btn btn-default"
-                    id="gitlab-token-toggle"
-                    aria-label="Toggle token visibility">
-                <i class="fa fa-eye"></i>
-            </button>
-        </span>
-                            </div>
-                            <p class="help-block">
-                                Token is used only for this import operation and is not stored.
-                            </p>
-                        </div>
-
-
-                        <div class="form-group">
-                            <label for="gitlab-org-select"
-                                   class="control-label"
-                                   style="display: block;">
-                                Organization (optional)
+                            <label for="gitlab-org-select" class="control-label" style="display:block;">
+                                Organization
                             </label>
                             <select class="form-control"
                                     id="gitlab-org-select"
                                     name="organization_id">
-                                <option value="">None</option>
-                                {% for org in organizations %}
+                                <option value="">— select organization —</option>
+                                {% for org in organizations_for_create %}
                                     <option value="{{ org.id }}">{{ org.name }}</option>
                                 {% endfor %}
                             </select>
                             <p class="help-block">
-                                If selected, all imported projects will be attached to this organization.
+                                The organization's default GitLab integration will be used for authentication.
+                                <a href="/integrations" target="_blank">Manage integrations.</a>
                             </p>
                         </div>
+                        <div id="gitlab-integration-info" class="alert alert-info" style="display:none;"></div>
 
 
                         <hr>
@@ -607,34 +570,6 @@
                                 JSON object, for example:
                                 <code>{"paths": {"exclude": ["artifacts", "test"]}}</code>.
                             </p>
-                        </div>
-
-                        <div id="ap-gitlab-token-section" style="display:none;">
-                            <hr class="my-3"/>
-                            <div class="form-group">
-                                <label>GitLab base URL</label>
-                                <div class="form-control" id="ap-gitlab-base-url" readonly></div>
-                                <p class="help-block">
-                                    Token update is available for GitLab-backed projects.
-                                </p>
-                            </div>
-                            <div class="form-group">
-                                <label for="ap-gitlab-token">Update GitLab token</label>
-                                <div class="input-group">
-                                    <input type="password"
-                                           class="form-control"
-                                           id="ap-gitlab-token"
-                                           placeholder="New GitLab personal access token">
-                                    <span class="input-group-btn">
-                                        <button class="btn btn-default" type="button" id="ap-gitlab-token-toggle">
-                                            <i class="fa fa-eye"></i>
-                                        </button>
-                                    </span>
-                                </div>
-                                <p class="help-block">
-                                    Leave empty to keep the current token.
-                                </p>
-                            </div>
                         </div>
 
                         <div class="checkbox">
@@ -942,11 +877,6 @@
             var scopeLocalRadio = document.getElementById("ap-scope-local");
             var originalScriptContent = "";
             var currentScriptIsShared = false;
-            var gitlabTokenSection = document.getElementById("ap-gitlab-token-section");
-            var gitlabTokenEditField = document.getElementById("ap-gitlab-token");
-            var gitlabTokenEditToggle = document.getElementById("ap-gitlab-token-toggle");
-            var gitlabBaseUrlField = document.getElementById("ap-gitlab-base-url");
-
             // GitLab import modal elements
             var gitlabOpenBtn = document.getElementById("gitlab-import-open");
             var gitlabModal = document.getElementById("gitlabImportModal");
@@ -958,9 +888,7 @@
             var gitlabProjectsContainer = document.getElementById("gitlab-projects-container");
             var gitlabProjectsTbody = document.getElementById("gitlab-projects-tbody");
             var gitlabSelectAll = document.getElementById("gitlab-select-all");
-            var gitlabUrlField = document.getElementById("gitlab-url");
-            var gitlabTokenField = document.getElementById("gitlab-token");
-            var gitlabTokenToggle = document.getElementById("gitlab-token-toggle");
+            var gitlabOrgSelect = document.getElementById("gitlab-org-select");
 
             // GitHub import modal elements
             var githubOpenBtn = document.getElementById("github-import-open");
@@ -984,7 +912,6 @@
             // URLs for GitLab integration
             var gitlabListUrl = "{% url 'aist:gitlab_projects_list' %}";
             var gitlabImportUrl = "{% url 'aist_api:import_project_from_gitlab' %}";
-            var gitlabTokenUpdateUrlTemplate = "{% url 'aist_api:project_gitlab_token_update' project_id=0 %}";
             var githubConnectStartUrl = "{% url 'aist_api:github_import_connect_start' %}";
             var githubReposUrl = "{% url 'aist_api:github_import_repositories' %}";
             var githubImportExecuteUrl = "{% url 'aist_api:github_import_execute' %}";
@@ -994,7 +921,6 @@
 
 
             var currentRow = null;
-            var currentRepoType = "";
 
             function getCsrfToken() {
                 // Standard helper for Django CSRF token detection.
@@ -1074,20 +1000,6 @@
                     fieldProfile.value = profilePretty || "";
                 }
 
-                currentRepoType = repoType;
-                if (gitlabTokenSection) {
-                    if (repoType === "GITLAB") {
-                        gitlabTokenSection.style.display = "block";
-                        if (gitlabBaseUrlField) {
-                            gitlabBaseUrlField.textContent = repoBaseUrl || "n/a";
-                        }
-                        if (gitlabTokenEditField) {
-                            gitlabTokenEditField.value = "";
-                        }
-                    } else {
-                        gitlabTokenSection.style.display = "none";
-                    }
-                }
 
                 if (errorBox) {
                     errorBox.style.display = "none";
@@ -1316,18 +1228,6 @@
                 });
             }
 
-            if (gitlabTokenEditToggle && gitlabTokenEditField) {
-                gitlabTokenEditToggle.addEventListener("click", function () {
-                    if (gitlabTokenEditField.type === "password") {
-                        gitlabTokenEditField.type = "text";
-                        this.innerHTML = '<i class="fa fa-eye-slash"></i>';
-                    } else {
-                        gitlabTokenEditField.type = "password";
-                        this.innerHTML = '<i class="fa fa-eye"></i>';
-                    }
-                });
-            }
-
             if (form) {
                 form.addEventListener("submit", function (ev) {
                     ev.preventDefault();
@@ -1373,54 +1273,13 @@
 
                             applyRowUpdate(currentRow, result.data.project);
 
-                            var gitlabToken = gitlabTokenEditField ? (gitlabTokenEditField.value || "").trim() : "";
-                            if (!gitlabToken || currentRepoType !== "GITLAB") {
-                                if (window.jQuery && window.jQuery.fn.modal) {
-                                    window.jQuery(modal).modal("hide");
-                                } else if (modal && modal.classList) {
-                                    modal.classList.remove("in");
-                                    modal.style.display = "none";
-                                }
-                                showGlobalAlert("Project has been updated.", "success");
-                                return;
+                            if (window.jQuery && window.jQuery.fn.modal) {
+                                window.jQuery(modal).modal("hide");
+                            } else if (modal && modal.classList) {
+                                modal.classList.remove("in");
+                                modal.style.display = "none";
                             }
-
-                            var tokenUrl = gitlabTokenUpdateUrlTemplate.replace("0", String(fieldId.value || ""));
-                            fetch(tokenUrl, {
-                                method: "POST",
-                                credentials: "same-origin",
-                                headers: jsonHeaders,
-                                body: JSON.stringify({gitlab_api_token: gitlabToken})
-                            }).then(function (resp) {
-                                return resp.json().then(function (data) {
-                                    return {ok: resp.ok, data: data};
-                                });
-                            }).then(function (tokenResult) {
-                                if (!tokenResult.ok || !tokenResult.data || tokenResult.data.ok !== true) {
-                                    var errMsg = "Failed to update GitLab token.";
-                                    if (tokenResult.data && tokenResult.data.detail) {
-                                        errMsg = tokenResult.data.detail;
-                                    }
-                                    if (errorBox) {
-                                        errorBox.textContent = errMsg;
-                                        errorBox.style.display = "block";
-                                    }
-                                    return;
-                                }
-                                if (gitlabTokenEditField) gitlabTokenEditField.value = "";
-                                if (window.jQuery && window.jQuery.fn.modal) {
-                                    window.jQuery(modal).modal("hide");
-                                } else if (modal && modal.classList) {
-                                    modal.classList.remove("in");
-                                    modal.style.display = "none";
-                                }
-                                showGlobalAlert("Project and GitLab token updated.", "success");
-                            }).catch(function () {
-                                if (errorBox) {
-                                    errorBox.textContent = "Unexpected error while updating GitLab token.";
-                                    errorBox.style.display = "block";
-                                }
-                            });
+                            showGlobalAlert("Project has been updated.", "success");
                         }).catch(function () {
                             if (errorBox) {
                                 errorBox.textContent = "Unexpected error while saving project.";
@@ -1837,18 +1696,25 @@
                 }
             })();
 
-            // Show / hide GitLab token
-            if (gitlabTokenToggle && gitlabTokenField) {
-                gitlabTokenToggle.addEventListener("click", function () {
-                    if (gitlabTokenField.type === "password") {
-                        gitlabTokenField.type = "text";
-                        this.innerHTML = '<i class="fa fa-eye-slash"></i>';
-                    } else {
-                        gitlabTokenField.type = "password";
-                        this.innerHTML = '<i class="fa fa-eye"></i>';
+            // Enable/disable List projects button based on organization selection
+            var gitlabIntegrationInfo = document.getElementById("gitlab-integration-info");
+
+            function updateGitlabListBtnState() {
+                if (gitlabListBtn) {
+                    gitlabListBtn.disabled = !(gitlabOrgSelect && gitlabOrgSelect.value);
+                }
+            }
+            if (gitlabOrgSelect) {
+                gitlabOrgSelect.addEventListener("change", function () {
+                    updateGitlabListBtnState();
+                    clearGitlabState();
+                    if (gitlabIntegrationInfo) {
+                        gitlabIntegrationInfo.style.display = "none";
+                        gitlabIntegrationInfo.textContent = "";
                     }
                 });
             }
+            updateGitlabListBtnState();
 
             // Load projects list from GitLab
             if (gitlabListBtn && gitlabForm && gitlabProjectsTbody) {
@@ -1964,14 +1830,11 @@
                         return;
                     }
 
-                    var gitlabUrl = gitlabUrlField ? (gitlabUrlField.value || "") : "";
-                    var gitlabToken = gitlabTokenField ? (gitlabTokenField.value || "") : "";
-                    var organizationField = document.getElementById("gitlab-org-select")
-                    const org = organizationField ? (organizationField.value || "") : "";
+                    var org = gitlabOrgSelect ? (gitlabOrgSelect.value || "") : "";
 
-                    if (!gitlabUrl || !gitlabToken) {
+                    if (!org) {
                         if (gitlabErrorBox) {
-                            gitlabErrorBox.textContent = "GitLab URL and token are required.";
+                            gitlabErrorBox.textContent = "Please select an organization.";
                             gitlabErrorBox.style.display = "block";
                         }
                         return;
@@ -1993,8 +1856,6 @@
                     // Send one request per selected project.
                     var promises = ids.map(function (id) {
                         var payload = {
-                            base_url: gitlabUrl,
-                            gitlab_api_token: gitlabToken,
                             project_id: id,
                             organization_id: org
                         };

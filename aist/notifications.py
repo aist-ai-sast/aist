@@ -51,6 +51,21 @@ class AISTSlackNotificationManager(SlackNotificationManger):
         msg = f"Slack channel id not found for '{channel}'"
         raise RuntimeError(msg)
 
+    def test_token(self, token: str) -> bool:
+        """Call auth.test to verify the token is valid."""
+        import requests  # noqa: PLC0415
+
+        try:
+            res = requests.post(
+                "https://slack.com/api/auth.test",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=settings.REQUESTS_TIMEOUT,
+            )
+            data = res.json()
+        except Exception:
+            return False
+        return bool(data.get("ok"))
+
     def post_message_with_token(
         self,
         *,

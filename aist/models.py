@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import logging
 import shutil
 import tarfile
@@ -88,7 +87,20 @@ class ScmGithubBinding(models.Model):
 
     scm = models.OneToOneField(RepositoryInfo, on_delete=models.CASCADE, related_name="github_binding")
     installation_id = models.BigIntegerField(null=True, blank=True, db_index=True)
-    base_api_url = models.CharField(max_length=255, blank=True, default="")  # e.g. https://github.mycorp.com/api/v3
+    org_integration = models.ForeignKey(
+        "OrgIntegration",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        limit_choices_to={"integration_type": "GITHUB"},
+        related_name="+",
+    )
+
+    def _base_api_url(self) -> str:
+        """GitHub Enterprise API base URL from org integration config."""
+        if self.org_integration:
+            return (self.org_integration.config or {}).get("base_api_url", "")
+        return ""
 
     def host(self, scm: RepositoryInfo) -> str:
         return scm.host()
@@ -173,19 +185,29 @@ class ScmGitlabBinding(models.Model):
     """GitLab-specific binding for ScmInfo."""
 
     scm = models.OneToOneField(RepositoryInfo, on_delete=models.CASCADE, related_name="gitlab_binding")
-    # just stub
-    personal_access_token = EncryptedCharField(max_length=255, blank=True, default="")  # TODO: change to vault
-    # or: ci_job_token = models.CharField(...), oauth_app_id, oauth_secret, и т.п.
+    org_integration = models.ForeignKey(
+        "OrgIntegration",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        limit_choices_to={"integration_type": "GITLAB"},
+        related_name="+",
+    )
+
+    def _token(self) -> str:
+        """Personal access token from org integration."""
+        if self.org_integration:
+            return (self.org_integration.secret or "").strip()
+        return ""
 
     def host(self, scm: RepositoryInfo) -> str:
         return scm.host()
 
     def build_clone_url(self, scm: RepositoryInfo) -> str | None:
-        token = (self.personal_access_token or "").strip()
+        token = self._token()
         if not token:
             return None
-        # GitLab HTTPS clone with PAT:
-        # https://oauth2:<PAT>@gitlab.com/owner/repo.git
+        # GitLab HTTPS clone with PAT: https://oauth2:<PAT>@gitlab.com/owner/repo.git
         return f"{self.host(scm).replace('https://', 'https://oauth2:' + token + '@')}/{scm.repo_full}.git"
 
     def build_blob_url(self, scm: RepositoryInfo, ref: str, path: str) -> str:
@@ -204,13 +226,13 @@ class ScmGitlabBinding(models.Model):
 
     def get_auth_headers(self) -> dict[str, str]:
         """Return API auth header for GitLab."""
-        tok = (self.personal_access_token or "").strip()
+        tok = self._token()
         return {"PRIVATE-TOKEN": tok} if tok else {}
 
     def get_project_info(self, scm: RepositoryInfo):
         logger = logging.getLogger("aist")
         base = self.host(scm).rstrip("/")
-        token = (self.personal_access_token or "").strip()
+        token = self._token()
 
         try:
             gl = gitlab.Gitlab(base, private_token=token or None)
@@ -317,6 +339,47 @@ class Organization(models.Model):
         return product_type
 
 
+class OrgIntegrationType(models.TextChoices):
+    GITLAB = "GITLAB", "GitLab"
+    GITHUB = "GITHUB", "GitHub"
+    SLACK = "SLACK", "Slack"
+    EMAIL = "EMAIL", "Email"
+
+
+class OrgIntegration(models.Model):
+
+    """
+    Org-level credential/config store for external integrations.
+
+    Replaces per-binding GitLab PATs and per-action Slack tokens.
+    ``secret`` is encrypted at rest and never returned by the API.
+    ``config`` holds non-secret settings (base_url, channel, from_email …).
+    """
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="integrations")
+    integration_type = models.CharField(max_length=32, choices=OrgIntegrationType.choices)
+    name = models.CharField(max_length=255)
+    config = models.JSONField(default=dict, blank=True)
+    secret = EncryptedCharField(max_length=4096, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("organization", "integration_type", "name")]
+        ordering = ["organization", "integration_type", "name"]
+
+    def __str__(self) -> str:
+        return f"{self.organization.name} / {self.integration_type} / {self.name}"
+
+
 class AISTProject(models.Model):
     created = models.DateTimeField(default=timezone.now, editable=False)
     updated = models.DateTimeField(auto_now=True)
@@ -367,6 +430,35 @@ class AISTProject(models.Model):
             return self.launch_schedule
         except LaunchSchedule.DoesNotExist:
             return None
+
+
+class ProjectIntegrationOverride(models.Model):
+
+    """
+    Per-project override for an org-level integration.
+
+    Only non-secret config can be overridden here (e.g. Slack channel,
+    email recipients). The secret is always taken from ``org_integration``.
+    If ``org_integration`` is None, the first active org integration of
+    ``integration_type`` for the project's org is used.
+    """
+
+    project = models.ForeignKey(AISTProject, on_delete=models.CASCADE, related_name="integration_overrides")
+    integration_type = models.CharField(max_length=32, choices=OrgIntegrationType.choices)
+    org_integration = models.ForeignKey(
+        OrgIntegration,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="project_overrides",
+    )
+    config_override = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        unique_together = [("project", "integration_type")]
+
+    def __str__(self) -> str:
+        return f"{self.project} / {self.integration_type}"
 
 
 class AISTProjectScript(models.Model):
@@ -1062,7 +1154,6 @@ class AISTLaunchConfigAction(models.Model):
     trigger_status = models.CharField(max_length=64, choices=AISTStatus.choices)
     action_type = models.CharField(max_length=32, choices=ActionType.choices)
     config = models.JSONField(default=dict, blank=True)
-    secret_config = EncryptedCharField(max_length=4096, blank=True, default="")
 
     created = models.DateTimeField(default=timezone.now, editable=False)
     updated = models.DateTimeField(auto_now=True)
@@ -1072,18 +1163,6 @@ class AISTLaunchConfigAction(models.Model):
 
     def __str__(self) -> str:
         return f"Action({self.launch_config_id}:{self.action_type}@{self.trigger_status})"
-
-    def get_secret_config(self) -> dict:
-        if not self.secret_config:
-            return {}
-        try:
-            return json.loads(self.secret_config)
-        except (TypeError, ValueError):
-            return {}
-
-    def set_secret_config(self, value: dict | None) -> None:
-        data = value or {}
-        self.secret_config = json.dumps(data, separators=(",", ":"))
 
 
 class WorkItemProviderType(models.TextChoices):

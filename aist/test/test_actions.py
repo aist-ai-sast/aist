@@ -20,6 +20,8 @@ from aist.models import (
     AISTProjectLaunchConfig,
     AISTProjectVersion,
     AISTStatus,
+    Organization,
+    OrgIntegration,
     VersionType,
 )
 
@@ -60,6 +62,19 @@ class ActionsTests(TestCase):
             project_version=self.pv,
             status=AISTStatus.WAITING_RESULT_FROM_AI,
         )
+        # Org-level Slack integration used by the resolver in SlackAction.
+        self.org = Organization.objects.create(
+            name="Actions Test Org",
+            product_type=self.prod_type,
+        )
+        self.project.organization = self.org
+        self.project.save(update_fields=["organization"])
+        self.slack_integration = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type="SLACK",
+            name="Slack",
+            secret="xoxb-test",  # noqa: S106
+        )
 
     def _create_ai_response(self):
         payload = {
@@ -82,16 +97,13 @@ class ActionsTests(TestCase):
         return AISTAIResponse.objects.create(pipeline=self.pipeline, payload=payload)
 
     def _make_action(self, action_type: str, config: dict, secret: dict | None = None):
-        action = AISTLaunchConfigAction.objects.create(
+        # ``secret`` param is ignored: tokens are resolved from OrgIntegration.
+        return AISTLaunchConfigAction.objects.create(
             launch_config=self.launch_config,
             trigger_status=AISTStatus.FINISHED,
             action_type=action_type,
             config=config,
         )
-        if secret:
-            action.set_secret_config(secret)
-            action.save(update_fields=["secret_config"])
-        return action
 
     def _attach_pipeline_findings(self):
         engagement = Engagement.objects.create(

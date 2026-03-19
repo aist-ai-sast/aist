@@ -9,10 +9,12 @@ from django.urls import reverse
 
 from aist.celery_signals import _update_action_run
 from aist.logging_transport import get_pipeline_log_path, install_pipeline_logging, uninstall_pipeline_file_logging
-from aist.models import AISTPipeline, AISTStatus
+from aist.models import AISTPipeline, AISTStatus, Organization, OrgIntegration, OrgIntegrationType
 from aist.test.test_api import AISTApiBase
 from aist.utils.secrets import MASKED_VALUE, mask_sensitive_data, mask_sensitive_text
 from aist_site.middleware import AistResponseMaskingMiddleware
+
+TEST_GITLAB_PAT = "xglpat-abcdef12345678".removeprefix("x")
 
 
 class SecretsMaskingUtilsTests(AISTApiBase):
@@ -256,19 +258,28 @@ class AistViewsMaskingMiddlewareTests(AISTApiBase):
         self.user.save(update_fields=["is_superuser"])
         client = Client()
         client.force_login(self.user)
+        org = Organization.objects.create(name="Masking Org")
+        OrgIntegration.objects.create(
+            organization=org,
+            integration_type=OrgIntegrationType.GITLAB,
+            name="Masking GitLab",
+            config={"base_url": "https://gitlab.example.com"},
+            secret=TEST_GITLAB_PAT,
+            is_active=True,
+        )
         mock_gitlab.side_effect = Exception(
-            "auth failed for https://oauth2:glpat-abcdef12345678@gitlab.example.com",
+            f"auth failed for https://oauth2:{TEST_GITLAB_PAT}@gitlab.example.com",
         )
 
         response = client.post(
             reverse("aist:gitlab_projects_list"),
-            data={"gitlab_url": "https://gitlab.example.com", "gitlab_token": "glpat-abcdef12345678"},
+            data={"organization_id": org.id},
         )
 
         self.assertEqual(response.status_code, 400)
         payload = json.loads(response.content.decode("utf-8"))
         self.assertFalse(payload["ok"])
-        self.assertNotIn("glpat-abcdef12345678", payload["error"])
+        self.assertNotIn(TEST_GITLAB_PAT, payload["error"])
         self.assertIn(MASKED_VALUE, payload["error"])
 
 

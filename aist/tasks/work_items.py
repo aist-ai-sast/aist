@@ -8,7 +8,7 @@ logger = logging.getLogger("aist.work_items")
 
 
 @shared_task(name="aist.tasks.work_items.sync_work_item_provider")
-def sync_work_item_provider(provider_id: int) -> dict:
+def sync_work_item_provider(provider_id: int, **_kwargs) -> dict:
     """Sync all WorkItemLinks for a single provider. Safe to retry."""
     # Import here to avoid circular imports at module load time
     from aist.models import WorkItemProvider  # noqa: PLC0415
@@ -29,8 +29,24 @@ def sync_work_item_provider(provider_id: int) -> dict:
     }
 
 
+@shared_task(name="aist.tasks.work_items.sync_work_item_link")
+def sync_work_item_link(link_id: int, **_kwargs) -> dict:
+    """Sync a single WorkItemLink. Called after manual link creation."""
+    from aist.models import WorkItemLink  # noqa: PLC0415
+    from aist.work_items.sync import sync_link  # noqa: PLC0415
+
+    try:
+        link = WorkItemLink.objects.select_related("provider").get(pk=link_id)
+    except WorkItemLink.DoesNotExist:
+        logger.warning("sync_work_item_link: link[%s] not found", link_id)
+        return {"link_id": link_id, "skipped": True}
+
+    result = sync_link(link)
+    return {"link_id": link_id, "success": result.success, "error": result.error}
+
+
 @shared_task(name="aist.tasks.work_items.sync_all_work_item_providers")
-def sync_all_work_item_providers() -> dict:
+def sync_all_work_item_providers(**_kwargs) -> dict:
     """
     Fan-out task dispatched by Celery Beat.
 

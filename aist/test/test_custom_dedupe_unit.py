@@ -1,4 +1,5 @@
-"""Unit tests for aist/dedupe/custom.py.
+"""
+Unit tests for aist/dedupe/custom.py.
 
 Tests here cover the three phases of run_canonical_dedupe in isolation:
   Phase 1: _compute_group_decisions (pure scoring, no DB)
@@ -10,12 +11,12 @@ No database is required — DummyFinding objects replace ORM instances.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
-from aist.dedupe.canonical import MatchVerdict
+from aist.dedupe.canonical import MatchVerdict, finding_signature
 from aist.dedupe.custom import (
     AIST_DEDUPE_AUTO_TAG,
     AIST_DEDUPE_CANDIDATE_TAG,
@@ -27,10 +28,10 @@ from aist.dedupe.custom import (
     run_canonical_dedupe,
 )
 
-
 # ---------------------------------------------------------------------------
 # Minimal stub that satisfies finding_signature() + _compute_group_decisions()
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _DummyTestType:
@@ -62,7 +63,7 @@ class DummyFinding:
     duplicate_finding_id: int | None = None
     duplicate_finding: object = None
     test: _DummyTest = field(default_factory=_DummyTest)
-    created: datetime = field(default_factory=lambda: datetime(2024, 1, 1, tzinfo=timezone.utc))
+    created: datetime = field(default_factory=lambda: datetime(2024, 1, 1, tzinfo=UTC))
 
     def __hash__(self):
         return hash(self.id)
@@ -77,7 +78,7 @@ def _ssl_finding(finding_id: int, created: datetime | None = None) -> DummyFindi
         file_path="app/net.py",
         line=10,
         cwe=295,
-        created=created or datetime(2024, 1, finding_id, tzinfo=timezone.utc),
+        created=created or datetime(2024, 1, finding_id, tzinfo=UTC),
     )
 
 
@@ -90,7 +91,7 @@ def _ssl_finding_snyk(finding_id: int, created: datetime | None = None) -> Dummy
         file_path="app/net.py",
         line=10,
         cwe=295,
-        created=created or datetime(2024, 1, finding_id, tzinfo=timezone.utc),
+        created=created or datetime(2024, 1, finding_id, tzinfo=UTC),
     )
 
 
@@ -103,7 +104,7 @@ def _custom_rule_finding(finding_id: int) -> DummyFinding:
         file_path="app/views.py",
         line=88,
         cwe=None,
-        created=datetime(2024, 1, finding_id, tzinfo=timezone.utc),
+        created=datetime(2024, 1, finding_id, tzinfo=UTC),
     )
 
 
@@ -114,7 +115,7 @@ def _no_line_finding(finding_id: int) -> DummyFinding:
         vuln_id_from_tool="some_rule",
         file_path="app/main.py",
         line=None,
-        created=datetime(2024, 1, finding_id, tzinfo=timezone.utc),
+        created=datetime(2024, 1, finding_id, tzinfo=UTC),
     )
 
 
@@ -125,7 +126,6 @@ def _no_line_finding(finding_id: int) -> DummyFinding:
 class ComputeGroupDecisionsTests(SimpleTestCase):
     def test_single_finding_gets_no_match(self):
         f = _ssl_finding(1)
-        from aist.dedupe.canonical import finding_signature
         sig_by_id = {f.id: finding_signature(f)}
         decisions = _compute_group_decisions([f], sig_by_id)
         self.assertEqual(decisions[f.id].verdict, MatchVerdict.NO_MATCH)
@@ -134,7 +134,6 @@ class ComputeGroupDecisionsTests(SimpleTestCase):
     def test_second_finding_scores_duplicate_when_family_and_cwe_match(self):
         f1 = _ssl_finding(1)
         f2 = _ssl_finding_snyk(2)
-        from aist.dedupe.canonical import finding_signature
         sig_by_id = {f.id: finding_signature(f) for f in [f1, f2]}
         decisions = _compute_group_decisions([f1, f2], sig_by_id)
         self.assertEqual(decisions[f1.id].verdict, MatchVerdict.NO_MATCH)
@@ -142,10 +141,13 @@ class ComputeGroupDecisionsTests(SimpleTestCase):
         self.assertIsNotNone(decisions[f2.id].root_id)
         self.assertEqual(decisions[f2.id].root_id, f1.id)
 
+    @override_settings(
+        AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD=4,
+        AIST_CANONICAL_CANDIDATE_MIN_SCORE=2,
+    )
     def test_second_finding_scores_candidate_when_only_rule_key_matches(self):
         f1 = _custom_rule_finding(1)
         f2 = _custom_rule_finding(2)
-        from aist.dedupe.canonical import finding_signature
         sig_by_id = {f.id: finding_signature(f) for f in [f1, f2]}
         decisions = _compute_group_decisions([f1, f2], sig_by_id)
         self.assertEqual(decisions[f1.id].verdict, MatchVerdict.NO_MATCH)
@@ -163,7 +165,7 @@ class ComputeGroupDecisionsTests(SimpleTestCase):
             file_path="src/db.py",
             line=5,
             cwe=89,
-            created=datetime(2024, 2, 1, tzinfo=timezone.utc),  # newer
+            created=datetime(2024, 2, 1, tzinfo=UTC),  # newer
         )
         older_high_id = DummyFinding(
             id=2,
@@ -172,9 +174,8 @@ class ComputeGroupDecisionsTests(SimpleTestCase):
             file_path="src/db.py",
             line=5,
             cwe=89,
-            created=datetime(2024, 1, 1, tzinfo=timezone.utc),  # older
+            created=datetime(2024, 1, 1, tzinfo=UTC),  # older
         )
-        from aist.dedupe.canonical import finding_signature
         sig_by_id = {f.id: finding_signature(f) for f in [newer_low_id, older_high_id]}
         decisions = _compute_group_decisions([newer_low_id, older_high_id], sig_by_id)
         # older_high_id (id=2) was created first → should be root
@@ -191,7 +192,6 @@ class ComputeGroupDecisionsTests(SimpleTestCase):
         broken.duplicate_finding = broken_root_obj
         third = _ssl_finding_snyk(3)
 
-        from aist.dedupe.canonical import finding_signature
         sig_by_id = {f.id: finding_signature(f) for f in [root, broken, third]}
         decisions = _compute_group_decisions([root, broken, third], sig_by_id)
         # third scores best against broken; broken.duplicate → root is broken_root_obj
@@ -406,6 +406,10 @@ class RunCanonicalDedupeOrchestrationTests(SimpleTestCase):
         self.assertEqual(result.summary.unchanged, 2)
         self.assertEqual(result.summary.processed, 2)
 
+    @override_settings(
+        AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD=4,
+        AIST_CANONICAL_CANDIDATE_MIN_SCORE=2,
+    )
     def test_candidate_verdict_in_dry_run(self):
         f1 = _custom_rule_finding(1)
         f2 = _custom_rule_finding(2)

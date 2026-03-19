@@ -226,6 +226,135 @@ export function useExportAiResults() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// WorkItemProvider mutations
+// ---------------------------------------------------------------------------
+
+export type WorkItemProviderPayload = {
+  provider_type: string;
+  name: string;
+  base_url?: string;
+  api_token?: string;
+  provider_config?: Record<string, unknown>;
+  sync_enabled?: boolean;
+  is_active?: boolean;
+};
+
+export function useCreateWorkItemProvider(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: WorkItemProviderPayload) =>
+      fetchJson(getRoute("work_item_providers_url", { org_id: orgId }), {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-item-providers", orgId] });
+    },
+  });
+}
+
+export function useUpdateWorkItemProvider(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ providerId, payload }: { providerId: number; payload: Partial<WorkItemProviderPayload> }) =>
+      fetchJson(getRoute("work_item_provider_detail_url", { provider_id: providerId }), {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-item-providers", orgId] });
+    },
+  });
+}
+
+export function useDeleteWorkItemProvider(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (providerId: number) =>
+      fetchJson(getRoute("work_item_provider_detail_url", { provider_id: providerId }), { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-item-providers", orgId] });
+    },
+  });
+}
+
+export function useValidateWorkItemProvider() {
+  return useMutation({
+    mutationFn: (providerId: number) =>
+      fetchJson<{ valid: boolean; detail: string }>(
+        getRoute("work_item_provider_validate_url", { provider_id: providerId }),
+        { method: "POST" },
+      ),
+  });
+}
+
+export function useSyncWorkItemProvider() {
+  return useMutation({
+    mutationFn: (providerId: number) =>
+      fetchJson<{ queued: boolean }>(
+        getRoute("work_item_provider_sync_url", { provider_id: providerId }),
+        { method: "POST" },
+      ),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Per-project integration override mutations
+// ---------------------------------------------------------------------------
+
+export function useSetProjectIntegrationOverride(projectId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      integrationType,
+      orgIntegrationId,
+      configOverride,
+    }: {
+      integrationType: string;
+      orgIntegrationId?: number | null;
+      configOverride?: Record<string, unknown>;
+    }) =>
+      fetchJson(
+        getRoute("project_integration_override_detail_url", {
+          project_id: projectId,
+          integration_type: integrationType,
+        }),
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            org_integration: orgIntegrationId ?? null,
+            config_override: configOverride ?? {},
+          }),
+        },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project-integration-overrides", projectId] });
+    },
+  });
+}
+
+export function useDeleteProjectIntegrationOverride(projectId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (integrationType: string) =>
+      fetchJson(
+        getRoute("project_integration_override_detail_url", {
+          project_id: projectId,
+          integration_type: integrationType,
+        }),
+        { method: "DELETE" },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project-integration-overrides", projectId] });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Work item link mutations
+// ---------------------------------------------------------------------------
+
 export function useCreateWorkItem(findingId: number) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -258,6 +387,79 @@ export function useDeleteWorkItem(findingId: number) {
       queryClient.invalidateQueries({ queryKey: ["findings-page"] });
       queryClient.invalidateQueries({ queryKey: ["finding", findingId] });
     },
+  });
+}
+
+export function useUpdateWorkItem(findingId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ linkId, status_category }: { linkId: number; status_category: string }) =>
+      fetchJson(
+        getRoute("work_item_link_detail_url", { finding_id: findingId, link_id: linkId }),
+        { method: "PATCH", body: JSON.stringify({ status_category }) },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["work-items", findingId] });
+      queryClient.invalidateQueries({ queryKey: ["findings-page"] });
+      queryClient.invalidateQueries({ queryKey: ["finding", findingId] });
+    },
+  });
+}
+
+export type OrgIntegrationPayload = {
+  integration_type: string;
+  name: string;
+  config?: Record<string, unknown>;
+  secret?: string;
+  is_active?: boolean;
+};
+
+export function useCreateOrgIntegration(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: OrgIntegrationPayload) =>
+      fetchJson(getRoute("org_integrations_url", { org_id: orgId }), {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
+    },
+  });
+}
+
+export function useUpdateOrgIntegration(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ integrationId, payload }: { integrationId: number; payload: Partial<OrgIntegrationPayload> }) =>
+      fetchJson(getRoute("org_integration_detail_url", { integration_id: integrationId }), {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
+    },
+  });
+}
+
+export function useDeleteOrgIntegration(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (integrationId: number) =>
+      fetchJson(getRoute("org_integration_detail_url", { integration_id: integrationId }), { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
+    },
+  });
+}
+
+export function useValidateOrgIntegration() {
+  return useMutation({
+    mutationFn: (integrationId: number) =>
+      fetchJson<{ valid: boolean; detail: string }>(
+        getRoute("org_integration_validate_url", { integration_id: integrationId }),
+        { method: "POST" },
+      ),
   });
 }
 

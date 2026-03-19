@@ -92,21 +92,12 @@ class LaunchConfigActionUpdateSerializer(serializers.Serializer):
     trigger_status = serializers.ChoiceField(choices=AISTStatus.choices, required=False)
     action_type = serializers.ChoiceField(choices=AISTLaunchConfigAction.ActionType.choices, required=False)
     config = serializers.JSONField(required=False)
-    secret_config = serializers.JSONField(required=False, write_only=True)
 
     def validate_config(self, value):
         if value is None:
             return value
         if not isinstance(value, dict):
             msg = "config must be a JSON object"
-            raise serializers.ValidationError(msg)
-        return value
-
-    def validate_secret_config(self, value):
-        if value is None:
-            return value
-        if not isinstance(value, dict):
-            msg = "secret_config must be a JSON object"
             raise serializers.ValidationError(msg)
         return value
 
@@ -142,21 +133,12 @@ class BaseActionCreateSerializer(serializers.Serializer):
     trigger_status = serializers.ChoiceField(choices=AISTStatus.choices)
     action_type = serializers.ChoiceField(choices=AISTLaunchConfigAction.ActionType.choices)
     config = serializers.JSONField(required=False, default=dict)
-    secret_config = serializers.JSONField(required=False, default=dict, write_only=True)
 
     def validate_config(self, value):
         if value is None:
             return {}
         if not isinstance(value, dict):
             msg = "config must be a JSON object"
-            raise serializers.ValidationError(msg)
-        return value
-
-    def validate_secret_config(self, value):
-        if value is None:
-            return {}
-        if not isinstance(value, dict):
-            msg = "secret_config must be a JSON object"
             raise serializers.ValidationError(msg)
         return value
 
@@ -190,9 +172,6 @@ class SlackActionCreateSerializer(BaseActionCreateSerializer):
             "include_common_summary": include_common_summary,
         }
 
-        secret_config = attrs.get("secret_config") or {}
-        slack_token = secret_config.get("slack_token") or ""
-        attrs["secret_config"] = {"slack_token": slack_token} if slack_token else {}
         return attrs
 
 
@@ -224,7 +203,6 @@ class EmailActionCreateSerializer(BaseActionCreateSerializer):
             "include_ai_csv": include_ai_csv,
             "include_common_summary": include_common_summary,
         }
-        attrs["secret_config"] = {}
         return attrs
 
 
@@ -243,7 +221,6 @@ class WriteLogActionCreateSerializer(BaseActionCreateSerializer):
             "description": description,
             "include_ai_csv": include_ai_csv,
         }
-        attrs["secret_config"] = {}
         return attrs
 
 
@@ -597,7 +574,6 @@ class ProjectLaunchConfigActionListCreateAPI(AuthorizedQuerySetMixin, APIView):
             action_type=s.validated_data["action_type"],
             config=s.validated_data.get("config") or {},
         )
-        obj.set_secret_config(s.validated_data.get("secret_config") or {})
         obj.save()
         return Response(LaunchConfigActionSerializer(obj).data, status=status.HTTP_201_CREATED)
 
@@ -649,7 +625,6 @@ class ProjectLaunchConfigActionDetailAPI(AuthorizedQuerySetMixin, APIView):
             "trigger_status": data.get("trigger_status", obj.trigger_status),
             "action_type": action_type,
             "config": data.get("config", obj.config),
-            "secret_config": data.get("secret_config", {}) if "secret_config" in data else {},
         }
         validator = serializer_cls(data=payload)
         validator.is_valid(raise_exception=True)
@@ -657,8 +632,6 @@ class ProjectLaunchConfigActionDetailAPI(AuthorizedQuerySetMixin, APIView):
         obj.trigger_status = validator.validated_data["trigger_status"]
         obj.action_type = validator.validated_data["action_type"]
         obj.config = validator.validated_data.get("config") or {}
-        if "secret_config" in data:
-            obj.set_secret_config(validator.validated_data.get("secret_config") or {})
         obj.save()
 
         return Response(LaunchConfigActionSerializer(obj).data)

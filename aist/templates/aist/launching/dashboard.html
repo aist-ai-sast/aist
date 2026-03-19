@@ -407,7 +407,7 @@
                 <div class="modal-body">
                     <div class="alert alert-danger" id="lc-action-edit-error" style="display:none;"></div>
                     <p class="text-muted small">
-                        {% trans "Edit JSON object with trigger_status, action_type, config, and optional secret_config." %}
+                        {% trans "Edit JSON object with trigger_status, action_type, and config." %}
                     </p>
                     <textarea id="lc-action-edit-json"
                               class="form-control"
@@ -1466,7 +1466,6 @@
             var createActionIncludeCommonSummary = document.getElementById("action-include-common-summary");
             var createActionSlackFields = document.getElementById("action-slack-fields");
             var createActionSlackChannels = document.getElementById("action-slack-channels");
-            var createActionSlackToken = document.getElementById("action-slack-token");
             var createActionEmailFields = document.getElementById("action-email-fields");
             var createActionEmails = document.getElementById("action-emails");
             var createActionLogFields = document.getElementById("action-log-fields");
@@ -1505,7 +1504,6 @@
                 if (createActionIncludeAiCsv) createActionIncludeAiCsv.checked = false;
                 if (createActionIncludeCommonSummary) createActionIncludeCommonSummary.checked = false;
                 if (createActionSlackChannels) createActionSlackChannels.value = "";
-                if (createActionSlackToken) createActionSlackToken.value = "";
                 if (createActionEmails) createActionEmails.value = "";
                 if (createActionLogLevel) createActionLogLevel.value = "INFO";
                 if (createActionType) showCreateActionFields(createActionType.value);
@@ -1835,7 +1833,6 @@
                         trigger_status: createActionTrigger ? createActionTrigger.value : "",
                         action_type: createActionType ? createActionType.value : "",
                         config: {},
-                        secret_config: {},
                     };
 
                     var title = createActionTitle ? createActionTitle.value.trim() : "";
@@ -1849,8 +1846,6 @@
                         payload.config.description = description;
                         payload.config.include_ai_csv = includeAiCsv;
                         payload.config.include_common_summary = includeCommonSummary;
-                        var token = createActionSlackToken ? createActionSlackToken.value.trim() : "";
-                        if (token) payload.secret_config.slack_token = token;
                     } else if (payload.action_type === "SEND_EMAIL") {
                         payload.config.emails = normalizeList(createActionEmails ? createActionEmails.value : "");
                         payload.config.title = title;

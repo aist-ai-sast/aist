@@ -65,8 +65,10 @@ class GithubIssuesBackend(WorkItemBackend):
         if base:
             return base
         binding = self._installation_binding()
-        if binding and binding.base_api_url:
-            return binding.base_api_url.rstrip("/")
+        if binding and binding.org_integration:
+            base_api_url = (binding.org_integration.config or {}).get("base_api_url", "")
+            if base_api_url:
+                return base_api_url.rstrip("/")
         return _GITHUB_API
 
     def _headers(self) -> dict[str, str]:
@@ -99,9 +101,9 @@ class GithubIssuesBackend(WorkItemBackend):
         try:
             parts = urlparse(url).path.strip("/").split("/")
             # parts: ['owner', 'repo', 'issues', '42']
-            if len(parts) >= 4 and parts[2] == "issues":  # noqa: PLR2004
+            if len(parts) >= 4 and parts[2] == "issues":
                 return parts[0], parts[1]
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: S110
             pass
         return None
 
@@ -125,7 +127,7 @@ class GithubIssuesBackend(WorkItemBackend):
             logger.debug("GitHub credential validation failed for provider %s", self.provider.pk, exc_info=True)
             return False
         else:
-            return resp.status_code == 200  # noqa: PLR2004
+            return resp.status_code == 200
 
     def fetch_issue_status(self, link: WorkItemLink) -> RemoteIssueInfo:
         # Resolve owner/repo: parse from external_url, fall back to provider_config
@@ -156,10 +158,10 @@ class GithubIssuesBackend(WorkItemBackend):
             msg = f"GitHub request failed: {exc}"
             raise WorkItemSyncError(msg) from exc
 
-        if resp.status_code == 404:  # noqa: PLR2004
+        if resp.status_code == 404:
             msg = f"GitHub issue #{issue_number} not found in {owner}/{repo}"
             raise WorkItemSyncError(msg)
-        if resp.status_code == 401:  # noqa: PLR2004
+        if resp.status_code == 401:
             msg = "GitHub API returned 401 Unauthorized - check api_token or GitHub App installation"
             raise WorkItemSyncError(msg)
         if not resp.ok:

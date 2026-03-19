@@ -16,8 +16,8 @@ from rest_framework.views import APIView
 from aist.api.projects import _create_and_attach_script
 from aist.api.schema import AISTApiTag
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
-from aist.models import AISTProject, RepositoryInfo, ScmGitlabBinding, ScmType
-from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
+from aist.models import AISTProject, OrgIntegration, OrgIntegrationType, RepositoryInfo, ScmGitlabBinding, ScmType
+from aist.queries import get_authorized_aist_organizations
 from aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GH flow uses
 
 
@@ -31,10 +31,6 @@ class OptionalIntField(serializers.IntegerField):
 class ImportGitlabRequestSerializer(serializers.Serializer):
     # GitLab numeric project id
     project_id = serializers.IntegerField(required=True)
-    # Personal/Group/Project Access Token with read_api (and read_repository if cloning is needed)
-    gitlab_api_token = serializers.CharField(write_only=True, trim_whitespace=True)
-    # Optional for self-hosted GitLab like https://gitlab.company.tld
-    base_url = serializers.URLField(required=False, default="https://gitlab.com")
     organization_id = OptionalIntField(required=True, allow_null=False)
 
 
@@ -44,10 +40,6 @@ class ImportGitlabResponseSerializer(serializers.Serializer):
     aist_project_id = serializers.IntegerField()
     repository_id = serializers.IntegerField()
     repo_full = serializers.CharField()
-
-
-class UpdateGitlabTokenRequestSerializer(serializers.Serializer):
-    gitlab_api_token = serializers.CharField(write_only=True, trim_whitespace=True)
 
 
 class ImportProjectFromGitlabAPI(APIView):
@@ -70,8 +62,27 @@ class ImportProjectFromGitlabAPI(APIView):
         serializer = ImportGitlabRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         project_id = serializer.validated_data["project_id"]
-        token = serializer.validated_data["gitlab_api_token"].strip()
-        base_url = serializer.validated_data.get("base_url") or "https://gitlab.com"
+
+        organization_id = serializer.validated_data.get("organization_id")
+        organization = get_object_or_404(
+            get_authorized_aist_organizations(Permissions.Product_Type_Add_Product, user=request.user),
+            pk=organization_id,
+        )
+
+        integration = (
+            OrgIntegration.objects
+            .filter(organization=organization, integration_type=OrgIntegrationType.GITLAB, is_active=True)
+            .order_by("pk")
+            .first()
+        )
+        if not integration:
+            return Response(
+                {"detail": "No active GitLab integration found for this organization."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        token = (integration.secret or "").strip()
+        base_url = ((integration.config or {}).get("base_url") or "https://gitlab.com").strip()
 
         gl = gitlab.Gitlab(base_url, private_token=token)
 
@@ -106,11 +117,6 @@ class ImportProjectFromGitlabAPI(APIView):
             return Response({"detail": "Analyzers config not loaded"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         langs = cfg.convert_languages(langs_raw)
 
-        organization_id = serializer.validated_data.get("organization_id")
-        organization = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_Type_Add_Product, user=request.user),
-            pk=organization_id,
-        )
         product_type = organization.ensure_product_type()
 
         # 3) Create Product in resolved Product Type
@@ -143,9 +149,9 @@ class ImportProjectFromGitlabAPI(APIView):
 
         binding, _ = ScmGitlabBinding.objects.get_or_create(scm=repo_info)
 
-        if token and binding.personal_access_token != token:
-            binding.personal_access_token = token
-            binding.save(update_fields=["personal_access_token"])
+        if binding.org_integration_id != integration.id:
+            binding.org_integration = integration
+            binding.save(update_fields=["org_integration"])
 
         with transaction.atomic():
             aist_project, project_created = AISTProject.objects.get_or_create(
@@ -176,35 +182,3 @@ class ImportProjectFromGitlabAPI(APIView):
             "repo_full": f"{owner_ns}/{repo_name}",
         })
         return Response(out.data, status=status.HTTP_201_CREATED)
-
-
-class ProjectGitlabTokenUpdateAPI(APIView):
-    permission_classes = [IsAuthenticated]
-
-    @extend_schema(
-        request=UpdateGitlabTokenRequestSerializer,
-        responses={200: OpenApiResponse(description="Token updated")},
-        tags=[AISTApiTag.GITLAB.value],
-        summary="Update GitLab token for project",
-    )
-    def post(self, request, project_id: int, *args, **kwargs):
-        serializer = UpdateGitlabTokenRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        token = serializer.validated_data["gitlab_api_token"].strip()
-        if not token:
-            return Response({"detail": "GitLab token is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        project = get_object_or_404(
-            get_authorized_aist_projects(Permissions.Product_Edit, user=request.user).select_related("repository"),
-            id=project_id,
-        )
-        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
-        repo = project.repository
-        if not repo or repo.type != ScmType.GITLAB:
-            return Response({"detail": "Project repository is not GitLab"}, status=status.HTTP_400_BAD_REQUEST)
-
-        binding, _created = ScmGitlabBinding.objects.get_or_create(scm=repo)
-        binding.personal_access_token = token
-        binding.save(update_fields=["personal_access_token"])
-
-        return Response({"ok": True})

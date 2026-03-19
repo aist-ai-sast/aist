@@ -32,13 +32,19 @@ class JiraBackend(WorkItemBackend):
     Uses the ``jira`` Python library (jira==3.10.5, already in vendor requirements).
 
     Required provider fields:
-    - ``base_url``: Jira instance URL, e.g. "https://company.atlassian.net"
-    - ``api_token``: Jira API token (Cloud) or PAT (Data Center)
-    - ``provider_config["jira_email"]``: account e-mail (Cloud only; omit for DC)
+    - ``base_url``: Jira instance root, e.g. "https://company.atlassian.net"
+    - ``api_token``: API token (Cloud ATATT…) or PAT (Data Center)
+    - ``provider_config["jira_email"]``: account email — required for Jira Cloud;
+      omit for Jira Data Center/Server (uses Bearer PAT auth instead)
     """
 
     def _build_client(self) -> JIRA:
-        """Return an authenticated jira.JIRA client."""
+        """
+        Return an authenticated jira.JIRA client.
+
+        Jira Cloud API tokens (ATATT…) require Basic auth with email+token.
+        Jira Data Center PATs use Bearer token auth (no email needed).
+        """
         server = (self.provider.base_url or "").rstrip("/")
         if not server:
             msg = "WorkItemProvider.base_url must be set for JIRA providers"
@@ -49,13 +55,13 @@ class JiraBackend(WorkItemBackend):
             msg = "WorkItemProvider.api_token must be set for JIRA providers"
             raise WorkItemSyncError(msg)
 
-        email = (self.provider.provider_config or {}).get("jira_email", "")
+        email = (self.provider.provider_config or {}).get("jira_email", "").strip()
 
         try:
             if email:
-                # Jira Cloud: basic auth with email + API token
+                # Jira Cloud: API token requires Basic auth (email + token)
                 return JIRA(server=server, basic_auth=(email, token))
-            # Jira Data Center / Server: PAT-based auth
+            # Jira Data Center/Server: PAT uses Bearer auth
             return JIRA(server=server, token_auth=token)
         except JIRAError as exc:
             raise WorkItemSyncError(str(exc)) from exc

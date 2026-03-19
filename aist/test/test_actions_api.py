@@ -37,7 +37,6 @@ class LaunchConfigActionsAPITests(AISTApiBase):
                 "trigger_status": AISTStatus.FINISHED,
                 "action_type": "PUSH_TO_SLACK",
                 "config": {"title": "Hi"},
-                "secret_config": {"slack_token": "xoxb-test"},
             },
             format="json",
         )
@@ -71,7 +70,7 @@ class LaunchConfigActionsAPITests(AISTApiBase):
         )
         self.assertEqual(resp.status_code, 201)
 
-    def test_secret_config_not_returned(self):
+    def test_slack_action_created_without_token_field(self):
         cfg = self._config()
         resp = self.client.post(
             self._actions_url(cfg.id),
@@ -79,7 +78,6 @@ class LaunchConfigActionsAPITests(AISTApiBase):
                 "trigger_status": AISTStatus.FINISHED,
                 "action_type": "PUSH_TO_SLACK",
                 "config": {"channels": ["#alerts"]},
-                "secret_config": {"slack_token": "xoxb-test"},
             },
             format="json",
         )

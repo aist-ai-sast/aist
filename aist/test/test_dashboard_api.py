@@ -23,7 +23,14 @@ from dojo.models import (
     Test_Type,
 )
 
-from aist.models import AISTAIFindingResponse, AISTPipeline, AISTProject, AISTStatus, WorkItemLink, WorkItemStatusCategory
+from aist.models import (
+    AISTAIFindingResponse,
+    AISTPipeline,
+    AISTProject,
+    AISTStatus,
+    WorkItemLink,
+    WorkItemStatusCategory,
+)
 
 
 class DashboardSummaryViewTests(TestCase):

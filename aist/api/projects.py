@@ -13,7 +13,8 @@ from rest_framework.views import APIView
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
-from aist.models import AISTProject, AISTProjectScript, Organization
+from aist.integrations.resolver import resolve_integration
+from aist.models import AISTProject, AISTProjectScript, Organization, OrgIntegrationType
 from aist.queries import (
     get_authorized_aist_organizations,
     get_authorized_aist_projects,
@@ -491,9 +492,17 @@ class AISTProjectActiveScriptAPI(AuthorizedQuerySetMixin, APIView):
 
 def project_meta_payload(project: AISTProject) -> dict:
     versions = [{"id": str(v.id), "label": str(v)} for v in project.versions.all()]
+
+    integration_defaults: dict[str, dict] = {}
+    for itype in (OrgIntegrationType.SLACK, OrgIntegrationType.EMAIL):
+        resolved = resolve_integration(project, itype)
+        if resolved:
+            integration_defaults[itype.value] = resolved.config
+
     return {
         "supported_languages": project.supported_languages or [],
         "versions": versions,
+        "integration_defaults": integration_defaults,
     }
 
 
