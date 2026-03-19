@@ -231,8 +231,7 @@ class WorkItemProviderCRUDTests(WorkItemBaseTestCase):
             organization=self.org, provider_type=WorkItemProviderType.GENERIC, name="secret",
         )
         response = self.client.get(self._providers_url())
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, [])  # authorized queryset hides it
+        self.assertEqual(response.status_code, 404)
 
 
 # ---------------------------------------------------------------------------

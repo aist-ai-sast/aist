@@ -96,8 +96,11 @@ def sync_ai_finding_responses(
         deleted, _ = pipeline.ai_finding_responses.all().delete()
         return SyncAIFindingResponsesResult(saved=0, dropped=len(parsed_entries), deleted=deleted)
 
+    # select_for_update() prevents TOCTOU: between ID validation and the subsequent
+    # close_finding/upsert writes, a concurrent transaction could delete or reassign
+    # a finding. Callers must invoke this function within transaction.atomic().
     valid_findings = {
-        finding.id: finding for finding in Finding.objects.filter(
+        finding.id: finding for finding in Finding.objects.select_for_update().filter(
             id__in=set(candidate_ids),
             test__engagement__product_id=pipeline.project.product_id,
         )

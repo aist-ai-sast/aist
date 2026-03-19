@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 from contextlib import contextmanager
+from datetime import timedelta
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from dojo.models import DojoMeta, Engagement, Finding, Test, Test_Type
 
 from aist.models import AISTPipeline, AISTStatus
 from aist.tasks.pipeline import postprocess_findings, run_sast_pipeline
+from aist.tasks.reconciliation import _recover_stuck_dedup_pipelines, _recover_stuck_enrich_pipelines
 from aist.test.test_api import AISTApiBase
 from aist.utils.pipeline import finish_pipeline
 from aist.utils.reconciliation import reconcile_pipeline_orphans, safe_attach_findings_to_version
@@ -299,3 +301,34 @@ class PostprocessFindingsTests(AISTApiBase):
             call_kwargs[1].get("task_id") if len(call_kwargs) > 1 else None
         )
         self.assertEqual(dispatched_task_id, pipeline.watch_dedup_task_id)
+
+
+class ReconciliationRecoveryTests(AISTApiBase):
+    def test_recover_stuck_pipeline_helpers_dry_run_do_not_mutate_pipelines(self):
+        dedup_pipeline = AISTPipeline.objects.create(
+            id="pipe-reconcile-dry-dedup-1",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.WAITING_DEDUPLICATION_TO_FINISH,
+        )
+        enrich_pipeline = AISTPipeline.objects.create(
+            id="pipe-reconcile-dry-enrich-1",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINDING_POSTPROCESSING,
+        )
+        old_updated = timezone.now() - timedelta(hours=1)
+        AISTPipeline.objects.filter(id=dedup_pipeline.id).update(updated=old_updated)
+        AISTPipeline.objects.filter(id=enrich_pipeline.id).update(updated=old_updated)
+
+        dedup_recovered = _recover_stuck_dedup_pipelines(dry_run=True)
+        enrich_recovered = _recover_stuck_enrich_pipelines(dry_run=True)
+
+        dedup_pipeline.refresh_from_db()
+        enrich_pipeline.refresh_from_db()
+
+        self.assertEqual(dedup_recovered, 1)
+        self.assertEqual(enrich_recovered, 1)
+        self.assertEqual(dedup_pipeline.status, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
+        self.assertIsNone(dedup_pipeline.watch_dedup_task_id)
+        self.assertEqual(enrich_pipeline.status, AISTStatus.FINDING_POSTPROCESSING)

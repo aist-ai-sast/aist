@@ -75,6 +75,12 @@ class ActionsTests(TestCase):
             name="Slack",
             secret="xoxb-test",  # noqa: S106
         )
+        self.email_integration = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type="EMAIL",
+            name="Email",
+            config={"emails": ["integration@example.com"]},
+        )
 
     def _create_ai_response(self):
         payload = {
@@ -427,6 +433,39 @@ class ActionsTests(TestCase):
         self.assertIn("**Project version:** GIT_HASH:main", kwargs["description"])
         self.assertIn("**Severity:** Critical: 1 | High: 1 | Medium: 0 | Low: 1 | Info: 0", kwargs["description"])
         self.assertIn("**Findings:** [Open findings](", kwargs["description"])
+
+    @patch("aist.actions.EmailNotificationManger.send_mail_notification")
+    def test_email_action_reads_recipients_from_integration(self, mock_send):
+        # action config has no emails — they come from the org EMAIL integration
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.SEND_EMAIL,
+            {"include_ai_csv": False},
+        )
+        EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+        self.assertTrue(mock_send.called)
+        self.assertEqual(mock_send.call_args.kwargs["recipient"], "integration@example.com")
+
+    @patch("aist.actions.EmailNotificationManger.send_mail_notification")
+    def test_email_action_integration_emails_override_action_config(self, mock_send):
+        # Both action config and integration have emails — integration wins
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.SEND_EMAIL,
+            {"emails": ["action@example.com"], "include_ai_csv": False},
+        )
+        EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+        self.assertTrue(mock_send.called)
+        self.assertEqual(mock_send.call_args.kwargs["recipient"], "integration@example.com")
+
+    @patch("aist.actions.EmailNotificationManger.send_mail_notification")
+    def test_email_action_falls_back_to_action_config_when_no_integration(self, mock_send):
+        self.email_integration.delete()
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.SEND_EMAIL,
+            {"emails": ["fallback@example.com"], "include_ai_csv": False},
+        )
+        EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+        self.assertTrue(mock_send.called)
+        self.assertEqual(mock_send.call_args.kwargs["recipient"], "fallback@example.com")
 
     @patch("aist.actions.install_pipeline_logging")
     def test_write_log_action_with_csv_flag_logs_simple_message(self, mock_install):

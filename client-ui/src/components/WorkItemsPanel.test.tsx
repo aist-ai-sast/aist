@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 
 import WorkItemsPanel from "./WorkItemsPanel";
 
@@ -10,6 +11,8 @@ const pushToast = vi.fn();
 const createMutate = vi.fn();
 const deleteMutate = vi.fn();
 const updateMutate = vi.fn();
+
+let mockCanWrite = true;
 
 let mockWorkItems: Array<{
   id: number;
@@ -36,10 +39,37 @@ vi.mock("./ToastProvider", () => ({
   useToast: () => ({ push: pushToast }),
 }));
 
+vi.mock("./PermissionGate", () => ({
+  default: ({ action, children, fallback = null }: { action: string; children: ReactNode; fallback?: ReactNode }) =>
+    action === "write" && mockCanWrite ? children : fallback,
+}));
+
 describe("WorkItemsPanel", () => {
   beforeEach(() => {
     mockWorkItems = [];
+    mockCanWrite = true;
     vi.clearAllMocks();
+  });
+
+  it("hides Link issue button and delete button for read-only users", () => {
+    mockCanWrite = false;
+    mockWorkItems = [
+      {
+        id: 7,
+        externalKey: "SEC-7",
+        externalUrl: "https://jira.example.com/browse/SEC-7",
+        title: "Existing linked issue",
+        statusCategory: "OPEN",
+        providerName: null,
+        providerType: null,
+        provider: null,
+      },
+    ];
+
+    render(<WorkItemsPanel findingId={42} />);
+
+    expect(screen.queryByRole("button", { name: "+ Link issue" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove work item" })).not.toBeInTheDocument();
   });
 
   it("creates a manual work item link with trimmed fields and resets the form on success", () => {

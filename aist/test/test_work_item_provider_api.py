@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from django.urls import reverse
 from django.utils import timezone
-from dojo.models import Engagement, Finding, Product_Type, Test, Test_Type
+from dojo.models import Engagement, Finding, Product_Type, Product_Type_Member, Test, Test_Type
 
 from aist.models import Organization, WorkItemProvider, WorkItemProviderType
 from aist.test.test_api import AISTApiBase
@@ -15,6 +15,11 @@ class WorkItemProviderAPIBase(AISTApiBase):
         super().setUp()
         self.org_prod_type = Product_Type.objects.create(name="WIP Org PT")
         self.org = Organization.objects.create(name="WIP Org", product_type=self.org_prod_type)
+        Product_Type_Member.objects.create(
+            product_type=self.org_prod_type,
+            user=self.user,
+            role=self.role_maintainer,
+        )
         self.project.organization = self.org
         self.project.save(update_fields=["organization"])
         self.list_url = reverse("aist_api:work_item_provider_list_create", kwargs={"org_id": self.org.pk})

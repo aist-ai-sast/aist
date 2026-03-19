@@ -6,6 +6,7 @@ import { useWorkItems } from "../lib/queries";
 import { useToast } from "./ToastProvider";
 import TextInput from "./TextInput";
 import type { WorkItemStatusCategory } from "../types";
+import PermissionGate from "./PermissionGate";
 
 type WorkItemsPanelProps = {
   findingId: number;
@@ -192,80 +193,84 @@ export default function WorkItemsPanel({ findingId }: WorkItemsPanelProps) {
                   {wi.externalUrl}
                 </a>
               </div>
-              <button
-                type="button"
-                className="aist-icon-button shrink-0 text-slate-400 hover:text-danger-400"
-                onClick={() => handleDelete(wi.id)}
-                disabled={deleteMutation.isPending}
-                aria-label="Remove work item"
-              >
-                <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                  <path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z" />
-                </svg>
-              </button>
+              <PermissionGate action="write">
+                <button
+                  type="button"
+                  className="aist-icon-button shrink-0 text-slate-400 hover:text-danger-400"
+                  onClick={() => handleDelete(wi.id)}
+                  disabled={deleteMutation.isPending}
+                  aria-label="Remove work item"
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                    <path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z" />
+                  </svg>
+                </button>
+              </PermissionGate>
             </li>
           ))}
         </ul>
       )}
 
-      {addOpen ? (
-        <div className="rounded-lg border border-night-500 bg-night-800/60 p-3 space-y-2">
-          <div className="text-xs uppercase tracking-[0.15em] text-slate-400">Link external issue</div>
-          <TextInput
-            variant="compact"
-            type="url"
-            placeholder="Issue URL (required)"
-            value={newUrl}
-            onChange={(e) => setNewUrl(e.target.value)}
-          />
-          <div className="grid grid-cols-2 gap-2">
+      <PermissionGate action="write">
+        {addOpen ? (
+          <div className="rounded-lg border border-night-500 bg-night-800/60 p-3 space-y-2">
+            <div className="text-xs uppercase tracking-[0.15em] text-slate-400">Link external issue</div>
             <TextInput
               variant="compact"
-              type="text"
-              placeholder="Key (e.g. PROJ-42)"
-              value={newKey}
-              onChange={(e) => setNewKey(e.target.value)}
+              type="url"
+              placeholder="Issue URL (required)"
+              value={newUrl}
+              onChange={(e) => setNewUrl(e.target.value)}
             />
-            <TextInput
-              variant="compact"
-              type="text"
-              placeholder="Title (optional)"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-            />
+            <div className="grid grid-cols-2 gap-2">
+              <TextInput
+                variant="compact"
+                type="text"
+                placeholder="Key (e.g. PROJ-42)"
+                value={newKey}
+                onChange={(e) => setNewKey(e.target.value)}
+              />
+              <TextInput
+                variant="compact"
+                type="text"
+                placeholder="Title (optional)"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className={btnPrimary}
+                onClick={handleAdd}
+                disabled={!newUrl.trim() || createMutation.isPending}
+              >
+                {createMutation.isPending ? "Adding…" : "Add"}
+              </button>
+              <button
+                type="button"
+                className={btnDefault}
+                onClick={() => {
+                  setAddOpen(false);
+                  setNewUrl("");
+                  setNewKey("");
+                  setNewTitle("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className={btnPrimary}
-              onClick={handleAdd}
-              disabled={!newUrl.trim() || createMutation.isPending}
-            >
-              {createMutation.isPending ? "Adding…" : "Add"}
-            </button>
-            <button
-              type="button"
-              className={btnDefault}
-              onClick={() => {
-                setAddOpen(false);
-                setNewUrl("");
-                setNewKey("");
-                setNewTitle("");
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
-          type="button"
-          className={btnDefault}
-          onClick={() => setAddOpen(true)}
-        >
-          + Link issue
-        </button>
-      )}
+        ) : (
+          <button
+            type="button"
+            className={btnDefault}
+            onClick={() => setAddOpen(true)}
+          >
+            + Link issue
+          </button>
+        )}
+      </PermissionGate>
     </div>
   );
 }

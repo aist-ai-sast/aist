@@ -127,13 +127,10 @@ def get_authorized_aist_organizations(permission, user=None):
         role__in=roles,
     ).values("product_type_id")
 
-    orgs_by_product_type = Organization.objects.filter(
+    return Organization.objects.filter(
         Q(product_type_id__in=Subquery(authorized_product_type_roles))
         | Q(product_type_id__in=Subquery(authorized_product_type_groups)),
     ).distinct()
-    products = get_authorized_aist_products(permission, user=user)
-    orgs_by_projects = Organization.objects.filter(projects__product__in=products).distinct()
-    return (orgs_by_product_type | orgs_by_projects).distinct()
 
 
 def get_authorized_work_item_providers(permission, user=None):

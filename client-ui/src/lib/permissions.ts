@@ -19,19 +19,21 @@ const roleRank: Record<number, number> = {
   [RoleIds.Owner]: 4,
 };
 
-function getRoleFromProfile(profile?: UserProfile | null, productId?: number): number | "superuser" | null {
+function getBestRole(roles: (number | undefined)[]): number | null {
+  const valid = roles.filter((r): r is number => r != null);
+  if (!valid.length) return null;
+  return valid.reduce((best, current) => (roleRank[current] ?? -1) > (roleRank[best] ?? -1) ? current : best);
+}
+
+function getRoleFromProfile(profile?: UserProfile | null): number | "superuser" | null {
   if (!profile) return null;
   if (profile.user?.is_superuser) return "superuser";
 
-  if (profile.product_member?.length) {
-    const members = productId
-      ? profile.product_member.filter((member) => member.product === productId && member.role)
-      : profile.product_member.filter((member) => member.role);
-    if (members.length) {
-      return members
-        .map((member) => member.role as number)
-        .reduce((best, current) => (roleRank[current] ?? -1) > (roleRank[best] ?? -1) ? current : best);
-    }
+  if (profile.product_type_member?.length) {
+    const best = getBestRole(
+      profile.product_type_member.filter((m) => m.role).map((m) => m.role),
+    );
+    if (best !== null) return best;
   }
 
   if (profile.global_role?.role) {
@@ -55,12 +57,12 @@ function canManageAccess(role: number | "superuser" | null): boolean {
 
 export type PermissionAction = "write" | "comment" | "enable" | "export" | "manage_access";
 
-export function usePermissions(productId?: number) {
+export function usePermissions() {
   const auth = useAuthStatus();
   const role = useMemo(() => {
     if (!auth.data) return null;
-    return getRoleFromProfile(auth.data, productId);
-  }, [auth.data, productId]);
+    return getRoleFromProfile(auth.data);
+  }, [auth.data]);
 
   const canWrite = useMemo(() => canWriteWithRole(role), [role]);
 
@@ -74,8 +76,8 @@ export function usePermissions(productId?: number) {
   };
 }
 
-export function useWritePermissions(productId?: number) {
-  const permissions = usePermissions(productId);
+export function useWritePermissions() {
+  const permissions = usePermissions();
   return {
     canWrite: permissions.canWrite,
     isLoading: permissions.isLoading,

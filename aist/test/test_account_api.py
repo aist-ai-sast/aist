@@ -160,3 +160,70 @@ class AISTAccountAPITests(AISTApiBase):
         response = self.client.post(reverse("aist_api:auth_logout_all"), format="json")
         self.assertEqual(response.status_code, 204)
         remove_all_sessions.assert_called_once()
+
+    def test_login_rotates_csrf_token(self):
+        # Django's login() calls rotate_token(), which changes the CSRF cookie.
+        # The SPA must be able to read the new value (requires CSRF_COOKIE_HTTPONLY=False).
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_before = client.cookies["csrftoken"].value
+        client.post(
+            reverse("aist_api:auth_login"),
+            data={"username": self.user.username, "password": "pass"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_before,
+        )
+        csrf_after = client.cookies["csrftoken"].value
+        self.assertNotEqual(csrf_before, csrf_after, "CSRF token must be rotated after login()")
+
+    def test_logout_invalidates_session(self):
+        # Full sign-out scenario: after logout the session must be gone.
+        # Uses the post-login CSRF token (as a browser with CSRF_COOKIE_HTTPONLY=False would).
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_before = client.cookies["csrftoken"].value
+        client.post(
+            reverse("aist_api:auth_login"),
+            data={"username": self.user.username, "password": "pass"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_before,
+        )
+        # Use the rotated post-login CSRF token for the logout call.
+        csrf_after_login = client.cookies["csrftoken"].value
+        response = client.post(
+            reverse("aist_api:auth_logout"),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_after_login,
+        )
+        self.assertEqual(response.status_code, 204)
+        # Session must be gone — authenticated endpoint returns 401/403.
+        response = client.get(reverse("aist_api:me"))
+        self.assertIn(response.status_code, [401, 403])
+
+    def test_relogin_after_logout(self):
+        # A second login after sign-out must succeed (no stale CSRF blocks it).
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_before = client.cookies["csrftoken"].value
+        client.post(
+            reverse("aist_api:auth_login"),
+            data={"username": self.user.username, "password": "pass"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_before,
+        )
+        csrf_after_login = client.cookies["csrftoken"].value
+        client.post(
+            reverse("aist_api:auth_logout"),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_after_login,
+        )
+        # After logout, re-login should work with a fresh CSRF token.
+        client.get(reverse("client_login"))
+        csrf_fresh = client.cookies["csrftoken"].value
+        response = client.post(
+            reverse("aist_api:auth_login"),
+            data={"username": self.user.username, "password": "pass"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_fresh,
+        )
+        self.assertEqual(response.status_code, 204)

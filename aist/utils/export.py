@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from io import StringIO
+from operator import itemgetter
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -64,7 +65,8 @@ def _build_ai_export_rows(
         rows.append(row)
 
     # Sort by impactScore descending: highest impact first.
-    rows.sort(key=lambda r: r.get("impactScore") or 0, reverse=True)
+    # "impactScore" is always present in the row dict (defaults to 0 above).
+    rows.sort(key=itemgetter("impactScore"), reverse=True)
     return rows
 
 

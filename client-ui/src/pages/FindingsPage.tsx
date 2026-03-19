@@ -29,6 +29,7 @@ import {
   toFindingsApiFilters,
 } from "../lib/findingsFilterUrl";
 import { useDebouncedValue } from "../lib/useDebouncedValue";
+import PermissionGate from "../components/PermissionGate";
 
 const DetailPanel = lazy(() => import("../components/DetailPanel"));
 
@@ -615,26 +616,28 @@ export default function FindingsPage() {
             </span>
           </div>
           <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-end">
-            <button
-              className="aist-icon-button h-10 w-full sm:w-auto text-xs font-semibold uppercase tracking-[0.14em]"
-              onClick={toggleBulkEditMode}
-              disabled={bulkStatusMutation.isPending}
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                {bulkEditMode ? (
-                  <path
-                    fill="currentColor"
-                    d="m7.41 6 4.59 4.59L16.59 6 18 7.41 13.41 12 18 16.59 16.59 18 12 13.41 7.41 18 6 16.59 10.59 12 6 7.41 7.41 6Z"
-                  />
-                ) : (
-                  <path
-                    fill="currentColor"
-                    d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"
-                  />
-                )}
-              </svg>
-              {bulkEditMode ? "Cancel Bulk Edit" : "Start Bulk Edit"}
-            </button>
+            <PermissionGate action="write">
+              <button
+                className="aist-icon-button h-10 w-full sm:w-auto text-xs font-semibold uppercase tracking-[0.14em]"
+                onClick={toggleBulkEditMode}
+                disabled={bulkStatusMutation.isPending}
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                  {bulkEditMode ? (
+                    <path
+                      fill="currentColor"
+                      d="m7.41 6 4.59 4.59L16.59 6 18 7.41 13.41 12 18 16.59 16.59 18 12 13.41 7.41 18 6 16.59 10.59 12 6 7.41 7.41 6Z"
+                    />
+                  ) : (
+                    <path
+                      fill="currentColor"
+                      d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"
+                    />
+                  )}
+                </svg>
+                {bulkEditMode ? "Cancel Bulk Edit" : "Start Bulk Edit"}
+              </button>
+            </PermissionGate>
             <button
               className="aist-icon-button h-10 w-full sm:w-auto"
               onClick={exportCurrentView}

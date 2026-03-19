@@ -296,10 +296,15 @@ class SlackAction(BaseAction):
 class EmailAction(BaseAction):
     action_type = AISTLaunchConfigAction.ActionType.SEND_EMAIL
 
-    def run(self, *, pipeline: AISTPipeline, new_status: str) -> None:
-        emails = self.config.get("emails") or []
+    def _get_emails(self, pipeline: AISTPipeline) -> list[str]:
+        resolved = resolve_integration(pipeline.project, OrgIntegrationType.EMAIL)
+        emails = (resolved.config.get("emails") if resolved else None) or self.config.get("emails") or []
         if isinstance(emails, str):
             emails = [emails]
+        return [e for e in emails if e]
+
+    def run(self, *, pipeline: AISTPipeline, new_status: str) -> None:
+        emails = self._get_emails(pipeline)
         if not emails:
             return
 

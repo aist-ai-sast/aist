@@ -18,6 +18,10 @@ export type UserProfile = {
     product?: number;
     role?: number;
   }>;
+  product_type_member?: Array<{
+    product_type?: number;
+    role?: number;
+  }>;
 };
 
 export async function loginWithSession(username: string, password: string) {

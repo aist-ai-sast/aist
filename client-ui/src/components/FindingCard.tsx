@@ -208,7 +208,7 @@ export default function FindingCard({
             href={wi.externalUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-brand-400 hover:text-brand-300 hover:underline"
+            className="aist-clickable-text inline-flex items-center gap-1"
             onClick={(event) => event.stopPropagation()}
             title={wi.title || wi.externalKey || wi.externalUrl}
           >

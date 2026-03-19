@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.core.management.base import BaseCommand, CommandError
 
 from aist.models import WorkItemProvider
-from aist.work_items.sync import sync_all_active_providers, sync_provider
+from aist.work_items.sync import sync_provider
 
 
 class Command(BaseCommand):
@@ -67,7 +67,11 @@ class Command(BaseCommand):
                 )
                 return
 
-            results = sync_all_active_providers()
+            providers = WorkItemProvider.objects.filter(sync_enabled=True, is_active=True)
+            results = []
+            for provider in providers:
+                result = sync_provider(provider)
+                results.append(result)
             total_synced = sum(r.synced for r in results)
             total_failed = sum(r.failed for r in results)
             total_skipped = sum(r.skipped for r in results)

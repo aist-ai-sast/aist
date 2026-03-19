@@ -82,6 +82,7 @@ def _build_routes() -> dict[str, Any]:
             "subpath",
         ),
         "dashboard_summary_url": reverse("client_dashboard_summary"),
+        "manageable_orgs_url": reverse("aist_api:organization_create") + "?manage=true",
         "org_integrations_url": _replace_int_placeholder(
             reverse("aist_api:org_integration_list_create", kwargs={"org_id": 0}),
             "org_id",

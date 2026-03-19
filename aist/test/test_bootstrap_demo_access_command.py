@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
-from dojo.models import Finding, Role
+from dojo.models import Finding, Product_Type_Member, Role
 
 from aist.management.commands.bootstrap_demo_access import DEMO_PROJECTS, DEMO_USERS, ORG_NAMES
 from aist.models import (
@@ -114,3 +114,35 @@ class BootstrapDemoAccessCommandTests(TestCase):
             self.assertIn(0, durations)
             self.assertIn(5 * 60, durations)
             self.assertIn(30 * 60, durations)
+
+    def test_each_demo_user_belongs_to_exactly_their_assigned_organization(self):
+        """
+        Each demo user must have membership in exactly one org — the one from DEMO_USERS spec.
+        Regression: users_by_role was keyed by role_name (non-unique), causing users with the
+        same role name (e.g. multiple Maintainers) to overwrite each other and end up assigned
+        to all organizations instead of only their own.
+        """
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        User = get_user_model()
+        org_by_name = {org.name: org for org in Organization.objects.filter(name__in=ORG_NAMES)}
+
+        for spec in DEMO_USERS:
+            user = User.objects.get(username=spec.username)
+            expected_org = org_by_name[spec.organization_name]
+            memberships = Product_Type_Member.objects.filter(
+                user=user,
+                product_type_id__in=[o.product_type_id for o in org_by_name.values() if o.product_type_id],
+            ).select_related("product_type")
+
+            self.assertEqual(
+                memberships.count(),
+                1,
+                f"{spec.username} should have exactly 1 org membership, "
+                f"got: {[m.product_type_id for m in memberships]}",
+            )
+            self.assertEqual(
+                memberships.first().product_type_id,
+                expected_org.product_type_id,
+                f"{spec.username} should be in '{spec.organization_name}' only",
+            )

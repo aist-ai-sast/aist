@@ -4,7 +4,6 @@ import { usePermissions, type PermissionAction } from "../lib/permissions";
 
 type PermissionGateProps = {
   action: PermissionAction;
-  productId?: number;
   fallback?: ReactNode;
   loadingFallback?: ReactNode;
   children: ReactNode;
@@ -20,12 +19,11 @@ const actionMap: Record<PermissionAction, (perms: ReturnType<typeof usePermissio
 
 export default function PermissionGate({
   action,
-  productId,
   fallback = null,
   loadingFallback = null,
   children,
 }: PermissionGateProps) {
-  const perms = usePermissions(productId);
+  const perms = usePermissions();
   if (perms.isLoading) return <>{loadingFallback}</>;
   return actionMap[action](perms) ? <>{children}</> : <>{fallback}</>;
 }

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.core.management.base import BaseCommand
 
-from aist.utils.reconciliation import reconcile_recent_pipelines
+from aist.tasks.reconciliation import reconcile_recent_orphans_task
 
 
 class Command(BaseCommand):
@@ -24,7 +24,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        result = reconcile_recent_pipelines(
+        result = reconcile_recent_orphans_task.run(
             hours=options["hours"],
             batch_size=options["batch_size"],
             dry_run=options["dry_run"],
@@ -35,5 +35,7 @@ class Command(BaseCommand):
             f"hours={result['hours']} "
             f"processed={result['processed']} "
             f"pipelines_with_remaining_violations={result['pipelines_with_remaining_violations']} "
-            f"remaining_violations={result['remaining_violations']}",
+            f"remaining_violations={result['remaining_violations']} "
+            f"recovered_stuck_dedup={result.get('recovered_stuck_dedup', 0)} "
+            f"recovered_stuck_enrich={result.get('recovered_stuck_enrich', 0)}",
         )

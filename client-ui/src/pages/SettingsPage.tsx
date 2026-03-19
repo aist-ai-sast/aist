@@ -83,7 +83,7 @@ export default function SettingsPage() {
   const username = getUsername(auth.data);
   const role = getRoleLabel(auth.data);
   const memberships = accountQuery.data.organization_memberships ?? [];
-  const canManageProfile = permissions.canWrite || permissions.canManageAccess;
+  const canManageProfile = permissions.canWrite;
   const canEditProfile = canManageProfile && accountQuery.data.can_edit_profile;
   const canEditUsername = canManageProfile && accountQuery.data.can_edit_username;
 

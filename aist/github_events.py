@@ -13,8 +13,7 @@ from aist.models import (
     ScmType,
     VersionType,
 )
-from aist.tasks import run_sast_pipeline
-from aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline
+from aist.utils.pipeline import has_unfinished_pipeline, trigger_pipeline_for_pr
 
 gh = GitHubRouter()
 logger = logging.getLogger("aist")
@@ -151,14 +150,11 @@ async def on_pr_event(event, gh, **_):
 
     params = {"pr_launch": True}
 
-    pipeline = await sync_to_async(create_pipeline_object)(aist_project, pv, pr_ref)
-    async_result = run_sast_pipeline.delay(pipeline.id, params)
-    pipeline.run_task_id = async_result.id
-    await sync_to_async(pipeline.save)(update_fields=["run_task_id"])
+    pipeline = await sync_to_async(trigger_pipeline_for_pr)(aist_project, pv, pr_ref, params)
 
     logger.info(
         "Pipeline enqueued for PR #%s: pipeline_id=%s task_id=%s",
         pr_number,
         pipeline.id,
-        async_result.id,
+        pipeline.run_task_id,
     )

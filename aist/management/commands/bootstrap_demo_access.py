@@ -40,6 +40,7 @@ class DemoUserSpec:
     last_name: str
     email: str
     role_name: str
+    organization_name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,10 +99,13 @@ def demo_ai_filter_snapshot() -> dict:
 
 
 DEMO_USERS = [
-    DemoUserSpec("org_reader", "Org", "Reader", "org_reader@example.local", "Reader"),
-    DemoUserSpec("org_writer", "Org", "Writer", "org_writer@example.local", "Writer"),
-    DemoUserSpec("org_maintainer", "Org", "Maintainer", "org_maintainer@example.local", "Maintainer"),
-    DemoUserSpec("org_owner", "Org", "Owner", "org_owner@example.local", "Owner"),
+    DemoUserSpec("org_reader", "Org", "Reader", "org_reader@example.local", "Reader", "Nova Payments"),
+    DemoUserSpec("org_writer", "Org", "Writer", "org_writer@example.local", "Writer", "Nova Payments"),
+    DemoUserSpec("org_maintainer", "Org", "Maintainer", "org_maintainer@example.local", "Maintainer", "Nova Payments"),
+    DemoUserSpec("org_owner", "Org", "Owner", "org_owner@example.local", "Owner", "Nova Payments"),
+    DemoUserSpec("acme_reader", "Acme", "Reader", "acme_reader@example.local", "Reader", "Acme Platform"),
+    DemoUserSpec("acme_maintainer", "Acme", "Maintainer", "acme_maintainer@example.local", "Maintainer", "Acme Platform"),
+    DemoUserSpec("helios_maintainer", "Helios", "Maintainer", "helios_maintainer@example.local", "Maintainer", "Helios Core"),
 ]
 
 DEMO_PROJECTS = [
@@ -341,11 +345,11 @@ class Command(BaseCommand):
         if not skip_admin:
             self._ensure_admin_username(user_model, password=password)
 
-        users_by_role = self._ensure_demo_users(user_model, password=password)
+        users_by_username = self._ensure_demo_users(user_model, password=password)
         organizations = self._ensure_organizations()
 
-        self._bind_roles_via_product_type(organizations=organizations, users_by_role=users_by_role)
-        self._ensure_demo_projects(organizations=organizations, users_by_role=users_by_role)
+        self._bind_roles_via_product_type(organizations=organizations, users_by_username=users_by_username)
+        self._ensure_demo_projects(organizations=organizations, users_by_username=users_by_username)
 
         self.stdout.write(f"Demo users password: {password}")
         self.stdout.write(f"Organizations: {', '.join(org.name for org in organizations)}")
@@ -375,7 +379,7 @@ class Command(BaseCommand):
             admin.save(update_fields=["password"])
 
     def _ensure_demo_users(self, user_model, *, password: str) -> dict[str, object]:
-        users_by_role: dict[str, object] = {}
+        users_by_username: dict[str, object] = {}
         for spec in DEMO_USERS:
             user, _ = user_model.objects.get_or_create(
                 username=spec.username,
@@ -402,8 +406,8 @@ class Command(BaseCommand):
             if not user.check_password(password):
                 user.set_password(password)
                 user.save(update_fields=["password"])
-            users_by_role[spec.role_name] = user
-        return users_by_role
+            users_by_username[spec.username] = user
+        return users_by_username
 
     def _ensure_organizations(self) -> list[Organization]:
         organizations: list[Organization] = []
@@ -416,7 +420,7 @@ class Command(BaseCommand):
             organizations.append(org)
         return organizations
 
-    def _bind_roles_via_product_type(self, *, organizations: list[Organization], users_by_role: dict[str, object]) -> None:
+    def _bind_roles_via_product_type(self, *, organizations: list[Organization], users_by_username: dict[str, object]) -> None:
         role_names = {spec.role_name for spec in DEMO_USERS}
         roles = {role.name: role for role in Role.objects.filter(name__in=role_names)}
         missing_roles = sorted(role_names - set(roles))
@@ -424,18 +428,32 @@ class Command(BaseCommand):
             msg = f"Missing roles in DB: {', '.join(missing_roles)}"
             raise CommandError(msg)
 
-        for org in organizations:
-            product_type = org.ensure_product_type()
-            for spec in DEMO_USERS:
-                Product_Type_Member.objects.get_or_create(
-                    product_type=product_type,
-                    user=users_by_role[spec.role_name],
-                    defaults={"role": roles[spec.role_name]},
-                )
-
-    def _ensure_demo_projects(self, *, organizations: list[Organization], users_by_role: dict[str, object]) -> None:
         organizations_by_name = {org.name: org for org in organizations}
-        default_reporter = users_by_role["Maintainer"]
+        all_demo_users = list(users_by_username.values())
+        all_org_product_type_ids = [org.ensure_product_type().id for org in organizations]
+
+        # Remove any memberships that point demo users to orgs outside their assigned org.
+        Product_Type_Member.objects.filter(
+            user__in=all_demo_users,
+            product_type_id__in=all_org_product_type_ids,
+        ).delete()
+
+        for spec in DEMO_USERS:
+            org = organizations_by_name.get(spec.organization_name)
+            if org is None:
+                msg = f"Organization '{spec.organization_name}' not found for user '{spec.username}'"
+                raise CommandError(msg)
+            product_type = org.ensure_product_type()
+            Product_Type_Member.objects.get_or_create(
+                product_type=product_type,
+                user=users_by_username[spec.username],
+                defaults={"role": roles[spec.role_name]},
+            )
+
+    def _ensure_demo_projects(self, *, organizations: list[Organization], users_by_username: dict[str, object]) -> None:
+        organizations_by_name = {org.name: org for org in organizations}
+        first_maintainer_username = next(s.username for s in DEMO_USERS if s.role_name == "Maintainer")
+        default_reporter = users_by_username[first_maintainer_username]
         now = timezone.now()
         today = timezone.localdate()
         sla_config, _ = SLA_Configuration.objects.get_or_create(name="Demo SLA")

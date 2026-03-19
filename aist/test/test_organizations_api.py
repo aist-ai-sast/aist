@@ -77,8 +77,11 @@ class OrganizationCreateAPITests(TestCase):
         )
         Product_Type_Member.objects.create(product_type=pt, user=regular_user, role=role_maintainer)
 
-        visible_org = Organization.objects.create(name="Visible Org")
-        hidden_org = Organization.objects.create(name="Hidden Org")
+        visible_org = Organization.objects.create(name="Visible Org", product_type=pt)
+        hidden_org = Organization.objects.create(
+            name="Hidden Org",
+            product_type=Product_Type.objects.create(name="Hidden PT"),
+        )
         AISTProject.objects.create(
             product=product,
             organization=visible_org,

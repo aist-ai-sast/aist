@@ -1,6 +1,7 @@
+import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { getRoute } from "../lib/routes";
-import { usePermissions } from "../lib/permissions";
+import PermissionGate from "./PermissionGate";
 import { ObjectIcons } from "./ObjectIcons";
 
 type SidebarProps = {
@@ -8,8 +9,28 @@ type SidebarProps = {
   onToggle: () => void;
 };
 
+const NAV_LINK_CLASS = (collapsed: boolean) =>
+  ({ isActive }: { isActive: boolean }) =>
+    [
+      "rounded-xl px-3 py-2 transition flex items-center justify-center gap-2",
+      collapsed
+        ? "lg:w-10 lg:px-0 lg:py-3 lg:justify-center"
+        : "lg:px-3 lg:py-3 lg:justify-start lg:text-left lg:w-full",
+      isActive
+        ? "bg-night-600 text-white"
+        : "text-slate-400 hover:text-white hover:bg-night-700",
+    ].join(" ");
+
+function NavItem({ to, label, icon, collapsed }: { to: string; label: string; icon: ReactNode; collapsed: boolean }) {
+  return (
+    <NavLink to={to} className={NAV_LINK_CLASS(collapsed)}>
+      <span className="text-slate-400">{icon}</span>
+      {collapsed ? null : <span className="hidden lg:inline">{label}</span>}
+    </NavLink>
+  );
+}
+
 export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
-  const permissions = usePermissions();
   const baseLinks = [
     { to: getRoute("ui_dashboard_path"), label: "Dashboard", icon: ObjectIcons.dashboard },
     { to: `${getRoute("ui_findings_path")}?active=true`, label: "Findings", icon: ObjectIcons.findings },
@@ -17,13 +38,9 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     { to: getRoute("ui_pipelines_path"), label: "Pipelines", icon: ObjectIcons.pipelines },
     { to: getRoute("ui_calendar_path"), label: "Calendar", icon: ObjectIcons.calendar },
   ];
-  const adminLinks = permissions.canManageAccess
-    ? [{ to: getRoute("ui_org_integrations_path"), label: "Integrations", icon: ObjectIcons.integrations }]
-    : [];
   const accountLinks = [
     { to: getRoute("ui_settings_path"), label: "My Account", icon: ObjectIcons.settings },
   ];
-  const links = [...baseLinks, ...adminLinks, ...accountLinks];
   return (
     <aside
       className={[
@@ -80,25 +97,19 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
           collapsed ? "lg:items-center lg:mt-8" : "lg:mt-8",
         ].join(" ")}
       >
-        {links.map((link) => (
-          <NavLink
-            key={link.to}
-            to={link.to}
-            className={({ isActive }) =>
-              [
-                "rounded-xl px-3 py-2 transition flex items-center justify-center gap-2",
-                collapsed
-                  ? "lg:w-10 lg:px-0 lg:py-3 lg:justify-center"
-                  : "lg:px-3 lg:py-3 lg:justify-start lg:text-left lg:w-full",
-                isActive
-                  ? "bg-night-600 text-white"
-                  : "text-slate-400 hover:text-white hover:bg-night-700",
-              ].join(" ")
-            }
-          >
-            <span className="text-slate-400">{link.icon}</span>
-            {collapsed ? null : <span className="hidden lg:inline">{link.label}</span>}
-          </NavLink>
+        {baseLinks.map((link) => (
+          <NavItem key={link.to} to={link.to} label={link.label} icon={link.icon} collapsed={collapsed} />
+        ))}
+        <PermissionGate action="manage_access">
+          <NavItem
+            to={getRoute("ui_org_integrations_path")}
+            label="Integrations"
+            icon={ObjectIcons.integrations}
+            collapsed={collapsed}
+          />
+        </PermissionGate>
+        {accountLinks.map((link) => (
+          <NavItem key={link.to} to={link.to} label={link.label} icon={link.icon} collapsed={collapsed} />
         ))}
         <div className="mt-auto" />
       </nav>

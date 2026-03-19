@@ -63,9 +63,9 @@ class GithubEventsTests(TestCase):
         binding = ScmGithubBinding.objects.get(scm=self.repo)
         self.assertEqual(binding.installation_id, 777)
 
-    @patch("aist.github_events.run_sast_pipeline")
-    def test_pull_request_event_creates_pipeline_for_linked_repository(self, run_task):
-        run_task.delay.return_value = SimpleNamespace(id="task-1")
+    @patch("aist.github_events.trigger_pipeline_for_pr")
+    def test_pull_request_event_creates_pipeline_for_linked_repository(self, mock_trigger):
+        mock_trigger.return_value = SimpleNamespace(id="pipe-1", run_task_id="task-1")
 
         event = SimpleNamespace(
             event="pull_request",
@@ -89,10 +89,10 @@ class GithubEventsTests(TestCase):
 
         self.assertTrue(AISTProjectVersion.objects.filter(project=self.project, version="abcdef1234567890").exists())
         self.assertTrue(PullRequest.objects.filter(repository=self.repo, pr_number=42).exists())
-        run_task.delay.assert_called_once()
+        mock_trigger.assert_called_once()
 
-    @patch("aist.github_events.run_sast_pipeline")
-    def test_pull_request_event_skips_when_repository_not_imported(self, run_task):
+    @patch("aist.github_events.trigger_pipeline_for_pr")
+    def test_pull_request_event_skips_when_repository_not_imported(self, mock_trigger):
         event = SimpleNamespace(
             event="pull_request",
             data={
@@ -112,4 +112,4 @@ class GithubEventsTests(TestCase):
 
         async_to_sync(on_pr_event)(event, gh=None)
 
-        run_task.delay.assert_not_called()
+        mock_trigger.assert_not_called()

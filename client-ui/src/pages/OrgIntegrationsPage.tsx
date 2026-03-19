@@ -1,6 +1,5 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 
-import { useAccountProfile } from "../lib/account";
 import { toUserMessage } from "../lib/api";
 import {
   useCreateOrgIntegration,
@@ -16,8 +15,9 @@ import {
   type OrgIntegrationPayload,
   type WorkItemProviderPayload,
 } from "../lib/mutations";
-import { usePermissions } from "../lib/permissions";
+import PermissionGate from "../components/PermissionGate";
 import {
+  useManageableOrgs,
   useOrgIntegrations,
   useWorkItemProviders,
   useProjectIntegrationOverrides,
@@ -984,13 +984,11 @@ function ProjectOverridesSection({ orgId }: { orgId: number }) {
 // ---------------------------------------------------------------------------
 
 export default function OrgIntegrationsPage() {
-  const permissions = usePermissions();
-  const accountQuery = useAccountProfile();
+  const manageableOrgsQuery = useManageableOrgs();
 
-  const memberships = accountQuery.data?.organization_memberships ?? [];
-  const orgIds = memberships.map((m: { organization_id: number }) => m.organization_id);
+  const orgs = manageableOrgsQuery.data ?? [];
 
-  if (accountQuery.isLoading) {
+  if (manageableOrgsQuery.isLoading) {
     return (
       <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-300">
         Loading...
@@ -998,47 +996,42 @@ export default function OrgIntegrationsPage() {
     );
   }
 
-  if (!permissions.canManageAccess) {
-    return (
-      <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-400">
-        You need Maintainer or Owner role to manage integrations.
-      </div>
-    );
-  }
-
-  if (orgIds.length === 0) {
-    return (
-      <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-400">
-        No organization found. Contact your administrator.
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-white">Integrations</h1>
-        <p className="mt-1 text-xs text-slate-400">
-          Manage org-level credentials for source control, notifications, and issue trackers.
-        </p>
-      </div>
-
-      {orgIds.map((orgId: number) => {
-        const membership = memberships.find((m: { organization_id: number; organization_name?: string }) => m.organization_id === orgId);
-        const orgName = membership?.organization_name;
-        return (
-          <div key={orgId} className="space-y-4">
-            {orgIds.length > 1 && (
-              <div className="text-xs uppercase tracking-[0.2em] text-slate-400 pt-2">
-                {orgName ?? `Organization #${orgId}`}
-              </div>
-            )}
-            <OrgIntegrationsSection orgId={orgId} />
-            <WorkItemProvidersSection orgId={orgId} />
-            <ProjectOverridesSection orgId={orgId} />
+    <PermissionGate
+      action="manage_access"
+      fallback={(
+        <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-400">
+          You need Maintainer or Owner role to manage integrations.
+        </div>
+      )}
+    >
+      {orgs.length === 0 ? (
+        <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-400">
+          No organization found. Contact your administrator.
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div>
+            <h1 className="text-2xl font-semibold text-white">Integrations</h1>
+            <p className="mt-1 text-xs text-slate-400">
+              Manage org-level credentials for source control, notifications, and issue trackers.
+            </p>
           </div>
-        );
-      })}
-    </div>
+
+          {orgs.map((org) => (
+            <div key={org.id} className="space-y-4">
+              {orgs.length > 1 && (
+                <div className="text-xs uppercase tracking-[0.2em] text-slate-400 pt-2">
+                  {org.name}
+                </div>
+              )}
+              <OrgIntegrationsSection orgId={org.id} />
+              <WorkItemProvidersSection orgId={org.id} />
+              <ProjectOverridesSection orgId={org.id} />
+            </div>
+          ))}
+        </div>
+      )}
+    </PermissionGate>
   );
 }

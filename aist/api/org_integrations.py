@@ -98,7 +98,7 @@ class OrgIntegrationListCreateAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
     authorized_queryset = AuthorizedQuerysetSpec(
         getter=get_authorized_org_integrations,
-        permission=Permissions.Product_View,
+        permission=Permissions.Product_Type_Manage_Members,
     )
 
     @extend_schema(
@@ -108,7 +108,11 @@ class OrgIntegrationListCreateAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: OrgIntegrationSerializer(many=True)},
     )
     def get(self, request, org_id: int):
-        qs = self.get_authorized_queryset().filter(organization_id=org_id)
+        org = get_object_or_404(
+            get_authorized_aist_organizations(Permissions.Product_Type_Manage_Members, user=request.user),
+            pk=org_id,
+        )
+        qs = org.integrations.all()
         return Response(OrgIntegrationSerializer(qs, many=True).data)
 
     @extend_schema(
@@ -124,7 +128,7 @@ class OrgIntegrationListCreateAPI(AuthorizedQuerySetMixin, APIView):
     )
     def post(self, request, org_id: int):
         org = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_View, user=request.user),
+            get_authorized_aist_organizations(Permissions.Product_Type_Manage_Members, user=request.user),
             pk=org_id,
         )
         data = {**request.data, "organization": org.pk}
@@ -145,7 +149,7 @@ class OrgIntegrationDetailAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
     authorized_queryset = AuthorizedQuerysetSpec(
         getter=get_authorized_org_integrations,
-        permission=Permissions.Product_View,
+        permission=Permissions.Product_Type_Manage_Members,
     )
 
     def _get_integration(self, integration_id: int) -> OrgIntegration:
@@ -194,7 +198,7 @@ class OrgIntegrationValidateAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
     authorized_queryset = AuthorizedQuerysetSpec(
         getter=get_authorized_org_integrations,
-        permission=Permissions.Product_View,
+        permission=Permissions.Product_Type_Manage_Members,
     )
 
     @extend_schema(

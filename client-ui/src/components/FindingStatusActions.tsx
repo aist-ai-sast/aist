@@ -214,7 +214,7 @@ export default function FindingStatusActions({
 
   return (
     <div>
-      <PermissionGate action="enable" productId={permissionProductId}>
+      <PermissionGate action="enable">
         <div className="flex flex-wrap items-end gap-2">
           {/* ── Active finding: Close + Risk Approval ── */}
           {finding.active ? (

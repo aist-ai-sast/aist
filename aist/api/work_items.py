@@ -219,7 +219,11 @@ class WorkItemProviderListCreateAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: WorkItemProviderSerializer(many=True)},
     )
     def get(self, request, org_id: int):
-        qs = self.get_authorized_queryset().filter(organization_id=org_id)
+        org = get_object_or_404(
+            get_authorized_aist_organizations(Permissions.Product_View, user=request.user),
+            pk=org_id,
+        )
+        qs = org.work_item_providers.all()
         return Response(WorkItemProviderSerializer(qs, many=True).data)
 
     @extend_schema(
@@ -237,7 +241,7 @@ class WorkItemProviderListCreateAPI(AuthorizedQuerySetMixin, APIView):
     )
     def post(self, request, org_id: int):
         org = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_View, user=request.user),
+            get_authorized_aist_organizations(Permissions.Product_Type_Manage_Members, user=request.user),
             pk=org_id,
         )
         data = {**request.data, "organization": org.pk}
@@ -258,7 +262,7 @@ class WorkItemProviderDetailAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
     authorized_queryset = AuthorizedQuerysetSpec(
         getter=get_authorized_work_item_providers,
-        permission=Permissions.Product_View,
+        permission=Permissions.Product_Type_Manage_Members,
     )
 
     def _get_provider(self, provider_id: int) -> WorkItemProvider:
@@ -292,8 +296,7 @@ class WorkItemProviderDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={204: None},
     )
     def delete(self, request, provider_id: int):
-        provider = self._get_provider(provider_id)
-        provider.delete()
+        self._get_provider(provider_id).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -309,7 +312,7 @@ class WorkItemProviderValidateAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
     authorized_queryset = AuthorizedQuerysetSpec(
         getter=get_authorized_work_item_providers,
-        permission=Permissions.Product_View,
+        permission=Permissions.Product_Type_Manage_Members,
     )
 
     @extend_schema(
@@ -348,7 +351,7 @@ class WorkItemProviderSyncAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
     authorized_queryset = AuthorizedQuerysetSpec(
         getter=get_authorized_work_item_providers,
-        permission=Permissions.Product_View,
+        permission=Permissions.Product_Type_Manage_Members,
     )
 
     @extend_schema(
@@ -417,7 +420,7 @@ class FindingWorkItemListCreateAPI(AuthorizedQuerySetMixin, APIView):
         provider_id = data.get("provider")
         if provider_id:
             get_object_or_404(
-                get_authorized_work_item_providers(Permissions.Product_View, user=request.user),
+                get_authorized_work_item_providers(Permissions.Product_Type_Manage_Members, user=request.user),
                 pk=provider_id,
             )
         elif data.get("external_url"):
@@ -427,7 +430,10 @@ class FindingWorkItemListCreateAPI(AuthorizedQuerySetMixin, APIView):
             except Exception:
                 url_host = ""
             if url_host:
-                providers_qs = get_authorized_work_item_providers(Permissions.Product_View, user=request.user)
+                providers_qs = get_authorized_work_item_providers(
+                    Permissions.Product_Type_Manage_Members,
+                    user=request.user,
+                )
                 for provider in providers_qs.exclude(base_url=""):
                     try:
                         provider_host = urlparse(provider.base_url).netloc.lower()

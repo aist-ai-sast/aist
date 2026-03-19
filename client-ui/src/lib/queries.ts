@@ -962,6 +962,21 @@ export function useFindingTimeline(findingId?: number) {
   });
 }
 
+export type ManageableOrg = {
+  id: number;
+  name: string;
+};
+
+export function useManageableOrgs() {
+  return useQuery({
+    queryKey: ["manageable-orgs"],
+    queryFn: async () => {
+      const payload = await fetchJson<ListResponse<ManageableOrg>>(getRoute("manageable_orgs_url"));
+      return payload.results ?? [];
+    },
+  });
+}
+
 export type OrgIntegration = {
   id: number;
   organization: number;

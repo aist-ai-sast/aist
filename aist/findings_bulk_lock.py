@@ -47,10 +47,15 @@ def acquire_bulk_locks(
     acquired: list[int] = []
     locked: list[int] = []
     for finding_id in normalize_finding_ids(finding_ids):
-        if cache.add(_lock_key(finding_id), owner_token, timeout=timeout):
+        try:
+            if cache.add(_lock_key(finding_id), owner_token, timeout=timeout):
+                acquired.append(finding_id)
+            else:
+                locked.append(finding_id)
+        except Exception:
+            # Cache unavailable: treat as acquired so the UX guard does not block the
+            # operation. Data integrity is guaranteed at the DB level via select_for_update.
             acquired.append(finding_id)
-        else:
-            locked.append(finding_id)
     return acquired, locked
 
 
@@ -70,7 +75,10 @@ def get_locked_finding_ids(finding_ids: list[int]) -> set[int]:
     if not normalized:
         return set()
     keys = [_lock_key(finding_id) for finding_id in normalized]
-    values = cache.get_many(keys)
+    try:
+        values = cache.get_many(keys)
+    except Exception:
+        return set()
     return {
         finding_id
         for finding_id, key in zip(normalized, keys, strict=False)

@@ -203,6 +203,22 @@ def create_pipeline_object(aist_project, project_version, pull_request):
     )
 
 
+def trigger_pipeline_for_pr(project, project_version, pull_request, params: dict) -> AISTPipeline:
+    """
+    Create an AISTPipeline for a PR event and dispatch run_sast_pipeline.
+
+    Encapsulates pipeline creation + Celery dispatch so the GitHub event handler
+    remains a thin integration layer without direct knowledge of task routing.
+    """
+    from aist.tasks.pipeline import run_sast_pipeline  # noqa: PLC0415
+
+    pipeline = create_pipeline_object(project, project_version, pull_request)
+    async_result = run_sast_pipeline.delay(pipeline.id, params)
+    pipeline.run_task_id = async_result.id
+    pipeline.save(update_fields=["run_task_id"])
+    return pipeline
+
+
 def _revoke_task(task_id: str | None, *, terminate: bool = True) -> None:
     """Safely revoke a Celery task by its ID if it is still running."""
     if not task_id:

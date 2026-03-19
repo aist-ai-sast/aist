@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from django.db import transaction
+from django.db.models import Q
+from django.shortcuts import get_object_or_404
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Product, SLA_Configuration
@@ -453,13 +455,12 @@ class AISTProjectScriptDetailAPI(AuthorizedQuerySetMixin, APIView):
     )
     def get(self, request, project_id: int, script_id: int) -> Response:
         project = self.get_authorized_object(id=project_id)
-        try:
-            script = AISTProjectScript.objects.select_related("created_by").get(pk=script_id)
-        except AISTProjectScript.DoesNotExist:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
-        # Authorise: must be this project's own revision or the shared singleton.
-        if script.project_id is not None and script.project_id != project.id:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        script = get_object_or_404(
+            AISTProjectScript.objects.select_related("created_by").filter(
+                Q(project_id=None) | Q(project_id=project.id),
+            ),
+            pk=script_id,
+        )
         return Response(AISTProjectScriptContentSerializer(script).data)
 
 

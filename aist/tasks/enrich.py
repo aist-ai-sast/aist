@@ -16,6 +16,26 @@ from aist.utils.pipeline import set_pipeline_status
 logger = logging.getLogger(__name__)
 
 
+@shared_task(name="aist.on_enrich_chord_error")
+def on_enrich_chord_error(*args, pipeline_id: str, **kwargs) -> None:
+    """
+    Celery errback invoked when the enrich chord fails at the infrastructure level
+    (e.g. worker crash, task revocation). Transitions the pipeline to a degraded
+    terminal state so it does not remain stuck in FINDING_POSTPROCESSING.
+
+    Note: individual finding failures are handled inside enrich_finding_batch and
+    never propagate as exceptions, so this handler covers only catastrophic failures.
+    """
+    from aist.utils.pipeline import finish_pipeline  # noqa: PLC0415
+
+    logger.error(
+        "Enrich chord failed for pipeline=%s; marking pipeline as degraded. args=%s",
+        pipeline_id,
+        args,
+    )
+    finish_pipeline(pipeline_id, degraded=True)
+
+
 @shared_task(bind=True)
 def report_enrich_done(self, result: int, pipeline_id: str, async_user=None):
     redis = get_redis()
@@ -199,4 +219,5 @@ def make_enrich_chord(*, pipeline_id: str):
         for chunk in chunks
     ]
     body = after_upload_enrich_and_watch.s(pipeline_id, test_ids, log_level)
-    return chord(header, body)
+    errback = on_enrich_chord_error.s(pipeline_id=pipeline_id)
+    return chord(header, body).on_error(errback)

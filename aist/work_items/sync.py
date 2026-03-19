@@ -112,19 +112,3 @@ def sync_provider(provider: WorkItemProvider) -> ProviderSyncResult:
         result.failed,
     )
     return result
-
-
-def sync_all_active_providers() -> list[ProviderSyncResult]:
-    """
-    Sync all active providers that have sync_enabled=True.
-
-    Called by the Celery beat task. Returns one result per provider.
-    """
-    providers = WorkItemProvider.objects.filter(sync_enabled=True, is_active=True)
-    results = []
-    for provider in providers:
-        try:
-            results.append(sync_provider(provider))
-        except Exception:
-            logger.exception("Unexpected error syncing provider[%s]", provider.pk)
-    return results

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from django.contrib.auth import get_user_model
 from django.urls import reverse
+from dojo.authorization.roles_permissions import Roles
+from dojo.models import Product_Type_Member, Role
+from rest_framework.test import APIClient
 
 from aist.models import OrgIntegration, OrgIntegrationType, ProjectIntegrationOverride
 from aist.test.test_api import AISTApiBase
@@ -18,6 +22,11 @@ class OrgIntegrationListCreateAPITests(AISTApiBase):
 
         self.org_prod_type = Product_Type.objects.create(name="Org PT")
         self.org = Organization.objects.create(name="Test Org", product_type=self.org_prod_type)
+        Product_Type_Member.objects.create(
+            product_type=self.org_prod_type,
+            user=self.user,
+            role=self.role_maintainer,
+        )
         # Link project to org
         self.project.organization = self.org
         self.project.save(update_fields=["organization"])
@@ -109,6 +118,11 @@ class OrgIntegrationDetailAPITests(AISTApiBase):
 
         self.org_prod_type = Product_Type.objects.create(name="Org PT2")
         self.org = Organization.objects.create(name="Detail Org", product_type=self.org_prod_type)
+        Product_Type_Member.objects.create(
+            product_type=self.org_prod_type,
+            user=self.user,
+            role=self.role_maintainer,
+        )
         self.project.organization = self.org
         self.project.save(update_fields=["organization"])
         self.integration = OrgIntegration.objects.create(
@@ -182,6 +196,11 @@ class OrgIntegrationValidateAPITests(AISTApiBase):
             name="Validate Org",
             product_type=Product_Type.objects.create(name="Validate PT"),
         )
+        Product_Type_Member.objects.create(
+            product_type=self.org.product_type,
+            user=self.user,
+            role=self.role_maintainer,
+        )
         self.project.organization = self.org
         self.project.save(update_fields=["organization"])
 
@@ -217,6 +236,11 @@ class ProjectIntegrationOverrideAPITests(AISTApiBase):
         self.org = Organization.objects.create(
             name="Override Org",
             product_type=Product_Type.objects.create(name="Override PT"),
+        )
+        Product_Type_Member.objects.create(
+            product_type=self.org.product_type,
+            user=self.user,
+            role=self.role_maintainer,
         )
         self.project.organization = self.org
         self.project.save(update_fields=["organization"])
@@ -278,6 +302,176 @@ class ProjectIntegrationOverrideAPITests(AISTApiBase):
         )
         resp = self.client.put(url, {"config_override": {}}, format="json")
         self.assertEqual(resp.status_code, 400)
+
+
+class CrossOrgDataLeakTests(AISTApiBase):
+
+    """
+    User from Org A must never see integrations of Org B,
+    even if a project in Org B happens to have a product in Org A's product_type.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from dojo.models import Product, Product_Type  # noqa: PLC0415
+
+        from aist.models import AISTProject, Organization  # noqa: PLC0415
+
+        # Org A — user has Maintainer membership (via AISTApiBase.prod_type)
+        self.org_a = Organization.objects.create(
+            name="Org A", product_type=self.prod_type,
+        )
+
+        # Org B — completely separate product_type, user has NO membership
+        self.prod_type_b = Product_Type.objects.create(name="PT B")
+        self.org_b = Organization.objects.create(
+            name="Org B", product_type=self.prod_type_b,
+        )
+
+        # Create an integration in Org B
+        self.org_b_integration = OrgIntegration.objects.create(
+            organization=self.org_b,
+            integration_type="SLACK",
+            name="Org B Slack",
+            config={"default_channel": "#b"},
+        )
+
+        # Anomaly: a product in Prod_Type A is used by a project assigned to Org B
+        product_in_a = Product.objects.create(
+            name="Leaked Product",
+            description="",
+            prod_type=self.prod_type,  # Org A's product_type!
+            sla_configuration_id=self.sla.id,
+        )
+        AISTProject.objects.create(
+            product=product_in_a,
+            organization=self.org_b,  # but assigned to Org B
+            supported_languages=[],
+            compilable=False,
+            profile={},
+        )
+
+    def test_user_cannot_list_org_b_integrations(self):
+        """User from Org A must not see Org B's integrations via the org B URL."""
+        url = reverse("aist_api:org_integration_list_create", kwargs={"org_id": self.org_b.pk})
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_user_cannot_access_org_b_integration_detail(self):
+        url = reverse("aist_api:org_integration_detail", kwargs={"integration_id": self.org_b_integration.pk})
+        self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_user_cannot_create_integration_in_org_b(self):
+        url = reverse("aist_api:org_integration_list_create", kwargs={"org_id": self.org_b.pk})
+        resp = self.client.post(url, {"integration_type": "GITHUB", "name": "Injected", "config": {}}, format="json")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_manageable_orgs_endpoint_excludes_org_b(self):
+        """GET /organizations/?manage=true must not return Org B."""
+        url = reverse("aist_api:organization_create") + "?manage=true"
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        results = payload.get("results", payload)
+        ids = [o["id"] for o in results]
+        self.assertNotIn(self.org_b.pk, ids)
+        self.assertIn(self.org_a.pk, ids)
+
+
+class OrgIntegrationReaderAccessTests(AISTApiBase):
+
+    """Reader-role user must not be able to write integrations (POST/PATCH/DELETE)."""
+
+    def setUp(self):
+        super().setUp()
+        from dojo.models import Product_Type  # noqa: PLC0415
+
+        from aist.models import Organization  # noqa: PLC0415
+
+        self.org_prod_type = Product_Type.objects.create(name="Reader Test PT")
+        self.org = Organization.objects.create(name="Reader Test Org", product_type=self.org_prod_type)
+        self.project.organization = self.org
+        self.project.save(update_fields=["organization"])
+
+        # Give the base (Maintainer) user access to this org too so integrations exist
+        Product_Type_Member.objects.get_or_create(
+            product_type=self.org_prod_type,
+            user=self.user,
+            defaults={"role": self.role_maintainer},
+        )
+
+        # Create a separate Reader user with only Reader role on this org
+        role_reader, _ = Role.objects.get_or_create(
+            id=Roles.Reader,
+            defaults={"name": "Reader"},
+        )
+        self.reader_user = get_user_model().objects.create_user(
+            username="reader_tester",
+            email="reader@example.com",
+            password="pass",  # noqa: S106
+        )
+        Product_Type_Member.objects.create(
+            product_type=self.org_prod_type,
+            user=self.reader_user,
+            role=role_reader,
+        )
+        self.reader_client = APIClient()
+        self.reader_client.force_authenticate(user=self.reader_user)
+
+        self.list_url = reverse("aist_api:org_integration_list_create", kwargs={"org_id": self.org.pk})
+        self.integration = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type="SLACK",
+            name="Shared Slack",
+            config={"default_channel": "#all"},
+        )
+        self.detail_url = reverse(
+            "aist_api:org_integration_detail",
+            kwargs={"integration_id": self.integration.pk},
+        )
+
+    def test_reader_cannot_list_integrations(self):
+        """Reader must not be able to open org integrations even for their own org."""
+        resp = self.reader_client.get(self.list_url)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_reader_cannot_get_integration_detail(self):
+        resp = self.reader_client.get(self.detail_url)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_reader_cannot_create_integration(self):
+        resp = self.reader_client.post(self.list_url, {
+            "integration_type": "GITLAB",
+            "name": "Smuggled GitLab",
+            "config": {"base_url": "https://evil.example.com"},
+        }, format="json")
+        self.assertEqual(resp.status_code, 404)
+        self.assertFalse(OrgIntegration.objects.filter(name="Smuggled GitLab").exists())
+
+    def test_reader_cannot_patch_integration(self):
+        resp = self.reader_client.patch(self.detail_url, {"name": "Hijacked"}, format="json")
+        self.assertEqual(resp.status_code, 404)
+        self.integration.refresh_from_db()
+        self.assertEqual(self.integration.name, "Shared Slack")
+
+    def test_reader_cannot_delete_integration(self):
+        resp = self.reader_client.delete(self.detail_url)
+        self.assertEqual(resp.status_code, 404)
+        self.assertTrue(OrgIntegration.objects.filter(pk=self.integration.pk).exists())
+
+    def test_reader_cannot_validate_integration(self):
+        url = reverse("aist_api:org_integration_validate", kwargs={"integration_id": self.integration.pk})
+        resp = self.reader_client.post(url)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_maintainer_can_still_create_integration(self):
+        """Regression: existing Maintainer user must not lose write access."""
+        resp = self.client.post(self.list_url, {
+            "integration_type": "GITHUB",
+            "name": "Maintainer GitHub",
+            "config": {},
+        }, format="json")
+        self.assertEqual(resp.status_code, 201)
 
 
 class IntegrationResolverTests(AISTApiBase):

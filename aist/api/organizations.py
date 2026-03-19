@@ -43,7 +43,9 @@ class OrganizationCreateAPI(generics.ListCreateAPIView):
     queryset = Organization.objects.all()
 
     def get_queryset(self):
-        return get_authorized_aist_organizations(Permissions.Product_View, user=self.request.user).order_by("name")
+        manage = self.request.query_params.get("manage", "").lower() == "true"
+        permission = Permissions.Product_Type_Manage_Members if manage else Permissions.Product_View
+        return get_authorized_aist_organizations(permission, user=self.request.user).order_by("name")
 
     @extend_schema(
         tags=[AISTApiTag.ORGANIZATIONS.value],

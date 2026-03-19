@@ -312,7 +312,7 @@ export default function FindingDetailTabs({
 
       {tab === "notes" ? (
         <div className="mt-4 space-y-3">
-          <PermissionGate action="comment" productId={permissionProductId}>
+          <PermissionGate action="comment">
             <div className="space-y-2">
               <textarea
                 className="w-full rounded-xl border border-night-500 bg-night-900 px-3 py-2 text-xs text-slate-200 outline-none focus-visible:outline-none focus-visible:ring-0 focus-visible:border-brand-600"

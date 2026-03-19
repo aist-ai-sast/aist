@@ -156,6 +156,13 @@ SINGLE_USER_SESSION = env.bool("DD_SINGLE_USER_SESSION", False)  # noqa: F405
 # Keep regular logout local to the current browser session.
 LOGOUT_ALL_SESSIONS = env.bool("DD_LOGOUT_ALL_SESSIONS", False)  # noqa: F405
 
+# The SPA reads the CSRF cookie via JS to send X-CSRFToken on every mutating
+# request.  DefectDojo defaults this to True (server-rendered UI doesn't need
+# JS-readable cookies), but that breaks session-based SPAs: after login(),
+# Django rotates the CSRF token, the new cookie value is unreadable by JS, so
+# every subsequent POST (including logout) fails with 403.
+CSRF_COOKIE_HTTPONLY = False
+
 # Explicitly control SMTP TLS/SSL from env. In this fork DD_EMAIL_URL parsing does
 # not reliably map TLS flag into EMAIL_USE_TLS, so keep a deterministic override.
 EMAIL_USE_TLS = env.bool("DD_EMAIL_USE_TLS", default=bool(globals().get("EMAIL_USE_TLS", False)))  # noqa: F405

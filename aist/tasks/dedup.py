@@ -19,7 +19,7 @@ from aist.models import (
     ProcessedFinding,
     TestDeduplicationProgress,
 )
-from aist.utils.pipeline import finish_pipeline, is_terminal_pipeline_status, set_pipeline_status
+from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +92,21 @@ def _release_pipeline_after_dedup(pipeline_id: str) -> None:
     """
     Atomically transition the pipeline to FINDING_POSTPROCESSING and schedule the
     enrich chord via on_commit so the dispatch only happens if the status change commits.
+
+    Idempotent: if the pipeline has already moved past WAITING_DEDUPLICATION_TO_FINISH
+    (e.g. a concurrent watch_deduplication instance already released it), this is a no-op.
     """
     from aist.tasks.enrich import make_enrich_chord  # noqa: PLC0415
 
     with transaction.atomic():
         pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        if pipeline.status != AISTStatus.WAITING_DEDUPLICATION_TO_FINISH:
+            logger.debug(
+                "Pipeline %s already past dedup status (%s); skipping release.",
+                pipeline_id,
+                pipeline.status,
+            )
+            return
         set_pipeline_status(pipeline, AISTStatus.FINDING_POSTPROCESSING)
         transaction.on_commit(lambda: make_enrich_chord(pipeline_id=pipeline_id).apply_async())
 
@@ -254,8 +264,11 @@ def watch_deduplication(self, pipeline_id: str, log_level, async_user=None) -> N
         while True:
             # Reload pipeline to capture any manual status change
             pipeline.refresh_from_db()
-            # Exit early if user or another task finished the pipeline
-            if is_terminal_pipeline_status(pipeline.status):
+            # Exit early if status moved away from WAITING_DEDUPLICATION_TO_FINISH.
+            # This handles both terminal statuses (user stopped the pipeline) and the
+            # case where a concurrent watch_deduplication instance already called
+            # _release_pipeline_after_dedup and transitioned to FINDING_POSTPROCESSING.
+            if pipeline.status != AISTStatus.WAITING_DEDUPLICATION_TO_FINISH:
                 return
             now = timezone.now()
             deadlines = _dedup_deadlines(now)

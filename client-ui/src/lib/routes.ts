@@ -44,6 +44,7 @@ type RouteMap = {
   ui_search_path: string;
   ui_settings_path: string;
   ui_org_integrations_path: string;
+  manageable_orgs_url: string;
   org_integrations_url: string;
   org_integration_detail_url: string;
   org_integration_validate_url: string;
