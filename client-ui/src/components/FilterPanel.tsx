@@ -32,8 +32,8 @@ type FilterPanelProps = {
   onTagsChange: (value: string[]) => void;
   selectedAiResponse: string;
   onAiResponseChange: (value: string) => void;
-  selectedHasWorkItem: string;
-  onHasWorkItemChange: (value: string) => void;
+  selectedWorkItemStatus: string;
+  onWorkItemStatusChange: (value: string) => void;
   onClearAll: () => void;
 };
 
@@ -64,8 +64,8 @@ export default function FilterPanel({
   onTagsChange,
   selectedAiResponse,
   onAiResponseChange,
-  selectedHasWorkItem,
-  onHasWorkItemChange,
+  selectedWorkItemStatus,
+  onWorkItemStatusChange,
   onClearAll,
 }: FilterPanelProps) {
   return (
@@ -258,19 +258,24 @@ export default function FilterPanel({
         <div>
           <div className="mb-1 flex items-center justify-between gap-2">
             <label className="text-xs text-slate-400">Work Item</label>
-            {selectedHasWorkItem !== "all" ? (
-              <FilterClearButton onClick={() => onHasWorkItemChange("all")} />
+            {selectedWorkItemStatus !== "all" ? (
+              <FilterClearButton onClick={() => onWorkItemStatusChange("all")} />
             ) : null}
           </div>
           <SelectField
             label="Work Item"
             hideLabel
-            value={selectedHasWorkItem}
-            onChange={onHasWorkItemChange}
+            value={selectedWorkItemStatus}
+            onChange={onWorkItemStatusChange}
             options={[
               { value: "all", label: "All" },
-              { value: "yes", label: "Has work item" },
-              { value: "no", label: "No work item" },
+              { value: "any", label: "Has work item" },
+              { value: "none", label: "No work item" },
+              { value: "OPEN", label: "Open" },
+              { value: "IN_PROGRESS", label: "In Progress" },
+              { value: "DONE", label: "Done" },
+              { value: "CANCELLED", label: "Cancelled / Won't Fix" },
+              { value: "UNKNOWN", label: "Unknown" },
             ]}
           />
         </div>

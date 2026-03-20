@@ -45,8 +45,30 @@ describe("parseFindingsFiltersFromSearch", () => {
       status: "Non-Active",
       risk: ["risk_accepted", "under_review"],
       aiStatus: "ai_tp",
-      hasWorkItem: "all",
+      workItemStatus: "all",
     });
+  });
+});
+
+describe("parseFindingsFiltersFromSearch — work_item_status", () => {
+  it("parses work_item_status directly", () => {
+    const params = new URLSearchParams({ work_item_status: "OPEN" });
+    expect(parseFindingsFiltersFromSearch(params).workItemStatus).toBe("OPEN");
+  });
+
+  it("maps legacy has_work_item=yes to any", () => {
+    const params = new URLSearchParams({ has_work_item: "yes" });
+    expect(parseFindingsFiltersFromSearch(params).workItemStatus).toBe("any");
+  });
+
+  it("maps legacy has_work_item=no to none", () => {
+    const params = new URLSearchParams({ has_work_item: "no" });
+    expect(parseFindingsFiltersFromSearch(params).workItemStatus).toBe("none");
+  });
+
+  it("defaults to all when param is absent", () => {
+    const params = new URLSearchParams({});
+    expect(parseFindingsFiltersFromSearch(params).workItemStatus).toBe("all");
   });
 });
 
@@ -99,6 +121,7 @@ describe("toFindingsApiFilters", () => {
         status: "Non-Active",
         risk: ["mitigated"],
         aiStatus: "ai_fp",
+        workItemStatus: "all",
       },
       { limit: 25, offset: 50, ordering: "-severity" },
     );
@@ -118,7 +141,7 @@ describe("toFindingsApiFilters", () => {
       projectVersion: "main",
       file: "src/a.ts",
       aiStatus: "ai_fp",
-      hasWorkItem: undefined,
+      workItemStatus: undefined,
       severities: ["High"],
       status: "disabled",
       riskStates: ["mitigated"],

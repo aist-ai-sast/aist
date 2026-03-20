@@ -21,7 +21,7 @@ export type FindingsFilterUrlState = {
   status: "All" | "Active" | "Non-Active";
   risk: RiskState[];
   aiStatus: string;
-  hasWorkItem: "all" | "yes" | "no";
+  workItemStatus: "all" | "none" | "any" | "OPEN" | "IN_PROGRESS" | "DONE" | "CANCELLED" | "UNKNOWN";
 };
 
 export type FindingStatusFilter = FindingsFilterUrlState["status"];
@@ -44,7 +44,7 @@ export const DEFAULT_FINDINGS_FILTERS: FindingsFilterUrlState = {
   status: "All",
   risk: [],
   aiStatus: "All",
-  hasWorkItem: "all",
+  workItemStatus: "all",
 };
 
 const FINDING_STATUS_VALUES = new Set<FindingStatusFilter>(["All", "Active", "Non-Active"]);
@@ -71,6 +71,20 @@ function orderByPriority<T extends string>(items: T[], order: readonly T[]): T[]
     if (leftRank !== rightRank) return leftRank - rightRank;
     return left.localeCompare(right);
   });
+}
+
+const WORK_ITEM_STATUS_VALUES = new Set(["all", "none", "any", "OPEN", "IN_PROGRESS", "DONE", "CANCELLED", "UNKNOWN"]);
+
+function _parseWorkItemStatus(params: URLSearchParams): FindingsFilterUrlState["workItemStatus"] {
+  const raw = params.get("work_item_status");
+  if (raw && WORK_ITEM_STATUS_VALUES.has(raw)) {
+    return raw as FindingsFilterUrlState["workItemStatus"];
+  }
+  // backwards-compat: old has_work_item param
+  const legacy = params.get("has_work_item");
+  if (legacy === "yes" || legacy === "true") return "any";
+  if (legacy === "no" || legacy === "false") return "none";
+  return "all";
 }
 
 export function parseFindingsFiltersFromSearch(params: URLSearchParams): FindingsFilterUrlState {
@@ -129,11 +143,7 @@ export function parseFindingsFiltersFromSearch(params: URLSearchParams): Finding
     status,
     risk: orderByPriority(riskRaw, RISK_ORDER),
     aiStatus: params.get("ai_status") || "All",
-    hasWorkItem: (params.get("has_work_item") === "yes" || params.get("has_work_item") === "true"
-      ? "yes"
-      : params.get("has_work_item") === "no" || params.get("has_work_item") === "false"
-        ? "no"
-        : "all") as FindingsFilterUrlState["hasWorkItem"],
+    workItemStatus: _parseWorkItemStatus(params),
   };
 }
 
@@ -163,7 +173,7 @@ export function buildFindingsFilterSearch(state: FindingsFilterUrlState): URLSea
   if (state.risk.includes("under_review")) params.set("under_review", "true");
   if (state.risk.includes("mitigated")) params.set("is_mitigated", "true");
   if (state.aiStatus && state.aiStatus !== "All") params.set("ai_status", state.aiStatus);
-  if (state.hasWorkItem && state.hasWorkItem !== "all") params.set("has_work_item", state.hasWorkItem);
+  if (state.workItemStatus && state.workItemStatus !== "all") params.set("work_item_status", state.workItemStatus);
   return params;
 }
 
@@ -189,7 +199,7 @@ export function toFindingsApiFilters(
       state.aiStatus === "All"
         ? undefined
         : (state.aiStatus as "has_ai" | "no_ai" | "ai_tp" | "ai_fp" | "ai_u"),
-    hasWorkItem: state.hasWorkItem !== "all" ? state.hasWorkItem : undefined,
+    workItemStatus: state.workItemStatus !== "all" ? state.workItemStatus : undefined,
     severities: state.severities.length ? state.severities : undefined,
     status: state.status === "Active" ? "enabled" : state.status === "Non-Active" ? "disabled" : undefined,
     riskStates: state.risk.length ? state.risk : undefined,

@@ -374,23 +374,23 @@ class HasWorkItemFilterTests(WorkItemBaseTestCase):
             reporter=self.user,
         )
 
-    def test_filter_has_work_item_true(self):
+    def test_filter_work_item_status_any_returns_linked_findings(self):
         WorkItemLink.objects.create(
             finding=self.finding,
             external_url="https://example.com/f1",
         )
-        response = self.client.get(self._findings_url(), {"has_work_item": "true"})
+        response = self.client.get(self._findings_url(), {"work_item_status": "any"})
         self.assertEqual(response.status_code, 200)
         ids = [f["id"] for f in response.data["results"]]
         self.assertIn(self.finding.pk, ids)
         self.assertNotIn(self.finding_no_link.pk, ids)
 
-    def test_filter_has_work_item_false(self):
+    def test_filter_work_item_status_none_returns_unlinked_findings(self):
         WorkItemLink.objects.create(
             finding=self.finding,
             external_url="https://example.com/f1",
         )
-        response = self.client.get(self._findings_url(), {"has_work_item": "false"})
+        response = self.client.get(self._findings_url(), {"work_item_status": "none"})
         self.assertEqual(response.status_code, 200)
         ids = [f["id"] for f in response.data["results"]]
         self.assertNotIn(self.finding.pk, ids)
@@ -418,3 +418,35 @@ class HasWorkItemFilterTests(WorkItemBaseTestCase):
         results = response.data["results"]
         finding_data = next(f for f in results if f["id"] == self.finding_no_link.pk)
         self.assertEqual(finding_data["work_items"], [])
+
+    def test_filter_work_item_status_by_category_returns_matching_findings(self):
+        # finding has an OPEN work item; finding_no_link has a DONE work item
+        WorkItemLink.objects.create(
+            finding=self.finding,
+            external_url="https://example.com/f-open",
+            status_category=WorkItemStatusCategory.OPEN,
+        )
+        WorkItemLink.objects.create(
+            finding=self.finding_no_link,
+            external_url="https://example.com/f-done",
+            status_category=WorkItemStatusCategory.DONE,
+        )
+
+        response = self.client.get(self._findings_url(), {"work_item_status": "OPEN"})
+        self.assertEqual(response.status_code, 200)
+        ids = [f["id"] for f in response.data["results"]]
+        self.assertIn(self.finding.pk, ids)
+        self.assertNotIn(self.finding_no_link.pk, ids)
+
+    def test_filter_work_item_status_all_returns_all_findings(self):
+        WorkItemLink.objects.create(
+            finding=self.finding,
+            external_url="https://example.com/f-open",
+            status_category=WorkItemStatusCategory.OPEN,
+        )
+
+        response = self.client.get(self._findings_url(), {"work_item_status": "all"})
+        self.assertEqual(response.status_code, 200)
+        ids = [f["id"] for f in response.data["results"]]
+        self.assertIn(self.finding.pk, ids)
+        self.assertIn(self.finding_no_link.pk, ids)

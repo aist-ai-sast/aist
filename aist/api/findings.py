@@ -150,7 +150,7 @@ class AISTFindingFilter(ApiFindingFilter):
         method="filter_ai_status",
         choices=[(value, value) for value in FINDING_API_CHOICES.ai_status],
     )
-    has_work_item = django_filters.BooleanFilter(method="filter_has_work_item")
+    work_item_status = django_filters.CharFilter(method="filter_work_item_status")
     ordering = django_filters.OrderingFilter(
         fields=tuple(
             (field_name, param_name)
@@ -171,12 +171,15 @@ class AISTFindingFilter(ApiFindingFilter):
             return queryset.none()
         return queryset.filter(test__aist_pipelines=pipeline)
 
-    def filter_has_work_item(self, queryset, name, value):
-        if value is True:
-            return queryset.filter(work_item_links__isnull=False).distinct()
-        if value is False:
+    def filter_work_item_status(self, queryset, name, value):
+        value = (value or "").strip()
+        if not value or value == "all":
+            return queryset
+        if value == "none":
             return queryset.filter(work_item_links__isnull=True)
-        return queryset
+        if value == "any":
+            return queryset.filter(work_item_links__isnull=False).distinct()
+        return queryset.filter(work_item_links__status_category=value).distinct()
 
     def _is_date_only_bound(self, key: str) -> bool:
         raw_value = (self.data.get(key) or "").strip()

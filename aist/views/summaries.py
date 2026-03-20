@@ -496,9 +496,9 @@ def dashboard_summary(request: HttpRequest) -> HttpResponse:
         critical_high=Count("id", filter=Q(active=True, severity__in=["Critical", "High"])),
         total_findings=Count("id"),
         risk_accepted=Count("id", filter=Q(risk_accepted=True)),
-        false_p=Count("id", filter=Q(false_p=True)),
-        out_of_scope=Count("id", filter=Q(out_of_scope=True)),
-        mitigated=Count("id", filter=Q(is_mitigated=True)),
+        false_p_count=Count("id", filter=Q(false_p=True)),
+        out_of_scope_count=Count("id", filter=Q(out_of_scope=True)),
+        mitigated=Count("id", filter=Q(is_mitigated=True, false_p=False, out_of_scope=False)),
         under_review=Count("id", filter=Q(under_review=True)),
     )
 
@@ -570,8 +570,8 @@ def dashboard_summary(request: HttpRequest) -> HttpResponse:
                 "mitigated": kpi["mitigated"],
                 "risk_accepted": kpi["risk_accepted"],
                 "under_review": kpi["under_review"],
-                "false_positive": kpi["false_p"],
-                "out_of_scope": kpi["out_of_scope"],
+                "false_positive": kpi["false_p_count"],
+                "out_of_scope": kpi["out_of_scope_count"],
             },
             "findings_aging_heatmap": findings_aging_heatmap,
             "risk_trend": risk_trend,

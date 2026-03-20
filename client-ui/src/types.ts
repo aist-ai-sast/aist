@@ -37,7 +37,7 @@ export type FindingFilters = {
   aiVerdict?: AIVerdict;
   cwe?: string;
   tags?: string[];
-  hasWorkItem?: "yes" | "no";
+  workItemStatus?: string;
   limit?: number;
   offset?: number;
   ordering?: string;

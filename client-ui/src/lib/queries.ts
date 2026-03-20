@@ -216,8 +216,7 @@ function buildFindingsParams(
       ? { tags: filters.tags.map((tag) => tag.trim()).filter(Boolean).join(",") }
       : {}),
     ...(filters.ordering ? { ordering: filters.ordering } : {}),
-    ...(filters.hasWorkItem === "yes" ? { has_work_item: "true" } : {}),
-    ...(filters.hasWorkItem === "no" ? { has_work_item: "false" } : {}),
+    ...(filters.workItemStatus ? { work_item_status: filters.workItemStatus } : {}),
   });
 }
 

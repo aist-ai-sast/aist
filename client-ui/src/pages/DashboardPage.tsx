@@ -164,54 +164,67 @@ const WI_STATUS_LABELS: Record<string, string> = {
   UNKNOWN: "Unknown",
 };
 
-function WorkItemCoverageCard({ coverage }: { coverage: DashboardSummary["work_item_coverage"] }) {
-  const total = Object.values(coverage.by_status).reduce((sum, n) => sum + n, 0);
+
+function WorkItemCoverageCard({
+  coverage,
+  onStatusClick,
+}: {
+  coverage: DashboardSummary["work_item_coverage"];
+  onStatusClick: (status: string) => void;
+}) {
+  const option = useMemo(
+    () => ({
+      backgroundColor: "transparent",
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, ...TOOLTIP_STYLE },
+      legend: {
+        textStyle: { color: CHART_TEXT_COLOR },
+        itemWidth: 10,
+        itemHeight: 10,
+      },
+      grid: { left: "2%", right: "2%", top: "40px", bottom: "16px", containLabel: true },
+      xAxis: {
+        type: "value",
+        axisLine: { lineStyle: { color: CHART_AXIS_COLOR } },
+        splitLine: { lineStyle: { color: CHART_AXIS_COLOR } },
+        axisLabel: { color: CHART_TEXT_COLOR },
+      },
+      yAxis: {
+        type: "category",
+        data: ["Findings"],
+        axisLabel: { color: CHART_TEXT_COLOR },
+        axisLine: { lineStyle: { color: CHART_AXIS_COLOR } },
+      },
+      series: Object.keys(WI_STATUS_LABELS).map((status) => ({
+        name: WI_STATUS_LABELS[status],
+        type: "bar",
+        stack: "total",
+        barMaxWidth: 32,
+        itemStyle: { color: WI_STATUS_COLORS[status] ?? "#475569" },
+        data: [coverage.by_status[status] ?? 0],
+      })),
+    }),
+    [coverage],
+  );
+
   return (
-    <div className="rounded-2xl border border-night-500 bg-night-700/90 p-4">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Work Item Coverage</div>
-          <div className="mt-1 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-slate-100">{coverage.coverage_pct}%</span>
-            <span className="text-xs text-slate-400">
-              {coverage.total_linked.toLocaleString()} linked findings
-            </span>
-          </div>
-        </div>
-        {total > 0 ? (
-          <div className="flex flex-wrap gap-3">
-            {Object.entries(coverage.by_status)
-              .filter(([, count]) => count > 0)
-              .map(([status, count]) => (
-                <div key={status} className="flex items-center gap-1.5 text-xs text-slate-300">
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: WI_STATUS_COLORS[status] ?? "#475569" }}
-                  />
-                  {WI_STATUS_LABELS[status] ?? status}: {count}
-                </div>
-              ))}
-          </div>
-        ) : null}
-      </div>
-      {total > 0 ? (
-        <div className="mt-3 flex h-2 overflow-hidden rounded-full bg-night-900">
-          {Object.entries(coverage.by_status)
-            .filter(([, count]) => count > 0)
-            .map(([status, count]) => (
-              <div
-                key={status}
-                className="h-full transition-all"
-                style={{
-                  width: `${(count / total) * 100}%`,
-                  backgroundColor: WI_STATUS_COLORS[status] ?? "#475569",
-                }}
-                title={`${WI_STATUS_LABELS[status] ?? status}: ${count}`}
-              />
-            ))}
-        </div>
-      ) : null}
-    </div>
+    <ChartCard
+      title="Work Item Coverage"
+      subtitle={`${coverage.coverage_pct}% covered · ${coverage.total_linked.toLocaleString()} linked findings · click a segment to filter`}
+    >
+      <ReactECharts
+        option={option}
+        style={{ width: "100%", height: "120px" }}
+        opts={{ renderer: "svg" }}
+        onEvents={{
+          click: (params: { seriesName?: string }) => {
+            const status = Object.keys(WI_STATUS_LABELS).find(
+              (k) => WI_STATUS_LABELS[k] === params.seriesName,
+            );
+            if (status) onStatusClick(status);
+          },
+        }}
+      />
+    </ChartCard>
   );
 }
 
@@ -813,7 +826,10 @@ export default function DashboardPage() {
       </div>
 
       {dashboard.data?.work_item_coverage ? (
-        <WorkItemCoverageCard coverage={dashboard.data.work_item_coverage} />
+        <WorkItemCoverageCard
+          coverage={dashboard.data.work_item_coverage}
+          onStatusClick={(status) => navigate(buildFindingsLink({ work_item_status: status }))}
+        />
       ) : null}
 
       {dashboard.isLoading ? (

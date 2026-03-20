@@ -179,6 +179,38 @@ class DashboardSummaryViewTests(TestCase):
         self.assertEqual(status["false_positive"], 0)
         self.assertEqual(status["out_of_scope"], 0)
 
+    def test_status_breakdown_mitigated_excludes_false_positive_and_out_of_scope(self):
+        # A finding closed as false positive has is_mitigated=True in DefectDojo, but must NOT
+        # inflate the mitigated counter — it must appear only under false_positive.
+        Finding.objects.create(
+            test=self.test,
+            title="False positive finding",
+            severity="Low",
+            active=False,
+            is_mitigated=True,
+            false_p=True,
+            reporter=self.user,
+        )
+        # Same for out of scope.
+        Finding.objects.create(
+            test=self.test,
+            title="Out of scope finding",
+            severity="Low",
+            active=False,
+            is_mitigated=True,
+            out_of_scope=True,
+            reporter=self.user,
+        )
+
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        status = response.json()["finding_status_breakdown"]
+
+        # Only the original finding_mitigated (no false_p/out_of_scope) counts as mitigated.
+        self.assertEqual(status["mitigated"], 1)
+        self.assertEqual(status["false_positive"], 1)
+        self.assertEqual(status["out_of_scope"], 1)
+
     def test_project_id_filter_returns_only_that_project(self):
         # Create a second product/project with findings
         product2 = Product.objects.create(
