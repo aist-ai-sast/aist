@@ -192,6 +192,18 @@ class AIPipelineCallbackAPI(APIView):
         return Response({"ok": True})
 
 
+class AiFixSerializer(serializers.Serializer):
+    fixSummary = serializers.CharField()
+    fixType = serializers.CharField()
+    diff = serializers.CharField(allow_null=True, default=None)
+    diffAvailable = serializers.BooleanField()
+    codeAfter = serializers.CharField(allow_null=True, default=None)
+    stepByStep = serializers.ListField(child=serializers.CharField())
+    testingHint = serializers.CharField(allow_null=True, default=None)
+    secretsManagement = serializers.CharField(allow_null=True, default=None)
+    suppressionAnnotation = serializers.CharField(allow_null=True, default=None)
+
+
 class AIFindingResponseItemSerializer(serializers.Serializer):
     pipeline_id = serializers.CharField()
     finding_id = serializers.IntegerField()
@@ -205,6 +217,7 @@ class AIFindingResponseItemSerializer(serializers.Serializer):
     uncertaintySpread = serializers.FloatField(allow_null=True)
     exploitCodeMaturity = serializers.CharField(allow_blank=True)
     references = serializers.ListField(child=serializers.CharField(), allow_empty=True)
+    fix = AiFixSerializer(allow_null=True)
     created = serializers.DateTimeField()
 
 
@@ -286,6 +299,7 @@ class AIFindingResponseListAPI(AuthorizedQuerySetMixin, APIView):
             "uncertaintySpread": row.uncertainty_spread,
             "exploitCodeMaturity": row.exploit_code_maturity,
             "references": row.references or [],
+            "fix": row.fix,
             "created": row.created,
         } for row in rows]
         return Response(payload)

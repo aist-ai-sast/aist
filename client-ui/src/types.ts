@@ -76,6 +76,20 @@ export type Finding = {
   workItems?: WorkItemLink[];
 };
 
+export type AiFixType = "code_change" | "config_change" | "architectural";
+
+export type AiFix = {
+  fixSummary: string;
+  fixType: AiFixType;
+  diff?: string | null;
+  diffAvailable: boolean;
+  codeAfter?: string | null;
+  stepByStep: string[];
+  testingHint?: string | null;
+  secretsManagement?: string | null;
+  suppressionAnnotation?: string | null;
+};
+
 export type AIResponse = {
   verdict?: AIVerdict;
   title?: string;
@@ -88,6 +102,7 @@ export type AIResponse = {
   exploitCodeMaturity?: string;
   references?: string[];
   pipelineId?: string;
+  fix?: AiFix | null;
 };
 
 export type Note = {

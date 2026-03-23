@@ -10,6 +10,7 @@ import PermissionGate from "./PermissionGate";
 import { useToast } from "./ToastProvider";
 import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
 import WorkItemsPanel from "./WorkItemsPanel";
+import AiFixPanel from "./AiFixPanel";
 
 type FindingDetailTabsProps = {
   finding: Finding;
@@ -288,9 +289,9 @@ export default function FindingDetailTabs({
                 </div>
               ) : null}
 
-              <div className="rounded-xl border border-night-500 bg-night-800 px-3 py-2 text-xs text-slate-400">
-                AI-assisted recommendation. Final triage decision remains with the security analyst.
-              </div>
+              {aiResponse.fix ? (
+                <AiFixPanel fix={aiResponse.fix} />
+              ) : null}
             </div>
           ) : (
             <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-sm text-slate-400">

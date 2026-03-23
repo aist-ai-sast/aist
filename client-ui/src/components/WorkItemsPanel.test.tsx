@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import WorkItemsPanel from "./WorkItemsPanel";
@@ -43,6 +43,10 @@ vi.mock("./PermissionGate", () => ({
   default: ({ action, children, fallback = null }: { action: string; children: ReactNode; fallback?: ReactNode }) =>
     action === "write" && mockCanWrite ? children : fallback,
 }));
+
+afterEach(() => {
+  cleanup();
+});
 
 describe("WorkItemsPanel", () => {
   beforeEach(() => {

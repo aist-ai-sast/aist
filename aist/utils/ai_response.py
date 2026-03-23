@@ -9,6 +9,10 @@ from dojo.models import Finding
 
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline
 
+_VALID_FIX_TYPES: frozenset[str] = frozenset(
+    choice[0] for choice in AISTAIFindingResponse.FixType.choices
+)
+
 VERDICT_KEYS: dict[str, tuple[str, ...]] = {
     AISTAIFindingResponse.Verdict.TRUE_POSITIVE: ("true_positives",),
     AISTAIFindingResponse.Verdict.FALSE_POSITIVE: ("false_positives",),
@@ -23,8 +27,69 @@ class SyncAIFindingResponsesResult:
     deleted: int
 
 
+@dataclass(frozen=True)
+class AiFixData:
+    fix_summary: str
+    fix_type: str
+    diff: str | None
+    diff_available: bool
+    code_after: str | None
+    step_by_step: list[str]
+    testing_hint: str | None
+    secrets_management: str | None
+    suppression_annotation: str | None
+
+    def to_json(self) -> dict:
+        return {
+            "fixSummary": self.fix_summary,
+            "fixType": self.fix_type,
+            "diff": self.diff,
+            "diffAvailable": self.diff_available,
+            "codeAfter": self.code_after,
+            "stepByStep": self.step_by_step,
+            "testingHint": self.testing_hint,
+            "secretsManagement": self.secrets_management,
+            "suppressionAnnotation": self.suppression_annotation,
+        }
+
+
 def _needs_false_positive_close(finding: Finding) -> bool:
     return not (finding.false_p and finding.is_mitigated and not finding.active)
+
+
+def _normalize_optional_str(value: object, *, max_len: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped[:max_len] if stripped else None
+
+
+def _normalize_fix(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    fix_type = value.get("fixType")
+    if fix_type not in _VALID_FIX_TYPES:
+        return None
+    fix_summary = _normalize_optional_str(value.get("fixSummary"), max_len=1024)
+    if not fix_summary:
+        return None
+    raw_steps = value.get("stepByStep")
+    steps = (
+        [s for s in raw_steps if isinstance(s, str)][:20]
+        if isinstance(raw_steps, list)
+        else []
+    )
+    return AiFixData(
+        fix_summary=fix_summary,
+        fix_type=fix_type,
+        diff=_normalize_optional_str(value.get("diff"), max_len=20_000),
+        diff_available=bool(value.get("diffAvailable")),
+        code_after=_normalize_optional_str(value.get("codeAfter"), max_len=20_000),
+        step_by_step=steps,
+        testing_hint=_normalize_optional_str(value.get("testingHint"), max_len=2_000),
+        secrets_management=_normalize_optional_str(value.get("secretsManagement"), max_len=2_000),
+        suppression_annotation=_normalize_optional_str(value.get("suppressionAnnotation"), max_len=512),
+    ).to_json()
 
 
 def _normalize_references(value) -> list[str]:
@@ -150,6 +215,7 @@ def sync_ai_finding_responses(
                 "uncertainty_level": entry.get("uncertaintyLevel"),
                 "uncertainty_spread": entry.get("uncertaintySpread"),
                 "exploit_code_maturity": (entry.get("exploitCodeMaturity") or "")[:64],
+                "fix": _normalize_fix(entry.get("fix")),
             },
         )
         saved += 1

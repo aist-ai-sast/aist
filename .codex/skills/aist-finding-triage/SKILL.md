@@ -18,12 +18,10 @@ description: Analyze new AIST pipeline findings from docker-compose data sources
 5. For each analyzed finding, directly create or update `AISTAIFindingResponse`; do not stop at generating a chat response.
 6. If verdict is `FP`, persist `AISTAIFindingResponse` and update the related `Finding` to the project's false-positive state using the normal project path (`false_p=True` and inactive/mitigated state as applicable).
 7. Do not use `AISTAIResponse.payload -> sync_ai_finding_responses()` as the primary write path; use it only when the task explicitly requires testing the ingestion callback path.
-8. Populate all real `AISTAIFindingResponse` fields that map to the schema, including `title`, `summary`/`reasoning`, `references`, `epss_score`, `impact_score`, `exploitability_score`, `uncertainty_level`, `uncertainty_spread`, and `exploit_code_maturity`. Use explicit defaults rather than omitting fields.
-9. If verdict is `TP`, include a reproducible local exploit/PoC path for developers as exact executable steps, not abstract guidance.
-10. Write all reasoning in English.
-11. Never mention scanner/tool vendor names.
-12. Ensure the response has `pipeline_id` equal to the provided input.
-13. Format `reasoning` as structured Markdown (headings + lists), not plain paragraph text.
+8. If verdict is `TP`, include a reproducible local exploit/PoC path for developers as exact executable steps, not abstract guidance. Write all reasoning in English.
+9. Never mention scanner/tool vendor names.
+10. Ensure the response has `pipeline_id` equal to the provided input.
+11. Format `reasoning` as structured Markdown (headings + lists), not plain paragraph text.
 
 # Workflow
 

@@ -114,6 +114,7 @@ type AIFindingResponseApi = {
   uncertaintySpread?: number | null;
   exploitCodeMaturity?: string;
   references?: string[];
+  fix?: import("../types").AiFix | null;
   created?: string;
 };
 
@@ -539,6 +540,7 @@ export function useAiFindingResponses(
           uncertaintySpread: item.uncertaintySpread ?? undefined,
           exploitCodeMaturity: item.exploitCodeMaturity ?? undefined,
           references: item.references ?? [],
+          fix: item.fix ?? undefined,
           pipelineId: item.pipeline_id,
         });
       }

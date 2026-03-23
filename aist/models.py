@@ -917,6 +917,11 @@ class AISTAIFindingResponse(models.Model):
         FALSE_POSITIVE = "false_positive", "False Positive"
         UNCERTAIN = "uncertain", "Uncertain"
 
+    class FixType(models.TextChoices):
+        CODE_CHANGE = "code_change", "Code Change"
+        CONFIG_CHANGE = "config_change", "Config Change"
+        ARCHITECTURAL = "architectural", "Architectural"
+
     pipeline = models.ForeignKey(
         "AISTPipeline",
         on_delete=models.CASCADE,
@@ -950,6 +955,7 @@ class AISTAIFindingResponse(models.Model):
     uncertainty_level = models.FloatField(null=True, blank=True)
     uncertainty_spread = models.FloatField(null=True, blank=True)
     exploit_code_maturity = models.CharField(max_length=64, blank=True, default="")
+    fix = models.JSONField(null=True, blank=True)
     created = models.DateTimeField(auto_now_add=True, db_index=True)
     updated = models.DateTimeField(auto_now=True)
 

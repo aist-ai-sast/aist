@@ -82,6 +82,7 @@ class DemoAIProfile:
     exploit_code_maturity: str
     references: tuple[str, ...]
     reasoning: str
+    fix: dict | None = None
 
 
 ORG_NAMES = [
@@ -244,6 +245,58 @@ DEMO_AI_PROFILES = (
             "https://cwe.mitre.org/data/definitions/89.html",
         ),
         reasoning="Strong evidence indicates the issue is exploitable and directly reachable by untrusted input.",
+        fix={
+            "fixType": "code_change",
+            "fixSummary": (
+                "Replace the hardcoded secret with a reference to an environment variable and add "
+                "startup validation so the service fails fast when credentials are absent."
+            ),
+            "diff": (
+                "--- a/deploy/scripts/release.sh\n"
+                "+++ b/deploy/scripts/release.sh\n"
+                "@@ -12,7 +12,11 @@\n"
+                '-CLOUD_ACCESS_KEY="AKIA...HARDCODED"\n'
+                '-CLOUD_SECRET_KEY="wJalrXUt...HARDCODED"\n'
+                '+if [ -z "$CLOUD_ACCESS_KEY" ] || [ -z "$CLOUD_SECRET_KEY" ]; then\n'
+                '+  echo "ERROR: CLOUD_ACCESS_KEY and CLOUD_SECRET_KEY must be set" >&2\n'
+                "+  exit 1\n"
+                "+fi\n"
+                ' aws configure set aws_access_key_id     "$CLOUD_ACCESS_KEY"\n'
+                ' aws configure set aws_secret_access_key "$CLOUD_SECRET_KEY"'
+            ),
+            "diffAvailable": True,
+            "codeAfter": (
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n\n"
+                "# Credentials injected by CI/CD pipeline or secret manager\n"
+                'if [ -z "${CLOUD_ACCESS_KEY:-}" ] || [ -z "${CLOUD_SECRET_KEY:-}" ]; then\n'
+                '  echo "ERROR: CLOUD_ACCESS_KEY and CLOUD_SECRET_KEY environment variables are required." >&2\n'
+                "  exit 1\n"
+                "fi\n\n"
+                'aws configure set aws_access_key_id     "$CLOUD_ACCESS_KEY"\n'
+                'aws configure set aws_secret_access_key "$CLOUD_SECRET_KEY"\n'
+                'aws configure set default.region        "${AWS_REGION:-us-east-1}"'
+            ),
+            "stepByStep": [
+                "Step 1: Open deploy/scripts/release.sh and locate the hardcoded CLOUD_ACCESS_KEY and CLOUD_SECRET_KEY assignments.",
+                "Step 2: Delete both hardcoded lines and replace with references to the same-named environment variables.",
+                "Step 3: Add a guard block at the top of the script that exits with a non-zero code if either variable is unset.",
+                "Step 4: Store the actual secrets in your CI/CD secret store (GitHub Actions Secrets, GitLab CI Variables, or Vault).",
+                "Step 5: Run `git log -p --all -S 'AKIA' -- '*.sh'` to confirm no hardcoded keys remain in commit history.",
+                "Step 6: Rotate the exposed access key immediately via the cloud provider console and revoke the old one.",
+            ],
+            "testingHint": (
+                "1. Unset the environment variables and run the script — it must exit with code 1 and print the error message.\n"
+                "2. Export valid test credentials and confirm the script proceeds normally.\n"
+                "3. Run `git secrets --scan` or `trufflehog git file://.` to verify no secrets remain in the repo."
+            ),
+            "secretsManagement": (
+                "Inject CLOUD_ACCESS_KEY and CLOUD_SECRET_KEY via your CI/CD platform's native secret store. "
+                "For AWS workloads prefer IAM roles over long-lived keys. "
+                "If keys are required, use AWS Secrets Manager or HashiCorp Vault with short TTLs and automatic rotation."
+            ),
+            "suppressionAnnotation": None,
+        },
     ),
     DemoAIProfile(
         label="medium-confidence-tp",
@@ -258,6 +311,51 @@ DEMO_AI_PROFILES = (
             "https://owasp.org/www-project-cheat-sheets/",
         ),
         reasoning="Likely true positive with partial exploit path confidence; remediation is still recommended.",
+        fix={
+            "fixType": "code_change",
+            "fixSummary": (
+                "Replace string-interpolated SQL with parameterized queries to eliminate injection risk."
+            ),
+            "diff": (
+                "--- a/src/api/reporting/query_builder.py\n"
+                "+++ b/src/api/reporting/query_builder.py\n"
+                "@@ -18,8 +18,9 @@\n"
+                " def build_report_query(cursor, filters: dict):\n"
+                "-    status_clause = f\"AND status = '{filters['status']}'\"\n"
+                "-    sql = f\"SELECT * FROM reports WHERE tenant_id = {filters['tenant_id']} {status_clause}\"\n"
+                "-    cursor.execute(sql)\n"
+                '+    sql = "SELECT * FROM reports WHERE tenant_id = %s AND status = %s"\n'
+                '+    params = (filters["tenant_id"], filters["status"])\n'
+                "+    cursor.execute(sql, params)"
+            ),
+            "diffAvailable": True,
+            "codeAfter": (
+                'ALLOWED_STATUSES = frozenset({"open", "closed", "pending"})\n\n'
+                "def build_report_query(cursor, filters: dict):\n"
+                '    tenant_id = filters["tenant_id"]\n'
+                '    status = filters["status"]\n\n'
+                "    if status not in ALLOWED_STATUSES:\n"
+                '        raise ValueError(f"Invalid status value: {status!r}")\n\n'
+                '    sql = "SELECT * FROM reports WHERE tenant_id = %s AND status = %s"\n'
+                "    cursor.execute(sql, (tenant_id, status))"
+            ),
+            "stepByStep": [
+                "Step 1: Open src/api/reporting/query_builder.py and locate all f-string or %-formatted SQL statements.",
+                "Step 2: Extract each dynamic value into a separate variable for clarity.",
+                "Step 3: Replace the interpolated SQL with a parameterized template using %s placeholders.",
+                "Step 4: Pass the values as the second argument tuple to cursor.execute().",
+                "Step 5: Add an allowlist check for enumerable fields like 'status' to add defense-in-depth.",
+                "Step 6: Run the existing test suite and add a test that passes a SQL-injection payload (e.g., \"'; DROP TABLE reports; --\") and asserts it is rejected or returned as literal data.",
+            ],
+            "testingHint": (
+                "Send status=\"'; DROP TABLE reports; --\" through the API endpoint and verify:\n"
+                "  - No SQL error is raised\n"
+                "  - The value is treated as a literal string filter, not executed\n"
+                "Use sqlmap or a manual curl request to confirm the endpoint is no longer injectable."
+            ),
+            "secretsManagement": None,
+            "suppressionAnnotation": None,
+        },
     ),
     DemoAIProfile(
         label="low-confidence-uncertain",
@@ -270,6 +368,7 @@ DEMO_AI_PROFILES = (
         exploit_code_maturity="proof_of_concept",
         references=(),
         reasoning="Signal is weak and may require manual triage with runtime context before a final verdict.",
+        fix=None,
     ),
     DemoAIProfile(
         label="high-confidence-fp",
@@ -284,6 +383,7 @@ DEMO_AI_PROFILES = (
             "https://owasp.org/www-community/vulnerabilities/False_Positive",
         ),
         reasoning="Pattern appears non-exploitable in this code path; scanner result is likely a false positive.",
+        fix=None,
     ),
     DemoAIProfile(
         label="medium-confidence-uncertain",
@@ -299,6 +399,29 @@ DEMO_AI_PROFILES = (
             "https://nvd.nist.gov/",
         ),
         reasoning="Conflicting static signals detected; additional validation is needed before closure or acceptance.",
+        fix={
+            "fixType": "architectural",
+            "fixSummary": (
+                "Conduct a targeted threat-model review of this component before committing to a code-level fix; "
+                "the finding may require a design change rather than a patch."
+            ),
+            "diff": None,
+            "diffAvailable": False,
+            "codeAfter": None,
+            "stepByStep": [
+                "Step 1: Schedule a 60-minute threat-model session with the feature team and a security champion.",
+                "Step 2: Map all data flows that pass through the flagged component using a data-flow diagram.",
+                "Step 3: Identify trust boundaries and verify whether untrusted input can reach the sensitive operation.",
+                "Step 4: If a real risk is confirmed, raise a tracked remediation task with severity and target sprint.",
+                "Step 5: If the risk is accepted, document the rationale in the project's security decision log and link it to this finding.",
+            ],
+            "testingHint": (
+                "After the threat-model session, run a focused penetration test or manual code review "
+                "on the identified data flows to validate whether exploitation is feasible in production."
+            ),
+            "secretsManagement": None,
+            "suppressionAnnotation": None,
+        },
     ),
     DemoAIProfile(
         label="sparse-data-uncertain",
@@ -311,6 +434,7 @@ DEMO_AI_PROFILES = (
         exploit_code_maturity="",
         references=(),
         reasoning="Insufficient context from source artifact to produce quantitative confidence metrics.",
+        fix=None,
     ),
 )
 
@@ -794,6 +918,7 @@ class Command(BaseCommand):
                 "uncertaintyLevel": profile.uncertainty_level,
                 "uncertaintySpread": profile.uncertainty_spread,
                 "exploitCodeMaturity": profile.exploit_code_maturity,
+                "fix": profile.fix,
             }
             if profile.verdict == AISTAIFindingResponse.Verdict.TRUE_POSITIVE:
                 payload_results["true_positives"].append(entry)
@@ -838,5 +963,6 @@ class Command(BaseCommand):
                     "uncertainty_level": profile.uncertainty_level,
                     "uncertainty_spread": profile.uncertainty_spread,
                     "exploit_code_maturity": profile.exploit_code_maturity,
+                    "fix": profile.fix,
                 },
             )
