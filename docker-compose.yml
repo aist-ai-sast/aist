@@ -216,6 +216,27 @@ services:
       # we keep using the redis volume as renaming is not possible and copying data over
       # would require steps during downtime or complex commands in the intializer
       - defectdojo_redis:/data
+  context-extractor-mcp:
+    build:
+      context: ./sast-combinator/context_extractor_service/ansible/files
+      dockerfile: Dockerfile
+    depends_on:
+      uwsgi:
+        condition: service_started
+    environment:
+      AIST_API_URL: "${DD_SITE_URL:-http://nginx:8080}"
+      AIST_API_TOKEN: "${AIST_SERVICE_TOKEN:-}"
+      MCP_AUTH_TOKEN: "${MCP_AUTH_TOKEN:-}"
+    volumes:
+      - type: bind
+        source: ${AIST_TMP_DIR:-/tmp/aist}/projects
+        target: /tmp/aist/projects
+        read_only: true
+    ports:
+      - "${MCP_CONTEXT_EXTRACTOR_PORT:-8000}:8000"
+    restart: unless-stopped
+    env_file:
+      - .env.dev
 volumes:
   defectdojo_postgres:
     driver: local

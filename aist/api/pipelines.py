@@ -7,16 +7,19 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from io import BytesIO, StringIO
+from pathlib import Path
 
 from django.db import close_old_connections, transaction
 from django.db.models import Count
 from django.http import HttpResponse, HttpResponseBadRequest, StreamingHttpResponse
+from django.shortcuts import get_object_or_404
 from django_filters import rest_framework as django_filters
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from openpyxl import Workbook
 from rest_framework import generics, serializers, status
+from rest_framework.authentication import TokenAuthentication
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -27,6 +30,7 @@ from aist.ai_filter import validate_and_normalize_filter
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import BACKLOG_COUNT, PUBSUB_CHANNEL_TPL, STREAM_KEY, get_pipeline_log_path, get_redis
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, TestDeduplicationProgress
 from aist.pipeline_args import PipelineArguments
@@ -851,3 +855,69 @@ class PipelineEnrichProgressAPI(AuthorizedQuerySetMixin, APIView):
         if not self.get_authorized_queryset().filter(id=pipeline_id).exists():
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
         return pipeline_enrich_progress_response(pipeline_id)
+
+
+class PipelineSourceInfoSerializer(serializers.Serializer):
+    pipeline_id = serializers.CharField()
+    status = serializers.CharField()
+    project_path = serializers.CharField()
+    project_name = serializers.CharField()
+    languages = serializers.ListField(child=serializers.CharField())
+
+
+class PipelineSourceInfoAPI(APIView):
+
+    """Internal endpoint for MCP services to resolve pipeline source path."""
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        responses={
+            200: PipelineSourceInfoSerializer,
+            404: OpenApiResponse(description="Pipeline not found"),
+            409: OpenApiResponse(description="Sources not available"),
+        },
+        tags=[AISTApiTag.PIPELINES.value],
+        summary="Get pipeline source info (internal)",
+        description=(
+            "Returns the on-disk source path for a running pipeline. "
+            "Used by context-extractor and filesystem MCP servers."
+        ),
+    )
+    def get(self, request, pipeline_id: str):
+        pipeline = get_object_or_404(
+            AISTPipeline.objects.select_related("project__product"),
+            id=pipeline_id,
+        )
+
+        if is_terminal_pipeline_status(pipeline.status):
+            return Response(
+                {"detail": "Pipeline is in terminal status, sources no longer available"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        ld = PipelineLaunchData(pipeline.launch_data)
+        project_path = ld.project_path
+        if not project_path:
+            return Response(
+                {"detail": "Source path not yet available"},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # project_path is the workspace root. For GIT projects, sources are
+        # cloned into a subdirectory named after the project. Detect which
+        # layout is present on disk.
+        source_root = Path(project_path)
+        product_name = getattr(pipeline.project.product, "name", "")
+        sub = source_root / product_name
+        if sub.is_dir() and (sub / ".git").is_dir():
+            source_root = sub
+
+        return Response({
+            "pipeline_id": pipeline.id,
+            "status": pipeline.status,
+            "project_path": str(source_root),
+            "project_name": product_name,
+            "languages": ld.languages or [],
+        })

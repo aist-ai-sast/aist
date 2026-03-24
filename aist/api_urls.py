@@ -71,6 +71,7 @@ from aist.api.pipelines import (
     PipelineLogsProgressiveAPI,
     PipelineLogsStreamAPI,
     PipelineLogsStreamRedisAPI,
+    PipelineSourceInfoAPI,
     PipelineStatusStreamAPI,
     PipelineStopAPI,
 )
@@ -114,6 +115,7 @@ urlpatterns = [
     path("pipelines/start/", PipelineStartAPI.as_view(), name="pipeline_start"),
     path("pipelines/<str:pipeline_id>", PipelineAPI.as_view(), name="pipeline_status"),
     path("pipelines/<str:pipeline_id>/stop/", PipelineStopAPI.as_view(), name="pipeline_stop"),
+    path("pipelines/<str:pipeline_id>/source-info/", PipelineSourceInfoAPI.as_view(), name="pipeline_source_info"),
     path("pipelines/<str:pipeline_id>/send-request-to-ai/", AISendRequestAPI.as_view(), name="pipeline_send_request"),
     path("pipelines/<str:pipeline_id>/callback/", AIPipelineCallbackAPI.as_view(), name="pipeline_callback"),
     path("ai-finding-responses/", AIFindingResponseListAPI.as_view(), name="ai_finding_responses"),
