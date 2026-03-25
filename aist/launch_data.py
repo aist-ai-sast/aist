@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 
 class PipelineLaunchData:
 
@@ -49,6 +51,34 @@ class PipelineLaunchData:
     def resolved_commit(self) -> str:
         """Convenience accessor for the nested ``git.resolved_commit`` field."""
         return ((self._data.get("git") or {}).get("resolved_commit") or "").strip()
+
+    @property
+    def is_git_based(self) -> bool:
+        """True if the project was checked out from a git repository.
+
+        Derived from ``project_version_descriptor.type``, which mirrors
+        :attr:`AISTProjectVersion.version_type` and is written to ``launch_data``
+        during the enrichment configuration step.
+        """
+        version_type = (self.project_version_descriptor or {}).get("type", "")
+        return version_type in {"GIT_BRANCH", "GIT_HASH"}
+
+    def resolve_source_root(self, product_name: str = "") -> str:
+        """Return the on-disk path to the project sources.
+
+        For git-based projects the sast-combinator clones the repository into a
+        subdirectory named after the product inside ``project_path``.  For
+        file-upload projects ``project_path`` is already the source root.
+
+        Returns ``project_path`` as-is when the expected subdirectory is absent
+        (graceful fallback so callers never get an empty string).
+        """
+        base = self.project_path
+        if self.is_git_based and product_name:
+            sub = Path(base) / product_name
+            if sub.is_dir():
+                return str(sub)
+        return base
 
     # ------------------------------------------------------------------ #
     # Internal — our fields, with setters.                                 #

@@ -19,7 +19,6 @@ from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from openpyxl import Workbook
 from rest_framework import generics, serializers, status
-from rest_framework.authentication import TokenAuthentication
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -869,7 +868,6 @@ class PipelineSourceInfoAPI(APIView):
 
     """Internal endpoint for MCP services to resolve pipeline source path."""
 
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -898,26 +896,19 @@ class PipelineSourceInfoAPI(APIView):
             )
 
         ld = PipelineLaunchData(pipeline.launch_data)
-        project_path = ld.project_path
-        if not project_path:
+        if not ld.project_path:
             return Response(
                 {"detail": "Source path not yet available"},
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # project_path is the workspace root. For GIT projects, sources are
-        # cloned into a subdirectory named after the project. Detect which
-        # layout is present on disk.
-        source_root = Path(project_path)
         product_name = getattr(pipeline.project.product, "name", "")
-        sub = source_root / product_name
-        if sub.is_dir() and (sub / ".git").is_dir():
-            source_root = sub
+        source_root = ld.resolve_source_root(product_name)
 
         return Response({
             "pipeline_id": pipeline.id,
             "status": pipeline.status,
-            "project_path": str(source_root),
+            "project_path": source_root,
             "project_name": product_name,
             "languages": ld.languages or [],
         })

@@ -175,6 +175,7 @@ services:
       WEBHOOK_TYPE: "${WEBHOOK_TYPE:-}"
       PRIVATE_KEY: "${PRIVATE_KEY:-}"
       DD_DATABASE_URL: ${DD_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/defectdojo}
+      AIST_SERVICE_TOKEN: "${AIST_SERVICE_TOKEN:-}"
       DD_ADMIN_USER: "${DD_ADMIN_USER:-admin}"
       DD_ADMIN_MAIL: "${DD_ADMIN_USER:-admin@defectdojo.local}"
       DD_ADMIN_FIRST_NAME: "${DD_ADMIN_FIRST_NAME:-Admin}"
@@ -232,8 +233,6 @@ services:
         source: ${AIST_TMP_DIR:-/tmp/aist}/projects
         target: /tmp/aist/projects
         read_only: true
-    ports:
-      - "${MCP_CONTEXT_EXTRACTOR_PORT:-8000}:8000"
     restart: unless-stopped
     env_file:
       - .env.dev

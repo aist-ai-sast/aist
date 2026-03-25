@@ -23,5 +23,6 @@ umask 0002
 
 wait_for_database_to_be_reachable
 python manage.py complete_initialization
+python manage.py bootstrap_service_token
 
 exec "$@"
