@@ -1,0 +1,4 @@
+interface:
+  display_name: "Context Extractor MCP Audit"
+  short_description: "Audit live MCP findings into isolated tests"
+  default_prompt: "Use $context-extractor-mcp-audit to replay live findings through the AI triage MCP flow and convert uncovered valid cases or confirmed bugs into isolated tests."
