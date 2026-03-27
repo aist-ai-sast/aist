@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ruff check:*)",
+      "Bash(sed:*)",
+      "Bash(ls:*)",
+      "Bash(npm search:*)",
+      "Bash(python:*)",
+      "Bash(pip show:*)",
+      "Bash(python3:*)",
+      "Bash(find:*)",
+      "Bash(node:*)",
+      "Bash(grep:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker compose:*)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(curl:*)",
+      "Bash(pip3 list:*)",
+      "Bash(docker run:*)",
+      "Bash(./run-mcp-tests.zsh -v)",
+      "Bash(./run-mcp-tests.zsh)",
+      "WebFetch(domain:docs.n8n.io)",
+      "WebFetch(domain:blog.thalheim.io)",
+      "Bash(/dev/null docker:*)",
+      "Bash(for f:*)",
+      "Bash(do cp:*)",
+      "Bash(pip download:*)",
+      "Bash(./run-mcp-tests.zsh --clean)",
+      "Bash(git:*)",
+      "Bash(xargs cat:*)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(claude --print \"/skills\")",
+      "Bash(claude --print \"list all available skills\")",
+      "Bash(claude --print \"/aist-debug\")",
+      "Bash(open -a Docker)"
+    ]
+  }
+}

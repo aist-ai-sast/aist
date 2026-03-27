@@ -1,0 +1,4 @@
+interface:
+  display_name: "MCP Regression Fix"
+  short_description: "Fix failing MCP regression tests with a generic root-cause solution"
+  default_prompt: "Use $mcp-regression-fix to fix failing context extractor MCP regression tests. Diagnose the root cause in context_extractor/ modules, identify the problem family, apply a generic fix, and extend test coverage where insufficient."

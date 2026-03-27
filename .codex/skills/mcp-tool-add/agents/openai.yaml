@@ -1,0 +1,4 @@
+interface:
+  display_name: "MCP Tool Add"
+  short_description: "Add a new tool to the context extractor MCP server"
+  default_prompt: "Use $mcp-tool-add to add a new MCP tool following all established patterns: @log_tool decorator, path traversal guard, isolated test fixture, and system prompt update."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIST Finding Triage"
+  short_description: "Classify new pipeline findings as TP or FP"
+  default_prompt: "Use $aist-finding-triage to analyze new findings in the AIST pipeline, classify them as True Positive or False Positive, and produce complete AISTAIFindingResponse payloads with evidence and reproduction steps."

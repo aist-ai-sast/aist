@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIST API Review"
+  short_description: "Review REST API endpoints for org isolation and correct patterns"
+  default_prompt: "Use $aist-api-review to review new or modified REST API endpoints in aist/api/ for organization isolation, correct permission classes, serializer usage, and superuser bypass."

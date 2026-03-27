@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIST Plan"
+  short_description: "Create an atomic implementation plan before starting a feature"
+  default_prompt: "Use $aist-plan to decompose the feature into 2-5 minute atomic tasks with test-first approach before writing any code."

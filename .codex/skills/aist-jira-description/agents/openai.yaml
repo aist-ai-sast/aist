@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIST Jira Description"
+  short_description: "Generate grouped Jira ticket descriptions from AIST findings"
+  default_prompt: "Use $aist-jira-description to generate Jira ticket descriptions from AIST pipeline findings. Groups similar findings into one ticket, subdivides by project path, and provides specific per-finding remediations."

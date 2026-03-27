@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIST Debug"
+  short_description: "Systematic root-cause debugging for any AIST component regression"
+  default_prompt: "Use $aist-debug to systematically find and fix the root cause of a regression. Reproduce first, trace to root cause, then fix with minimal change and a regression test."

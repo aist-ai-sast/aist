@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIST Security Check"
+  short_description: "Audit changed files for security violations before commit"
+  default_prompt: "Use $aist-security-check to audit all changed files for security issues: organization boundary violations, path traversal, missing authentication, raw SQL injection, and hardcoded credentials."

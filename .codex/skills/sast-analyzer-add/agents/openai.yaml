@@ -1,0 +1,4 @@
+interface:
+  display_name: "SAST Analyzer Add"
+  short_description: "Add a new SAST analyzer to the pipeline"
+  default_prompt: "Use $sast-analyzer-add to add a new SAST analyzer to the sast-pipeline: Dockerfile with security rules, analyze.sh script, analyzers.yaml config entry, and isolated test with fixtures."

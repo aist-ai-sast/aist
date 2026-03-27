@@ -221,6 +221,7 @@ Check all applicable tools:
 6. Existing coverage still requires full live-triage replay and per-tool status recording before the finding can be marked complete.
 7. For code findings, do not mark the finding complete if only the shallow tools were evaluated while any of `find_identifiers`, `trace_identifier_backward`, `find_callers`, `find_definition`, or `find_route_to_function` remain unverified and applicable.
 8. Treat unjustified early stopping as an audit failure, not as a completed finding.
+9. If a tool runs so long that it is reasonably likely to be hung, deadlocked, or otherwise not making progress, treat that behavior as a confirmed bug candidate, capture the concrete reproducing situation, and convert it into an isolated test case.
 
 # Depth-First Audit Rule
 
@@ -249,6 +250,8 @@ Prohibited behavior:
 6. Add fixtures under the appropriate tests fixture directory.
 7. Prefer existing thematic test files, but do not let them grow into huge files.
 8. If no suitable small file exists, create a new small thematic test file.
+9. When a bug is a tool that hangs or runs unreasonably long, add a reproduction-oriented test case for the exact triggering scenario, not just a prose note.
+10. Anonymize any strings in tests, fixtures, comments, or `xfail` reasons that look like secrets, tokens, passwords, private keys, credentials, or other sensitive values while preserving the behavior needed to reproduce the issue.
 
 # Bug Reproduction Rules
 
@@ -261,6 +264,8 @@ Each `xfail` reason must include:
 - line number;
 - failing tool;
 - short mismatch summary.
+
+If the defect is a hang or excessive runtime, the mismatch summary must say that explicitly and the test must preserve the concrete reproducing structure that caused the stall.
 
 # Progress Log
 
