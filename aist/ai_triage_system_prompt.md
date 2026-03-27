@@ -45,7 +45,12 @@ find_decorators(pipeline_id, file_path, line_number)
 ```
 find_identifiers(pipeline_id, file_path, line_number)
 ```
-Identify the variables read at the sink. Then for each suspicious variable:
+Identify the meaningful operands on the sink line. `reads` is line-local context,
+not a minimal taint-source list: it may include receiver objects, method/function
+names participating in the call, and argument/member inputs visible on that line.
+Focus first on suspicious runtime values such as request objects, params, paths,
+headers, body fields, file handles, session objects, and user-derived variables.
+Then for each suspicious variable:
 ```
 trace_identifier_backward(pipeline_id, file_path, line_number, "variable_name")
 ```

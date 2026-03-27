@@ -1,3 +1,8 @@
+---
+name: mcp-tool-add
+description: Add a new tool to the context extractor MCP server following established patterns for logging, path validation, isolated tests, and AI triage prompt integration.
+---
+
 # mcp-tool-add
 
 Guided workflow for adding a new tool to the context extractor MCP server.

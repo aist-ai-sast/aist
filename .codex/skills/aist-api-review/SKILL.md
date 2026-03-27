@@ -1,3 +1,8 @@
+---
+name: aist-api-review
+description: Deep review of new or modified REST endpoints in aist/api for organization isolation, serializer-driven validation, permissions, and consistency with neighboring AIST API patterns.
+---
+
 # aist-api-review
 
 Review new or modified REST API endpoints in `aist/api/` for correctness, security, and

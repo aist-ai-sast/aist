@@ -24,12 +24,12 @@ AIST is a SAST aggregation and triage platform:
 
 - `aist/` — core platform: models, REST API (`aist/api/`), async Celery tasks (`aist/tasks/`),
   deduplication (`aist/dedupe/`), SCM integrations, work items, UI views
-- `sast-combinator/sast-pipeline/` — analyzer orchestrator: runs SAST tools in isolated
-  Docker containers; results written to shared volume, then loaded into platform from files
-- `sast-combinator/context_extractor_service/` — MCP server with Tree-sitter AST analysis;
+- `sast-combinator/sast-pipeline/` — analyzer orchestrator : runs SAST tools in isolated
+  Docker containers; results written to shared volume, then loaded into platform from files (git submodule)
+- `sast-combinator/context_extractor_service/` — MCP server with Tree-sitter AST analysis (git submodule);
   called by external AI triage agents; resolves `pipeline_id` → project path via platform API
 - `client-ui/` — React enterprise frontend
-- `vendor/` — upstream base platform, read-only
+- `vendor/` — upstream base platform, read-only (git submodule)
 
 Data flow:
 ```

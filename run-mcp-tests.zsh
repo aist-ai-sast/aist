@@ -24,6 +24,7 @@ Usage: ./run-mcp-tests.zsh [--clean] [-v|--verbose]
 
 Runs pytest inside the context-extractor-mcp Docker container.
 Tests cover project_analysis and config_analysis MCP tools.
+Runs all tests (no stop on first failure) and shows xfail/xpass summary.
 
 Options:
   --clean    Rebuild the image from scratch (no cache).
@@ -48,10 +49,8 @@ else
   docker build -t "${IMAGE}:test" "${BUILD_CONTEXT}"
 fi
 
-PYTEST_ARGS="-x"
-if [[ $verbose -eq 1 ]]; then
-  PYTEST_ARGS="-xvs"
-fi
+PYTEST_ARGS="-v"
+[[ $verbose -eq 1 ]] && PYTEST_ARGS="-vs"
 
 echo "==> Running tests..."
 docker run --rm \

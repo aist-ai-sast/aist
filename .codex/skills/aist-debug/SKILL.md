@@ -1,3 +1,8 @@
+---
+name: aist-debug
+description: Systematic root-cause debugging workflow for AIST regressions across api, celery, deduplication, pipeline, and client-ui components, with reproduction before fixes.
+---
+
 # aist-debug
 
 Systematic root-cause debugging for any AIST component regression.

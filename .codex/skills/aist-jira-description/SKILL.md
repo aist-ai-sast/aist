@@ -1,3 +1,8 @@
+---
+name: aist-jira-description
+description: Generate grouped Jira ticket descriptions from AIST findings by clustering related issues into remediation families and splitting them by project-specific source path.
+---
+
 # aist-jira-description
 
 Generate Jira ticket descriptions from AIST findings.

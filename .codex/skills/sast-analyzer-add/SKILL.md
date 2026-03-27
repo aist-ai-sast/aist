@@ -1,3 +1,8 @@
+---
+name: sast-analyzer-add
+description: Add a new SAST analyzer to the sast-pipeline orchestrator with the required Dockerfile, analyze.sh, analyzer config entry, and test coverage.
+---
+
 # sast-analyzer-add
 
 Add a new SAST analyzer to the sast-pipeline orchestrator.

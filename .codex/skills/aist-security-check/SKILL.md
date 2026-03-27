@@ -1,3 +1,8 @@
+---
+name: aist-security-check
+description: Deep audit of changed AIST files for organization-boundary violations, path traversal risks, authentication gaps, unsafe queries, and other project security regressions.
+---
+
 # aist-security-check
 
 Audit changed files for security issues before commit. Covers organization boundary

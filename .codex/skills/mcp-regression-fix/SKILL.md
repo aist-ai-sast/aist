@@ -1,3 +1,8 @@
+---
+name: mcp-regression-fix
+description: Fix failing or xfail-marked context extractor MCP regression tests by reproducing failures, identifying the root cause in context_extractor modules, and extending coverage when needed.
+---
+
 # mcp-regression-fix
 
 Fix failing regression or marked as xfail tests for the MCP context extractor server.
@@ -151,24 +156,23 @@ use `pytest.mark.xfail(strict=True)` with reason containing:
 
 ## Step 6 — Verify
 
-Run the originally failing test(s):
-```
-docker compose --env-file .env.dev exec <service> \
-  pytest sast-combinator/context_extractor_service/ansible/files/tests/<test_file>.py -v
-```
-
-Run the full regression suite to check for introduced regressions:
-```
+Run all tests (including xfail) to see the full picture:
+```bash
 ./run-mcp-tests.zsh --clean
 ```
+This runs all tests and shows which xfail tests now xpass (line: `XPASS`).
 
-Run ruff on changed files:
-```
-docker compose --env-file .env.dev exec <service> ruff check <changed_files>
+For previously xfail tests that now xpass: remove their `@pytest.mark.xfail` decorator.
+
+To run a specific test file directly against the already-built image (faster, no rebuild):
+```bash
+docker run --rm -w /app aist-context-extractor-mcp:test \
+  python -m pytest tests/<test_file>.py -v
 ```
 
 **Done when:**
 - [ ] All originally failing tests pass
+- [ ] xfail tests that now pass have their decorator removed
 - [ ] No new test failures introduced
 - [ ] Fix covers the full problem family (not just the specific failing case)
 - [ ] New tests added for uncovered family members (if any)

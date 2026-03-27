@@ -31,6 +31,18 @@ Do not stop at the cheapest subset of tools. The goal is not to get a minimal pa
 
 This audit must remain manual at the decision layer. Large volume changes batching and bookkeeping, but it does not permit replacing per-finding triage with a newly invented automated auditor.
 
+# Oracle Priority
+
+When deciding what a test should assert, use this priority order:
+
+1. real source semantics from the live finding;
+2. documented MCP tool contract;
+3. the isolated fixture that preserves the same semantics;
+4. the currently observed MCP output.
+
+Observed MCP output is evidence of current behavior, not the default source of truth for expected behavior.
+If observed MCP output disagrees with source-derived expected behavior, preserve the source-derived expectation and treat the mismatch as a bug.
+
 # Hard Constraints
 
 1. Process the full finding set for the projects resolved from the selected pipeline ids. The skill is not complete until all findings in those projects are handled.
@@ -44,6 +56,7 @@ This audit must remain manual at the decision layer. Large volume changes batchi
 9. Avoid duplicate coverage by checking the existing suite first.
 10. Do not build a new auditor, replay engine, scoring layer, classifier, or automatic verdict framework to replace manual finding-by-finding triage.
 11. Do not stop after processing only 1-2 findings unless a real blocker prevents further work.
+12. Any test reproducer must be bounded and CI-safe. Preserve the real triggering structure, but do not create fixtures whose size or runtime is uncontrolled.
 
 # Autonomy And Reporting Rule
 
@@ -252,6 +265,123 @@ Prohibited behavior:
 8. If no suitable small file exists, create a new small thematic test file.
 9. When a bug is a tool that hangs or runs unreasonably long, add a reproduction-oriented test case for the exact triggering scenario, not just a prose note.
 10. Anonymize any strings in tests, fixtures, comments, or `xfail` reasons that look like secrets, tokens, passwords, private keys, credentials, or other sensitive values while preserving the behavior needed to reproduce the issue.
+11. If a bug only becomes visible on a deep, wide, or otherwise stress-heavy source shape, keep that shape in the fixture. Do not "simplify" away the nesting, repetition, or size if those properties are part of the real reproducer.
+12. Deep-nested, loop-heavy, or performance-stress fixtures are allowed when they come from a real finding or from a manually validated reduction of a real reproducer. They are not allowed as purely invented synthetic stress tests with no demonstrated link to a real source shape.
+13. Any test that patches module-global state in `mcp_server` or `context_extractor.*` must use `monkeypatch.setattr(...)` or an equivalent automatically reverted mechanism. Do not use direct module-level assignment that can leak state into later tests.
+14. When deciding whether an existing test already covers a finding, require all three:
+    - same MCP tool;
+    - same language or construct family;
+    - same failure mode or semantic expectation.
+    Similar topic alone is not enough to mark a finding as covered.
+15. Prefer semantic fidelity over minimality. If there is a conflict:
+    - semantic fidelity to the real finding wins first;
+    - reproducer stability and bounded execution win second;
+    - fixture minimality wins last.
+
+## Line Number Contract
+
+**All MCP tool line numbers are 1-indexed.** Line 1 is the first line of the file.
+
+## Mandatory Line-Selection Workflow
+
+For every new or updated regression test that depends on a specific line, the agent must complete all three steps below in order.
+
+The agent must leave an explicit audit trail for this workflow in either:
+
+- the progress log entry for the finding; or
+- a short test docstring/comment while the test is being authored.
+
+That record must include:
+
+- live source line number;
+- live source line text;
+- fixture line number;
+- tool under test.
+
+### Step A. Capture the source-of-truth line from the real finding
+
+Before deriving an isolated fixture, record from the live project source:
+
+- the exact source line text the finding is about;
+- the exact 1-indexed line number used for the live MCP replay;
+- which tool output is expected to describe that line.
+
+Do not proceed if the "real finding line" is ambiguous. Resolve that ambiguity first by inspecting the live source and the finding context.
+
+### Step B. Preserve that same line in the isolated fixture
+
+After creating the isolated fixture, verify that the fixture still contains the same semantic target line as the real source.
+
+You must explicitly confirm:
+
+- the exact fixture line number;
+- the exact `code_on_line` or raw source line text at that line;
+- that this fixture line is the same semantic target as in Step A, not a neighboring control-flow line or body line.
+
+If blank lines, multiline constructs, or fixture reduction changed the target line, update the fixture or update the selected line number before writing assertions.
+
+### Step C. Write assertions only for that verified target line
+
+All assertions for `extract_function`, `find_identifiers`, and `trace_identifier_backward` must be written against the single verified target line from Step B.
+
+Prohibited:
+
+- calling a tool on line N while asserting semantics from line N+1 or N-1;
+- calling a tool on a control-flow line and asserting payload from the body line;
+- calling a tool on an assignment line and asserting payload from the surrounding `with`, `if`, `for`, or `try`;
+- changing assertions to match a different line instead of fixing the selected line number or fixture.
+
+If the isolated fixture cannot preserve the real finding's target line cleanly, the fixture is not ready yet and must be revised before assertions are written.
+
+## Verify Line Selection And Reproduce Current Behavior
+
+Before finalizing any line-sensitive assertion, call the tool directly in the container to:
+
+1. confirm that the selected fixture line is the intended semantic target;
+2. reproduce the current MCP behavior on that exact line.
+
+Use this step to validate line selection and capture current behavior.
+Do not use it as permission to rewrite expected values to match semantically wrong MCP output.
+
+Example:
+
+```python
+docker run --rm -w /app aist-context-extractor-mcp:test python -c "
+import mcp_server
+from pathlib import Path
+import tempfile
+
+source = '''...paste fixture source here...'''
+tmpdir = Path(tempfile.mkdtemp())
+file_path = 'fixture.ext'
+(tmpdir / file_path).write_text(source)
+mcp_server._resolve_source_dir = lambda _pid: tmpdir
+
+# Find the right line number by scanning
+for ln in range(1, len(source.splitlines()) + 2):
+    r = mcp_server.extract_function('test', file_path, ln)
+    col = r['meta'].get('code_on_line', '')
+    if col:
+        print(f'  Line {ln}: {repr(col)}')
+
+# Then verify identifiers and trace for the correct line
+ids = mcp_server.find_identifiers('test', file_path, CORRECT_LINE)
+print('identifiers:', ids)
+trace = mcp_server.trace_identifier_backward('test', file_path, CORRECT_LINE, 'IDENTIFIER')
+print('trace:', trace)
+" 2>&1 | grep -v INFO
+```
+
+**Rules:**
+- Never guess line numbers from counting the fixture source manually — always verify with the tool.
+- The SAST scanner may report findings with 0-indexed or 1-indexed lines depending on the tool; always check which convention was used and convert to 1-indexed for MCP calls.
+- `trace_identifier_backward` returns `"line"` as 1-indexed (= internal 0-indexed stmt_line + 1). The condition `stmt_line >= line_number` with 0-indexed stmt_line and 1-indexed line_number means the trace includes the line where the call is made (because 0-indexed N-1 < 1-indexed N). Account for this when writing trace assertions.
+- If `code_on_line` is empty or wrong, the line number is almost certainly wrong — do not adjust the assertion, adjust the line number.
+- `find_identifiers` and `trace_identifier_backward` are usually line-local in what they report, but expected results must be derived from the source and the intended tool contract, not copied from the current MCP output.
+- First decide which concrete source line the real finding is about. Then derive the semantically correct expectation for that exact line from the fixture source. Only after that compare MCP output to the expected result.
+- Do not mix expectations from a control-flow line and its body unless the intended contract for that tool explicitly says both should appear. If the real finding is on `with open(...)`, validate the semantics of that line; if it is on `data = f.read()`, validate that line instead.
+- Re-run the exact MCP call on the isolated fixture before finalizing the test, but use that rerun only to confirm line selection and reproduce the current behavior. Do not blindly rewrite assertions to match the observed MCP output if the output is semantically wrong for the selected line.
+- If MCP output and source-derived expectation disagree, preserve the source-derived expectation and record it as a normal failing assertion or `xfail`, depending on whether the bug is being fixed now or intentionally deferred.
 
 # Bug Reproduction Rules
 
@@ -266,6 +396,14 @@ Each `xfail` reason must include:
 - short mismatch summary.
 
 If the defect is a hang or excessive runtime, the mismatch summary must say that explicitly and the test must preserve the concrete reproducing structure that caused the stall.
+
+For hang, deadlock, or pathological-runtime bugs:
+
+- preserve the relevant structural property from the real reproducer, such as deep nesting, chained callbacks, large literal expansion, or repeated wrapper nodes;
+- do not replace a real stress reproducer with a smaller fixture unless you have manually proven that the smaller fixture still reproduces the same bug;
+- explicitly note in the test docstring or comment which structural property is essential to the reproduction.
+- keep the reproducer bounded enough that the test can complete under CI when the bug is fixed;
+- if the reproducer must remain expensive, prefer an `xfail(strict=True)` or another bounded regression pattern over an effectively unbounded normal test.
 
 # Progress Log
 

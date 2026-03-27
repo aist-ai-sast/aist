@@ -1,3 +1,8 @@
+---
+name: aist-plan
+description: Create an atomic implementation plan for non-trivial AIST work by exploring the codebase first and breaking changes into small test-first tasks.
+---
+
 # aist-plan
 
 Create an atomic implementation plan before starting any non-trivial feature or refactor.
