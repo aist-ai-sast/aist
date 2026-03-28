@@ -38,8 +38,8 @@ class Command(BaseCommand):
                 self.style.WARNING(
                     f"\n{_ENV_VAR} is not set. Generated a new token.\n"
                     f"Add the following line to your .env file:\n\n"
-                    f"  {_ENV_VAR}={desired_key}\n"
-                )
+                    f"  {_ENV_VAR}={desired_key}\n",
+                ),
             )
 
         with transaction.atomic():
@@ -74,6 +74,6 @@ class Command(BaseCommand):
         verb = "Created" if user_created else "Found"
         self.stdout.write(
             self.style.SUCCESS(
-                f"{verb} service account '{_SERVICE_USERNAME}', token {action}."
-            )
+                f"{verb} service account '{_SERVICE_USERNAME}', token {action}.",
+            ),
         )

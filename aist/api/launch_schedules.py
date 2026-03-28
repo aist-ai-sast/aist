@@ -496,7 +496,7 @@ class LaunchSchedulePreviewSerializer(serializers.Serializer):
         return v
 
 
-class LaunchSchedulePreviewAPI(APIView):
+class LaunchSchedulePreviewAPI(AuthorizedQuerySetMixin, APIView):
 
     """
     UI helper endpoint: preview next N runs for a cron expression.

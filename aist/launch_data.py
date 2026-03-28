@@ -54,7 +54,8 @@ class PipelineLaunchData:
 
     @property
     def is_git_based(self) -> bool:
-        """True if the project was checked out from a git repository.
+        """
+        True if the project was checked out from a git repository.
 
         Derived from ``project_version_descriptor.type``, which mirrors
         :attr:`AISTProjectVersion.version_type` and is written to ``launch_data``
@@ -64,7 +65,8 @@ class PipelineLaunchData:
         return version_type in {"GIT_BRANCH", "GIT_HASH"}
 
     def resolve_source_root(self, product_name: str = "") -> str:
-        """Return the on-disk path to the project sources.
+        """
+        Return the on-disk path to the project sources.
 
         For git-based projects the sast-combinator clones the repository into a
         subdirectory named after the product inside ``project_path``.  For

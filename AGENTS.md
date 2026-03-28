@@ -63,6 +63,7 @@ def get_queryset(self):
   Before adding any file-reading code, check the existing path guard in `mcp_server.py`.
 - Docker in `sast-pipeline`: no `privileged: true`, no `network_mode: host` without
   explicit documented justification.
+- For every ApiView class inherit from AuthorizedQuerySetMixin before APIView
 
 **Security checklist — verify before finalizing any change:**
 

@@ -7,7 +7,6 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from io import BytesIO, StringIO
-from pathlib import Path
 
 from django.db import close_old_connections, transaction
 from django.db.models import Count
@@ -864,7 +863,7 @@ class PipelineSourceInfoSerializer(serializers.Serializer):
     languages = serializers.ListField(child=serializers.CharField())
 
 
-class PipelineSourceInfoAPI(APIView):
+class PipelineSourceInfoAPI(AuthorizedQuerySetMixin, APIView):
 
     """Internal endpoint for MCP services to resolve pipeline source path."""
 

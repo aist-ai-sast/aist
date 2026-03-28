@@ -66,6 +66,7 @@ class PipelineSourceInfoAPITests(AISTApiBase):
             launch_data={
                 "project_path": f"{_PROJ_PATH}/pipe-src-git",
                 "languages": ["python"],
+                "project_version_descriptor": {"type": "GIT_HASH"},
             },
         )
 
@@ -126,7 +127,7 @@ class PipelineSourceInfoAPITests(AISTApiBase):
         anon_client = APIClient()
         resp = anon_client.get(self._url("pipe-src-noauth"))
 
-        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(resp.status_code, 403)
 
     def test_returns_409_for_finished_with_warnings(self):
         AISTPipeline.objects.create(

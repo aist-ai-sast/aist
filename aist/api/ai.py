@@ -11,7 +11,6 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers
-from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -149,8 +148,7 @@ class AIDeleteResponseAPI(AuthorizedQuerySetMixin, APIView):
         return Response(status=204)
 
 
-class AIPipelineCallbackAPI(APIView):
-    authentication_classes = [TokenAuthentication]
+class AIPipelineCallbackAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
