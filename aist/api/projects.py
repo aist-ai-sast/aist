@@ -8,6 +8,7 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Product, SLA_Configuration
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -27,26 +28,20 @@ from aist.utils.pipeline_imports import _load_analyzers_config
 _SCRIPT_MAX_BYTES = 256 * 1024
 
 
-def _create_and_attach_script(project: AISTProject, content: str, user=None) -> AISTProjectScript:
+def _create_initial_script(project: AISTProject, content: str, user=None) -> AISTProjectScript:
     """
-    Attach a script to a project, reusing the shared default when possible.
+    Create a project-scoped script revision for a newly created project.
 
-    If *content* matches the default entrypoint script, the shared singleton is
-    reused instead of creating a duplicate per-project copy.  This way a single
-    edit to the shared default propagates to all projects that have not yet
-    customised their script.
+    The script is deduplicated by sha256 within the project.  It is stored as
+    a project revision (script.project=project) and will be used as the default
+    when the first AISTProjectVersion is created for this project.
     """
-    content_stripped = (content or "").strip()
-    if not content_stripped or content_stripped == DEFAULT_ENTRYPOINT_SCRIPT.strip():
-        script = AISTProjectScript.get_shared_default()
-    else:
-        script = AISTProjectScript.objects.create(
-            project=project,
-            content=content,
-            created_by=user,
-        )
-    project.active_script = script
-    project.save(update_fields=["active_script", "updated"])
+    content_stripped = (content or "").strip() or DEFAULT_ENTRYPOINT_SCRIPT
+    script, _ = AISTProjectScript.get_or_create_for_project(
+        content=content_stripped,
+        project=project,
+        user=user,
+    )
     return script
 
 
@@ -64,7 +59,6 @@ class AISTProjectSerializer(serializers.ModelSerializer):
             "product_name",
             "supported_languages",
             "compilable",
-            "active_script_id",
             "organization_id",
             "organization_name",
             "created",
@@ -284,9 +278,9 @@ class AISTProjectListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
                 supported_languages=serializer.validated_data["supported_languages"],
                 profile=serializer.validated_data["profile"] or {},
             )
-            # Always create an initial script revision so the project can be launched immediately.
+            # Create an initial project-scoped script revision for use when the first version is created.
             script_content = (serializer.validated_data.get("script_content") or "").strip()
-            _create_and_attach_script(project, script_content or DEFAULT_ENTRYPOINT_SCRIPT, user=request.user)
+            _create_initial_script(project, script_content, user=request.user)
 
         out = AISTProjectSerializer(project)
         return Response({"ok": True, "project": out.data}, status=status.HTTP_201_CREATED)
@@ -401,6 +395,9 @@ class AISTProjectScriptListCreateAPI(AuthorizedQuerySetMixin, APIView):
         set_active = serializer.validated_data["set_active"]
 
         if scope == "global":
+            if not request.user.is_superuser:
+                msg = "Only superusers may update the shared default script (scope=global)."
+                raise PermissionDenied(msg)
             # Lock the shared singleton row before reading + writing to prevent
             # a lost-update race when two requests update the global script
             # concurrently.  select_for_update() acquires a row-level lock that
@@ -410,9 +407,6 @@ class AISTProjectScriptListCreateAPI(AuthorizedQuerySetMixin, APIView):
                     script = AISTProjectScript.objects.select_for_update().get(is_shared=True)
                     script.content = content
                     script.save(update_fields=["content", "sha256"])
-                    if set_active and project.active_script_id != script.pk:
-                        project.active_script = script
-                        project.save(update_fields=["active_script", "updated"])
             except AISTProjectScript.DoesNotExist:
                 return Response(
                     {"detail": "Shared default script not found. Run migrations to initialise it."},
@@ -420,16 +414,18 @@ class AISTProjectScriptListCreateAPI(AuthorizedQuerySetMixin, APIView):
                 )
             response_status = status.HTTP_200_OK
         else:
-            # Create an immutable project-specific revision.
-            script = AISTProjectScript.objects.create(
-                project=project,
+            # Create a project-scoped revision (deduplicated by sha256).
+            script, created = AISTProjectScript.get_or_create_for_project(
                 content=content,
-                created_by=request.user,
+                project=project,
+                user=request.user,
             )
             if set_active:
-                project.active_script = script
-                project.save(update_fields=["active_script", "updated"])
-            response_status = status.HTTP_201_CREATED
+                latest_version = project.versions.order_by("-created").select_related("script").first()
+                if latest_version and latest_version.script_id != script.pk:
+                    latest_version.script = script
+                    latest_version.save(update_fields=["script", "updated"])
+            response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
 
         return Response(AISTProjectScriptContentSerializer(script).data, status=response_status)
 
@@ -477,17 +473,18 @@ class AISTProjectActiveScriptAPI(AuthorizedQuerySetMixin, APIView):
     @extend_schema(
         responses={
             200: AISTProjectScriptContentSerializer,
-            404: OpenApiResponse(description="Project has no active script"),
         },
         tags=[AISTApiTag.PROJECTS.value],
         summary="Get active script",
-        description="Returns the active script content for the project, whether shared or project-specific.",
+        description=(
+            "Returns the active script for the project. "
+            "Resolution order: latest version's script → latest project-scoped revision → shared default. "
+            "Always returns 200 — the shared default is the final fallback."
+        ),
     )
     def get(self, request, project_id: int) -> Response:
         project = self.get_authorized_object(id=project_id)
-        if not project.active_script_id:
-            return Response({"detail": "Project has no active script."}, status=status.HTTP_404_NOT_FOUND)
-        script = AISTProjectScript.objects.get(pk=project.active_script_id)
+        script = project.active_script
         return Response(AISTProjectScriptContentSerializer(script).data)
 
 
@@ -561,7 +558,7 @@ def update_project_from_payload(*, project: AISTProject, payload: dict):
     return {
         "id": project.id,
         "product_name": getattr(project.product, "name", str(project.id)),
-        "active_script_id": project.active_script_id,
+        "active_script_id": project.active_script.id if project.active_script else None,
         "compilable": project.compilable,
         "supported_languages": project.supported_languages,
         "profile": project.profile,

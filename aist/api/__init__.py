@@ -76,7 +76,11 @@ from aist.api.pipelines import (
     PipelineStartAPI,
     PipelineStartRequestSerializer,
 )
-from aist.api.project_versions import AISTProjectVersionCreateSerializer, ProjectVersionCreateAPI
+from aist.api.project_versions import (
+    AISTProjectVersionCreateSerializer,
+    ProjectVersionCreateAPI,
+    ProjectVersionScriptUpdateAPI,
+)
 from aist.api.projects import (
     AISTProjectActiveScriptAPI,
     AISTProjectDetailAPI,
@@ -177,6 +181,7 @@ __all__ = [
     "ProjectLaunchScheduleUpsertAPI",
     "ProjectVersionCreateAPI",
     "ProjectVersionFileBlobAPI",
+    "ProjectVersionScriptUpdateAPI",
     "SlackActionCreateSerializer",
     "WorkItemLinkInlineSerializer",
     "WorkItemProviderDetailAPI",

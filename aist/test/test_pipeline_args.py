@@ -337,7 +337,7 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
 
 class ScriptFromDBTests(TestCase):
 
-    """User scenario: active_script is set; pipeline writes temp file then removes it."""
+    """Version-level script resolution: version.script → shared default fallback."""
 
     def setUp(self):
         sla = SLA_Configuration.objects.create(name="SLA db")
@@ -349,27 +349,24 @@ class ScriptFromDBTests(TestCase):
             sla_configuration_id=sla.id,
         )
 
-    def test_active_script_writes_temp_file_and_cleans_up(self):
-        """When active_script is set, a temp file is created then removed after context exits."""
-        script_content = "#!/bin/bash\necho from_db"
-        project = AISTProject.objects.create(
-            product=self.product,
-            supported_languages=[],
-            compilable=False,
-            profile={},
-        )
-        active_script = AISTProjectScript.objects.create(
-            project=project,
-            content=script_content,
-        )
-        project.active_script = active_script
-        project.save(update_fields=["active_script"])
-
+    def _make_args(self, project, project_version):
         args = PipelineArguments.__new__(PipelineArguments)
         args.project = project
-        args.project_version = {}
+        args.project_version = project_version
         args.pipeline_path = None
         args.aist_path = Path(tempfile.gettempdir()) / "aist-out"
+        return args
+
+    def test_version_script_writes_temp_file_and_cleans_up(self):
+        """When a version has a script, its content is written to a temp file that is removed after context exits."""
+        script_content = "#!/bin/bash\necho from_version"
+        project = AISTProject.objects.create(product=self.product, supported_languages=[], compilable=False, profile={})
+        script = AISTProjectScript.objects.create(project=project, content=script_content)
+        version = AISTProjectVersion.objects.create(
+            project=project, version="v1.0", version_type=VersionType.GIT_BRANCH, script=script,
+        )
+
+        args = self._make_args(project, {"id": version.id})
 
         temp_path = None
         with args.script_path_context() as resolved:
@@ -379,20 +376,10 @@ class ScriptFromDBTests(TestCase):
 
         self.assertFalse(Path(temp_path).exists())
 
-    def test_no_active_script_falls_back_to_shared_default(self):
-        """When active_script_id is None, script_path_context uses shared default and cleans up temp file."""
-        project = AISTProject.objects.create(
-            product=self.product,
-            supported_languages=[],
-            compilable=False,
-            profile={},
-        )
-
-        args = PipelineArguments.__new__(PipelineArguments)
-        args.project = project
-        args.project_version = {}
-        args.pipeline_path = None
-        args.aist_path = Path(tempfile.gettempdir()) / "aist-out"
+    def test_no_project_version_falls_back_to_shared_default(self):
+        """When project_version has no id, script_path_context uses shared default and cleans up."""
+        project = AISTProject.objects.create(product=self.product, supported_languages=[], compilable=False, profile={})
+        args = self._make_args(project, {})
 
         temp_path = None
         with args.script_path_context() as resolved:
@@ -400,10 +387,43 @@ class ScriptFromDBTests(TestCase):
             self.assertTrue(Path(resolved).exists())
             self.assertGreater(len(Path(resolved).read_text(encoding="utf-8")), 0)
 
-        project.refresh_from_db()
-        self.assertIsNotNone(project.active_script_id)
-        self.assertTrue(project.active_script.is_shared)
         self.assertFalse(Path(temp_path).exists())
+
+    def test_version_script_takes_priority_over_script_revisions(self):
+        """When AISTProjectVersion has a script, it takes priority over project script_revisions."""
+        project_script_content = "#!/bin/bash\necho project_revision"
+        version_script_content = "#!/bin/bash\necho version_script"
+
+        project = AISTProject.objects.create(product=self.product, supported_languages=[], compilable=False, profile={})
+        # Project-scoped revision (used by active_script property fallback)
+        AISTProjectScript.objects.create(project=project, content=project_script_content)
+
+        version_script = AISTProjectScript.objects.create(project=project, content=version_script_content)
+        version = AISTProjectVersion.objects.create(
+            project=project, version="v1.0", version_type=VersionType.GIT_BRANCH, script=version_script,
+        )
+
+        args = self._make_args(project, {"id": version.id, "version": "v1.0"})
+
+        with args.script_path_context() as resolved:
+            content = Path(resolved).read_text(encoding="utf-8")
+
+        self.assertEqual(content, version_script_content)
+
+    def test_version_without_script_falls_back_to_shared_default(self):
+        """When version.script is None, script_path_context falls back to the shared default."""
+        project = AISTProject.objects.create(product=self.product, supported_languages=[], compilable=False, profile={})
+        version = AISTProjectVersion.objects.create(
+            project=project, version="v2.0", version_type=VersionType.GIT_BRANCH, script=None,
+        )
+        shared_default = AISTProjectScript.get_shared_default()
+
+        args = self._make_args(project, {"id": version.id, "version": "v2.0"})
+
+        with args.script_path_context() as resolved:
+            content = Path(resolved).read_text(encoding="utf-8")
+
+        self.assertEqual(content, shared_default.content)
 
 
 class AnalyzersDiscardTests(TestCase):

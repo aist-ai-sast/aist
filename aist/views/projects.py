@@ -142,7 +142,7 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
     # Organizations with their projects prefetched to avoid N+1 queries.
     project_qs = (
         get_authorized_aist_projects(Permissions.Product_View, user=request.user)
-        .select_related("product", "repository", "active_script")
+        .select_related("product", "repository")
         .order_by("product__name", "id")
     )
     organizations = (
@@ -173,5 +173,10 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
             # URL template: replace literal "0" with a project id in JS.
             "active_script_url_template": reverse("aist_api:project_active_script", kwargs={"project_id": 0}),
             "project_scripts_url_template": reverse("aist_api:project_script_list_create", kwargs={"project_id": 0}),
+            # Both 0s are replaced in JS: first for project_id, second for version_id.
+            "project_version_script_url_template": reverse(
+                "aist_api:project_version_script_update",
+                kwargs={"project_id": 0, "version_id": 0},
+            ),
         },
     )

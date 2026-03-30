@@ -92,15 +92,21 @@ class PipelineArguments:
             )
 
         if commit and effective and effective.version_type == VersionType.GIT_BRANCH:
-            resolved_version, _ = AISTProjectVersion.objects.get_or_create(
+            resolved_version, created = AISTProjectVersion.objects.get_or_create(
                 project_id=effective.project_id,
                 version=commit,
                 version_type=VersionType.GIT_HASH,
-                defaults={"resolved_from_branch": effective},
+                defaults={"resolved_from_branch": effective, "script": effective.script},
             )
+            update_fields = []
             if resolved_version.resolved_from_branch_id is None:
                 resolved_version.resolved_from_branch = effective
-                resolved_version.save(update_fields=["resolved_from_branch", "updated"])
+                update_fields.append("resolved_from_branch")
+            if not created and resolved_version.script_id is None and effective.script_id:
+                resolved_version.script = effective.script
+                update_fields.append("script")
+            if update_fields:
+                resolved_version.save(update_fields=[*update_fields, "updated"])
 
             effective.last_resolved_commit = commit
             effective.last_resolved_at = timezone.now()
@@ -243,7 +249,7 @@ class PipelineArguments:
         The dictionary must contain `project_id` instead of `project`.
         """
         try:
-            project = AISTProject.objects.select_related("active_script").get(id=data["project_id"])
+            project = AISTProject.objects.get(id=data["project_id"])
         except AISTProject.DoesNotExist:
             msg = MSG_PROJECT_NOT_FOUND_TPL.format(data["project_id"])
             raise ValueError(msg)
@@ -311,19 +317,30 @@ class PipelineArguments:
     @contextmanager
     def script_path_context(self) -> Iterator[str]:
         """
-        Write the active script to a temp file and yield its path.
+        Write the version's script to a temp file and yield its path.
         The temp file is removed when the context exits.
-        If active_script is not set, falls back to the shared default automatically.
+
+        Every AISTProjectVersion always has a script set (enforced by data migration
+        and creation logic). Falls back to shared default only as a last-resort guard.
         """
-        if not self.project.active_script_id:
+        pv_id = (self.project_version or {}).get("id")
+        script = None
+        if pv_id:
+            pv = (
+                AISTProjectVersion.objects
+                .select_related("script")
+                .filter(pk=pv_id, project=self.project)
+                .first()
+            )
+            if pv:
+                script = pv.script
+        if script is None:
             _logger.warning(
-                "Project %s has no active_script; falling back to shared default.",
+                "Project version for project %s has no script; falling back to shared default.",
                 self.project.id,
             )
             script = AISTProjectScript.get_shared_default()
-            self.project.active_script = script
-            self.project.save(update_fields=["active_script", "updated"])
-        script_path = self._write_script_to_temp(self.project.active_script)
+        script_path = self._write_script_to_temp(script)
         try:
             yield script_path
         finally:

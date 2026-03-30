@@ -28,7 +28,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from aist.api.projects import _create_and_attach_script
+from aist.api.projects import _create_initial_script
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
@@ -664,7 +664,7 @@ def _import_github_repository(*, installation_id: int, organization: Organizatio
         )
 
         if created_project:
-            _create_and_attach_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
+            _create_initial_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
         else:
             if aist_project.organization_id and aist_project.organization_id != organization.id:
                 reason = "project_linked_to_another_organization"

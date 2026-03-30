@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load aist_extras %}
 
 {% block breadcrumbs %}
     <li class="breadcrumb-item active" aria-current="page">
@@ -76,7 +77,7 @@
                 {% for p in projects %}
                     <tr data-project-id="{{ p.id }}"
                         data-project-name="{{ p.product.name|default_if_none:'' }}"
-                        data-project-active-script-id="{{ p.active_script_id|default_if_none:'' }}"
+                        data-project-active-script-id="{{ p.active_script.id }}"
                         data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
                         data-project-langs="{{ p.supported_languages|join:', ' }}"
                         data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
@@ -84,6 +85,7 @@
                         data-project-org-name="{{ p.organization.name|default_if_none:'' }}"
                         data-project-repo-type="{{ p.repository.type|default_if_none:'' }}"
                         data-project-repo-base-url="{{ p.repository.base_url|default_if_none:'' }}"
+                        data-project-versions="{{ p.versions.all|versions_json }}"
                         data-update-url="{% url 'aist:aist_project_update' p.id %}"
                         data-delete-url="{% url 'aist_api:project_detail' project_id=p.id %}">
                         <td>{{ p.id }}</td>
@@ -99,11 +101,9 @@
                             </a>
                         </td>
                         <td class="script-cell">
-                            {% if p.active_script_id %}
-                                <code title="{{ p.active_script.sha256 }}">{{ p.active_script.sha256|slice:":8" }}&hellip;</code>
-                            {% else %}
-                                <span class="text-danger">No script</span>
-                            {% endif %}
+                            {% with p.active_script as s %}
+                                <code title="{{ s.sha256 }}">{{ s.sha256|slice:":8" }}&hellip;</code>
+                            {% endwith %}
                         </td>
                         <td class="langs-cell">
                             {% if p.supported_languages %}
@@ -155,7 +155,7 @@
                         {% for p in org.projects.all %}
                             <tr data-project-id="{{ p.id }}"
                                 data-project-name="{{ p.product.name|default_if_none:'' }}"
-                                data-project-active-script-id="{{ p.active_script_id|default_if_none:'' }}"
+                                data-project-active-script-id="{{ p.active_script.id }}"
                                 data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
                                 data-project-langs="{{ p.supported_languages|join:', ' }}"
                                 data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
@@ -163,6 +163,7 @@
                                 data-project-org-name="{{ org.name|default_if_none:'' }}"
                                 data-project-repo-type="{{ p.repository.type|default_if_none:'' }}"
                                 data-project-repo-base-url="{{ p.repository.base_url|default_if_none:'' }}"
+                                data-project-versions="{{ p.versions.all|versions_json }}"
                                 data-update-url="{% url 'aist:aist_project_update' p.id %}"
                                 data-delete-url="{% url 'aist_api:project_detail' project_id=p.id %}">
                                 <td>{{ p.id }}</td>
@@ -178,11 +179,9 @@
                                     </a>
                                 </td>
                                 <td class="script-cell">
-                                    {% if p.active_script_id %}
-                                        <code title="{{ p.active_script.sha256 }}">{{ p.active_script.sha256|slice:":8" }}&hellip;</code>
-                                    {% else %}
-                                        <span class="text-danger">No script</span>
-                                    {% endif %}
+                                    {% with p.active_script as s %}
+                                        <code title="{{ s.sha256 }}">{{ s.sha256|slice:":8" }}&hellip;</code>
+                                    {% endwith %}
                                 </td>
                                 <td class="langs-cell">
                                     {% if p.supported_languages %}
@@ -234,7 +233,7 @@
                         {% for p in unassigned_projects %}
                             <tr data-project-id="{{ p.id }}"
                                 data-project-name="{{ p.product.name|default_if_none:'' }}"
-                                data-project-active-script-id="{{ p.active_script_id|default_if_none:'' }}"
+                                data-project-active-script-id="{{ p.active_script.id }}"
                                 data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
                                 data-project-langs="{{ p.supported_languages|join:', ' }}"
                                 data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
@@ -242,6 +241,7 @@
                                 data-project-org-name=""
                                 data-project-repo-type="{{ p.repository.type|default_if_none:'' }}"
                                 data-project-repo-base-url="{{ p.repository.base_url|default_if_none:'' }}"
+                                data-project-versions="{{ p.versions.all|versions_json }}"
                                 data-update-url="{% url 'aist:aist_project_update' p.id %}"
                                 data-delete-url="{% url 'aist_api:project_detail' project_id=p.id %}">
                                 <td>{{ p.id }}</td>
@@ -257,11 +257,9 @@
                                     </a>
                                 </td>
                                 <td class="script-cell">
-                                    {% if p.active_script_id %}
-                                        <code title="{{ p.active_script.sha256 }}">{{ p.active_script.sha256|slice:":8" }}&hellip;</code>
-                                    {% else %}
-                                        <span class="text-danger">No script</span>
-                                    {% endif %}
+                                    {% with p.active_script as s %}
+                                        <code title="{{ s.sha256 }}">{{ s.sha256|slice:":8" }}&hellip;</code>
+                                    {% endwith %}
                                 </td>
                                 <td class="langs-cell">
                                     {% if p.supported_languages %}
@@ -614,6 +612,17 @@
                                 </div>
                             </div>
 
+                            {# Version selector — visible only for local scope #}
+                            <div id="ap-script-version-group" style="display:none;margin-bottom:8px;">
+                                <label for="ap-script-version">Apply to version</label>
+                                <select class="form-control" id="ap-script-version">
+                                    <option value="">— Latest version (default) —</option>
+                                </select>
+                                <p class="help-block" style="margin-top:4px;margin-bottom:0;">
+                                    Assign this script to a specific version, or leave as default to update the latest.
+                                </p>
+                            </div>
+
                             <textarea class="form-control"
                                       id="ap-script-content"
                                       name="script_content"
@@ -875,8 +884,26 @@
             var scriptHelp = document.getElementById("ap-script-help");
             var scopeGlobalRadio = document.getElementById("ap-scope-global");
             var scopeLocalRadio = document.getElementById("ap-scope-local");
+            var scriptVersionGroup = document.getElementById("ap-script-version-group");
+            var fieldScriptVersion = document.getElementById("ap-script-version");
             var originalScriptContent = "";
             var currentScriptIsShared = false;
+            function updateVersionGroupVisibility() {
+                if (!scriptVersionGroup) return;
+                // Show when scope=local is selected, or when project already has its own script
+                // (scope block hidden — no shared-vs-local choice needed).
+                var scopeBlockHidden = !scriptScopeBlock || scriptScopeBlock.style.display === "none";
+                var localSelected = scopeLocalRadio && scopeLocalRadio.checked;
+                scriptVersionGroup.style.display = (localSelected || scopeBlockHidden) ? "block" : "none";
+            }
+
+            if (scopeGlobalRadio) {
+                scopeGlobalRadio.addEventListener("change", updateVersionGroupVisibility);
+            }
+            if (scopeLocalRadio) {
+                scopeLocalRadio.addEventListener("change", updateVersionGroupVisibility);
+            }
+
             // GitLab import modal elements
             var gitlabOpenBtn = document.getElementById("gitlab-import-open");
             var gitlabModal = document.getElementById("gitlabImportModal");
@@ -918,6 +945,7 @@
             var emptyProjectCreateUrl = "{% url 'aist_api:project_list' %}";
             var activeScriptUrlTemplate = "{{ active_script_url_template|escapejs }}";
             var projectScriptsUrlTemplate = "{{ project_scripts_url_template|escapejs }}";
+            var projectVersionScriptUrlTemplate = "{{ project_version_script_url_template|escapejs }}";
 
 
             var currentRow = null;
@@ -1015,7 +1043,29 @@
                 }
                 if (scriptMeta) scriptMeta.textContent = "";
                 if (scriptScopeBlock) scriptScopeBlock.style.display = "none";
+                if (scriptVersionGroup) scriptVersionGroup.style.display = "none";
+                if (fieldScriptVersion) {
+                    fieldScriptVersion.innerHTML = '<option value="">— Latest version (default) —</option>';
+                }
                 if (scriptLoading) scriptLoading.style.display = "block";
+
+                // Populate version selector from the row's data attribute (pre-rendered by server).
+                if (fieldScriptVersion) {
+                    var versionsRaw = row.getAttribute("data-project-versions") || "[]";
+                    try {
+                        var versions = JSON.parse(versionsRaw);
+                        versions.forEach(function (v) {
+                            var opt = document.createElement("option");
+                            opt.value = String(v.id);
+                            opt.textContent = v.label;
+                            fieldScriptVersion.appendChild(opt);
+                        });
+                    } catch (e) { /* selector keeps default-only option */ }
+                    // Sync Bootstrap Select widget with the updated native <select> options.
+                    if (window.jQuery && window.jQuery.fn.selectpicker) {
+                        window.jQuery(fieldScriptVersion).selectpicker("refresh");
+                    }
+                }
 
                 var scriptUrl = activeScriptUrlTemplate.replace("/0/", "/" + id + "/");
                 fetch(scriptUrl, {credentials: "same-origin"})
@@ -1047,6 +1097,7 @@
                                         "Saving changes creates a new project-specific revision.";
                                 }
                             }
+                            updateVersionGroupVisibility();
                         } else {
                             if (fieldScriptContent) fieldScriptContent.style.display = "";
                             if (scriptMeta) scriptMeta.textContent = "No script loaded.";
@@ -1288,11 +1339,13 @@
                         });
                     }
 
-                    // Determine the scope chosen by the user.
+                    // Determine the scope and target version chosen by the user.
                     var chosenScope = "local";
                     if (currentScriptIsShared && scopeGlobalRadio && scopeGlobalRadio.checked) {
                         chosenScope = "global";
                     }
+                    var chosenVersionId = (chosenScope === "local" && fieldScriptVersion)
+                        ? (fieldScriptVersion.value || "") : "";
 
                     // If script content changed (or scope forces a write), save the script first.
                     var newScript = fieldScriptContent ? fieldScriptContent.value : "";
@@ -1302,11 +1355,18 @@
                     var shouldSaveScript = scriptChanged || (chosenScope === "global" && newScript);
                     if (shouldSaveScript) {
                         var scriptsUrl = projectScriptsUrlTemplate.replace("/0/", "/" + String(fieldId.value || "") + "/");
+                        // When a specific version is selected, skip auto-assign (set_active=false)
+                        // and PATCH the version manually after the script is created.
+                        var scriptBody = {
+                            content: newScript,
+                            scope: chosenScope,
+                            set_active: !chosenVersionId
+                        };
                         fetch(scriptsUrl, {
                             method: "POST",
                             credentials: "same-origin",
                             headers: jsonHeaders,
-                            body: JSON.stringify({content: newScript, scope: chosenScope})
+                            body: JSON.stringify(scriptBody)
                         }).then(function (resp) {
                             return resp.json().then(function (d) { return {ok: resp.ok, data: d}; });
                         }).then(function (scriptResult) {
@@ -1343,7 +1403,39 @@
                                         "Saving changes creates a new project-specific revision.";
                                 }
                             }
-                            doProjectSave();
+                            // If a specific version was chosen, assign the new script to it.
+                            if (chosenVersionId && scriptResult.data && scriptResult.data.id) {
+                                var pid = String(fieldId.value || "");
+                                var versionScriptUrl = projectVersionScriptUrlTemplate
+                                    .replace("/0/versions/0/", "/" + pid + "/versions/" + chosenVersionId + "/");
+                                fetch(versionScriptUrl, {
+                                    method: "PATCH",
+                                    credentials: "same-origin",
+                                    headers: jsonHeaders,
+                                    body: JSON.stringify({script_id: scriptResult.data.id})
+                                }).then(function (r) {
+                                    return r.json().then(function (d) { return {ok: r.ok, data: d}; });
+                                }).then(function (patchResult) {
+                                    if (!patchResult.ok) {
+                                        var msg = extractApiErrorMessage(
+                                            patchResult.data, "Failed to assign script to version."
+                                        );
+                                        if (errorBox) {
+                                            errorBox.textContent = msg;
+                                            errorBox.style.display = "block";
+                                        }
+                                        return;
+                                    }
+                                    doProjectSave();
+                                }).catch(function () {
+                                    if (errorBox) {
+                                        errorBox.textContent = "Unexpected error while assigning script to version.";
+                                        errorBox.style.display = "block";
+                                    }
+                                });
+                            } else {
+                                doProjectSave();
+                            }
                         }).catch(function () {
                             if (errorBox) {
                                 errorBox.textContent = "Unexpected error while saving script.";

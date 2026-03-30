@@ -13,7 +13,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from aist.api.projects import _create_and_attach_script
+from aist.api.projects import _create_initial_script
 from aist.api.schema import AISTApiTag
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import AISTProject, OrgIntegration, OrgIntegrationType, RepositoryInfo, ScmGitlabBinding, ScmType
@@ -165,7 +165,7 @@ class ImportProjectFromGitlabAPI(APIView):
                 },
             )
             if project_created:
-                _create_and_attach_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
+                _create_initial_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
             else:
                 if aist_project.organization_id and aist_project.organization_id != organization.id:
                     msg = "Project is already linked to another organization."

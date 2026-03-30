@@ -386,13 +386,6 @@ class AISTProject(models.Model):
 
     product = models.OneToOneField(Product, on_delete=models.CASCADE)
     supported_languages = models.JSONField(default=list, blank=True)
-    active_script = models.ForeignKey(
-        "AISTProjectScript",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="+",
-    )
     compilable = models.BooleanField(default=False)
     profile = models.JSONField(default=dict, blank=True)
     repository = models.OneToOneField(
@@ -420,10 +413,31 @@ class AISTProject(models.Model):
             excluded_paths.extend(self.profile.get("paths", {}).get("exclude", []))
         return excluded_paths
 
-    def clean(self) -> None:
-        if not self.active_script_id:
-            msg = "AISTProject must have active_script set."
-            raise ValidationError(msg)
+    @property
+    def active_script(self) -> AISTProjectScript:
+        """
+        Return the current effective script for this project.
+
+        Resolution order:
+        1. Latest version's script (authoritative for pipeline history)
+        2. Latest project-scoped revision (set at creation before any version exists)
+        3. Shared default singleton
+
+        This property replaces the former stored FK.
+        Do NOT call in list-view loops without prefetching; see views/projects.py.
+        """
+        latest_version = (
+            self.versions
+            .order_by("-created")
+            .select_related("script")
+            .first()
+        )
+        if latest_version and latest_version.script_id:
+            return latest_version.script
+        latest_revision = self.script_revisions.order_by("-created_at").first()
+        if latest_revision:
+            return latest_revision
+        return AISTProjectScript.get_shared_default()
 
     def get_launch_schedule(self) -> LaunchSchedule | None:
         try:
@@ -467,9 +481,16 @@ class AISTProjectScript(models.Model):
     Versioned snapshot of a project's entrypoint script.
 
     Project-specific revisions are append-only: each new save creates a new row.
-    The shared default (``is_shared=True``, ``project=None``) is the exception —
-    it may be updated in-place via ``scope=global`` so that one edit propagates
-    to all projects that still use it.  Use ``get_shared_default()`` to obtain it.
+    The shared default (``is_shared=True``, ``project=None``) is the singleton
+    template used when creating new versions without an explicit script.
+    It may be updated in-place via ``scope=global`` (superuser only).
+    Use ``get_shared_default()`` to obtain it.
+
+    ``AISTProjectVersion.script`` always references a project-scoped script
+    (``project=version.project``), never the shared singleton directly —
+    this guarantees org isolation and immutable version history.
+    Use ``get_or_create_for_project()`` to snapshot the current global template
+    into a project-scoped copy without content duplication.
     """
 
     project = models.ForeignKey(
@@ -538,6 +559,31 @@ class AISTProjectScript(models.Model):
             script = cls.objects.get(is_shared=True)
         return script
 
+    @classmethod
+    def get_or_create_for_project(
+        cls,
+        content: str,
+        project: AISTProject,
+        user=None,
+    ) -> tuple[AISTProjectScript, bool]:
+        """
+        Return a project-scoped script with the given content, creating it if absent.
+
+        Deduplicates by sha256 within the project so identical content reuses the
+        same row instead of proliferating copies.  The returned script always has
+        ``project=project`` and ``is_shared=False``.
+        """
+        sha = hashlib.sha256(content.encode()).hexdigest()
+        existing = cls.objects.filter(sha256=sha, project=project, is_shared=False).first()
+        if existing:
+            return existing, False
+        return cls.objects.create(
+            content=content,
+            project=project,
+            is_shared=False,
+            created_by=user,
+        ), True
+
 
 class VersionType(models.TextChoices):
     GIT_BRANCH = "GIT_BRANCH", "Git branch"
@@ -577,6 +623,14 @@ class AISTProjectVersion(models.Model):
 
     source_archive = models.FileField(upload_to=_upload_to, null=True, blank=True)  # noqa: DJ012
     source_archive_sha256 = models.CharField(max_length=64, blank=True, null=True, default="")
+    script = models.ForeignKey(
+        "AISTProjectScript",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="version_overrides",
+        help_text="Script used for this version. Always project-scoped (script.project == self.project).",
+    )
 
     class Meta:  # noqa: DJ012
         constraints = [
@@ -600,6 +654,11 @@ class AISTProjectVersion(models.Model):
         super().save(*args, **kwargs)
 
     def clean(self):
+        if self.script_id and self.script.project_id != self.project_id:
+            raise ValidationError(
+                {"script": "Script must belong to the same project as this version."},
+            )
+
         if self.version_type == VersionType.FILE_HASH:
             if not self.source_archive:
                 raise ValidationError(ERR_FILEHASH_REQUIRES_SOURCE)

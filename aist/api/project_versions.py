@@ -9,8 +9,27 @@ from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
-from aist.models import AISTProjectVersion, VersionType
+from aist.models import AISTProjectScript, AISTProjectVersion, VersionType
 from aist.queries import get_authorized_aist_projects
+
+
+def _resolve_script_for_new_version(project) -> AISTProjectScript:
+    """
+    Return the script to use for a new version when no script_id is specified.
+
+    Resolution order:
+    1. Latest project-scoped script revision (set at project creation or via API)
+    2. Project-scoped copy of the shared default (created on demand)
+    """
+    latest_revision = project.script_revisions.order_by("-created_at").first()
+    if latest_revision:
+        return latest_revision
+    global_default = AISTProjectScript.get_shared_default()
+    script, _ = AISTProjectScript.get_or_create_for_project(
+        content=global_default.content,
+        project=project,
+    )
+    return script
 
 
 class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
@@ -25,10 +44,11 @@ class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
 
     id = serializers.IntegerField(read_only=True)
     project = serializers.PrimaryKeyRelatedField(read_only=True)
+    script_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = AISTProjectVersion
-        fields = ("id", "project", "version_type", "version", "source_archive")
+        fields = ("id", "project", "version_type", "version", "source_archive", "script_id")
         extra_kwargs = {
             "version": {"required": False, "allow_blank": True},
             "source_archive": {"required": False},
@@ -68,8 +88,34 @@ class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        # Ensure every version always has a project-scoped script.
+        if "script" not in validated_data or validated_data.get("script") is None:
+            validated_data["script"] = _resolve_script_for_new_version(validated_data["project"])
         # for FILE_HASH without explicit version the model will set sha256 in save()
         return AISTProjectVersion.objects.create(**validated_data)
+
+
+class AISTProjectVersionScriptUpdateSerializer(serializers.Serializer):
+    script_id = serializers.IntegerField(allow_null=True)
+
+    def validate_script_id(self, value):
+        if value is None:
+            return None
+        project = self.context["project"]
+        # Only project-scoped scripts are allowed; shared singleton must never be
+        # set directly on a version (org isolation + historicity contract).
+        allowed = AISTProjectScript.objects.filter(
+            project=project,
+            is_shared=False,
+            pk=value,
+        )
+        if not allowed.exists():
+            msg = (
+                "Script not found or not accessible for this project. "
+                "Only project-scoped scripts may be assigned to a version."
+            )
+            raise serializers.ValidationError(msg)
+        return value
 
 
 class ProjectVersionCreateAPI(AuthorizedQuerySetMixin, APIView):
@@ -111,3 +157,49 @@ class ProjectVersionCreateAPI(AuthorizedQuerySetMixin, APIView):
 
         out = AISTProjectVersionCreateSerializer(instance=version, context={"project": project})
         return Response(out.data, status=status.HTTP_201_CREATED)
+
+
+class ProjectVersionScriptUpdateAPI(AuthorizedQuerySetMixin, APIView):
+
+    """PATCH endpoint to set or clear the script override for a project version."""
+
+    permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
+
+    @extend_schema(
+        methods=["patch"],
+        request=AISTProjectVersionScriptUpdateSerializer,
+        responses={
+            200: OpenApiResponse(description="Script updated"),
+            400: OpenApiResponse(description="Validation failed"),
+            404: OpenApiResponse(description="Project or version not found"),
+        },
+        tags=[AISTApiTag.PROJECTS.value],
+        summary="Set version script override",
+        description=(
+            "Set or clear the script override for a specific project version. "
+            "Pass script_id=null to clear the override (falls back to project active_script)."
+        ),
+    )
+    def patch(self, request, project_id, version_id):
+        project = self.get_authorized_object(permission=Permissions.Product_Edit, pk=project_id)
+
+        try:
+            version = AISTProjectVersion.objects.get(pk=version_id, project=project)
+        except AISTProjectVersion.DoesNotExist:
+            return Response({"detail": "Version not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = AISTProjectVersionScriptUpdateSerializer(
+            data=request.data,
+            context={"project": project},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        script_id = serializer.validated_data["script_id"]
+        version.script_id = script_id
+        version.save(update_fields=["script", "updated"])
+
+        return Response({"script_id": version.script_id}, status=status.HTTP_200_OK)
