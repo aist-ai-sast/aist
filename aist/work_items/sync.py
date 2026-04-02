@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 
 from django.utils import timezone
 
+from aist.integrations.resolver import ResolvedIntegration
 from aist.models import WorkItemLink, WorkItemProvider
+from aist.utils.vpn import vpn_sidecar_context
 from aist.work_items.backends.base import WorkItemSyncError
 from aist.work_items.backends.registry import get_backend, has_backend
 
 logger = logging.getLogger("aist.work_items")
+
+
+def _resolve_provider_vpn(provider: WorkItemProvider) -> ResolvedIntegration | None:
+    vpn = getattr(provider, "vpn_integration", None)
+    if not vpn or not vpn.is_active:
+        return None
+    return ResolvedIntegration(integration=vpn, config=dict(vpn.config or {}))
 
 
 @dataclass
@@ -28,18 +38,9 @@ class ProviderSyncResult:
     errors: list[str] = field(default_factory=list)
 
 
-def sync_link(link: WorkItemLink) -> LinkSyncResult:
-    """
-    Fetch current status for a single WorkItemLink and persist it.
-
-    Returns a ``LinkSyncResult`` describing success or failure.
-    The link is never deleted; errors are stored in ``link.sync_error``
-    so operators can see what went wrong without log diving.
-    """
+def _sync_link_with_proxy(link: WorkItemLink, proxy_url: str | None) -> LinkSyncResult:
+    """Inner sync — assumes VPN (if needed) is already up and proxy_url is set."""
     provider = link.provider
-    if provider is None:
-        # Manual links have no provider to sync from
-        return LinkSyncResult(link_id=link.pk, success=False, error="manual link — no provider")
 
     if not (link.external_id or link.external_key or "").strip():
         error = "no external_id or external_key to fetch"
@@ -47,10 +48,9 @@ def sync_link(link: WorkItemLink) -> LinkSyncResult:
         return LinkSyncResult(link_id=link.pk, success=False, error=error)
 
     try:
-        backend = get_backend(provider)
+        backend = get_backend(provider, proxy_url=proxy_url)
         info = backend.fetch_issue_status(link)
     except NotImplementedError as exc:
-        # Provider type has no sync backend (e.g. GENERIC)
         return LinkSyncResult(link_id=link.pk, success=False, error=str(exc))
     except WorkItemSyncError as exc:
         error = str(exc)
@@ -77,12 +77,33 @@ def sync_link(link: WorkItemLink) -> LinkSyncResult:
     return LinkSyncResult(link_id=link.pk, success=True)
 
 
+def sync_link(link: WorkItemLink) -> LinkSyncResult:
+    """
+    Fetch current status for a single WorkItemLink and persist it.
+
+    Returns a ``LinkSyncResult`` describing success or failure.
+    The link is never deleted; errors are stored in ``link.sync_error``
+    so operators can see what went wrong without log diving.
+    """
+    provider = link.provider
+    if provider is None:
+        # Manual links have no provider to sync from
+        return LinkSyncResult(link_id=link.pk, success=False, error="manual link — no provider")
+
+    vpn_resolved = _resolve_provider_vpn(provider)
+    execution_id = f"wipl-{link.pk}-{uuid.uuid4().hex[:8]}"
+    with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_, proxy_url):
+        return _sync_link_with_proxy(link, proxy_url)
+
+
 def sync_provider(provider: WorkItemProvider) -> ProviderSyncResult:
     """
     Sync all WorkItemLinks belonging to *provider*.
 
     Only runs if ``provider.sync_enabled`` is True and a backend exists.
     Each link is synced independently so one failure doesn't abort the rest.
+    If ``provider.vpn_integration`` is set, starts a VPN sidecar and routes
+    all HTTP calls through it.
     """
     result = ProviderSyncResult(provider_id=provider.pk)
 
@@ -96,14 +117,17 @@ def sync_provider(provider: WorkItemProvider) -> ProviderSyncResult:
         result.skipped = WorkItemLink.objects.filter(provider=provider).count()
         return result
 
-    links = WorkItemLink.objects.filter(provider=provider).select_related("provider")
-    for link in links:
-        link_result = sync_link(link)
-        if link_result.success:
-            result.synced += 1
-        else:
-            result.failed += 1
-            result.errors.append(f"link[{link.pk}]: {link_result.error}")
+    vpn_resolved = _resolve_provider_vpn(provider)
+    execution_id = f"wip-{provider.pk}-{uuid.uuid4().hex[:8]}"
+    with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_, proxy_url):
+        links = WorkItemLink.objects.filter(provider=provider).select_related("provider")
+        for link in links:
+            link_result = _sync_link_with_proxy(link, proxy_url)
+            if link_result.success:
+                result.synced += 1
+            else:
+                result.failed += 1
+                result.errors.append(f"link[{link.pk}]: {link_result.error}")
 
     logger.info(
         "Provider[%s] sync complete: synced=%d failed=%d",

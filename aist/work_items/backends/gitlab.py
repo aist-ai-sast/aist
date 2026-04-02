@@ -47,7 +47,7 @@ class GitlabIssuesBackend(WorkItemBackend):
             msg = "WorkItemProvider.api_token must be set for GITLAB providers"
             raise WorkItemSyncError(msg)
 
-        return gitlab.Gitlab(url, private_token=token)
+        return gitlab.Gitlab(url, private_token=token, session=self._make_proxied_session())
 
     def _get_project(self, gl):
         cfg = self.provider.provider_config or {}

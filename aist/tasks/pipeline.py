@@ -10,9 +10,12 @@ from dojo.models import Finding, Test
 
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging
-from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionType
+from aist.integrations.resolver import resolve_integration
+from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, OrgIntegrationType, VersionType
 from aist.pipeline_args import PipelineArguments
+from aist.utils.vpn import vpn_sidecar_context
 from aist.tasks.dedup import watch_deduplication
+from aist.celery_signals import _update_action_run
 from aist.utils.pipeline import (
     cleanup_terminal_project_build_paths,
     finish_pipeline,
@@ -138,26 +141,39 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
         # Isolate output directory per pipeline run to prevent concurrent-write collisions.
         output_dir = str(Path(output_dir) / pipeline_id)
 
+        vpn_resolved = resolve_integration(pipeline.project, OrgIntegrationType.VPN)
         logger.info("Starting configure_project_run_analyses")
-        with params.script_path_context() as script_path:
-            ld = PipelineLaunchData(configure_project_run_analyses(
-                script_path=script_path,
-                output_dir=output_dir,
-                languages=languages,
-                analyzer_config=analyzers_helper,
-                dockerfile_path=dockerfile_path,
-                context_dir=params.pipeline_src_path,
-                image_name=f"project-{project_name}-builder" if project_name else "project-builder",
-                project_path=project_build_path,
-                force_rebuild=False,
-                rebuild_images=rebuild_images,
-                version=project_version,
-                log_level=log_level,
-                min_time_class=time_class_level or "",
-                analyzers=analyzers,
-                pipeline_id=pipeline_id,
-                additional_env=params.additional_environments,
-            ))
+        with vpn_sidecar_context(vpn_resolved, execution_id=pipeline_id) as (vpn_container, _vpn_proxy):
+            if vpn_container:
+                _update_action_run(
+                    pipeline_id,
+                    key="vpn_start",
+                    action_type="vpn",
+                    trigger_status="active",
+                    source="runner",
+                    status="started",
+                )
+            vpn_network = f"container:{vpn_container}" if vpn_container else None
+            with params.script_path_context() as script_path:
+                ld = PipelineLaunchData(configure_project_run_analyses(
+                    script_path=script_path,
+                    output_dir=output_dir,
+                    languages=languages,
+                    analyzer_config=analyzers_helper,
+                    dockerfile_path=dockerfile_path,
+                    context_dir=params.pipeline_src_path,
+                    image_name=f"project-{project_name}-builder" if project_name else "project-builder",
+                    project_path=project_build_path,
+                    force_rebuild=False,
+                    rebuild_images=rebuild_images,
+                    version=project_version,
+                    log_level=log_level,
+                    min_time_class=time_class_level or "",
+                    analyzers=analyzers,
+                    pipeline_id=pipeline_id,
+                    additional_env=params.additional_environments,
+                    network=vpn_network,
+                ))
 
         ld.languages = languages
         ld.ai = {

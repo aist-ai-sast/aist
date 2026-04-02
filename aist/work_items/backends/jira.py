@@ -57,12 +57,13 @@ class JiraBackend(WorkItemBackend):
 
         email = (self.provider.provider_config or {}).get("jira_email", "").strip()
 
+        proxies = self._proxies()
         try:
             if email:
                 # Jira Cloud: API token requires Basic auth (email + token)
-                return JIRA(server=server, basic_auth=(email, token))
+                return JIRA(server=server, basic_auth=(email, token), proxies=proxies)
             # Jira Data Center/Server: PAT uses Bearer auth
-            return JIRA(server=server, token_auth=token)
+            return JIRA(server=server, token_auth=token, proxies=proxies)
         except JIRAError as exc:
             raise WorkItemSyncError(str(exc)) from exc
 

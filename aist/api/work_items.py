@@ -12,7 +12,7 @@ from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
-from aist.models import WorkItemLink, WorkItemProvider, WorkItemProviderType, WorkItemStatusCategory
+from aist.models import OrgIntegration, OrgIntegrationType, WorkItemLink, WorkItemProvider, WorkItemProviderType, WorkItemStatusCategory
 from aist.queries import get_authorized_aist_organizations, get_authorized_findings, get_authorized_work_item_providers
 from aist.tasks.work_items import sync_work_item_link, sync_work_item_provider
 from aist.work_items.backends import get_backend
@@ -39,6 +39,14 @@ class WorkItemProviderSerializer(serializers.ModelSerializer):
         help_text="True when an API token is stored (token value is never returned).",
     )
 
+    # VPN integration FK — nullable, must belong to the same organization
+    vpn_integration = serializers.PrimaryKeyRelatedField(
+        queryset=OrgIntegration.objects.filter(integration_type=OrgIntegrationType.VPN),
+        allow_null=True,
+        required=False,
+        help_text="Optional VPN OrgIntegration (type=VPN) required to reach this provider. Must belong to the same organization.",
+    )
+
     class Meta:
         model = WorkItemProvider
         fields = [
@@ -53,6 +61,7 @@ class WorkItemProviderSerializer(serializers.ModelSerializer):
             "provider_config",
             "sync_enabled",
             "is_active",
+            "vpn_integration",
             "created",
             "updated",
         ]
@@ -66,6 +75,21 @@ class WorkItemProviderSerializer(serializers.ModelSerializer):
         if "api_token" not in self.initial_data:
             validated_data.pop("api_token", None)
         return super().update(instance, validated_data)
+
+    def validate_vpn_integration(self, value):
+        if value is None:
+            return value
+        # Determine the organization from the instance (PATCH) or the request data (POST)
+        instance = self.instance
+        if instance is not None:
+            organization_id = instance.organization_id
+        else:
+            organization_id = self.initial_data.get("organization")
+        if organization_id and str(value.organization_id) != str(organization_id):
+            raise serializers.ValidationError(
+                "VPN integration must belong to the same organization as this provider."
+            )
+        return value
 
 
 class WorkItemLinkSerializer(serializers.ModelSerializer):

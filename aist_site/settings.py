@@ -74,6 +74,7 @@ LOGIN_URL = "/aist-admin/login/"
 LOGIN_REDIRECT_URL = "/aist-admin/"
 
 AIST_PROJECTS_BUILD_DIR = env("AIST_PROJECTS_BUILD_DIR", default="/tmp/aist/projects")  # noqa: F405,S108
+AIST_VPN_SIDECAR_IMAGE = env("AIST_VPN_SIDECAR_IMAGE", default="aist-vpn-sidecar:latest")  # noqa: F405
 
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="https://aist.itsec-europe.com/")  # noqa: F405
 AIST_AI_TRIAGE_WEBHOOK_URL = env(  # noqa: F405
@@ -133,6 +134,11 @@ CELERY_BEAT_SCHEDULE.update(  # noqa: F405
         "aist-sync-work-item-providers": {
             "task": "aist.tasks.work_items.sync_all_work_item_providers",
             "schedule": timedelta(minutes=15),
+        },
+        "aist-cleanup-orphaned-vpn-containers": {
+            "task": "aist.tasks.work_items.cleanup_orphaned_vpn_containers",
+            "schedule": timedelta(hours=1),
+            "kwargs": {"max_age_minutes": 240},
         },
     },
 )

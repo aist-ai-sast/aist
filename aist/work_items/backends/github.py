@@ -122,6 +122,7 @@ class GithubIssuesBackend(WorkItemBackend):
                 f"{self._api_base()}/user",
                 headers=self._headers(),
                 timeout=_TIMEOUT,
+                proxies=self._proxies(),
             )
         except requests.RequestException:
             logger.debug("GitHub credential validation failed for provider %s", self.provider.pk, exc_info=True)
@@ -153,7 +154,7 @@ class GithubIssuesBackend(WorkItemBackend):
         url = f"{self._api_base()}/repos/{owner}/{repo}/issues/{issue_number}"
 
         try:
-            resp = requests.get(url, headers=self._headers(), timeout=_TIMEOUT)
+            resp = requests.get(url, headers=self._headers(), timeout=_TIMEOUT, proxies=self._proxies())
         except requests.RequestException as exc:
             msg = f"GitHub request failed: {exc}"
             raise WorkItemSyncError(msg) from exc

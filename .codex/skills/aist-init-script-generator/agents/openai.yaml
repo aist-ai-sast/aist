@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIST Init Script Generator"
+  short_description: "Generate project-specific init script for SAST using AIST default logic"
+  default_prompt: "Use $aist-init-script-generator with target_repo_path to generate a project-specific init script. Preserve git clone and env exports from aist/default_script.py and adapt the rest to the target repository build flow."

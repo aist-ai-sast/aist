@@ -27,7 +27,7 @@ def register_backend(provider_type: str):
     return decorator
 
 
-def get_backend(provider: WorkItemProvider) -> WorkItemBackend:
+def get_backend(provider: WorkItemProvider, proxy_url: str | None = None) -> WorkItemBackend:
     """
     Return an instantiated backend for *provider*.
 
@@ -38,7 +38,7 @@ def get_backend(provider: WorkItemProvider) -> WorkItemBackend:
     if cls is None:
         msg = f"No sync backend registered for provider type '{provider.provider_type}'"
         raise NotImplementedError(msg)
-    return cls(provider)
+    return cls(provider, proxy_url=proxy_url)
 
 
 def has_backend(provider_type: str) -> bool:

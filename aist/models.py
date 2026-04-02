@@ -344,6 +344,7 @@ class OrgIntegrationType(models.TextChoices):
     GITHUB = "GITHUB", "GitHub"
     SLACK = "SLACK", "Slack"
     EMAIL = "EMAIL", "Email"
+    VPN = "VPN", "VPN"
 
 
 class OrgIntegration(models.Model):
@@ -378,6 +379,41 @@ class OrgIntegration(models.Model):
 
     def __str__(self) -> str:
         return f"{self.organization.name} / {self.integration_type} / {self.name}"
+
+
+class OrgIntegrationVPNSecret(models.Model):
+    """
+    Encrypted VPN credentials for an OrgIntegration of type VPN.
+
+    Kept in a separate model so that each credential component is independently
+    updatable and VPN-type-specific fields don't pollute OrgIntegration (which is
+    shared by all integration types).
+
+    ``ovpn_content`` is the primary field and accepts a full .ovpn file including
+    inline <ca>/<cert>/<key> blocks.  The separate cert fields are optional extras:
+    the sidecar entrypoint appends them only if the corresponding block is NOT already
+    present in ``ovpn_content``, supporting both upload styles without user error.
+    """
+
+    integration = models.OneToOneField(
+        OrgIntegration,
+        on_delete=models.CASCADE,
+        related_name="vpn_secret",
+    )
+    # Full .ovpn file — may already contain inline <ca>/<cert>/<key> blocks.
+    # max_length=16384 accommodates enterprise configs with embedded certs.
+    ovpn_content = EncryptedCharField(max_length=16384, blank=True, default="")
+    # Optional separate PEM blocks (appended only if not already inline in ovpn_content)
+    ca_cert = EncryptedCharField(max_length=8192, blank=True, default="")
+    client_cert = EncryptedCharField(max_length=8192, blank=True, default="")
+    client_key = EncryptedCharField(max_length=8192, blank=True, default="")
+    tls_auth_key = EncryptedCharField(max_length=4096, blank=True, default="")
+    # Optional auth-user-pass credentials
+    vpn_username = EncryptedCharField(max_length=512, blank=True, default="")
+    vpn_password = EncryptedCharField(max_length=512, blank=True, default="")
+
+    def __str__(self) -> str:
+        return f"VPNSecret for {self.integration}"
 
 
 class AISTProject(models.Model):
@@ -1273,6 +1309,17 @@ class WorkItemProvider(models.Model):
         help_text="Automatically sync work-item status from the tracker.",
     )
     is_active = models.BooleanField(default=True)
+    # Optional VPN integration required to reach this provider's endpoint.
+    # Must belong to the same organization (validated in the API serializer).
+    vpn_integration = models.ForeignKey(
+        "OrgIntegration",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="dependent_work_item_providers",
+        limit_choices_to={"integration_type": "VPN"},
+        help_text="VPN integration to use when connecting to this provider. Must belong to the same organization.",
+    )
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 

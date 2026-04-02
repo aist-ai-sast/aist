@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
-from aist.models import OrgIntegration, OrgIntegrationType, ProjectIntegrationOverride
+from aist.models import OrgIntegration, OrgIntegrationVPNSecret, OrgIntegrationType, ProjectIntegrationOverride
 from aist.queries import (
     get_authorized_aist_organizations,
     get_authorized_aist_projects,
@@ -20,6 +20,70 @@ from aist.queries import (
 # ---------------------------------------------------------------------------
 # Serializers
 # ---------------------------------------------------------------------------
+
+
+class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
+    """
+    Serializer for OrgIntegrationVPNSecret.
+    All credential fields are write-only; only boolean presence indicators are readable.
+    On PATCH, fields not present in the request body are preserved unchanged.
+    """
+
+    ovpn_content = serializers.CharField(
+        write_only=True, required=False, allow_blank=True,
+        style={"input_type": "password"},
+        help_text="Full .ovpn file content (inline <ca>/<cert>/<key> blocks supported).",
+    )
+    ca_cert = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    client_cert = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    client_key = serializers.CharField(
+        write_only=True, required=False, allow_blank=True,
+        style={"input_type": "password"},
+    )
+    tls_auth_key = serializers.CharField(
+        write_only=True, required=False, allow_blank=True,
+        style={"input_type": "password"},
+    )
+    vpn_username = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    vpn_password = serializers.CharField(
+        write_only=True, required=False, allow_blank=True,
+        style={"input_type": "password"},
+    )
+    has_ovpn_content = serializers.SerializerMethodField()
+    has_client_cert = serializers.SerializerMethodField()
+    has_client_key = serializers.SerializerMethodField()
+    has_username = serializers.SerializerMethodField()
+
+    def get_has_ovpn_content(self, obj) -> bool:
+        return bool(obj.ovpn_content)
+
+    def get_has_client_cert(self, obj) -> bool:
+        return bool(obj.client_cert)
+
+    def get_has_client_key(self, obj) -> bool:
+        return bool(obj.client_key)
+
+    def get_has_username(self, obj) -> bool:
+        return bool(obj.vpn_username)
+
+    def update(self, instance, validated_data):
+        # On PATCH: preserve fields not explicitly provided in the request body.
+        secret_fields = (
+            "ovpn_content", "ca_cert", "client_cert", "client_key",
+            "tls_auth_key", "vpn_username", "vpn_password",
+        )
+        for field in secret_fields:
+            if field not in self.initial_data:
+                validated_data.pop(field, None)
+        return super().update(instance, validated_data)
+
+    class Meta:
+        model = OrgIntegrationVPNSecret
+        fields = [
+            "ovpn_content", "ca_cert", "client_cert", "client_key", "tls_auth_key",
+            "vpn_username", "vpn_password",
+            "has_ovpn_content", "has_client_cert", "has_client_key", "has_username",
+        ]
 
 
 class OrgIntegrationSerializer(serializers.ModelSerializer):
@@ -38,6 +102,8 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         help_text="True when a secret is stored (value is never returned).",
     )
     integration_type_display = serializers.CharField(source="get_integration_type_display", read_only=True)
+    # Present in responses only when integration_type == VPN (removed in to_representation otherwise)
+    vpn_secret = OrgIntegrationVPNSecretSerializer(required=False)
 
     class Meta:
         model = OrgIntegration
@@ -50,6 +116,7 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             "config",
             "secret",
             "has_secret",
+            "vpn_secret",
             "is_active",
             "created_by",
             "created",
@@ -60,11 +127,34 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
     def get_has_secret(self, obj) -> bool:
         return bool(obj.secret)
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Only include vpn_secret for VPN integrations; for all others it's irrelevant noise
+        if instance.integration_type != OrgIntegrationType.VPN:
+            data.pop("vpn_secret", None)
+        return data
+
     def update(self, instance, validated_data):
         # On PATCH: if secret is not provided at all, keep existing value.
         if "secret" not in self.initial_data:
             validated_data.pop("secret", None)
-        return super().update(instance, validated_data)
+        vpn_data = validated_data.pop("vpn_secret", None)
+        instance = super().update(instance, validated_data)
+        if instance.integration_type == OrgIntegrationType.VPN and vpn_data is not None:
+            vpn_secret, _ = OrgIntegrationVPNSecret.objects.get_or_create(integration=instance)
+            vpn_ser = OrgIntegrationVPNSecretSerializer(
+                vpn_secret, data=vpn_data, partial=True, context=self.context,
+            )
+            vpn_ser.is_valid(raise_exception=True)
+            vpn_ser.save()
+        return instance
+
+    def create(self, validated_data):
+        vpn_data = validated_data.pop("vpn_secret", None)
+        instance = super().create(validated_data)
+        if instance.integration_type == OrgIntegrationType.VPN:
+            OrgIntegrationVPNSecret.objects.create(integration=instance, **(vpn_data or {}))
+        return instance
 
 
 class ProjectIntegrationOverrideSerializer(serializers.ModelSerializer):
@@ -252,7 +342,56 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
         # Basic SMTP connectivity check would require opening a socket; skip for now.
         return True, "Email configuration is not automatically validated."
 
+    if itype == OrgIntegrationType.VPN:
+        return _validate_vpn_integration(integration)
+
     return False, f"No validator for integration type {itype}"
+
+
+def _parse_remote_from_ovpn(ovpn_content: str) -> str | None:
+    """Return the hostname from the first 'remote <host> [port] [proto]' line."""
+    for line in ovpn_content.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0] == "remote":
+            return parts[1]
+    return None
+
+
+def _validate_vpn_integration(integration: OrgIntegration) -> tuple[bool, str]:
+    """
+    Validate a VPN integration by pinging the VPN server endpoint.
+
+    Uses config.ping_target if set; otherwise parses the 'remote' directive from
+    the .ovpn content.  Does NOT establish a VPN tunnel — this is a lightweight
+    reachability check only.
+    """
+    import subprocess  # noqa: PLC0415
+
+    vpn_secret = getattr(integration, "vpn_secret", None)
+    if not vpn_secret or not vpn_secret.ovpn_content:
+        return False, "No VPN configuration stored. Upload an .ovpn file first."
+
+    config = integration.config or {}
+    ping_target = config.get("ping_target") or _parse_remote_from_ovpn(vpn_secret.ovpn_content)
+    if not ping_target:
+        return False, (
+            "Cannot determine server address. "
+            "Set config.ping_target or add a 'remote <host>' directive in the .ovpn content."
+        )
+
+    try:
+        result = subprocess.run(
+            ["ping", "-c", "1", "-W", "5", ping_target],
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return True, f"{ping_target} is reachable."
+        return False, f"{ping_target} unreachable (ping returned {result.returncode})."
+    except subprocess.TimeoutExpired:
+        return False, f"Ping to {ping_target} timed out."
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +463,22 @@ class ProjectIntegrationOverrideDetailAPI(AuthorizedQuerySetMixin, APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         project = self._get_project(project_id)
+        # Cross-org guard: an explicit org_integration must belong to the project's org.
+        # This prevents a user from routing a project's integrations through another org's credentials.
+        org_integration_id = request.data.get("org_integration")
+        if org_integration_id:
+            try:
+                oi = OrgIntegration.objects.get(pk=org_integration_id)
+            except OrgIntegration.DoesNotExist:
+                return Response(
+                    {"org_integration": "Integration not found."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if oi.organization_id != project.organization_id:
+                return Response(
+                    {"org_integration": "Integration belongs to a different organization."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         override, _ = ProjectIntegrationOverride.objects.get_or_create(
             project=project,
             integration_type=integration_type,

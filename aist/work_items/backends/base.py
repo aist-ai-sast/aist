@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import requests
+
 if TYPE_CHECKING:
     from aist.models import WorkItemLink, WorkItemProvider
 
@@ -35,8 +37,23 @@ class WorkItemBackend(ABC):
     the same class handles both cloud and self-hosted variants of a tracker.
     """
 
-    def __init__(self, provider: WorkItemProvider) -> None:
+    def __init__(self, provider: WorkItemProvider, proxy_url: str | None = None) -> None:
         self.provider = provider
+        self.proxy_url = proxy_url
+
+    def _proxies(self) -> dict | None:
+        """Return a requests-compatible proxies dict, or None when no proxy is set."""
+        if not self.proxy_url:
+            return None
+        return {"http": self.proxy_url, "https": self.proxy_url}
+
+    def _make_proxied_session(self) -> requests.Session:
+        """Return a requests.Session pre-configured with the proxy (if any)."""
+        session = requests.Session()
+        proxies = self._proxies()
+        if proxies:
+            session.proxies.update(proxies)
+        return session
 
     @abstractmethod
     def validate_credentials(self) -> bool:

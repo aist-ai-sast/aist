@@ -15,7 +15,7 @@ def sync_work_item_provider(provider_id: int, **_kwargs) -> dict:
     from aist.work_items.sync import sync_provider  # noqa: PLC0415
 
     try:
-        provider = WorkItemProvider.objects.get(pk=provider_id, is_active=True)
+        provider = WorkItemProvider.objects.select_related("vpn_integration").get(pk=provider_id, is_active=True)
     except WorkItemProvider.DoesNotExist:
         logger.warning("sync_work_item_provider: provider[%s] not found or inactive", provider_id)
         return {"provider_id": provider_id, "skipped": True}
@@ -36,7 +36,7 @@ def sync_work_item_link(link_id: int, **_kwargs) -> dict:
     from aist.work_items.sync import sync_link  # noqa: PLC0415
 
     try:
-        link = WorkItemLink.objects.select_related("provider").get(pk=link_id)
+        link = WorkItemLink.objects.select_related("provider__vpn_integration").get(pk=link_id)
     except WorkItemLink.DoesNotExist:
         logger.warning("sync_work_item_link: link[%s] not found", link_id)
         return {"link_id": link_id, "skipped": True}
@@ -63,3 +63,19 @@ def sync_all_work_item_providers(**_kwargs) -> dict:
 
     logger.info("sync_all_work_item_providers: dispatched %d provider tasks", len(providers))
     return {"dispatched": len(providers)}
+
+
+@shared_task(name="aist.tasks.work_items.cleanup_orphaned_vpn_containers")
+def cleanup_orphaned_vpn_containers_task(max_age_minutes: int = 240, **_kwargs) -> dict:
+    """
+    Periodic safety-net: remove ``aist-vpn-*`` containers older than *max_age_minutes*.
+
+    VPN sidecar containers are normally stopped by the ``finally`` block in
+    ``vpn_sidecar_context``.  This task handles the edge case where a Celery
+    worker was killed (SIGKILL / OOM) before the finally block could run,
+    leaving orphaned containers that hold VPN connections and consume resources.
+    """
+    from aist.utils.vpn import cleanup_orphaned_vpn_containers  # noqa: PLC0415
+
+    removed = cleanup_orphaned_vpn_containers(max_age_minutes=max_age_minutes)
+    return {"removed": removed}

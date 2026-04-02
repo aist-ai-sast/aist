@@ -57,6 +57,13 @@ def _reverse_backfill(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    # atomic=False: the backfill RunPython fires pgtrigger deferred triggers on
+    # aist_aistprojectscript; if the subsequent RemoveField runs in the same
+    # transaction PostgreSQL raises "cannot ALTER TABLE … because it has pending
+    # trigger events".  Disabling the transaction wrapper lets each operation
+    # commit independently so the trigger queue is flushed before the ALTER.
+    atomic = False
+
     dependencies = [
         ("aist", "0025_aistaifindingresponse_fix"),
     ]
