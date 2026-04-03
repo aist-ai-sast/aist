@@ -23,11 +23,13 @@ Security notes:
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import socket
 import subprocess
 import time
+from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Generator
@@ -45,6 +47,40 @@ def _get_vpn_sidecar_image() -> str:
     return getattr(settings, "AIST_VPN_SIDECAR_IMAGE", "aist-vpn-sidecar:latest")
 
 
+def _build_vpn_sidecar_if_needed(image: str) -> None:
+    """Build the VPN sidecar image if it is not present locally.
+
+    Mirrors ``build_image_if_needed`` in sast-pipeline's ``analyzer_runner.py``:
+    check with ``docker images -q``, skip if already present, build otherwise.
+
+    The Dockerfile context is ``sast-combinator/vpn-sidecar/`` which lives
+    next to ``sast-combinator/sast-pipeline/`` (AIST_PIPELINE_CODE_PATH).
+    Both directories are COPY-ed into the Django image in Dockerfile.django-debian,
+    so the context is always available at runtime inside the Celery worker container.
+    """
+    present = subprocess.run(
+        ["docker", "images", "-q", image],
+        capture_output=True, text=True,
+    )
+    if present.stdout.strip():
+        logger.debug("vpn sidecar image=%s already present, skipping build", image)
+        return
+
+    from django.conf import settings  # noqa: PLC0415
+    pipeline_path = getattr(settings, "AIST_PIPELINE_CODE_PATH", None)
+    if not pipeline_path:
+        raise RuntimeError(
+            f"VPN sidecar image {image!r} not found and AIST_PIPELINE_CODE_PATH is not set; "
+            "cannot build the image automatically."
+        )
+    dockerfile_dir = str(Path(pipeline_path).parent / "vpn-sidecar")
+    logger.info("vpn sidecar image=%s not found; building from %s", image, dockerfile_dir)
+    subprocess.run(
+        ["docker", "build", "-t", image, dockerfile_dir],
+        check=True,
+    )
+
+
 def _find_free_port() -> int:
     """Ask the OS for a free TCP port on localhost, then release it."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -52,21 +88,39 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _b64(value: str) -> str:
+    """Base64-encode a string so it can be safely passed as a ``docker run -e`` value.
+
+    Docker CLI truncates env-var values at the first embedded newline when they
+    are passed as ``-e KEY=VALUE`` arguments.  Multi-line fields (PEM certs,
+    .ovpn config) must therefore be encoded before being placed on the command
+    line.  The VPN sidecar entrypoint decodes them with ``base64 -d``.
+    """
+    return base64.b64encode(value.encode()).decode()
+
+
 def _assemble_env(vpn_secret) -> dict[str, str]:
     """
     Build the env dict passed to ``docker run -e``.
-    Only non-empty fields are included so the sidecar's assembly logic
-    (append-only-if-absent) behaves correctly when ovpn_content already
-    contains inline cert blocks.
+
+    Multi-line fields (certs, .ovpn config) are base64-encoded so that Docker
+    CLI does not truncate them at embedded newlines.  Single-line credentials
+    (username, password) are passed as-is.  Only non-empty fields are included.
+
+    The VPN sidecar entrypoint (entrypoint.sh) decodes the base64 fields with
+    ``base64 -d`` before writing them to disk.
     """
     return {k: v for k, v in {
-        "AIST_VPN_OVPN_CONTENT": vpn_secret.ovpn_content,
-        "AIST_VPN_CA_CERT":       vpn_secret.ca_cert,
-        "AIST_VPN_CLIENT_CERT":   vpn_secret.client_cert,
-        "AIST_VPN_CLIENT_KEY":    vpn_secret.client_key,
-        "AIST_VPN_TLS_AUTH_KEY":  vpn_secret.tls_auth_key,
-        "AIST_VPN_USERNAME":      vpn_secret.vpn_username,
-        "AIST_VPN_PASSWORD":      vpn_secret.vpn_password,
+        "AIST_VPN_OVPN_CONTENT": _b64(vpn_secret.ovpn_content) if vpn_secret.ovpn_content else "",
+        "AIST_VPN_CA_CERT":      _b64(vpn_secret.ca_cert)       if vpn_secret.ca_cert       else "",
+        "AIST_VPN_CLIENT_CERT":  _b64(vpn_secret.client_cert)   if vpn_secret.client_cert   else "",
+        "AIST_VPN_CLIENT_KEY":   _b64(vpn_secret.client_key)    if vpn_secret.client_key    else "",
+        "AIST_VPN_TLS_AUTH_KEY": _b64(vpn_secret.tls_auth_key)  if vpn_secret.tls_auth_key  else "",
+        # Pass the tls key type so the entrypoint uses the correct block tag
+        # ("tls-auth" vs "tls-crypt" — different OpenVPN protocols, not interchangeable).
+        "AIST_VPN_TLS_KEY_TYPE": getattr(vpn_secret, "tls_key_type", "tls-auth") or "tls-auth",
+        "AIST_VPN_USERNAME":     vpn_secret.vpn_username,
+        "AIST_VPN_PASSWORD":     vpn_secret.vpn_password,
     }.items() if v}
 
 
@@ -141,6 +195,9 @@ def vpn_sidecar_context(
     proxy_url = f"socks5://127.0.0.1:{host_port}"
     env_dict = _assemble_env(vpn_secret)
 
+    image = _get_vpn_sidecar_image()
+    _build_vpn_sidecar_if_needed(image)
+
     cmd = [
         "docker", "run", "-d",
         "--name", container_name,
@@ -151,7 +208,7 @@ def vpn_sidecar_context(
     ]
     for k, v in env_dict.items():
         cmd += ["-e", f"{k}={v}"]
-    cmd.append(_get_vpn_sidecar_image())
+    cmd.append(image)
 
     logger.info(
         "execution=%s vpn=starting sidecar=%s socks5_port=%d",

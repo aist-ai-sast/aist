@@ -238,6 +238,7 @@ export type WorkItemProviderPayload = {
   provider_config?: Record<string, unknown>;
   sync_enabled?: boolean;
   is_active?: boolean;
+  vpn_integration?: number | null;
 };
 
 export function useCreateWorkItemProvider(orgId: number) {
@@ -310,10 +311,12 @@ export function useSetProjectIntegrationOverride(projectId: number) {
       integrationType,
       orgIntegrationId,
       configOverride,
+      isDisabled,
     }: {
       integrationType: string;
       orgIntegrationId?: number | null;
       configOverride?: Record<string, unknown>;
+      isDisabled?: boolean;
     }) =>
       fetchJson(
         getRoute("project_integration_override_detail_url", {
@@ -325,6 +328,7 @@ export function useSetProjectIntegrationOverride(projectId: number) {
           body: JSON.stringify({
             org_integration: orgIntegrationId ?? null,
             config_override: configOverride ?? {},
+            is_disabled: isDisabled ?? false,
           }),
         },
       ),
@@ -406,11 +410,23 @@ export function useUpdateWorkItem(findingId: number) {
   });
 }
 
+export type VpnSecretPayload = {
+  ovpn_content?: string;
+  ca_cert?: string;
+  client_cert?: string;
+  client_key?: string;
+  tls_auth_key?: string;
+  vpn_username?: string;
+  vpn_password?: string;
+};
+
 export type OrgIntegrationPayload = {
   integration_type: string;
   name: string;
   config?: Record<string, unknown>;
   secret?: string;
+  vpn_secret?: VpnSecretPayload;
+  vpn_integration?: number | null;
   is_active?: boolean;
 };
 

@@ -557,3 +557,245 @@ class IntegrationResolverTests(AISTApiBase):
         self.project.save(update_fields=["organization"])
         result = resolve_integration(self.project, OrgIntegrationType.GITLAB)
         self.assertIsNone(result)
+
+
+class OrgIntegrationVPNLinkTests(AISTApiBase):
+
+    """Tests for the vpn_integration FK on OrgIntegration."""
+
+    def setUp(self):
+        super().setUp()
+        from dojo.models import Product_Type  # noqa: PLC0415
+
+        from aist.models import Organization  # noqa: PLC0415
+
+        self.org_prod_type = Product_Type.objects.create(name="VPN Link PT")
+        self.org = Organization.objects.create(name="VPN Link Org", product_type=self.org_prod_type)
+        Product_Type_Member.objects.create(
+            product_type=self.org_prod_type,
+            user=self.user,
+            role=self.role_maintainer,
+        )
+        self.project.organization = self.org
+        self.project.save(update_fields=["organization"])
+
+        self.vpn = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type="VPN",
+            name="Corp VPN",
+            is_active=True,
+        )
+        self.list_url = reverse("aist_api:org_integration_list_create", kwargs={"org_id": self.org.pk})
+
+    def test_create_gitlab_with_vpn_link(self):
+        resp = self.client.post(self.list_url, {
+            "integration_type": "GITLAB",
+            "name": "Corp GitLab",
+            "config": {"base_url": "https://gitlab.corp.com"},
+            "vpn_integration": self.vpn.pk,
+        }, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["vpn_integration"], self.vpn.pk)
+        integration = OrgIntegration.objects.get(name="Corp GitLab")
+        self.assertEqual(integration.vpn_integration_id, self.vpn.pk)
+
+    def test_create_gitlab_without_vpn_link(self):
+        resp = self.client.post(self.list_url, {
+            "integration_type": "GITLAB",
+            "name": "Direct GitLab",
+            "config": {},
+        }, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertIsNone(resp.data["vpn_integration"])
+
+    def test_patch_adds_vpn_link(self):
+        integration = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type="GITLAB",
+            name="GitLab No VPN",
+        )
+        url = reverse("aist_api:org_integration_detail", kwargs={"integration_id": integration.pk})
+        resp = self.client.patch(url, {"vpn_integration": self.vpn.pk}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        integration.refresh_from_db()
+        self.assertEqual(integration.vpn_integration_id, self.vpn.pk)
+
+    def test_patch_removes_vpn_link(self):
+        integration = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type="GITLAB",
+            name="GitLab With VPN",
+            vpn_integration=self.vpn,
+        )
+        url = reverse("aist_api:org_integration_detail", kwargs={"integration_id": integration.pk})
+        resp = self.client.patch(url, {"vpn_integration": None}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        integration.refresh_from_db()
+        self.assertIsNone(integration.vpn_integration_id)
+
+    def test_vpn_integration_not_shown_for_vpn_type(self):
+        """VPN integrations must not expose vpn_integration field (they are the VPN)."""
+        url = reverse("aist_api:org_integration_detail", kwargs={"integration_id": self.vpn.pk})
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("vpn_integration", resp.data)
+
+    def test_cross_org_vpn_rejected(self):
+        """VPN integration from a different org must be rejected."""
+        from dojo.models import Product_Type  # noqa: PLC0415
+
+        from aist.models import Organization  # noqa: PLC0415
+
+        other_org = Organization.objects.create(
+            name="Other Org",
+            product_type=Product_Type.objects.create(name="Other PT"),
+        )
+        foreign_vpn = OrgIntegration.objects.create(
+            organization=other_org,
+            integration_type="VPN",
+            name="Foreign VPN",
+        )
+        resp = self.client.post(self.list_url, {
+            "integration_type": "GITLAB",
+            "name": "Smuggled GitLab",
+            "config": {},
+            "vpn_integration": foreign_vpn.pk,
+        }, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+
+class VpnProjectOverrideTests(AISTApiBase):
+
+    """Tests for per-project VPN disable via ProjectIntegrationOverride.is_disabled."""
+
+    def setUp(self):
+        super().setUp()
+        from dojo.models import Product_Type  # noqa: PLC0415
+
+        from aist.models import Organization  # noqa: PLC0415
+
+        self.org_prod_type = Product_Type.objects.create(name="VPN Override PT")
+        self.org = Organization.objects.create(name="VPN Override Org", product_type=self.org_prod_type)
+        Product_Type_Member.objects.create(
+            product_type=self.org_prod_type,
+            user=self.user,
+            role=self.role_maintainer,
+        )
+        self.project.organization = self.org
+        self.project.save(update_fields=["organization"])
+
+        self.vpn = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type="VPN",
+            name="Corp VPN",
+            is_active=True,
+        )
+        self.detail_url = reverse(
+            "aist_api:project_integration_override_detail",
+            kwargs={"project_id": self.project.pk, "integration_type": "VPN"},
+        )
+
+    # ------------------------------------------------------------------
+    # Resolver behaviour
+    # ------------------------------------------------------------------
+
+    def test_resolver_returns_org_vpn_when_no_override(self):
+        """With no override, resolver should return the org-level VPN."""
+        from aist.integrations.resolver import resolve_integration  # noqa: PLC0415
+
+        result = resolve_integration(self.project, OrgIntegrationType.VPN)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.integration.pk, self.vpn.pk)
+
+    def test_resolver_returns_none_when_is_disabled_true(self):
+        """Override with is_disabled=True must suppress org-level VPN."""
+        from aist.integrations.resolver import resolve_integration  # noqa: PLC0415
+
+        ProjectIntegrationOverride.objects.create(
+            project=self.project,
+            integration_type="VPN",
+            is_disabled=True,
+        )
+        result = resolve_integration(self.project, OrgIntegrationType.VPN)
+        self.assertIsNone(result)
+
+    def test_resolver_falls_back_to_org_default_when_is_disabled_false(self):
+        """Override with is_disabled=False and no org_integration → use org default."""
+        from aist.integrations.resolver import resolve_integration  # noqa: PLC0415
+
+        ProjectIntegrationOverride.objects.create(
+            project=self.project,
+            integration_type="VPN",
+            is_disabled=False,
+        )
+        result = resolve_integration(self.project, OrgIntegrationType.VPN)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.integration.pk, self.vpn.pk)
+
+    # ------------------------------------------------------------------
+    # API behaviour
+    # ------------------------------------------------------------------
+
+    def test_put_vpn_override_is_disabled(self):
+        """PUT /projects/<id>/integration-overrides/VPN/ with is_disabled=true must persist."""
+        resp = self.client.put(self.detail_url, {"is_disabled": True}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["is_disabled"])
+        override = ProjectIntegrationOverride.objects.get(project=self.project, integration_type="VPN")
+        self.assertTrue(override.is_disabled)
+
+    def test_put_vpn_override_re_enable(self):
+        """Setting is_disabled=false on an existing disabled override re-enables org VPN."""
+        ProjectIntegrationOverride.objects.create(
+            project=self.project,
+            integration_type="VPN",
+            is_disabled=True,
+        )
+        resp = self.client.put(self.detail_url, {"is_disabled": False}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["is_disabled"])
+
+    def test_delete_vpn_override_restores_org_default(self):
+        """DELETE removes the override — resolver falls back to org-level VPN."""
+        from aist.integrations.resolver import resolve_integration  # noqa: PLC0415
+
+        ProjectIntegrationOverride.objects.create(
+            project=self.project,
+            integration_type="VPN",
+            is_disabled=True,
+        )
+        resp = self.client.delete(self.detail_url)
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(ProjectIntegrationOverride.objects.filter(project=self.project, integration_type="VPN").exists())
+        result = resolve_integration(self.project, OrgIntegrationType.VPN)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.integration.pk, self.vpn.pk)
+
+    def test_other_project_in_same_org_unaffected(self):
+        """Disabling VPN for one project must not affect other projects in the same org."""
+        from dojo.models import Product  # noqa: PLC0415
+
+        from aist.integrations.resolver import resolve_integration  # noqa: PLC0415
+        from aist.models import AISTProject  # noqa: PLC0415
+
+        other_product = Product.objects.create(
+            name="Other Product",
+            description="",
+            prod_type=self.org_prod_type,
+            sla_configuration_id=self.sla.id,
+        )
+        other_project = AISTProject.objects.create(
+            product=other_product,
+            organization=self.org,
+            supported_languages=[],
+            compilable=False,
+            profile={},
+        )
+        ProjectIntegrationOverride.objects.create(
+            project=self.project,
+            integration_type="VPN",
+            is_disabled=True,
+        )
+        result = resolve_integration(other_project, OrgIntegrationType.VPN)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.integration.pk, self.vpn.pk)

@@ -229,13 +229,19 @@ class ScmGitlabBinding(models.Model):
         tok = self._token()
         return {"PRIVATE-TOKEN": tok} if tok else {}
 
-    def get_project_info(self, scm: RepositoryInfo):
+    def get_project_info(self, scm: RepositoryInfo, *, proxy_url: str | None = None):
         logger = logging.getLogger("aist")
         base = self.host(scm).rstrip("/")
         token = self._token()
 
         try:
-            gl = gitlab.Gitlab(base, private_token=token or None)
+            kwargs: dict = {"private_token": token or None}
+            if proxy_url:
+                import requests as _requests  # noqa: PLC0415
+                session = _requests.Session()
+                session.proxies = {"http": proxy_url, "https": proxy_url}
+                kwargs["session"] = session
+            gl = gitlab.Gitlab(base, **kwargs)
             project = gl.projects.get(scm.repo_full)
         except gitlab.exceptions.GitlabGetError as exc:
             logger.warning(
@@ -363,6 +369,18 @@ class OrgIntegration(models.Model):
     config = models.JSONField(default=dict, blank=True)
     secret = EncryptedCharField(max_length=4096, blank=True, default="")
     is_active = models.BooleanField(default=True)
+    vpn_integration = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        limit_choices_to={"integration_type": "VPN"},
+        related_name="dependent_integrations",
+        help_text=(
+            "VPN integration to route this integration's requests through. "
+            "Must be a VPN-type integration in the same organization."
+        ),
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -408,6 +426,9 @@ class OrgIntegrationVPNSecret(models.Model):
     client_cert = EncryptedCharField(max_length=8192, blank=True, default="")
     client_key = EncryptedCharField(max_length=8192, blank=True, default="")
     tls_auth_key = EncryptedCharField(max_length=4096, blank=True, default="")
+    # Which OpenVPN inline block was used: "tls-auth" (legacy) or "tls-crypt" (modern).
+    # Not encrypted — not sensitive. Determines correct block tag on sidecar reassembly.
+    tls_key_type = models.CharField(max_length=16, blank=True, default="tls-auth")
     # Optional auth-user-pass credentials
     vpn_username = EncryptedCharField(max_length=512, blank=True, default="")
     vpn_password = EncryptedCharField(max_length=512, blank=True, default="")
@@ -503,6 +524,10 @@ class ProjectIntegrationOverride(models.Model):
         related_name="project_overrides",
     )
     config_override = models.JSONField(default=dict, blank=True)
+    is_disabled = models.BooleanField(
+        default=False,
+        help_text="When True, the org-level integration of this type is disabled for this project.",
+    )
 
     class Meta:
         unique_together = [("project", "integration_type")]

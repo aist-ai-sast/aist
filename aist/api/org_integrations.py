@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from django.shortcuts import get_object_or_404
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
@@ -16,6 +18,58 @@ from aist.queries import (
     get_authorized_aist_projects,
     get_authorized_org_integrations,
 )
+
+# ---------------------------------------------------------------------------
+# OVPN helpers
+# ---------------------------------------------------------------------------
+
+# Maps OpenVPN XML-like tag names to VPNSecret model field names.
+_OVPN_TAG_TO_FIELD: dict[str, str] = {
+    "ca": "ca_cert",
+    "cert": "client_cert",
+    "key": "client_key",
+    "tls-auth": "tls_auth_key",
+    "tls-crypt": "tls_auth_key",  # tls-crypt uses same storage field
+}
+
+
+def _split_ovpn_pem_blocks(ovpn_content: str) -> tuple[str, dict[str, str]]:
+    """
+    Extract inline PEM/key blocks from an .ovpn file.
+
+    Returns ``(cleaned_config, extracted)`` where:
+    - ``cleaned_config`` — original content with the extracted blocks removed
+      (only connection directives remain; safe to log)
+    - ``extracted`` — dict mapping model field names to the block content,
+      e.g. ``{"ca_cert": "...", "client_key": "..."}``
+
+    Also sets ``extracted["tls_key_type"]`` to "tls-crypt" or "tls-auth"
+    so the entrypoint can reconstruct the correct block tag.  The distinction
+    matters: ``tls-crypt`` and ``tls-auth`` are different OpenVPN protocols and
+    the server will silently drop packets if the wrong one is used.
+
+    When multiple tags map to the same field (tls-auth / tls-crypt) the last
+    matched value wins, but in practice a valid .ovpn has only one of them.
+    """
+    extracted: dict[str, str] = {}
+    cleaned = ovpn_content
+    for tag, field in _OVPN_TAG_TO_FIELD.items():
+        pattern = re.compile(
+            rf"<{re.escape(tag)}>(.*?)</{re.escape(tag)}>",
+            re.DOTALL | re.IGNORECASE,
+        )
+        match = pattern.search(cleaned)
+        if match:
+            extracted[field] = match.group(1).strip()
+            if field == "tls_auth_key":
+                # Record which tag was used so the sidecar entrypoint can
+                # reconstruct <tls-auth> vs <tls-crypt> correctly.
+                extracted["tls_key_type"] = tag  # "tls-auth" or "tls-crypt"
+            cleaned = pattern.sub("", cleaned)
+    # Collapse runs of blank lines left after block removal
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, extracted
+
 
 # ---------------------------------------------------------------------------
 # Serializers
@@ -49,6 +103,9 @@ class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
         write_only=True, required=False, allow_blank=True,
         style={"input_type": "password"},
     )
+    # Not sensitive — indicates whether the uploaded .ovpn used tls-auth or tls-crypt.
+    # Read-write so that manual PATCH requests can correct it if needed.
+    tls_key_type = serializers.CharField(required=False, allow_blank=True, default="tls-auth")
     has_ovpn_content = serializers.SerializerMethodField()
     has_client_cert = serializers.SerializerMethodField()
     has_client_key = serializers.SerializerMethodField()
@@ -66,11 +123,25 @@ class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
     def get_has_username(self, obj) -> bool:
         return bool(obj.vpn_username)
 
+    def validate(self, attrs):
+        ovpn = attrs.get("ovpn_content", "")
+        if ovpn:
+            cleaned, extracted = _split_ovpn_pem_blocks(ovpn)
+            attrs["ovpn_content"] = cleaned
+            # Populate separate cert fields from the inline blocks only when
+            # the caller has not explicitly supplied those fields themselves.
+            # Fields absent from the request are not present in attrs at all
+            # (DRF omits them during to_internal_value for optional fields).
+            for field, value in extracted.items():
+                if field not in attrs:
+                    attrs[field] = value
+        return attrs
+
     def update(self, instance, validated_data):
         # On PATCH: preserve fields not explicitly provided in the request body.
         secret_fields = (
             "ovpn_content", "ca_cert", "client_cert", "client_key",
-            "tls_auth_key", "vpn_username", "vpn_password",
+            "tls_auth_key", "tls_key_type", "vpn_username", "vpn_password",
         )
         for field in secret_fields:
             if field not in self.initial_data:
@@ -81,6 +152,7 @@ class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
         model = OrgIntegrationVPNSecret
         fields = [
             "ovpn_content", "ca_cert", "client_cert", "client_key", "tls_auth_key",
+            "tls_key_type",
             "vpn_username", "vpn_password",
             "has_ovpn_content", "has_client_cert", "has_client_key", "has_username",
         ]
@@ -105,6 +177,17 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
     # Present in responses only when integration_type == VPN (removed in to_representation otherwise)
     vpn_secret = OrgIntegrationVPNSecretSerializer(required=False)
 
+    # VPN routing FK — nullable, only applicable to non-VPN integration types
+    vpn_integration = serializers.PrimaryKeyRelatedField(
+        queryset=OrgIntegration.objects.filter(integration_type=OrgIntegrationType.VPN),
+        allow_null=True,
+        required=False,
+        help_text=(
+            "Optional VPN integration to route requests through. "
+            "Must be a VPN-type integration in the same organization."
+        ),
+    )
+
     class Meta:
         model = OrgIntegration
         fields = [
@@ -117,6 +200,7 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             "secret",
             "has_secret",
             "vpn_secret",
+            "vpn_integration",
             "is_active",
             "created_by",
             "created",
@@ -127,11 +211,28 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
     def get_has_secret(self, obj) -> bool:
         return bool(obj.secret)
 
+    def validate_vpn_integration(self, value):
+        if value is None:
+            return value
+        instance = self.instance
+        if instance is not None:
+            organization_id = instance.organization_id
+        else:
+            organization_id = self.initial_data.get("organization")
+        if organization_id and str(value.organization_id) != str(organization_id):
+            raise serializers.ValidationError(
+                "VPN integration must belong to the same organization."
+            )
+        return value
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         # Only include vpn_secret for VPN integrations; for all others it's irrelevant noise
         if instance.integration_type != OrgIntegrationType.VPN:
             data.pop("vpn_secret", None)
+        # VPN integrations cannot themselves route through another VPN
+        if instance.integration_type == OrgIntegrationType.VPN:
+            data.pop("vpn_integration", None)
         return data
 
     def update(self, instance, validated_data):
@@ -169,6 +270,7 @@ class ProjectIntegrationOverrideSerializer(serializers.ModelSerializer):
             "integration_type",
             "org_integration",
             "config_override",
+            "is_disabled",
         ]
         read_only_fields = ["id", "project"]
 
@@ -316,8 +418,23 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
 
         base_url = config.get("base_url") or "https://gitlab.com"
         try:
-            gl = gitlab.Gitlab(base_url, private_token=secret or None)
-            gl.auth()
+            kwargs: dict = {"private_token": secret or None}
+            vpn = getattr(integration, "vpn_integration", None)
+            if vpn and vpn.is_active:
+                import requests as _requests  # noqa: PLC0415
+                from aist.integrations.resolver import ResolvedIntegration  # noqa: PLC0415
+                from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
+                vpn_resolved = ResolvedIntegration(integration=vpn, config=dict(vpn.config or {}))
+                with vpn_sidecar_context(vpn_resolved, execution_id=f"validate-{integration.pk}") as (_, proxy_url):
+                    if proxy_url:
+                        session = _requests.Session()
+                        session.proxies = {"http": proxy_url, "https": proxy_url}
+                        kwargs["session"] = session
+                    gl = gitlab.Gitlab(base_url, **kwargs)
+                    gl.auth()
+            else:
+                gl = gitlab.Gitlab(base_url, **kwargs)
+                gl.auth()
         except Exception as exc:
             return False, str(exc)
         else:

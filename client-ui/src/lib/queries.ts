@@ -651,6 +651,7 @@ export type WorkItemProviderSummary = {
   baseUrl: string;
   syncEnabled: boolean;
   hasToken: boolean;
+  vpnIntegrationId: number | null;
 };
 
 export function useWorkItems(findingId?: number) {
@@ -685,6 +686,7 @@ type WorkItemProviderApi = {
   base_url?: string;
   sync_enabled: boolean;
   has_token: boolean;
+  vpn_integration?: number | null;
 };
 
 export function useWorkItemProviders(orgId?: number) {
@@ -703,6 +705,7 @@ export function useWorkItemProviders(orgId?: number) {
         baseUrl: p.base_url ?? "",
         syncEnabled: p.sync_enabled,
         hasToken: p.has_token,
+        vpnIntegrationId: p.vpn_integration ?? null,
       }));
     },
     enabled: Boolean(orgId),
@@ -978,6 +981,13 @@ export function useManageableOrgs() {
   });
 }
 
+export type VpnSecretStatus = {
+  has_ovpn_content: boolean;
+  has_client_cert: boolean;
+  has_client_key: boolean;
+  has_username: boolean;
+};
+
 export type OrgIntegration = {
   id: number;
   organization: number;
@@ -986,6 +996,8 @@ export type OrgIntegration = {
   name: string;
   config: Record<string, unknown>;
   has_secret: boolean;
+  vpn_secret?: VpnSecretStatus;
+  vpn_integration?: number | null;
   is_active: boolean;
   created: string;
   updated: string;
@@ -997,6 +1009,7 @@ export type ProjectIntegrationOverride = {
   integration_type: string;
   org_integration: number | null;
   config_override: Record<string, unknown>;
+  is_disabled: boolean;
 };
 
 export function useProjectIntegrationOverrides(projectId?: number) {

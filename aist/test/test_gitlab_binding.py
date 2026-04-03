@@ -50,3 +50,31 @@ class GitlabBindingTests(TestCase):
         info = self.binding.get_project_info(self.repo)
 
         self.assertIsNone(info)
+
+    @patch("aist.models.gitlab.Gitlab")
+    def test_get_project_info_with_proxy_url_sets_session_proxies(self, mock_gitlab):
+        """When proxy_url is given, a requests.Session with proxies must be passed to Gitlab()."""
+        mock_project = Mock()
+        mock_project.attributes = {"default_branch": "develop"}
+        mock_gitlab.return_value.projects.get.return_value = mock_project
+
+        proxy = "socks5://127.0.0.1:1080"
+        self.binding.get_project_info(self.repo, proxy_url=proxy)
+
+        _, kwargs = mock_gitlab.call_args
+        session = kwargs.get("session")
+        self.assertIsNotNone(session, "session must be passed when proxy_url is set")
+        self.assertEqual(session.proxies.get("https"), proxy)
+        self.assertEqual(session.proxies.get("http"), proxy)
+
+    @patch("aist.models.gitlab.Gitlab")
+    def test_get_project_info_without_proxy_url_has_no_session(self, mock_gitlab):
+        """When proxy_url is None (default), no session kwarg is passed."""
+        mock_project = Mock()
+        mock_project.attributes = {"default_branch": "main"}
+        mock_gitlab.return_value.projects.get.return_value = mock_project
+
+        self.binding.get_project_info(self.repo)
+
+        _, kwargs = mock_gitlab.call_args
+        self.assertNotIn("session", kwargs)

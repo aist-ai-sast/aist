@@ -106,6 +106,7 @@ COPY vendor/defectdojo/ ./vendor/defectdojo/
 COPY --from=client-build /app/client-ui/dist/ /app/client-ui/dist/
 
 COPY sast-combinator/sast-pipeline/ /app/sast-combinator/sast-pipeline
+COPY sast-combinator/vpn-sidecar/   /app/sast-combinator/vpn-sidecar
 ENV AIST_PIPELINE_CODE_PATH=/app/sast-combinator/sast-pipeline
 
 # Add extra fixtures to docker image which are loaded by the initializer

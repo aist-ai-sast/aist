@@ -96,6 +96,7 @@ COPY --from=client-build /app/client-ui/dist/ /app/client-ui/dist/
 COPY docker/extra_fixtures/* /app/vendor/defectdojo/dojo/fixtures/
 
 COPY sast-combinator/sast-pipeline/ /app/sast-combinator/sast-pipeline
+COPY sast-combinator/vpn-sidecar/   /app/sast-combinator/vpn-sidecar
 ENV AIST_PIPELINE_CODE_PATH=/app/sast-combinator/sast-pipeline
 
 RUN \

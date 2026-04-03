@@ -35,10 +35,14 @@ def resolve_integration(project: AISTProject, integration_type: OrgIntegrationTy
         .first()
     )
 
-    if override and override.org_integration and override.org_integration.is_active:
-        integration = override.org_integration
-        effective_config = {**integration.config, **override.config_override}
-        return ResolvedIntegration(integration=integration, config=effective_config)
+    if override is not None:
+        if override.is_disabled:
+            return None  # explicitly disabled for this project — skip org default
+        if override.org_integration and override.org_integration.is_active:
+            integration = override.org_integration
+            effective_config = {**integration.config, **override.config_override}
+            return ResolvedIntegration(integration=integration, config=effective_config)
+        # override exists but no org_integration → fall through to org default
 
     if project.organization_id is None:
         return None
