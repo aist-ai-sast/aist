@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from dojo.authorization.roles_permissions import Roles
@@ -184,7 +186,7 @@ class OrgIntegrationDetailAPITests(AISTApiBase):
 
 class OrgIntegrationValidateAPITests(AISTApiBase):
 
-    """POST /integrations/<id>/validate/"""
+    """POST /integrations/<id>/validate/ and GET /…/<task_id>/"""
 
     def setUp(self):
         super().setUp()
@@ -204,23 +206,90 @@ class OrgIntegrationValidateAPITests(AISTApiBase):
         self.project.organization = self.org
         self.project.save(update_fields=["organization"])
 
-    def test_github_always_valid(self):
+    def _post_validate(self, integration):
+        url = reverse("aist_api:org_integration_validate", kwargs={"integration_id": integration.pk})
+        fake_result = MagicMock()
+        fake_result.id = "fake-task-id"
+        with patch("aist.tasks.validate.validate_integration.delay", return_value=fake_result):
+            return self.client.post(url)
+
+    def test_validate_returns_202_and_task_id(self):
         integration = OrgIntegration.objects.create(
             organization=self.org, integration_type="GITHUB", name="GitHub", config={},
         )
-        url = reverse("aist_api:org_integration_validate", kwargs={"integration_id": integration.pk})
-        resp = self.client.post(url)
+        resp = self._post_validate(integration)
+        self.assertEqual(resp.status_code, 202)
+        self.assertIn("task_id", resp.data)
+
+    def test_validate_status_pending(self):
+        integration = OrgIntegration.objects.create(
+            organization=self.org, integration_type="GITHUB", name="GitHub", config={},
+        )
+        url = reverse(
+            "aist_api:org_integration_validate_status",
+            kwargs={"integration_id": integration.pk, "task_id": "some-task"},
+        )
+        fake_ar = MagicMock()
+        fake_ar.state = "PENDING"
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(url)
         self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["state"], "PENDING")
+        self.assertIsNone(resp.data["valid"])
+
+    def test_validate_status_success(self):
+        integration = OrgIntegration.objects.create(
+            organization=self.org, integration_type="GITHUB", name="GitHub", config={},
+        )
+        url = reverse(
+            "aist_api:org_integration_validate_status",
+            kwargs={"integration_id": integration.pk, "task_id": "some-task"},
+        )
+        fake_ar = MagicMock()
+        fake_ar.state = "SUCCESS"
+        fake_ar.result = {"valid": True, "detail": "", "_integration_id": integration.pk}
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["state"], "SUCCESS")
         self.assertTrue(resp.data["valid"])
 
-    def test_email_always_valid(self):
+    def test_validate_status_failure(self):
         integration = OrgIntegration.objects.create(
-            organization=self.org, integration_type="EMAIL", name="Email", config={},
+            organization=self.org, integration_type="GITHUB", name="GitHub", config={},
         )
-        url = reverse("aist_api:org_integration_validate", kwargs={"integration_id": integration.pk})
-        resp = self.client.post(url)
+        url = reverse(
+            "aist_api:org_integration_validate_status",
+            kwargs={"integration_id": integration.pk, "task_id": "some-task"},
+        )
+        fake_ar = MagicMock()
+        fake_ar.state = "FAILURE"
+        fake_ar.result = Exception("connection refused")
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(url)
         self.assertEqual(resp.status_code, 200)
-        self.assertTrue(resp.data["valid"])
+        self.assertEqual(resp.data["state"], "FAILURE")
+        self.assertFalse(resp.data["valid"])
+
+    def test_validate_status_cross_org_rejected(self):
+        """Cannot poll status for an integration from another org."""
+        from dojo.models import Product_Type  # noqa: PLC0415
+
+        from aist.models import Organization  # noqa: PLC0415
+
+        other_org = Organization.objects.create(
+            name="Other Org V",
+            product_type=Product_Type.objects.create(name="Other PT V"),
+        )
+        foreign = OrgIntegration.objects.create(
+            organization=other_org, integration_type="GITHUB", name="Foreign GitHub",
+        )
+        url = reverse(
+            "aist_api:org_integration_validate_status",
+            kwargs={"integration_id": foreign.pk, "task_id": "task-x"},
+        )
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 404)
 
 
 class ProjectIntegrationOverrideAPITests(AISTApiBase):

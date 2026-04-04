@@ -23,6 +23,7 @@ import {
   useWorkItemProviders,
   useProjectIntegrationOverrides,
   useProjects,
+  useValidationStatus,
   type OrgIntegration,
   type VpnSecretStatus,
   type WorkItemProviderSummary,
@@ -224,10 +225,22 @@ function ResourceRow({
           onClick={onValidate}
           title="Validate credentials"
         >
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
-            <path fill="currentColor" d="m9 12 2 2 4-4 1.4 1.4-5.4 5.4-3.4-3.4L9 12ZM12 2 4 6v6c0 5.5 3.8 9.9 8 11 4.2-1.1 8-5.5 8-11V6l-8-4Z" />
-          </svg>
-          Validate
+          {isPendingValidate ? (
+            <>
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 animate-spin" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" opacity="0.25" />
+                <path fill="currentColor" opacity="0.75" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4Z" />
+              </svg>
+              Validating…
+            </>
+          ) : (
+            <>
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                <path fill="currentColor" d="m9 12 2 2 4-4 1.4 1.4-5.4 5.4-3.4-3.4L9 12ZM12 2 4 6v6c0 5.5 3.8 9.9 8 11 4.2-1.1 8-5.5 8-11V6l-8-4Z" />
+              </svg>
+              Validate
+            </>
+          )}
         </button>
         <button
           className="aist-icon-button border-night-400/60 bg-night-700/60 text-slate-300 text-[11px] px-2.5 py-1.5"
@@ -752,6 +765,8 @@ function OrgIntegrationForm({
                     setForm((prev) => ({ ...prev, vpn_integration: value ? Number(value) : null }))
                   }
                   placeholder="None (direct connection)"
+                  clearable
+                  clearLabel="None (direct connection)"
                   options={vpnOptions.map((i) => ({ value: String(i.id), label: i.name }))}
                 />
                 {vpnOptions.length === 0 && (
@@ -799,9 +814,31 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
   const validateIntegration = useValidateOrgIntegration();
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [validatingState, setValidatingState] = useState<{ integrationId: number; taskId: string } | null>(null);
 
   const integrations = integrationsQuery.data ?? [];
   const editingIntegration = integrations.find((i) => i.id === editingId) ?? null;
+
+  const validationStatus = useValidationStatus(
+    validatingState?.integrationId ?? null,
+    validatingState?.taskId ?? null,
+  );
+
+  // Resolve validation result when task completes
+  useEffect(() => {
+    if (!validatingState) return;
+    const s = validationStatus.data?.state;
+    if (s === "SUCCESS" || s === "FAILURE") {
+      const data = validationStatus.data!;
+      toast.push(
+        data.valid
+          ? "Credentials are valid."
+          : `Validation failed: ${data.detail || "Check integration configuration."}`,
+        data.valid ? "success" : "error",
+      );
+      setValidatingState(null);
+    }
+  }, [validationStatus.data?.state]);
 
   // First active integration per type is the auto-selected default by resolver
   const defaultIds = new Set<number>();
@@ -827,11 +864,8 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
 
   async function handleValidate(integration: OrgIntegration) {
     try {
-      const result = await validateIntegration.mutateAsync(integration.id);
-      toast.push(
-        result.valid ? "Credentials are valid." : `Validation failed: ${result.detail || "Check integration configuration."}`,
-        result.valid ? "success" : "error",
-      );
+      const { task_id } = await validateIntegration.mutateAsync(integration.id);
+      setValidatingState({ integrationId: integration.id, taskId: task_id });
     } catch (error) {
       toast.push(toUserMessage(error), "error");
     }
@@ -876,7 +910,10 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
             onDelete={() => handleDelete(integration)}
             onValidate={() => handleValidate(integration)}
             isPendingDelete={deleteIntegration.isPending}
-            isPendingValidate={validateIntegration.isPending}
+            isPendingValidate={
+              (validateIntegration.isPending && validateIntegration.variables === integration.id) ||
+              validatingState?.integrationId === integration.id
+            }
           />
         ),
       )}
@@ -1065,6 +1102,8 @@ function WorkItemProviderForm({
               setForm((prev) => ({ ...prev, vpn_integration: value ? Number(value) : null }))
             }
             placeholder="None"
+            clearable
+            clearLabel="None"
             options={vpnOptions.map((i) => ({ value: String(i.id), label: i.name }))}
           />
           {vpnOptions.length === 0 && (

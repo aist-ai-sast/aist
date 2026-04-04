@@ -1026,6 +1026,31 @@ export function useProjectIntegrationOverrides(projectId?: number) {
   });
 }
 
+export type ValidationTaskStatus = {
+  state: "PENDING" | "STARTED" | "SUCCESS" | "FAILURE";
+  valid: boolean | null;
+  detail: string;
+};
+
+export function useValidationStatus(integrationId: number | null, taskId: string | null) {
+  return useQuery({
+    queryKey: ["validate-status", integrationId, taskId],
+    queryFn: () =>
+      fetchJson<ValidationTaskStatus>(
+        getRoute("org_integration_validate_status_url", {
+          integration_id: integrationId!,
+          task_id: taskId!,
+        }),
+      ),
+    enabled: Boolean(integrationId && taskId),
+    refetchInterval: (query) => {
+      const s = query.state.data?.state;
+      if (s === "SUCCESS" || s === "FAILURE") return false;
+      return 2000;
+    },
+  });
+}
+
 export function useOrgIntegrations(orgId?: number) {
   return useQuery({
     queryKey: ["org-integrations", orgId],

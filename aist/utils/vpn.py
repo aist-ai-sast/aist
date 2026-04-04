@@ -7,7 +7,7 @@ and a SOCKS5 proxy (microsocks on :1080).  It yields two values needed by caller
   container_name  — pass to ``docker run --network container:<name>``
                     so the builder container shares the VPN tunnel transparently.
 
-  socks5_proxy_url — pass to HTTP client libraries as the proxy URL
+  proxy_url        — pass to HTTP client libraries as the proxy URL
                      (e.g. ``proxies={"https": proxy_url}``) so Jira, GitLab,
                      and other Celery-side calls are routed through the VPN.
 
@@ -17,6 +17,9 @@ Security notes:
 - Credentials are decrypted in Celery worker memory and passed directly to
   ``docker run -e``; they are never written to disk on the host.
 - The SOCKS5 port is bound to 127.0.0.1 only (not accessible from other machines).
+- When running inside Docker (Celery worker), callers reach the SOCKS5 port via
+  `host.docker.internal` (Docker Desktop) or with `extra_hosts: host.docker.internal:host-gateway`
+  on Linux.
 - The sidecar container is stopped and removed on context exit, even on exception.
 - The container name embeds the execution_id so cleanup_pipeline_containers()
   automatically covers it for pipeline-level cleanup.
@@ -86,6 +89,42 @@ def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _running_in_docker() -> bool:
+    """Return True when the current process is running inside a Docker container."""
+    return Path("/.dockerenv").exists()
+
+
+def _get_own_docker_network() -> str | None:
+    """Return the first named Docker network this container is attached to.
+
+    Used to start the VPN sidecar on the same network so its SOCKS5 port is
+    reachable by container name — without publishing a host port.  This avoids
+    the Linux issue where ``-p 127.0.0.1:{port}:1080`` is NOT reachable via
+    ``host.docker.internal`` (unlike Docker Desktop on macOS which works around
+    this in its VM layer).
+
+    Reads the container ID from ``/etc/hostname`` and inspects it via Docker
+    socket (available in celeryworker via ``/var/run/docker.sock`` bind-mount).
+    Skips ``bridge`` and ``host`` pseudo-networks; prefers named user networks.
+    Returns ``None`` on any error so callers can fall back gracefully.
+    """
+    try:
+        container_id = Path("/etc/hostname").read_text().strip()
+        result = subprocess.run(
+            [
+                "docker", "inspect",
+                "--format", "{{range $k,$v := .NetworkSettings.Networks}}{{$k}}\n{{end}}",
+                container_id,
+            ],
+            capture_output=True, text=True,
+        )
+        networks = [n.strip() for n in result.stdout.splitlines() if n.strip()]
+        named = [n for n in networks if n not in ("bridge", "host", "none")]
+        return named[0] if named else None
+    except Exception:
+        return None
 
 
 def _b64(value: str) -> str:
@@ -172,7 +211,7 @@ def vpn_sidecar_context(
     ``container_name``    — use as ``--network container:<name>`` for the builder
                             container so it transparently shares the VPN tunnel.
     ``socks5_proxy_url``  — use as ``proxies={"https": url}`` in HTTP clients
-                            (Jira, GitLab, YouTrack, etc.) for SOCKS5 routing.
+                            (Jira, GitLab, YouTrack, etc.) for HTTP CONNECT proxy routing.
 
     Both values are ``None`` when ``resolved`` is ``None`` (no VPN needed).
 
@@ -191,33 +230,65 @@ def vpn_sidecar_context(
         return
 
     container_name = f"aist-vpn-{execution_id}"
-    host_port = _find_free_port()
-    proxy_url = f"socks5://127.0.0.1:{host_port}"
     env_dict = _assemble_env(vpn_secret)
 
     image = _get_vpn_sidecar_image()
     _build_vpn_sidecar_if_needed(image)
 
+    # The sidecar always runs on Docker's default bridge network so that it has a
+    # clean single-interface routing table and can reach the VPN server on the internet.
     cmd = [
         "docker", "run", "-d",
         "--name", container_name,
         "--cap-add", "NET_ADMIN",
         "--device", "/dev/net/tun",
-        # Bind SOCKS5 port to localhost only — not reachable from other hosts
-        "-p", f"127.0.0.1:{host_port}:1080",
     ]
+
+    if _running_in_docker():
+        # Running inside a Celery worker container.  Start the sidecar on the
+        # same Docker network so the SOCKS5 port is reachable by container name
+        # without publishing a host port.
+        #
+        # Why NOT use -p 127.0.0.1:{port}:1080 here:
+        #   On Linux Docker Engine, 127.0.0.1-bound ports are only accessible on
+        #   the host's loopback — not via host.docker.internal (which resolves to
+        #   the host's bridge gateway IP, not 127.0.0.1).  Docker Desktop on
+        #   macOS/Windows hides this by routing host.docker.internal through a VM
+        #   shim, but production Linux deployments fail silently with ECONNREFUSED.
+        #
+        # By sharing the same named network, Docker DNS resolves {container_name}
+        # directly to the sidecar's eth0 IP, and microsocks listens on :1080 there.
+        own_network = _get_own_docker_network()
+        if own_network:
+            cmd += ["--network", own_network]
+            proxy_url = f"http://{container_name}:1080"
+            logger.debug("execution=%s vpn=using network=%s", execution_id, own_network)
+        else:
+            # Fallback: publish to all interfaces so host.docker.internal can reach it.
+            host_port = _find_free_port()
+            cmd += ["-p", f"{host_port}:1080"]
+            proxy_url = f"http://host.docker.internal:{host_port}"
+            logger.warning(
+                "execution=%s vpn=could not detect own network, falling back to port publish port=%d",
+                execution_id, host_port,
+            )
+    else:
+        # Running directly on the host (local dev / tests).
+        host_port = _find_free_port()
+        cmd += ["-p", f"127.0.0.1:{host_port}:1080"]
+        proxy_url = f"http://127.0.0.1:{host_port}"
     for k, v in env_dict.items():
         cmd += ["-e", f"{k}={v}"]
     cmd.append(image)
 
     logger.info(
-        "execution=%s vpn=starting sidecar=%s socks5_port=%d",
-        execution_id, container_name, host_port,
+        "execution=%s vpn=starting sidecar=%s socks5=%s",
+        execution_id, container_name, proxy_url,
     )
     try:
         subprocess.run(cmd, capture_output=True, text=True, check=True)
         _wait_for_sidecar_ready(container_name)
-        logger.info("execution=%s vpn=up sidecar=%s", execution_id, container_name)
+        logger.info("execution=%s vpn=up sidecar=%s proxy=%s", execution_id, container_name, proxy_url)
         yield container_name, proxy_url
     finally:
         logger.info("execution=%s vpn=stopping sidecar=%s", execution_id, container_name)

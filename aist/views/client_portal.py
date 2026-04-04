@@ -95,6 +95,17 @@ def _build_routes() -> dict[str, Any]:
             reverse("aist_api:org_integration_validate", kwargs={"integration_id": 0}),
             "integration_id",
         ),
+        "org_integration_validate_status_url": _replace_str_placeholder(
+            _replace_int_placeholder(
+                reverse(
+                    "aist_api:org_integration_validate_status",
+                    kwargs={"integration_id": 0, "task_id": "TASKID"},
+                ),
+                "integration_id",
+            ),
+            "TASKID",
+            "task_id",
+        ),
         "project_integration_overrides_url": _replace_int_placeholder(
             reverse("aist_api:project_integration_overrides", kwargs={"project_id": 0}),
             "project_id",

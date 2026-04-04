@@ -48,6 +48,7 @@ type RouteMap = {
   org_integrations_url: string;
   org_integration_detail_url: string;
   org_integration_validate_url: string;
+  org_integration_validate_status_url: string;
   project_integration_overrides_url: string;
   project_integration_override_detail_url: string;
 };

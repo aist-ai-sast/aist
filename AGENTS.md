@@ -29,6 +29,10 @@ AIST is a SAST aggregation and triage platform:
 - `sast-combinator/context_extractor_service/` — MCP server with Tree-sitter AST analysis (git submodule);
   called by external AI triage agents; resolves `pipeline_id` → project path via platform API
 - `client-ui/` — React enterprise frontend
+- `sast-combinator/vpn-sidecar/` — ephemeral Docker container with OpenVPN + HTTP CONNECT proxy
+  (tinyproxy); started per-execution when a VPN integration is configured, removed immediately after.
+  Credentials stored encrypted in `OrgIntegrationVPNSecret`; passed via `docker run -e` as base64.
+  See `aist/integrations/VPN.md` for which traffic is routed through VPN and how to configure.
 - `vendor/` — upstream base platform, read-only (git submodule)
 
 Data flow:

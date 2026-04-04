@@ -65,6 +65,10 @@ def _split_ovpn_pem_blocks(ovpn_content: str) -> tuple[str, dict[str, str]]:
                 # Record which tag was used so the sidecar entrypoint can
                 # reconstruct <tls-auth> vs <tls-crypt> correctly.
                 extracted["tls_key_type"] = tag  # "tls-auth" or "tls-crypt"
+                if tag == "tls-crypt":
+                    # tls-crypt does not use key-direction; remove it so the
+                    # entrypoint does not need to strip it from the base config.
+                    cleaned = re.sub(r"\nkey-direction\s+\d+", "", cleaned)
             cleaned = pattern.sub("", cleaned)
     # Collapse runs of blank lines left after block removal
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
@@ -105,7 +109,11 @@ class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
     )
     # Not sensitive — indicates whether the uploaded .ovpn used tls-auth or tls-crypt.
     # Read-write so that manual PATCH requests can correct it if needed.
-    tls_key_type = serializers.CharField(required=False, allow_blank=True, default="tls-auth")
+    # No default here: the value is always derived from the uploaded .ovpn via
+    # _split_ovpn_pem_blocks.  A default="tls-auth" would prevent the extracted
+    # "tls-crypt" from being applied (DRF always injects the default into attrs,
+    # making `if field not in attrs` always false for this field).
+    tls_key_type = serializers.CharField(required=False, allow_blank=True)
     has_ovpn_content = serializers.SerializerMethodField()
     has_client_cert = serializers.SerializerMethodField()
     has_client_key = serializers.SerializerMethodField()
@@ -132,19 +140,30 @@ class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
             # the caller has not explicitly supplied those fields themselves.
             # Fields absent from the request are not present in attrs at all
             # (DRF omits them during to_internal_value for optional fields).
+            # tls_key_type is always overwritten from the parsed file — it must
+            # reflect the actual tag (<tls-auth> vs <tls-crypt>) found in the
+            # uploaded .ovpn regardless of any previously stored value.
             for field, value in extracted.items():
-                if field not in attrs:
+                if field not in attrs or field == "tls_key_type":
                     attrs[field] = value
         return attrs
 
     def update(self, instance, validated_data):
-        # On PATCH: preserve fields not explicitly provided in the request body.
+        # On PATCH: preserve fields not explicitly provided in the request body,
+        # EXCEPT for fields derived from ovpn_content when it was uploaded —
+        # those must be saved together with the new ovpn_content.
+        ovpn_provided = "ovpn_content" in self.initial_data
+        # Fields extracted from ovpn_content during validate():
+        ovpn_derived = {"ca_cert", "client_cert", "client_key", "tls_auth_key", "tls_key_type"}
         secret_fields = (
             "ovpn_content", "ca_cert", "client_cert", "client_key",
             "tls_auth_key", "tls_key_type", "vpn_username", "vpn_password",
         )
         for field in secret_fields:
             if field not in self.initial_data:
+                # Keep derived fields when they came from a freshly uploaded ovpn_content.
+                if ovpn_provided and field in ovpn_derived:
+                    continue
                 validated_data.pop(field, None)
         return super().update(instance, validated_data)
 
@@ -383,8 +402,9 @@ class OrgIntegrationValidateAPI(AuthorizedQuerySetMixin, APIView):
     """
     POST /integrations/<integration_id>/validate/
 
-    Tests connectivity / credentials for the integration.
-    Returns 200 {"valid": true/false} — never raises 5xx for credential failures.
+    Dispatches credential validation to a Celery worker (which has Docker socket
+    access for VPN-routed checks).  Returns 202 {"task_id": "..."} immediately.
+    Poll GET /integrations/<id>/validate/<task_id>/ for the result.
     """
 
     permission_classes = [IsAuthenticated]
@@ -395,16 +415,66 @@ class OrgIntegrationValidateAPI(AuthorizedQuerySetMixin, APIView):
 
     @extend_schema(
         tags=[AISTApiTag.INTEGRATIONS],
-        summary="Validate integration credentials",
+        summary="Start async integration credential validation",
         request=None,
         responses={
-            200: {"type": "object", "properties": {"valid": {"type": "boolean"}, "detail": {"type": "string"}}},
+            202: {"type": "object", "properties": {"task_id": {"type": "string"}}},
         },
     )
     def post(self, request, integration_id: int):
         integration = self.get_authorized_object(pk=integration_id)
-        valid, detail = _validate_integration(integration)
-        return Response({"valid": valid, "detail": detail})
+        from aist.tasks.validate import validate_integration  # noqa: PLC0415
+        result = validate_integration.delay(integration.pk)
+        return Response({"task_id": result.id}, status=status.HTTP_202_ACCEPTED)
+
+
+class OrgIntegrationValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
+
+    """
+    GET /integrations/<integration_id>/validate/<task_id>/
+
+    Returns the result of a previously dispatched validation task.
+    State is one of PENDING, STARTED, SUCCESS, FAILURE.
+    """
+
+    permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_org_integrations,
+        permission=Permissions.Product_Type_Manage_Members,
+    )
+
+    @extend_schema(
+        tags=[AISTApiTag.INTEGRATIONS],
+        summary="Poll validation task status",
+        parameters=[
+            OpenApiParameter("integration_id", int, OpenApiParameter.PATH),
+            OpenApiParameter("task_id", str, OpenApiParameter.PATH),
+        ],
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "state": {"type": "string"},
+                    "valid": {"type": "boolean", "nullable": True},
+                    "detail": {"type": "string"},
+                },
+            },
+        },
+    )
+    def get(self, request, integration_id: int, task_id: str):
+        self.get_authorized_object(pk=integration_id)  # org isolation check
+        from celery.result import AsyncResult  # noqa: PLC0415
+        ar = AsyncResult(task_id)
+        if ar.state == "SUCCESS":
+            result = ar.result
+            # Verify this task was dispatched for the requested integration
+            # (prevents reading another integration's result via a guessed task_id).
+            if result.get("_integration_id") != integration_id:
+                return Response({"state": "PENDING", "valid": None, "detail": ""})
+            return Response({"state": "SUCCESS", "valid": result["valid"], "detail": result["detail"]})
+        if ar.state == "FAILURE":
+            return Response({"state": "FAILURE", "valid": False, "detail": str(ar.result)})
+        return Response({"state": ar.state, "valid": None, "detail": ""})
 
 
 def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:

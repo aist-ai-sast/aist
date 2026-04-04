@@ -6,6 +6,8 @@ type Option = {
   disabled?: boolean;
 };
 
+const NONE_SENTINEL = "__none__";
+
 type SelectFieldProps = {
   label: string;
   value: string;
@@ -16,6 +18,8 @@ type SelectFieldProps = {
   hideLabel?: boolean;
   showIndicator?: boolean;
   side?: "top" | "bottom" | "left" | "right";
+  clearable?: boolean;
+  clearLabel?: string;
 };
 
 export default function SelectField({
@@ -28,11 +32,17 @@ export default function SelectField({
   hideLabel = false,
   showIndicator = true,
   side,
+  clearable = false,
+  clearLabel = "None",
 }: SelectFieldProps) {
+  function handleChange(v: string) {
+    onChange(v === NONE_SENTINEL ? "" : v);
+  }
+
   return (
     <div>
       {hideLabel ? null : <label className="text-xs text-slate-400">{label}</label>}
-      <Select.Root value={value || undefined} onValueChange={onChange} disabled={disabled}>
+      <Select.Root value={value || undefined} onValueChange={handleChange} disabled={disabled}>
         <Select.Trigger
           className={[
             "flex h-10 w-full items-center justify-between rounded-xl border border-night-500 bg-night-600 px-3 text-sm text-white outline-none transition focus-visible:border-brand-600 focus-visible:ring-2 focus-visible:ring-brand-600/60 data-[state=open]:border-brand-600 data-[state=open]:ring-2 data-[state=open]:ring-brand-600/60",
@@ -62,6 +72,14 @@ export default function SelectField({
             style={{ minWidth: "var(--radix-select-trigger-width)" }}
           >
             <Select.Viewport className="p-1">
+              {clearable && (
+                <Select.Item
+                  value={NONE_SENTINEL}
+                  className="cursor-pointer select-none rounded-lg px-3 py-2 text-sm text-slate-400 italic outline-none data-[highlighted]:bg-night-700 data-[state=checked]:bg-night-600"
+                >
+                  <Select.ItemText>{clearLabel}</Select.ItemText>
+                </Select.Item>
+              )}
               {options.map((option) => (
                 <Select.Item
                   key={option.value}

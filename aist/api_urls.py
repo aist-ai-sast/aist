@@ -38,6 +38,7 @@ from aist.api import (
     OrgIntegrationDetailAPI,
     OrgIntegrationListCreateAPI,
     OrgIntegrationValidateAPI,
+    OrgIntegrationValidateStatusAPI,
     PipelineAPI,
     PipelineLaunchQueueClearDispatchedAPI,
     PipelineLaunchQueueDetailAPI,
@@ -245,6 +246,11 @@ urlpatterns = [
         "integrations/<int:integration_id>/validate/",
         OrgIntegrationValidateAPI.as_view(),
         name="org_integration_validate",
+    ),
+    path(
+        "integrations/<int:integration_id>/validate/<str:task_id>/",
+        OrgIntegrationValidateStatusAPI.as_view(),
+        name="org_integration_validate_status",
     ),
     path(
         "projects/<int:project_id>/integration-overrides/",

@@ -472,7 +472,7 @@ export function useDeleteOrgIntegration(orgId: number) {
 export function useValidateOrgIntegration() {
   return useMutation({
     mutationFn: (integrationId: number) =>
-      fetchJson<{ valid: boolean; detail: string }>(
+      fetchJson<{ task_id: string }>(
         getRoute("org_integration_validate_url", { integration_id: integrationId }),
         { method: "POST" },
       ),

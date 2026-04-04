@@ -151,6 +151,10 @@ services:
       DD_CSRF_TRUSTED_ORIGINS: "${DD_CSRF_TRUSTED_ORIGINS:-[]}"
       DD_CREDENTIAL_AES_256_KEY: "${DD_CREDENTIAL_AES_256_KEY:-&91a*agLqesc*0DJ+2*bAbsUZfR*4nLw}"
       DD_DATABASE_READINESS_TIMEOUT: "${DD_DATABASE_READINESS_TIMEOUT:-30}"
+    extra_hosts:
+      # Allows VPN sidecar SOCKS5 proxy to be reached from inside this container
+      # via host.docker.internal on Linux Docker Engine (Docker Desktop provides it automatically).
+      - "host.docker.internal:host-gateway"
     volumes:
         - type: bind
           source: ./docker/extra_settings
@@ -217,6 +221,17 @@ services:
       # we keep using the redis volume as renaming is not possible and copying data over
       # would require steps during downtime or complex commands in the intializer
       - defectdojo_redis:/data
+  vpn-sidecar:
+    build:
+      context: ./sast-combinator/vpn-sidecar
+      dockerfile: Dockerfile
+    image: "aist-vpn-sidecar:latest"
+    # This service exists only to make `docker compose build` rebuild the VPN
+    # sidecar image. The image is started on-demand by vpn_sidecar_context()
+    # in aist/utils/vpn.py — not by docker compose up.
+    command: ["true"]
+    restart: "no"
+
   context-extractor-mcp:
     build:
       context: ./sast-combinator/context_extractor_service/ansible/files
