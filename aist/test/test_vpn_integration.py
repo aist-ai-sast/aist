@@ -87,10 +87,10 @@ class SplitOvpnPemBlocksTests(AISTApiBase):
         self.assertNotIn("key-direction", cleaned)
 
     def test_key_direction_preserved_in_extracted_when_tls_auth(self):
-        """key-direction found in the config body is captured in extracted dict."""
+        """tls-auth keeps key-direction in the cleaned config for later extraction."""
         ovpn = f"client\nkey-direction 0\n<tls-auth>\n{_FAKE_TLS_AUTH}\n</tls-auth>\n"
-        _, extracted = _split_ovpn_pem_blocks(ovpn)
-        self.assertEqual(extracted.get("tls_key_direction"), "0")
+        cleaned, _ = _split_ovpn_pem_blocks(ovpn)
+        self.assertIn("key-direction 0", cleaned)
 
     def test_config_directives_preserved(self):
         ovpn = f"client\nremote vpn.example.com 1194\n<ca>\n{_FAKE_CA}\n</ca>\n"
@@ -221,8 +221,9 @@ class GetOwnEth0IpTests(AISTApiBase):
 
     @patch("socket.gethostbyname", return_value="127.0.0.1")
     @patch("socket.gethostname", return_value="worker")
+    @patch("aist.utils.vpn._find_executable", side_effect=["/usr/bin/ip", "/usr/bin/hostname"])
     @patch("subprocess.run")
-    def test_skips_loopback_falls_back_to_ip_command(self, mock_run, mock_name, mock_addr):
+    def test_skips_loopback_falls_back_to_ip_command(self, mock_run, mock_find, mock_name, mock_addr):
         """When socket returns 127.x, fall back to 'ip' command."""
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -232,6 +233,7 @@ class GetOwnEth0IpTests(AISTApiBase):
 
         result = _get_own_eth0_ip()
         self.assertEqual(result, "172.19.0.8")
+        mock_find.assert_called()
         mock_name.assert_called_once()
         mock_addr.assert_called_once_with("worker")
 
@@ -513,7 +515,7 @@ class VpnSecretSerializerParseTests(AISTApiBase):
 
         from aist.models import OrgIntegrationVPNSecret  # noqa: PLC0415
 
-        secret = OrgIntegrationVPNSecret.objects.get()
+        secret = OrgIntegrationVPNSecret.objects.get(integration_id=resp.data["id"])
         self.assertIn("FAKECA", secret.ca_cert)
         self.assertIn("FAKECERT", secret.client_cert)
         self.assertIn("FAKEKEY", secret.client_key)
@@ -528,7 +530,7 @@ class VpnSecretSerializerParseTests(AISTApiBase):
 
         from aist.models import OrgIntegrationVPNSecret  # noqa: PLC0415
 
-        secret = OrgIntegrationVPNSecret.objects.get()
+        secret = OrgIntegrationVPNSecret.objects.get(integration_id=resp.data["id"])
         self.assertEqual(secret.ca_cert, "")
         self.assertEqual(secret.client_cert, "")
         self.assertEqual(secret.client_key, "")
@@ -542,6 +544,33 @@ class VpnSecretSerializerParseTests(AISTApiBase):
         self.assertTrue(vpn_secret_data["has_client_key"])
         for field in ("ovpn_content", "ca_cert", "client_cert", "client_key", "tls_auth_key"):
             self.assertNotIn(field, vpn_secret_data)
+
+    def test_response_does_not_expose_raw_vpn_password_or_username(self):
+        resp = self.client.post(
+            self.list_url,
+            {
+                "integration_type": "VPN",
+                "name": "Corp VPN creds",
+                "config": {},
+                "vpn_secret": {
+                    "ovpn_content": _FULL_OVPN_WITH_CERTS,
+                    "vpn_username": "alice",
+                    "vpn_password": "hunter2",
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+
+        vpn_secret_data = resp.data.get("vpn_secret", {})
+        self.assertTrue(vpn_secret_data["has_username"])
+        self.assertNotIn("vpn_username", vpn_secret_data)
+        self.assertNotIn("vpn_password", vpn_secret_data)
+        self.assertNotIn("ovpn_content", vpn_secret_data)
+        self.assertNotIn("ca_cert", vpn_secret_data)
+        self.assertNotIn("client_cert", vpn_secret_data)
+        self.assertNotIn("client_key", vpn_secret_data)
+        self.assertNotIn("tls_auth_key", vpn_secret_data)
 
     def test_explicit_ca_cert_not_overwritten_by_parsed_value(self):
         """When ca_cert is explicitly provided, it takes precedence over the inline block."""
@@ -563,7 +592,7 @@ class VpnSecretSerializerParseTests(AISTApiBase):
 
         from aist.models import OrgIntegrationVPNSecret  # noqa: PLC0415
 
-        secret = OrgIntegrationVPNSecret.objects.get()
+        secret = OrgIntegrationVPNSecret.objects.get(integration_id=resp.data["id"])
         self.assertIn("EXPLICIT", secret.ca_cert)
         self.assertNotIn("FAKECA", secret.ca_cert)
 
@@ -589,7 +618,7 @@ class VpnSecretSerializerParseTests(AISTApiBase):
 
         from aist.models import OrgIntegrationVPNSecret  # noqa: PLC0415
 
-        secret = OrgIntegrationVPNSecret.objects.get()
+        secret = OrgIntegrationVPNSecret.objects.get(integration_id=resp.data["id"])
         self.assertIn("FAKETLS", secret.tls_auth_key)
         self.assertEqual(secret.tls_key_type, "tls-crypt-v2")
         self.assertNotIn("<tls-crypt-v2>", secret.ovpn_content)
@@ -614,7 +643,7 @@ class ScopedSessionTests(AISTApiBase):
             is_active=True,
         )
 
-    @patch("aist.models.vpn_sidecar_context")
+    @patch("aist.utils.vpn.vpn_sidecar_context")
     def test_no_vpn_yields_plain_session_without_proxy(self, mock_ctx):
         """When vpn_integration is None, scoped_session yields session with no proxy."""
         from contextlib import contextmanager  # noqa: PLC0415
@@ -634,7 +663,7 @@ class ScopedSessionTests(AISTApiBase):
         mock_ctx.assert_called_once()
         self.assertIsNone(mock_ctx.call_args[0][0])  # vpn_resolved is None
 
-    @patch("aist.models.vpn_sidecar_context")
+    @patch("aist.utils.vpn.vpn_sidecar_context")
     def test_with_vpn_session_has_proxy(self, mock_ctx):
         """When vpn_integration is set and active, scoped_session configures proxy."""
         from contextlib import contextmanager  # noqa: PLC0415
@@ -678,11 +707,12 @@ class ScopedContextTests(AISTApiBase):
             organization=org,
             provider_type=WorkItemProviderType.JIRA,
             name="Jira Test",
-            config={"jira_url": "https://jira.example.com", "project_key": "TEST"},
-            secret=_JIRA_TEST_VALUE,
+            base_url="https://jira.example.com",
+            api_token=_JIRA_TEST_VALUE,
+            provider_config={"default_project_key": "TEST"},
         )
 
-    @patch("aist.work_items.backends.base.vpn_sidecar_context")
+    @patch("aist.utils.vpn.vpn_sidecar_context")
     def test_no_vpn_proxy_url_is_none(self, mock_ctx):
         from contextlib import contextmanager  # noqa: PLC0415
 
@@ -701,7 +731,7 @@ class ScopedContextTests(AISTApiBase):
 
         self.assertIsNone(mock_ctx.call_args[0][0])  # vpn_resolved is None
 
-    @patch("aist.work_items.backends.base.vpn_sidecar_context")
+    @patch("aist.utils.vpn.vpn_sidecar_context")
     def test_with_vpn_proxy_url_set(self, mock_ctx):
         from contextlib import contextmanager  # noqa: PLC0415
 
@@ -747,8 +777,8 @@ class FetchGitlabProjectsTaskTests(AISTApiBase):
             is_active=True,
         )
 
-    @patch("aist.models.vpn_sidecar_context")
-    @patch("aist.tasks.integrations.gitlab")
+    @patch("aist.utils.vpn.vpn_sidecar_context")
+    @patch("gitlab.Gitlab")
     def test_returns_project_list_on_success(self, mock_gl_module, mock_sidecar):
         from contextlib import contextmanager  # noqa: PLC0415
 
@@ -768,7 +798,7 @@ class FetchGitlabProjectsTaskTests(AISTApiBase):
             default_branch="main",
             visibility="private",
         )
-        mock_gl_module.Gitlab.return_value.projects.list.return_value = [fake_proj]
+        mock_gl_module.return_value.projects.list.return_value = [fake_proj]
 
         result = fetch_gitlab_projects(self.integration.pk)
 
@@ -777,8 +807,8 @@ class FetchGitlabProjectsTaskTests(AISTApiBase):
         self.assertEqual(result["projects"][0]["id"], 1)
         self.assertEqual(result["projects"][0]["path_with_namespace"], "group/my-project")
 
-    @patch("aist.models.vpn_sidecar_context")
-    @patch("aist.tasks.integrations.gitlab")
+    @patch("aist.utils.vpn.vpn_sidecar_context")
+    @patch("gitlab.Gitlab")
     def test_fetch_project_info_404_returns_error_dict(self, mock_gl_module, mock_sidecar):
         from contextlib import contextmanager  # noqa: PLC0415
 
@@ -792,20 +822,17 @@ class FetchGitlabProjectsTaskTests(AISTApiBase):
 
         mock_sidecar.side_effect = _noop
         exc = gl_module.exceptions.GitlabGetError("not found", response_code=404)
-        mock_gl_module.Gitlab.return_value.projects.get.side_effect = exc
-        mock_gl_module.exceptions = gl_module.exceptions
+        mock_gl_module.return_value.projects.get.side_effect = exc
 
         result = fetch_gitlab_project_info(self.integration.pk, project_id=999)
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["response_code"], 404)
 
-    @patch("aist.models.vpn_sidecar_context")
-    @patch("aist.tasks.integrations.gitlab")
+    @patch("aist.utils.vpn.vpn_sidecar_context")
+    @patch("gitlab.Gitlab")
     def test_fetch_project_info_success_returns_metadata(self, mock_gl_module, mock_sidecar):
         from contextlib import contextmanager  # noqa: PLC0415
-
-        import gitlab as gl_module  # noqa: PLC0415
 
         from aist.tasks.integrations import fetch_gitlab_project_info  # noqa: PLC0415
 
@@ -819,8 +846,7 @@ class FetchGitlabProjectsTaskTests(AISTApiBase):
         fake_proj.description = "Test repo"
         fake_proj.web_url = "https://gitlab.example.com/group/repo"
         fake_proj.languages.return_value = {"Python": 80.0, "Shell": 20.0}
-        mock_gl_module.Gitlab.return_value.projects.get.return_value = fake_proj
-        mock_gl_module.exceptions = gl_module.exceptions
+        mock_gl_module.return_value.projects.get.return_value = fake_proj
 
         result = fetch_gitlab_project_info(self.integration.pk, project_id=42)
 

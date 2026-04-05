@@ -61,6 +61,8 @@ type AistProjectApi = {
   id: number;
   product_id: number;
   product_name: string;
+  organization_id?: number | null;
+  organization_name?: string | null;
 };
 
 type ProductSummaryApi = {
@@ -296,6 +298,8 @@ export function useProjects() {
         id: item.id,
         productId: item.product_id,
         name: item.product_name,
+        organizationId: item.organization_id ?? null,
+        organizationName: item.organization_name ?? null,
       }));
     },
   });

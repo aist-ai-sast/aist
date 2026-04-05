@@ -1266,7 +1266,7 @@ function ProjectOverridesSection({ orgId }: { orgId: number }) {
   const setOverride = useSetProjectIntegrationOverride(selectedProjectId ?? 0);
   const deleteOverride = useDeleteProjectIntegrationOverride(selectedProjectId ?? 0);
 
-  const projects = projectsQuery.data ?? [];
+  const projects = (projectsQuery.data ?? []).filter((project) => project.organizationId === orgId);
   const integrations = integrationsQuery.data ?? [];
   const overrides = overridesQuery.data ?? [];
 

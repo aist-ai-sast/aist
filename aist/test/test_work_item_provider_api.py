@@ -183,36 +183,32 @@ class WorkItemProviderDetailAPITests(WorkItemProviderAPIBase):
 
 class WorkItemProviderValidateAPITests(WorkItemProviderAPIBase):
 
-    def test_validate_returns_true_when_backend_succeeds(self):
+    def test_validate_returns_202_and_task_id(self):
         provider = self._create_provider()
-        with patch("aist.api.work_items.get_backend") as mock_get_backend:
-            mock_backend = MagicMock()
-            mock_backend.validate_credentials.return_value = True
-            mock_get_backend.return_value = mock_backend
+        fake_result = MagicMock(id="task-validate-ok")
+        with patch("aist.tasks.validate.validate_work_item_provider.delay", return_value=fake_result) as mock_delay:
             resp = self.client.post(self._validate_url(provider.pk))
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(resp.data["valid"])
-        self.assertIn("detail", resp.data)
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(resp.data["task_id"], "task-validate-ok")
+        mock_delay.assert_called_once_with(provider.pk)
 
-    def test_validate_returns_false_with_detail_when_backend_fails(self):
+    def test_validate_starts_async_task_for_backend_provider(self):
         provider = self._create_provider()
-        with patch("aist.api.work_items.get_backend") as mock_get_backend:
-            mock_backend = MagicMock()
-            mock_backend.validate_credentials.return_value = False
-            mock_get_backend.return_value = mock_backend
+        with patch("aist.tasks.validate.validate_work_item_provider.delay") as mock_delay:
+            mock_delay.return_value = MagicMock(id="task-validate-backend")
             resp = self.client.post(self._validate_url(provider.pk))
-        self.assertEqual(resp.status_code, 200)
-        self.assertFalse(resp.data["valid"])
-        self.assertIn("detail", resp.data)
-        self.assertTrue(resp.data["detail"])
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(resp.data["task_id"], "task-validate-backend")
 
-    def test_validate_no_backend_returns_false_with_detail(self):
+    def test_validate_starts_async_task_for_generic_provider(self):
         provider = self._create_provider()
-        with patch("aist.api.work_items.get_backend", side_effect=NotImplementedError):
+        provider.provider_type = WorkItemProviderType.GENERIC
+        provider.save(update_fields=["provider_type"])
+        with patch("aist.tasks.validate.validate_work_item_provider.delay") as mock_delay:
+            mock_delay.return_value = MagicMock(id="task-validate-generic")
             resp = self.client.post(self._validate_url(provider.pk))
-        self.assertEqual(resp.status_code, 200)
-        self.assertFalse(resp.data["valid"])
-        self.assertIn("detail", resp.data)
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(resp.data["task_id"], "task-validate-generic")
 
 
 # ---------------------------------------------------------------------------

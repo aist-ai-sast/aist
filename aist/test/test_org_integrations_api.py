@@ -264,7 +264,7 @@ class OrgIntegrationValidateAPITests(AISTApiBase):
         )
         fake_ar = MagicMock()
         fake_ar.state = "FAILURE"
-        fake_ar.result = Exception("connection refused")
+        fake_ar.result = {"_integration_id": integration.pk}
         with patch("celery.result.AsyncResult", return_value=fake_ar):
             resp = self.client.get(url)
         self.assertEqual(resp.status_code, 200)
@@ -848,7 +848,7 @@ class VpnProjectOverrideTests(AISTApiBase):
         from aist.models import AISTProject  # noqa: PLC0415
 
         other_product = Product.objects.create(
-            name="Other Product",
+            name=f"Other Product {self.project.pk}",
             description="",
             prod_type=self.org_prod_type,
             sla_configuration_id=self.sla.id,
@@ -1120,7 +1120,7 @@ class WorkItemProviderValidateAPITests(AISTApiBase):
         fake_ar = MagicMock()
         fake_ar.state = "SUCCESS"
         fake_ar.result = {"valid": True, "detail": "", "_provider_id": self.provider.pk}
-        with patch("celery.result.AsyncResult", return_value=fake_ar):
+        with patch("aist.api.work_items.AsyncResult", return_value=fake_ar):
             resp = self.client.get(self._status_url(self.provider.pk, "task-ok"))
         self.assertEqual(resp.data["state"], "SUCCESS")
         self.assertTrue(resp.data["valid"])
@@ -1130,7 +1130,7 @@ class WorkItemProviderValidateAPITests(AISTApiBase):
         fake_ar = MagicMock()
         fake_ar.state = "SUCCESS"
         fake_ar.result = {"valid": False, "detail": "bad creds", "_provider_id": 999999}
-        with patch("celery.result.AsyncResult", return_value=fake_ar):
+        with patch("aist.api.work_items.AsyncResult", return_value=fake_ar):
             resp = self.client.get(self._status_url(self.provider.pk, "task-other"))
         self.assertEqual(resp.data["state"], "PENDING")
         self.assertIsNone(resp.data["valid"])
@@ -1139,7 +1139,7 @@ class WorkItemProviderValidateAPITests(AISTApiBase):
         fake_ar = MagicMock()
         fake_ar.state = "FAILURE"
         fake_ar.result = {"_provider_id": self.provider.pk}
-        with patch("celery.result.AsyncResult", return_value=fake_ar):
+        with patch("aist.api.work_items.AsyncResult", return_value=fake_ar):
             resp = self.client.get(self._status_url(self.provider.pk, "task-fail"))
         self.assertEqual(resp.data["state"], "FAILURE")
         self.assertFalse(resp.data["valid"])
@@ -1148,7 +1148,7 @@ class WorkItemProviderValidateAPITests(AISTApiBase):
         fake_ar = MagicMock()
         fake_ar.state = "FAILURE"
         fake_ar.result = {"_provider_id": 999999}
-        with patch("celery.result.AsyncResult", return_value=fake_ar):
+        with patch("aist.api.work_items.AsyncResult", return_value=fake_ar):
             resp = self.client.get(self._status_url(self.provider.pk, "task-other-fail"))
         self.assertEqual(resp.data["state"], "PENDING")
         self.assertIsNone(resp.data["valid"])
@@ -1157,7 +1157,7 @@ class WorkItemProviderValidateAPITests(AISTApiBase):
         fake_ar = MagicMock()
         fake_ar.state = "PENDING"
         fake_ar.result = None
-        with patch("celery.result.AsyncResult", return_value=fake_ar):
+        with patch("aist.api.work_items.AsyncResult", return_value=fake_ar):
             resp = self.client.get(self._status_url(self.provider.pk, "task-pending"))
         self.assertEqual(resp.data["state"], "PENDING")
         self.assertIsNone(resp.data["valid"])
@@ -1178,7 +1178,7 @@ class ValidateWorkItemProviderHelperTests(AISTApiBase):
             vpn_integration=vpn_integration,
         )
 
-    @patch("aist.work_items.backends.registry.get_backend")
+    @patch("aist.api.work_items.get_backend")
     def test_no_vpn_backend_validate_credentials_called(self, mock_get_backend):
         """When no VPN is configured, validate_credentials() is called via scoped_context."""
         from contextlib import contextmanager  # noqa: PLC0415
@@ -1202,7 +1202,7 @@ class ValidateWorkItemProviderHelperTests(AISTApiBase):
         _, kwargs = mock_get_backend.call_args
         self.assertNotIn("proxy_url", kwargs)
 
-    @patch("aist.work_items.backends.registry.get_backend")
+    @patch("aist.api.work_items.get_backend")
     def test_vpn_proxy_url_set_on_backend_via_scoped_context(self, mock_get_backend):
         """When VPN is configured, scoped_context sets proxy_url on the backend."""
         from contextlib import contextmanager  # noqa: PLC0415
@@ -1222,7 +1222,7 @@ class ValidateWorkItemProviderHelperTests(AISTApiBase):
         self.assertTrue(valid)
         mock_backend.validate_credentials.assert_called_once()
 
-    @patch("aist.work_items.backends.registry.get_backend")
+    @patch("aist.api.work_items.get_backend")
     def test_not_implemented_error_returns_false_with_message(self, mock_get_backend):
         mock_get_backend.side_effect = NotImplementedError
 
@@ -1231,7 +1231,7 @@ class ValidateWorkItemProviderHelperTests(AISTApiBase):
         self.assertFalse(valid)
         self.assertIn("not support", detail)
 
-    @patch("aist.work_items.backends.registry.get_backend")
+    @patch("aist.api.work_items.get_backend")
     def test_generic_exception_returns_sanitized_message(self, mock_get_backend):
         """Exceptions must not leak raw exception details to the caller."""
         from contextlib import contextmanager  # noqa: PLC0415

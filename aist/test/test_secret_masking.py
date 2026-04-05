@@ -77,6 +77,51 @@ class SecretsMaskingUtilsTests(AISTApiBase):
         self.assertEqual(masked["title"], "Fix auth bypass")
         self.assertEqual(masked["status_category"], "OPEN")
 
+    def test_mask_sensitive_data_preserves_safe_vpn_secret_presence_flags(self):
+        payload = {
+            "vpn_secret": {
+                "tls_key_type": "tls-auth",
+                "has_ovpn_content": True,
+                "has_client_cert": True,
+                "has_client_key": True,
+                "has_username": False,
+            },
+        }
+
+        masked = mask_sensitive_data(payload)
+
+        self.assertEqual(
+            masked["vpn_secret"],
+            {
+                "tls_key_type": "tls-auth",
+                "has_ovpn_content": True,
+                "has_client_cert": True,
+                "has_client_key": True,
+                "has_username": False,
+            },
+        )
+
+    def test_mask_sensitive_data_masks_raw_vpn_secret_fields_if_they_appear(self):
+        payload = {
+            "vpn_secret": {
+                "ovpn_content": "client\nremote vpn.example.com 1194",
+                "ca_cert": "CA",
+                "client_cert": "CERT",
+                "client_key": "KEY",
+                "tls_auth_key": "TLS",
+                "vpn_password": "hunter2",
+            },
+        }
+
+        masked = mask_sensitive_data(payload)
+
+        self.assertEqual(masked["vpn_secret"]["ovpn_content"], MASKED_VALUE)
+        self.assertEqual(masked["vpn_secret"]["ca_cert"], MASKED_VALUE)
+        self.assertEqual(masked["vpn_secret"]["client_cert"], MASKED_VALUE)
+        self.assertEqual(masked["vpn_secret"]["client_key"], MASKED_VALUE)
+        self.assertEqual(masked["vpn_secret"]["tls_auth_key"], MASKED_VALUE)
+        self.assertEqual(masked["vpn_secret"]["vpn_password"], MASKED_VALUE)
+
     def test_mask_sensitive_data_masks_repo_url_credentials_under_non_sensitive_key(self):
         payload = {
             "env": {

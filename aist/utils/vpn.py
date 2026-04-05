@@ -358,12 +358,18 @@ def _stop_sidecar(container_name: str) -> None:
     if docker_bin is None:
         logger.warning("vpn: docker CLI unavailable while stopping sidecar=%s", container_name)
         return
-    r = subprocess.run([docker_bin, "stop", "--time", "5", container_name], capture_output=True, check=False)
-    if r.returncode != 0:
-        logger.warning("vpn: docker stop failed rc=%d name=%s", r.returncode, container_name)
-    r = subprocess.run([docker_bin, "rm", "--force", container_name], capture_output=True, check=False)
-    if r.returncode != 0:
-        logger.warning("vpn: docker rm failed rc=%d name=%s", r.returncode, container_name)
+    try:
+        r = subprocess.run([docker_bin, "stop", "--time", "5", container_name], capture_output=True, check=False)
+        if r.returncode != 0:
+            logger.warning("vpn: docker stop failed rc=%d name=%s", r.returncode, container_name)
+    except Exception:
+        logger.warning("vpn: docker stop raised for name=%s", container_name, exc_info=True)
+    try:
+        r = subprocess.run([docker_bin, "rm", "--force", container_name], capture_output=True, check=False)
+        if r.returncode != 0:
+            logger.warning("vpn: docker rm failed rc=%d name=%s", r.returncode, container_name)
+    except Exception:
+        logger.warning("vpn: docker rm raised for name=%s", container_name, exc_info=True)
 
 
 @contextmanager

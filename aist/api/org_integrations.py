@@ -300,6 +300,7 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             )
             vpn_ser.is_valid(raise_exception=True)
             vpn_ser.save()
+            instance.refresh_from_db()
         return instance
 
     def create(self, validated_data):
@@ -307,6 +308,7 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         instance = super().create(validated_data)
         if instance.integration_type == OrgIntegrationType.VPN:
             OrgIntegrationVPNSecret.objects.create(integration=instance, **(vpn_data or {}))
+            instance.refresh_from_db()
         return instance
 
 

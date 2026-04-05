@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from unittest.mock import Mock, patch
 
-import gitlab
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -61,21 +60,20 @@ class GitlabIntegrationAPITests(TestCase):
         )
 
     @patch("aist.api.gitlab_integration._load_analyzers_config")
-    @patch("aist.api.gitlab_integration.gitlab.Gitlab")
-    def test_import_gitlab_project_happy_path(self, mock_gitlab, mock_cfg):
+    @patch("aist.api.gitlab_integration.fetch_gitlab_project_info.delay")
+    def test_import_gitlab_project_happy_path(self, mock_delay, mock_cfg):
         org = Organization.objects.create(name="Org")
         integration = self._create_gitlab_integration(org)
 
         mock_cfg.return_value = Mock(convert_languages=Mock(return_value=["python"]))
-
-        langs_payload = {"Python": 80.0, "Go": 20.0}
-        mock_project = Mock(
-            path_with_namespace="group/my-repo",
-            description="desc",
-            web_url="https://gitlab.example.com/group/my-repo",
-        )
-        mock_project.languages.return_value = langs_payload
-        mock_gitlab.return_value.projects.get.return_value = mock_project
+        mock_delay.return_value.get.return_value = {
+            "ok": True,
+            "path_with_namespace": "group/my-repo",
+            "description": "desc",
+            "web_url": "https://gitlab.example.com/group/my-repo",
+            "inferred_base": "https://gitlab.example.com",
+            "langs_raw": {"Python": 80.0, "Go": 20.0},
+        }
 
         resp = self.client.post(
             self._url(),
@@ -102,15 +100,11 @@ class GitlabIntegrationAPITests(TestCase):
         self.assertEqual(binding.org_integration.secret, TEST_GITLAB_TOKEN)
         self.assertEqual(binding.org_integration.integration_type, "GITLAB")
 
-    @patch("aist.api.gitlab_integration.gitlab.Gitlab")
-    def test_import_gitlab_project_returns_404(self, mock_gitlab):
+    @patch("aist.api.gitlab_integration.fetch_gitlab_project_info.delay")
+    def test_import_gitlab_project_returns_404(self, mock_delay):
         org = Organization.objects.create(name="Org 404")
         self._create_gitlab_integration(org)
-        mock_gitlab.return_value.projects.get.side_effect = gitlab.exceptions.GitlabGetError(
-            error_message="Not Found",
-            response_code=404,
-            response_body="",
-        )
+        mock_delay.return_value.get.return_value = {"ok": False, "response_code": 404, "error": "Not Found"}
 
         resp = self.client.post(
             self._url(),
@@ -123,15 +117,15 @@ class GitlabIntegrationAPITests(TestCase):
 
         self.assertEqual(resp.status_code, 404)
 
-    @patch("aist.api.gitlab_integration.gitlab.Gitlab")
-    def test_import_gitlab_project_masks_token_in_error_detail(self, mock_gitlab):
+    @patch("aist.api.gitlab_integration.fetch_gitlab_project_info.delay")
+    def test_import_gitlab_project_masks_token_in_error_detail(self, mock_delay):
         org = Organization.objects.create(name="Org 502")
         self._create_gitlab_integration(org, secret=TEST_GITLAB_PAT)
-        mock_gitlab.return_value.projects.get.side_effect = gitlab.exceptions.GitlabGetError(
-            error_message=f"upstream failed for {TEST_GITLAB_PAT}",
-            response_code=500,
-            response_body="",
-        )
+        mock_delay.return_value.get.return_value = {
+            "ok": False,
+            "response_code": 500,
+            "error": f"GitLab API error: {MASKED_VALUE}",
+        }
 
         resp = self.client.post(
             self._url(),
@@ -174,8 +168,8 @@ class GitlabIntegrationAPITests(TestCase):
         self.assertEqual(resp.data["detail"], "No active GitLab integration found for this organization.")
 
     @patch("aist.api.gitlab_integration._load_analyzers_config")
-    @patch("aist.api.gitlab_integration.gitlab.Gitlab")
-    def test_import_gitlab_project_conflicts_on_existing_product_type_mismatch(self, mock_gitlab, mock_cfg):
+    @patch("aist.api.gitlab_integration.fetch_gitlab_project_info.delay")
+    def test_import_gitlab_project_conflicts_on_existing_product_type_mismatch(self, mock_delay, mock_cfg):
         org = Organization.objects.create(name="Org A")
         self._create_gitlab_integration(org)
         other_pt = Product_Type.objects.create(name="Other PT")
@@ -187,13 +181,14 @@ class GitlabIntegrationAPITests(TestCase):
         )
 
         mock_cfg.return_value = Mock(convert_languages=Mock(return_value=["python"]))
-        mock_project = Mock(
-            path_with_namespace="group/my-repo",
-            description="desc",
-            web_url="https://gitlab.example.com/group/my-repo",
-        )
-        mock_project.languages.return_value = {"Python": 100.0}
-        mock_gitlab.return_value.projects.get.return_value = mock_project
+        mock_delay.return_value.get.return_value = {
+            "ok": True,
+            "path_with_namespace": "group/my-repo",
+            "description": "desc",
+            "web_url": "https://gitlab.example.com/group/my-repo",
+            "inferred_base": "https://gitlab.example.com",
+            "langs_raw": {"Python": 100.0},
+        }
 
         resp = self.client.post(
             self._url(),

@@ -22,6 +22,8 @@ _BARE_TOKEN_PATTERN = re.compile(
 
 
 def _is_sensitive_key(key: str) -> bool:
+    if key.lower() in _ALWAYS_SENSITIVE_KEYS:
+        return True
     return _FILTER.cleanse_setting(key, "value") == MASKED_VALUE
 
 
@@ -103,8 +105,32 @@ def mask_sensitive_text(text: str) -> str:
 # Keys that look sensitive by Django's heuristics but are NOT secrets.
 # "key" — generic dict key; "external_key" — issue tracker reference (e.g. PROJ-42);
 # "external_id" / "external_url" — issue tracker identifiers, not credentials.
+# "vpn_secret" — API response container that already exposes only presence flags
+# and non-secret metadata from OrgIntegrationVPNSecretSerializer.
 _NON_SENSITIVE_KEYS: frozenset[str] = frozenset(
-    {"key", "external_key", "external_id", "external_url", "has_token", "has_secret"},
+    {
+        "key",
+        "external_key",
+        "external_id",
+        "external_url",
+        "has_token",
+        "has_secret",
+        "vpn_secret",
+        "tls_key_type",
+        "has_client_key",
+    },
+)
+
+_ALWAYS_SENSITIVE_KEYS: frozenset[str] = frozenset(
+    {
+        "ovpn_content",
+        "ca_cert",
+        "client_cert",
+        "client_key",
+        "tls_auth_key",
+        "vpn_username",
+        "vpn_password",
+    },
 )
 
 

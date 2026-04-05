@@ -108,10 +108,10 @@ run_unit_tests() {
 run_e2e_tests() {
   echo "==> Client UI e2e tests"
 
-  local started_stack=0
+  typeset -g CLIENT_UI_STARTED_STACK=0
 
   cleanup_stack() {
-    if [[ $started_stack -eq 1 ]]; then
+    if [[ ${CLIENT_UI_STARTED_STACK:-0} -eq 1 ]]; then
       if [[ $show_logs -eq 1 ]]; then
         docker compose "${compose_args[@]}" logs --tail=2500 || true
       fi
@@ -155,10 +155,10 @@ run_e2e_tests() {
     fi
 
     echo "==> Building app images"
-    docker compose "${compose_args[@]}" build uwsgi nginx
+    docker compose "${compose_args[@]}" build uwsgi nginx context-extractor-mcp
 
     echo "==> Starting db/cache"
-    started_stack=1
+    CLIENT_UI_STARTED_STACK=1
     docker compose "${compose_args[@]}" up --no-deps -d postgres valkey
 
     echo "==> Initializer"
@@ -168,9 +168,9 @@ run_e2e_tests() {
     docker compose "${compose_args[@]}" run --rm --no-deps --entrypoint /bin/bash uwsgi -lc \
       "cd /app && python3 manage.py bootstrap_demo_access --password '${DD_ADMIN_PASSWORD}'"
 
-    echo "==> Starting uwsgi/nginx"
-    docker compose "${compose_args[@]}" up --no-deps -d uwsgi nginx
-    started_stack=1
+    echo "==> Starting uwsgi/nginx/context-extractor-mcp"
+    docker compose "${compose_args[@]}" up --no-deps -d uwsgi nginx context-extractor-mcp
+    CLIENT_UI_STARTED_STACK=1
 
     local readiness_url="http://127.0.0.1:${DD_HTTP_PORT}/"
     echo "==> Waiting for app readiness at ${readiness_url}"
@@ -190,7 +190,7 @@ run_e2e_tests() {
 
   echo "==> Running Playwright in Docker: ${PLAYWRIGHT_IMAGE}"
   local docker_network_args=()
-  if [[ $started_stack -eq 1 ]]; then
+  if [[ ${CLIENT_UI_STARTED_STACK:-0} -eq 1 ]]; then
     docker_network_args=(--network "$compose_network")
   fi
 

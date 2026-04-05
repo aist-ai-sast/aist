@@ -249,8 +249,6 @@ services:
         target: /tmp/aist/projects
         read_only: true
     restart: unless-stopped
-    env_file:
-      - .env.dev
 volumes:
   defectdojo_postgres:
     driver: local

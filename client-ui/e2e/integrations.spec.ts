@@ -6,13 +6,13 @@ async function openSelectOption(trigger: Locator, optionName: string) {
   await trigger.page().getByRole("option", { name: optionName, exact: true }).click();
 }
 
-async function getFirstProjectName(page: Page): Promise<string> {
-  const response = await page.request.get("/api/v2/aist/projects/");
-  expect(response.status(), await response.text()).toBe(200);
-  const payload = await response.json() as { results?: Array<{ product_name: string }>; items?: Array<{ product_name: string }> };
-  const first = (payload.results ?? payload.items ?? [])[0];
-  expect(first?.product_name).toBeTruthy();
-  return first.product_name;
+async function selectFirstOption(trigger: Locator) {
+  await trigger.click();
+  await trigger.page().getByRole("option").first().click();
+}
+
+function acceptNextDialog(page: Page) {
+  page.once("dialog", (dialog) => dialog.accept());
 }
 
 test.beforeEach(async ({ page }) => {
@@ -24,7 +24,6 @@ test("integrations page lets a maintainer manage org integrations, providers, an
   const integrationName = `E2E GitLab ${suffix}`;
   const renamedIntegration = `${integrationName} Updated`;
   const providerName = `E2E Jira ${suffix}`;
-  const projectName = await getFirstProjectName(page);
   const orgSection = page.locator("section").filter({ hasText: "Org Integrations" }).first();
 
   await page.goto("/integrations");
@@ -38,10 +37,10 @@ test("integrations page lets a maintainer manage org integrations, providers, an
   await orgSection.getByRole("button", { name: "Create" }).click();
 
   await expect(page.getByText("Integration created.")).toBeVisible();
-  const integrationRow = orgSection.locator("div").filter({ hasText: integrationName }).first();
-  await expect(integrationRow).toContainText("default");
+  await expect(orgSection).toContainText(integrationName);
+  await expect(orgSection).toContainText("default");
 
-  await integrationRow.getByRole("button", { name: "Edit" }).click();
+  await orgSection.getByRole("button", { name: "Edit" }).first().click();
   await expect(orgSection.getByText("Edit Integration")).toBeVisible();
   await orgSection.getByPlaceholder("e.g. Production").fill(renamedIntegration);
   await orgSection.getByRole("button", { name: "Save changes" }).click();
@@ -57,13 +56,20 @@ test("integrations page lets a maintainer manage org integrations, providers, an
   await expect(providerSection).toContainText(providerName);
 
   const overridesSection = page.locator("section").filter({ hasText: "Per-Project Overrides" }).first();
-  await openSelectOption(overridesSection.getByRole("combobox").first(), projectName);
+  await selectFirstOption(overridesSection.getByRole("combobox").first());
   await expect(overridesSection.getByText("GitLab", { exact: true })).toBeVisible();
   await openSelectOption(overridesSection.getByRole("combobox").nth(1), renamedIntegration);
   await expect(page.getByText("Override saved.")).toBeVisible();
 
   await overridesSection.getByTitle("Clear override").click();
   await expect(page.getByText("Override cleared.")).toBeVisible();
+
+  acceptNextDialog(page);
+  await providerSection.getByRole("button", { name: "Delete" }).first().click();
+  await expect(page.getByText("Provider deleted.")).toBeVisible();
+  acceptNextDialog(page);
+  await orgSection.getByRole("button", { name: "Delete" }).first().click();
+  await expect(page.getByText("Integration deleted.")).toBeVisible();
 });
 
 test("maintainer can create a VPN integration and link it to a work item provider", async ({ page }) => {
@@ -93,12 +99,11 @@ test("maintainer can create a VPN integration and link it to a work item provide
   await orgSection.getByRole("button", { name: "Create" }).click();
   await expect(page.getByText("Integration created.")).toBeVisible();
 
-  const vpnRow = orgSection.locator("div").filter({ hasText: vpnName }).first();
-  await expect(vpnRow).toBeVisible();
+  await expect(orgSection).toContainText(vpnName);
   // VPN badge must be rendered
-  await expect(vpnRow.locator("span").filter({ hasText: "VPN" }).first()).toBeVisible();
+  await expect(orgSection.getByText("VPN", { exact: true }).first()).toBeVisible();
   // Validate button present for VPN integration
-  await expect(vpnRow.getByRole("button", { name: "Validate" })).toBeVisible();
+  await expect(orgSection.getByRole("button", { name: "Validate" }).first()).toBeVisible();
 
   // --- Link VPN to a new Work Item Provider ---
   const providerSection = page.locator("section").filter({ hasText: "Work Item Providers" }).first();
@@ -109,18 +114,14 @@ test("maintainer can create a VPN integration and link it to a work item provide
     .fill(`https://jira-${suffix}.example.com`);
 
   // Select VPN integration in the provider form
-  const vpnSelect = providerSection.locator("label").filter({ hasText: "VPN Integration" });
-  await openSelectOption(vpnSelect.locator("[role='combobox']"), vpnName);
+  await openSelectOption(providerSection.getByRole("combobox").nth(1), vpnName);
 
   await providerSection.getByRole("button", { name: "Create" }).click();
   await expect(page.getByText("Provider created.")).toBeVisible();
 
   // --- Edit provider — verify VPN selection is preserved ---
-  const providerRow = providerSection.locator("div").filter({ hasText: providerName }).first();
-  await providerRow.getByRole("button", { name: "Edit" }).click();
-  await expect(
-    providerSection.locator("label").filter({ hasText: "VPN Integration" }).locator("[role='combobox']"),
-  ).toContainText(vpnName);
+  await providerSection.getByRole("button", { name: "Edit" }).first().click();
+  await expect(providerSection.getByRole("combobox").nth(1)).toContainText(vpnName);
   await providerSection.getByRole("button", { name: "Cancel" }).click();
 
   // --- VPN type must NOT appear in per-project overrides dropdown ---
@@ -131,6 +132,10 @@ test("maintainer can create a VPN integration and link it to a work item provide
   await page.keyboard.press("Escape");
 
   // --- Cleanup ---
-  await providerRow.getByRole("button", { name: "Delete" }).click();
-  await vpnRow.getByRole("button", { name: "Delete" }).click();
+  acceptNextDialog(page);
+  await providerSection.getByRole("button", { name: "Delete" }).first().click();
+  await expect(page.getByText("Provider deleted.")).toBeVisible();
+  acceptNextDialog(page);
+  await orgSection.getByRole("button", { name: "Delete" }).first().click();
+  await expect(page.getByText("Integration deleted.")).toBeVisible();
 });

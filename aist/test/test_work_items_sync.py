@@ -322,28 +322,31 @@ class ValidateAndSyncAPITests(TestCase):
     def _sync_url(self):
         return reverse("aist_api:work_item_provider_sync", kwargs={"provider_id": self.provider.pk})
 
-    def test_validate_returns_valid_true(self):
-        with patch("aist.api.work_items.get_backend") as mock_get:
-            mock_get.return_value.validate_credentials.return_value = True
+    def test_validate_returns_202_and_task_id(self):
+        fake_result = MagicMock(id="task-vs-ok")
+        with patch("aist.tasks.validate.validate_work_item_provider.delay", return_value=fake_result) as mock_delay:
             response = self.client.post(self._validate_url())
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.data["valid"])
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["task_id"], "task-vs-ok")
+        mock_delay.assert_called_once_with(self.provider.pk)
 
-    def test_validate_returns_valid_false_on_auth_failure(self):
-        with patch("aist.api.work_items.get_backend") as mock_get:
-            mock_get.return_value.validate_credentials.return_value = False
+    def test_validate_queues_task_for_provider_with_backend(self):
+        with patch("aist.tasks.validate.validate_work_item_provider.delay") as mock_delay:
+            mock_delay.return_value = MagicMock(id="task-vs-backend")
             response = self.client.post(self._validate_url())
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.data["valid"])
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["task_id"], "task-vs-backend")
 
-    def test_validate_returns_false_for_generic_provider(self):
+    def test_validate_queues_task_for_generic_provider(self):
         generic = WorkItemProvider.objects.create(
             organization=self.org, provider_type=WorkItemProviderType.GENERIC, name="Generic VS",
         )
         url = reverse("aist_api:work_item_provider_validate", kwargs={"provider_id": generic.pk})
-        response = self.client.post(url)
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.data["valid"])
+        with patch("aist.tasks.validate.validate_work_item_provider.delay") as mock_delay:
+            mock_delay.return_value = MagicMock(id="task-vs-generic")
+            response = self.client.post(url)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["task_id"], "task-vs-generic")
 
     def test_sync_enqueues_task_and_returns_202(self):
         with patch("aist.api.work_items.sync_work_item_provider") as mock_task:

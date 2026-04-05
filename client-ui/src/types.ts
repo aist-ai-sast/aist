@@ -122,6 +122,8 @@ export type Project = {
   id: number;
   productId: number;
   name: string;
+  organizationId?: number | null;
+  organizationName?: string | null;
 };
 
 export type RiskScore = {
