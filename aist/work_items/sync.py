@@ -6,20 +6,11 @@ from dataclasses import dataclass, field
 
 from django.utils import timezone
 
-from aist.integrations.resolver import ResolvedIntegration
 from aist.models import WorkItemLink, WorkItemProvider
-from aist.utils.vpn import vpn_sidecar_context
 from aist.work_items.backends.base import WorkItemSyncError
 from aist.work_items.backends.registry import get_backend, has_backend
 
 logger = logging.getLogger("aist.work_items")
-
-
-def _resolve_provider_vpn(provider: WorkItemProvider) -> ResolvedIntegration | None:
-    vpn = getattr(provider, "vpn_integration", None)
-    if not vpn or not vpn.is_active:
-        return None
-    return ResolvedIntegration(integration=vpn, config=dict(vpn.config or {}))
 
 
 @dataclass
@@ -90,10 +81,10 @@ def sync_link(link: WorkItemLink) -> LinkSyncResult:
         # Manual links have no provider to sync from
         return LinkSyncResult(link_id=link.pk, success=False, error="manual link — no provider")
 
-    vpn_resolved = _resolve_provider_vpn(provider)
     execution_id = f"wipl-{link.pk}-{uuid.uuid4().hex[:8]}"
-    with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_, proxy_url):
-        return _sync_link_with_proxy(link, proxy_url)
+    backend = get_backend(provider)
+    with backend.scoped_context(execution_id=execution_id) as b:
+        return _sync_link_with_proxy(link, b.proxy_url)
 
 
 def sync_provider(provider: WorkItemProvider) -> ProviderSyncResult:
@@ -117,12 +108,12 @@ def sync_provider(provider: WorkItemProvider) -> ProviderSyncResult:
         result.skipped = WorkItemLink.objects.filter(provider=provider).count()
         return result
 
-    vpn_resolved = _resolve_provider_vpn(provider)
     execution_id = f"wip-{provider.pk}-{uuid.uuid4().hex[:8]}"
-    with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_, proxy_url):
+    backend = get_backend(provider)
+    with backend.scoped_context(execution_id=execution_id) as b:
         links = WorkItemLink.objects.filter(provider=provider).select_related("provider")
         for link in links:
-            link_result = _sync_link_with_proxy(link, proxy_url)
+            link_result = _sync_link_with_proxy(link, b.proxy_url)
             if link_result.success:
                 result.synced += 1
             else:

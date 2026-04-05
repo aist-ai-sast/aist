@@ -8,14 +8,13 @@ from django.db import transaction
 from django.utils import timezone
 from dojo.models import Finding, Test
 
+from aist.celery_signals import _update_action_run
+from aist.integrations.resolver import resolve_integration
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging
-from aist.integrations.resolver import resolve_integration
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, OrgIntegrationType, VersionType
 from aist.pipeline_args import PipelineArguments
-from aist.utils.vpn import vpn_sidecar_context
 from aist.tasks.dedup import watch_deduplication
-from aist.celery_signals import _update_action_run
 from aist.utils.pipeline import (
     cleanup_terminal_project_build_paths,
     finish_pipeline,
@@ -25,6 +24,7 @@ from aist.utils.pipeline import (
 )
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
 from aist.utils.reconciliation import safe_attach_findings_to_version
+from aist.utils.vpn import vpn_sidecar_context
 
 # --------------------------------------------------------------------
 # Ensure external "pipeline" package is importable before importing it

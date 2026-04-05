@@ -28,7 +28,7 @@ __all__ = [
     "report_enrich_done",
     "run_sast_pipeline",
     "sync_all_work_item_providers",
-    "validate_integration",
     "sync_work_item_provider",
+    "validate_integration",
     "watch_deduplication",
 ]

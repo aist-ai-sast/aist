@@ -6,7 +6,7 @@ import logging
 import shutil
 import tarfile
 import zipfile
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from datetime import datetime as dt
 from pathlib import Path
 from urllib.parse import quote
@@ -398,8 +398,33 @@ class OrgIntegration(models.Model):
     def __str__(self) -> str:
         return f"{self.organization.name} / {self.integration_type} / {self.name}"
 
+    @contextmanager
+    def scoped_session(self, execution_id: str):
+        """
+        Context manager — yield a requests.Session with VPN proxy configured
+        if vpn_integration is set and active.
+
+        Must run in a Celery worker (Docker socket access required for VPN sidecar).
+        When no VPN is configured, yields a plain session (no proxy).
+        """
+        import requests as _requests  # noqa: PLC0415
+
+        from aist.integrations.resolver import ResolvedIntegration  # noqa: PLC0415
+        from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
+        vpn = self.vpn_integration
+        vpn_resolved = (
+            ResolvedIntegration(integration=vpn, config=dict(vpn.config or {}))
+            if (vpn and getattr(vpn, "is_active", False)) else None
+        )
+        with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_, proxy_url):
+            session = _requests.Session()
+            if proxy_url:
+                session.proxies.update({"http": proxy_url, "https": proxy_url})
+            yield session
+
 
 class OrgIntegrationVPNSecret(models.Model):
+
     """
     Encrypted VPN credentials for an OrgIntegration of type VPN.
 

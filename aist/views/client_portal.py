@@ -138,6 +138,17 @@ def _build_routes() -> dict[str, Any]:
             reverse("aist_api:work_item_provider_validate", kwargs={"provider_id": 0}),
             "provider_id",
         ),
+        "work_item_provider_validate_status_url": _replace_str_placeholder(
+            _replace_int_placeholder(
+                reverse(
+                    "aist_api:work_item_provider_validate_status",
+                    kwargs={"provider_id": 0, "task_id": "TASKID"},
+                ),
+                "provider_id",
+            ),
+            "TASKID",
+            "task_id",
+        ),
         "work_item_provider_sync_url": _replace_int_placeholder(
             reverse("aist_api:work_item_provider_sync", kwargs={"provider_id": 0}),
             "provider_id",

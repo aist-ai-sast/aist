@@ -1051,6 +1051,25 @@ export function useValidationStatus(integrationId: number | null, taskId: string
   });
 }
 
+export function useWorkItemProviderValidationStatus(providerId: number | null, taskId: string | null) {
+  return useQuery({
+    queryKey: ["wip-validate-status", providerId, taskId],
+    queryFn: () =>
+      fetchJson<ValidationTaskStatus>(
+        getRoute("work_item_provider_validate_status_url", {
+          provider_id: providerId!,
+          task_id: taskId!,
+        }),
+      ),
+    enabled: Boolean(providerId && taskId),
+    refetchInterval: (query) => {
+      const s = query.state.data?.state;
+      if (s === "SUCCESS" || s === "FAILURE") return false;
+      return 2000;
+    },
+  });
+}
+
 export function useOrgIntegrations(orgId?: number) {
   return useQuery({
     queryKey: ["org-integrations", orgId],

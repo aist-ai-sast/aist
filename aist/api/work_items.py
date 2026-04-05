@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
+import uuid
 from urllib.parse import urlparse
 
+from celery.result import AsyncResult
 from django.shortcuts import get_object_or_404
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
@@ -12,10 +15,19 @@ from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
-from aist.models import OrgIntegration, OrgIntegrationType, WorkItemLink, WorkItemProvider, WorkItemProviderType, WorkItemStatusCategory
+from aist.models import (
+    OrgIntegration,
+    OrgIntegrationType,
+    WorkItemLink,
+    WorkItemProvider,
+    WorkItemProviderType,
+    WorkItemStatusCategory,
+)
 from aist.queries import get_authorized_aist_organizations, get_authorized_findings, get_authorized_work_item_providers
 from aist.tasks.work_items import sync_work_item_link, sync_work_item_provider
 from aist.work_items.backends import get_backend
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Serializers
@@ -81,14 +93,10 @@ class WorkItemProviderSerializer(serializers.ModelSerializer):
             return value
         # Determine the organization from the instance (PATCH) or the request data (POST)
         instance = self.instance
-        if instance is not None:
-            organization_id = instance.organization_id
-        else:
-            organization_id = self.initial_data.get("organization")
+        organization_id = instance.organization_id if instance is not None else self.initial_data.get("organization")
         if organization_id and str(value.organization_id) != str(organization_id):
-            raise serializers.ValidationError(
-                "VPN integration must belong to the same organization as this provider."
-            )
+            msg = "VPN integration must belong to the same organization as this provider."
+            raise serializers.ValidationError(msg)
         return value
 
 
@@ -324,13 +332,35 @@ class WorkItemProviderDetailAPI(AuthorizedQuerySetMixin, APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def _validate_work_item_provider(provider: WorkItemProvider) -> tuple[bool, str]:
+    """
+    Run credential validation for a WorkItemProvider, routing through VPN when configured.
+
+    Called by the validate_work_item_provider Celery task (runs in the worker
+    process which has Docker socket access for vpn_sidecar_context).
+    Returns (valid, detail) — never raises.
+    """
+    execution_id = f"wip-validate-{provider.pk}-{uuid.uuid4().hex[:8]}"
+    try:
+        backend = get_backend(provider)
+        with backend.scoped_context(execution_id=execution_id) as b:
+            valid = b.validate_credentials()
+            detail = "" if valid else "Credentials are invalid or connectivity check failed."
+            return valid, detail
+    except NotImplementedError:
+        return False, "This provider type does not support credential validation."
+    except Exception as exc:
+        logger.exception("WorkItemProvider[%s] validation error", provider.pk)
+        return False, f"Validation failed ({type(exc).__name__}) — see server logs."
+
+
 class WorkItemProviderValidateAPI(AuthorizedQuerySetMixin, APIView):
 
     """
     POST /work-item-providers/<provider_id>/validate/
 
-    Tests connectivity and credentials against the tracker.
-    Returns 200 {"valid": true/false} — never raises 5xx for credential failures.
+    Dispatches credential validation to a Celery worker (which has Docker socket
+    access for VPN-routed validation).  Returns 202 with a task_id to poll.
     """
 
     permission_classes = [IsAuthenticated]
@@ -341,26 +371,64 @@ class WorkItemProviderValidateAPI(AuthorizedQuerySetMixin, APIView):
 
     @extend_schema(
         tags=[AISTApiTag.WORK_ITEMS],
-        summary="Validate provider credentials",
+        summary="Validate provider credentials (async)",
         request=None,
         responses={
-            200: {"type": "object", "properties": {"valid": {"type": "boolean"}}},
+            202: {"type": "object", "properties": {"task_id": {"type": "string"}}},
         },
     )
     def post(self, request, provider_id: int):
         provider = self.get_authorized_object(pk=provider_id)
-        valid = False
-        detail = ""
-        try:
-            backend = get_backend(provider)
-            valid = backend.validate_credentials()
-            if not valid:
-                detail = "Credentials are invalid or the connectivity check failed."
-        except NotImplementedError:
-            detail = "This provider type does not support credential validation."
-        except Exception as exc:
-            detail = str(exc) or "Validation error."
-        return Response({"valid": valid, "detail": detail})
+        from aist.tasks.validate import validate_work_item_provider  # noqa: PLC0415
+
+        result = validate_work_item_provider.delay(provider.pk)
+        return Response({"task_id": result.id}, status=status.HTTP_202_ACCEPTED)
+
+
+class WorkItemProviderValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
+
+    """
+    GET /work-item-providers/<provider_id>/validate/<task_id>/
+
+    Polls the result of a validation task dispatched by WorkItemProviderValidateAPI.
+    Embeds provider_id in the task result so cross-task result disclosure is prevented:
+    a task_id that belongs to a different provider returns PENDING.
+    """
+
+    permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_work_item_providers,
+        permission=Permissions.Product_Type_Manage_Members,
+    )
+
+    @extend_schema(
+        tags=[AISTApiTag.WORK_ITEMS],
+        summary="Poll validation task status",
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "state": {"type": "string"},
+                    "valid": {"type": "boolean", "nullable": True},
+                    "detail": {"type": "string"},
+                },
+            },
+        },
+    )
+    def get(self, request, provider_id: int, task_id: str):
+        self.get_authorized_object(pk=provider_id)
+        ar = AsyncResult(task_id)
+        if ar.state == "SUCCESS":
+            result = ar.result or {}
+            if result.get("_provider_id") != provider_id:
+                return Response({"state": "PENDING", "valid": None, "detail": ""})
+            return Response({"state": "SUCCESS", "valid": result["valid"], "detail": result["detail"]})
+        if ar.state == "FAILURE":
+            meta = ar.result if isinstance(ar.result, dict) else {}
+            if meta.get("_provider_id") != provider_id:
+                return Response({"state": "PENDING", "valid": None, "detail": ""})
+            return Response({"state": "FAILURE", "valid": False, "detail": "Validation failed — see server logs."})
+        return Response({"state": ar.state, "valid": None, "detail": ""})
 
 
 class WorkItemProviderSyncAPI(AuthorizedQuerySetMixin, APIView):

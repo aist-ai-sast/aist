@@ -24,6 +24,7 @@ import {
   useProjectIntegrationOverrides,
   useProjects,
   useValidationStatus,
+  useWorkItemProviderValidationStatus,
   type OrgIntegration,
   type VpnSecretStatus,
   type WorkItemProviderSummary,
@@ -1156,9 +1157,30 @@ function WorkItemProvidersSection({ orgId }: { orgId: number }) {
   const { data: orgIntegrations } = useOrgIntegrations(orgId);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [validatingProviderState, setValidatingProviderState] = useState<{ providerId: number; taskId: string } | null>(null);
 
   const providers = providersQuery.data ?? [];
   const editingProvider = providers.find((p) => p.id === editingId) ?? null;
+
+  const providerValidationStatus = useWorkItemProviderValidationStatus(
+    validatingProviderState?.providerId ?? null,
+    validatingProviderState?.taskId ?? null,
+  );
+
+  useEffect(() => {
+    if (!validatingProviderState) return;
+    const s = providerValidationStatus.data?.state;
+    if (s === "SUCCESS" || s === "FAILURE") {
+      const data = providerValidationStatus.data!;
+      toast.push(
+        data.valid
+          ? "Provider credentials are valid."
+          : `Validation failed: ${data.detail || "Check provider configuration."}`,
+        data.valid ? "success" : "error",
+      );
+      setValidatingProviderState(null);
+    }
+  }, [providerValidationStatus.data?.state]);
 
   async function handleDelete(provider: WorkItemProviderSummary) {
     if (!confirm(`Delete provider "${provider.name}"?`)) return;
@@ -1172,11 +1194,8 @@ function WorkItemProvidersSection({ orgId }: { orgId: number }) {
 
   async function handleValidate(provider: WorkItemProviderSummary) {
     try {
-      const result = await validateProvider.mutateAsync(provider.id);
-      toast.push(
-        result.valid ? "Provider credentials are valid." : `Validation failed: ${result.detail || "Check provider configuration."}`,
-        result.valid ? "success" : "error",
-      );
+      const { task_id } = await validateProvider.mutateAsync(provider.id);
+      setValidatingProviderState({ providerId: provider.id, taskId: task_id });
     } catch (error) {
       toast.push(toUserMessage(error), "error");
     }
@@ -1217,7 +1236,10 @@ function WorkItemProvidersSection({ orgId }: { orgId: number }) {
             onDelete={() => handleDelete(provider)}
             onValidate={() => handleValidate(provider)}
             isPendingDelete={deleteProvider.isPending}
-            isPendingValidate={validateProvider.isPending}
+            isPendingValidate={
+              (validateProvider.isPending && validateProvider.variables === provider.id) ||
+              validatingProviderState?.providerId === provider.id
+            }
           />
         ),
       )}

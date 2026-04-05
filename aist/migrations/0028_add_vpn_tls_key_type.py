@@ -6,13 +6,13 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('aist', '0027_vpn_integration'),
+        ("aist", "0027_vpn_integration"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='orgintegrationvpnsecret',
-            name='tls_key_type',
-            field=models.CharField(blank=True, default='tls-auth', max_length=16),
+            model_name="orgintegrationvpnsecret",
+            name="tls_key_type",
+            field=models.CharField(blank=True, default="tls-auth", max_length=16),
         ),
     ]

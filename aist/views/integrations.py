@@ -5,9 +5,9 @@ from django.http import HttpRequest, JsonResponse
 from django.views.decorators.http import require_POST
 from dojo.authorization.roles_permissions import Permissions
 
-from aist.api.integrations import gitlab_projects_list_payload
 from aist.models import OrgIntegration
 from aist.queries import get_authorized_aist_organizations
+from aist.tasks.integrations import fetch_gitlab_projects
 
 
 @login_required
@@ -39,8 +39,8 @@ def gitlab_projects_list(request: HttpRequest) -> JsonResponse:
             status=404,
         )
 
-    url = (integration.config or {}).get("base_url", "").strip()
-    token = (integration.secret or "").strip()
-
-    payload, status_code = gitlab_projects_list_payload(url, token)
-    return JsonResponse(payload, status=status_code)
+    try:
+        result = fetch_gitlab_projects.delay(integration.pk).get(timeout=350)
+    except Exception:
+        return JsonResponse({"ok": False, "error": "Failed to fetch projects (timeout or task error)."}, status=502)
+    return JsonResponse(result, status=200 if result.get("ok") else 400)

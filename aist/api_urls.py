@@ -60,10 +60,10 @@ from aist.api import (
     WorkItemProviderListCreateAPI,
     WorkItemProviderSyncAPI,
     WorkItemProviderValidateAPI,
+    WorkItemProviderValidateStatusAPI,
 )
 from aist.api.ai import AIDeleteResponseAPI, AIFindingResponseListAPI, AIPipelineCallbackAPI, AISendRequestAPI
 from aist.api.gitlab_integration import ImportProjectFromGitlabAPI
-from aist.api.integrations import GitlabProjectsListAPI
 from aist.api.pipelines import (
     ExportAIResultsAPI,
     PipelineDeduplicationProgressAPI,
@@ -220,7 +220,6 @@ urlpatterns = [
         GithubProjectLinkRepositoryAPI.as_view(),
         name="project_github_link_repository",
     ),
-    path("projects/gitlab/list/", GitlabProjectsListAPI.as_view(), name="gitlab_projects_list"),
     path("findings/tags/", AvailableFindingTagsAPI.as_view(), name="finding_tags"),
     path(
         "findings/<int:finding_id>/work-items/",
@@ -276,6 +275,11 @@ urlpatterns = [
         "work-item-providers/<int:provider_id>/validate/",
         WorkItemProviderValidateAPI.as_view(),
         name="work_item_provider_validate",
+    ),
+    path(
+        "work-item-providers/<int:provider_id>/validate/<str:task_id>/",
+        WorkItemProviderValidateStatusAPI.as_view(),
+        name="work_item_provider_validate_status",
     ),
     path(
         "work-item-providers/<int:provider_id>/sync/",

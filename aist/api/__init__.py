@@ -105,6 +105,7 @@ from aist.api.work_items import (
     WorkItemProviderListCreateAPI,
     WorkItemProviderSyncAPI,
     WorkItemProviderValidateAPI,
+    WorkItemProviderValidateStatusAPI,
 )
 
 __all__ = [
@@ -190,6 +191,7 @@ __all__ = [
     "WorkItemProviderListCreateAPI",
     "WorkItemProviderSyncAPI",
     "WorkItemProviderValidateAPI",
+    "WorkItemProviderValidateStatusAPI",
     "WriteLogActionCreateSerializer",
     "create_launch_config_for_project",
 ]

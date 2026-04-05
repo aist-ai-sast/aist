@@ -7,6 +7,7 @@ from aist.models import OrgIntegrationVPNSecret
 
 @admin.register(OrgIntegrationVPNSecret)
 class OrgIntegrationVPNSecretAdmin(admin.ModelAdmin):
+
     """
     Read-only admin view for VPN secret presence indicators.
 

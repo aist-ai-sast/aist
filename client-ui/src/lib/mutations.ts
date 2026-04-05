@@ -283,7 +283,7 @@ export function useDeleteWorkItemProvider(orgId: number) {
 export function useValidateWorkItemProvider() {
   return useMutation({
     mutationFn: (providerId: number) =>
-      fetchJson<{ valid: boolean; detail: string }>(
+      fetchJson<{ task_id: string }>(
         getRoute("work_item_provider_validate_url", { provider_id: providerId }),
         { method: "POST" },
       ),

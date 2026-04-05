@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
 
-import requests as _requests
 from django.shortcuts import get_object_or_404
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
@@ -15,14 +15,12 @@ from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
-from aist.integrations.resolver import ResolvedIntegration
-from aist.models import OrgIntegration, OrgIntegrationVPNSecret, OrgIntegrationType, ProjectIntegrationOverride
+from aist.models import OrgIntegration, OrgIntegrationType, OrgIntegrationVPNSecret, ProjectIntegrationOverride
 from aist.queries import (
     get_authorized_aist_organizations,
     get_authorized_aist_projects,
     get_authorized_org_integrations,
 )
-from aist.utils.vpn import vpn_sidecar_context
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +30,12 @@ logger = logging.getLogger(__name__)
 
 # Maps OpenVPN XML-like tag names to VPNSecret model field names.
 _OVPN_TAG_TO_FIELD: dict[str, str] = {
-    "ca":           "ca_cert",
-    "cert":         "client_cert",
-    "key":          "client_key",
-    "tls-auth":     "tls_auth_key",
-    "tls-crypt":    "tls_auth_key",     # tls-crypt uses same storage field
-    "tls-crypt-v2": "tls_auth_key",     # OpenVPN 2.5+ per-client wrapped keys
+    "ca": "ca_cert",
+    "cert": "client_cert",
+    "key": "client_key",
+    "tls-auth": "tls_auth_key",
+    "tls-crypt": "tls_auth_key",  # tls-crypt uses same storage field
+    "tls-crypt-v2": "tls_auth_key",  # OpenVPN 2.5+ per-client wrapped keys
 }
 
 
@@ -89,6 +87,7 @@ def _split_ovpn_pem_blocks(ovpn_content: str) -> tuple[str, dict[str, str]]:
 
 
 class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
+
     """
     Serializer for OrgIntegrationVPNSecret.
     All credential fields are write-only; only boolean presence indicators are readable.
@@ -96,23 +95,31 @@ class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
     """
 
     ovpn_content = serializers.CharField(
-        write_only=True, required=False, allow_blank=True,
+        write_only=True,
+        required=False,
+        allow_blank=True,
         style={"input_type": "password"},
         help_text="Full .ovpn file content (inline <ca>/<cert>/<key> blocks supported).",
     )
     ca_cert = serializers.CharField(write_only=True, required=False, allow_blank=True)
     client_cert = serializers.CharField(write_only=True, required=False, allow_blank=True)
     client_key = serializers.CharField(
-        write_only=True, required=False, allow_blank=True,
+        write_only=True,
+        required=False,
+        allow_blank=True,
         style={"input_type": "password"},
     )
     tls_auth_key = serializers.CharField(
-        write_only=True, required=False, allow_blank=True,
+        write_only=True,
+        required=False,
+        allow_blank=True,
         style={"input_type": "password"},
     )
     vpn_username = serializers.CharField(write_only=True, required=False, allow_blank=True)
     vpn_password = serializers.CharField(
-        write_only=True, required=False, allow_blank=True,
+        write_only=True,
+        required=False,
+        allow_blank=True,
         style={"input_type": "password"},
     )
     # Not sensitive — indicates whether the uploaded .ovpn used tls-auth or tls-crypt.
@@ -164,8 +171,14 @@ class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
         # Fields extracted from ovpn_content during validate():
         ovpn_derived = {"ca_cert", "client_cert", "client_key", "tls_auth_key", "tls_key_type"}
         secret_fields = (
-            "ovpn_content", "ca_cert", "client_cert", "client_key",
-            "tls_auth_key", "tls_key_type", "vpn_username", "vpn_password",
+            "ovpn_content",
+            "ca_cert",
+            "client_cert",
+            "client_key",
+            "tls_auth_key",
+            "tls_key_type",
+            "vpn_username",
+            "vpn_password",
         )
         for field in secret_fields:
             if field not in self.initial_data:
@@ -178,10 +191,18 @@ class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrgIntegrationVPNSecret
         fields = [
-            "ovpn_content", "ca_cert", "client_cert", "client_key", "tls_auth_key",
+            "ovpn_content",
+            "ca_cert",
+            "client_cert",
+            "client_key",
+            "tls_auth_key",
             "tls_key_type",
-            "vpn_username", "vpn_password",
-            "has_ovpn_content", "has_client_cert", "has_client_key", "has_username",
+            "vpn_username",
+            "vpn_password",
+            "has_ovpn_content",
+            "has_client_cert",
+            "has_client_key",
+            "has_username",
         ]
 
 
@@ -242,20 +263,15 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         if value is None:
             return value
         instance = self.instance
-        if instance is not None:
-            organization_id = instance.organization_id
-        else:
-            organization_id = self.initial_data.get("organization")
+        organization_id = instance.organization_id if instance is not None else self.initial_data.get("organization")
         # Unconditional check — raise even if organization_id is None/empty so that
         # a missing context never silently allows cross-org VPN linkage.
         if not organization_id:
-            raise serializers.ValidationError(
-                "Cannot determine organization context; VPN integration cannot be validated."
-            )
+            msg = "Cannot determine organization context; VPN integration cannot be validated."
+            raise serializers.ValidationError(msg)
         if str(value.organization_id) != str(organization_id):
-            raise serializers.ValidationError(
-                "VPN integration must belong to the same organization."
-            )
+            msg = "VPN integration must belong to the same organization."
+            raise serializers.ValidationError(msg)
         return value
 
     def to_representation(self, instance):
@@ -277,7 +293,10 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         if instance.integration_type == OrgIntegrationType.VPN and vpn_data is not None:
             vpn_secret, _ = OrgIntegrationVPNSecret.objects.get_or_create(integration=instance)
             vpn_ser = OrgIntegrationVPNSecretSerializer(
-                vpn_secret, data=vpn_data, partial=True, context=self.context,
+                vpn_secret,
+                data=vpn_data,
+                partial=True,
+                context=self.context,
             )
             vpn_ser.is_valid(raise_exception=True)
             vpn_ser.save()
@@ -438,6 +457,7 @@ class OrgIntegrationValidateAPI(AuthorizedQuerySetMixin, APIView):
     def post(self, request, integration_id: int):
         integration = self.get_authorized_object(pk=integration_id)
         from aist.tasks.validate import validate_integration  # noqa: PLC0415
+
         result = validate_integration.delay(integration.pk)
         return Response({"task_id": result.id}, status=status.HTTP_202_ACCEPTED)
 
@@ -478,6 +498,7 @@ class OrgIntegrationValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
     def get(self, request, integration_id: int, task_id: str):
         self.get_authorized_object(pk=integration_id)  # org isolation check
         from celery.result import AsyncResult  # noqa: PLC0415
+
         ar = AsyncResult(task_id)
         if ar.state == "SUCCESS":
             result = ar.result
@@ -492,8 +513,7 @@ class OrgIntegrationValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
             meta = ar.result if isinstance(ar.result, dict) else {}
             if meta.get("_integration_id") != integration_id:
                 return Response({"state": "PENDING", "valid": None, "detail": ""})
-            return Response({"state": "FAILURE", "valid": False,
-                             "detail": "Validation failed — see server logs."})
+            return Response({"state": "FAILURE", "valid": False, "detail": "Validation failed — see server logs."})
         return Response({"state": ar.state, "valid": None, "detail": ""})
 
 
@@ -508,19 +528,8 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
 
         base_url = config.get("base_url") or "https://gitlab.com"
         try:
-            kwargs: dict = {"private_token": secret or None}
-            vpn = getattr(integration, "vpn_integration", None)
-            if vpn and vpn.is_active:
-                vpn_resolved = ResolvedIntegration(integration=vpn, config=dict(vpn.config or {}))
-                with vpn_sidecar_context(vpn_resolved, execution_id=f"validate-{integration.pk}") as (_, proxy_url):
-                    if proxy_url:
-                        session = _requests.Session()
-                        session.proxies = {"http": proxy_url, "https": proxy_url}
-                        kwargs["session"] = session
-                    gl = gitlab.Gitlab(base_url, **kwargs)
-                    gl.auth()
-            else:
-                gl = gitlab.Gitlab(base_url, **kwargs)
+            with integration.scoped_session(execution_id=f"validate-{integration.pk}") as session:
+                gl = gitlab.Gitlab(base_url, private_token=secret or None, session=session)
                 gl.auth()
         except Exception as exc:
             logger.exception("Integration[%s] GITLAB validation error", integration.pk)
@@ -571,8 +580,6 @@ def _validate_vpn_integration(integration: OrgIntegration) -> tuple[bool, str]:
     the .ovpn content.  Does NOT establish a VPN tunnel — this is a lightweight
     reachability check only.
     """
-    import subprocess  # noqa: PLC0415
-
     vpn_secret = getattr(integration, "vpn_secret", None)
     if not vpn_secret or not vpn_secret.ovpn_content:
         return False, "No VPN configuration stored. Upload an .ovpn file first."
@@ -586,19 +593,28 @@ def _validate_vpn_integration(integration: OrgIntegration) -> tuple[bool, str]:
         )
 
     try:
+        ping_bin = shutil.which("ping")
+        if ping_bin is None:
+            return False, "Ping binary is not available on the server."
         result = subprocess.run(
-            ["ping", "-c", "1", "-W", "5", ping_target],
+            [ping_bin, "-c", "1", "-W", "5", ping_target],
             capture_output=True,
             timeout=10,
+            check=False,
         )
-        if result.returncode == 0:
-            return True, f"{ping_target} is reachable."
-        return False, f"{ping_target} unreachable (ping returned {result.returncode})."
+        is_reachable = result.returncode == 0
+        detail = (
+            f"{ping_target} is reachable."
+            if is_reachable
+            else f"{ping_target} unreachable (ping returned {result.returncode})."
+        )
     except subprocess.TimeoutExpired:
         return False, f"Ping to {ping_target} timed out."
     except Exception as exc:
         logger.exception("VPN reachability check failed for %s", ping_target)
         return False, f"Reachability check failed ({type(exc).__name__}) — see server logs."
+    else:
+        return is_reachable, detail
 
 
 # ---------------------------------------------------------------------------

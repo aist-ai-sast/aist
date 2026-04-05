@@ -207,25 +207,6 @@ class ActionRunMaskingTests(AISTApiBase):
         self.assertIn(f"PRIVATE-TOKEN: {MASKED_VALUE}", error)
 
 
-class GitlabIntegrationsMaskingTests(AISTApiBase):
-    @patch("aist.api.integrations.gitlab.Gitlab")
-    def test_gitlab_projects_list_api_masks_exception_details(self, mock_gitlab):
-        mock_gitlab.side_effect = Exception(
-            "auth failed for https://oauth2:glpat-abcdef12345678@gitlab.example.com",
-        )
-
-        resp = self.client.post(
-            reverse("aist_api:gitlab_projects_list"),
-            data={"gitlab_url": "https://gitlab.example.com", "gitlab_token": "glpat-abcdef12345678"},
-            format="json",
-        )
-
-        self.assertEqual(resp.status_code, 400)
-        self.assertFalse(resp.data["ok"])
-        self.assertNotIn("glpat-abcdef12345678", resp.data["error"])
-        self.assertIn(MASKED_VALUE, resp.data["error"])
-
-
 class AistViewsMaskingMiddlewareTests(AISTApiBase):
     def test_masks_json_responses_for_aist_views(self):
         factory = RequestFactory()
@@ -252,8 +233,8 @@ class AistViewsMaskingMiddlewareTests(AISTApiBase):
 
         self.assertEqual(payload.get("token"), "plain-token")
 
-    @patch("aist.api.integrations.gitlab.Gitlab")
-    def test_masks_real_aist_view_json_response(self, mock_gitlab):
+    @patch("aist.views.integrations.fetch_gitlab_projects")
+    def test_masks_real_aist_view_json_response(self, mock_task):
         self.user.is_superuser = True
         self.user.save(update_fields=["is_superuser"])
         client = Client()
@@ -267,9 +248,10 @@ class AistViewsMaskingMiddlewareTests(AISTApiBase):
             secret=TEST_GITLAB_PAT,
             is_active=True,
         )
-        mock_gitlab.side_effect = Exception(
-            f"auth failed for https://oauth2:{TEST_GITLAB_PAT}@gitlab.example.com",
-        )
+        mock_task.delay.return_value.get.return_value = {
+            "ok": False,
+            "error": f"auth failed for https://oauth2:{TEST_GITLAB_PAT}@gitlab.example.com",
+        }
 
         response = client.post(
             reverse("aist:gitlab_projects_list"),

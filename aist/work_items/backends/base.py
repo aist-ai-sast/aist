@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -54,6 +55,26 @@ class WorkItemBackend(ABC):
         if proxies:
             session.proxies.update(proxies)
         return session
+
+    @contextmanager
+    def scoped_context(self, execution_id: str):
+        """
+        Context manager — yield self with proxy_url set if provider.vpn_integration
+        is configured and active.
+
+        Must run in a Celery worker (Docker socket access required for VPN sidecar).
+        When no VPN is configured, yields self with proxy_url=None.
+        """
+        from aist.integrations.resolver import ResolvedIntegration  # noqa: PLC0415
+        from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
+        vpn = getattr(self.provider, "vpn_integration", None)
+        vpn_resolved = (
+            ResolvedIntegration(integration=vpn, config=dict(vpn.config or {}))
+            if (vpn and getattr(vpn, "is_active", False)) else None
+        )
+        with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_, proxy_url):
+            self.proxy_url = proxy_url
+            yield self
 
     @abstractmethod
     def validate_credentials(self) -> bool:

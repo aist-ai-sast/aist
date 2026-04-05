@@ -24,21 +24,25 @@ Security notes:
 - The container name embeds the execution_id so cleanup_pipeline_containers()
   automatically covers it for pipeline-level cleanup.
 """
+
 from __future__ import annotations
 
 import base64
 import json
 import logging
 import re
+import shutil
 import socket
 import subprocess
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Generator
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from aist.integrations.resolver import ResolvedIntegration
 
 logger = logging.getLogger(__name__)
@@ -49,13 +53,19 @@ _TUN_WAIT_SECS = 35  # tun0 timeout (30 s in sidecar) + 5 s buffer for tinyproxy
 _REDACT_LOG_PREFIXES = ("[VPN] DNS configured", "nameserver ", "search ")
 
 
+def _find_executable(name: str) -> str | None:
+    return shutil.which(name)
+
+
 def _get_vpn_sidecar_image() -> str:
     from django.conf import settings  # noqa: PLC0415
+
     return getattr(settings, "AIST_VPN_SIDECAR_IMAGE", "aist-vpn-sidecar:latest")
 
 
 def _build_vpn_sidecar_if_needed(image: str) -> None:
-    """Build the VPN sidecar image if it is not present locally.
+    """
+    Build the VPN sidecar image if it is not present locally.
 
     Mirrors ``build_image_if_needed`` in sast-pipeline's ``analyzer_runner.py``:
     check with ``docker images -q``, skip if already present, build otherwise.
@@ -65,32 +75,41 @@ def _build_vpn_sidecar_if_needed(image: str) -> None:
     Both directories are COPY-ed into the Django image in Dockerfile.django-debian,
     so the context is always available at runtime inside the Celery worker container.
     """
+    docker_bin = _find_executable("docker")
+    if docker_bin is None:
+        msg = "Docker CLI is not available; cannot manage VPN sidecar containers."
+        raise RuntimeError(msg)
     present = subprocess.run(
-        ["docker", "images", "-q", image],
-        capture_output=True, text=True,
+        [docker_bin, "images", "-q", image],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if present.stdout.strip():
         logger.debug("vpn sidecar image=%s already present, skipping build", image)
         return
 
     from django.conf import settings  # noqa: PLC0415
+
     pipeline_path = getattr(settings, "AIST_PIPELINE_CODE_PATH", None)
     if not pipeline_path:
-        raise RuntimeError(
+        msg = (
             f"VPN sidecar image {image!r} not found and AIST_PIPELINE_CODE_PATH is not set; "
             "cannot build the image automatically."
         )
+        raise RuntimeError(msg)
     dockerfile_dir = str(Path(pipeline_path).parent / "vpn-sidecar")
     logger.info("vpn sidecar image=%s not found; building from %s", image, dockerfile_dir)
     subprocess.run(
-        ["docker", "build", "-t", image, dockerfile_dir],
+        [docker_bin, "build", "-t", image, dockerfile_dir],
         check=True,
         timeout=300,  # 5-minute cap; a hung build would block the Celery worker indefinitely
     )
 
 
 def _find_free_port() -> int:
-    """Ask the OS for a free TCP port on localhost, then release it.
+    """
+    Ask the OS for a free TCP port on localhost, then release it.
 
     Note: there is a TOCTOU race between releasing the socket here and Docker
     binding to it.  This race is only active in the rarely-triggered fallback
@@ -108,7 +127,8 @@ def _running_in_docker() -> bool:
 
 
 def _get_own_docker_network() -> str | None:
-    """Return the first named Docker network this container is attached to.
+    """
+    Return the first named Docker network this container is attached to.
 
     Used to start the VPN sidecar on the same network so its HTTP CONNECT proxy
     port is reachable by container name — without publishing a host port.  This
@@ -122,24 +142,32 @@ def _get_own_docker_network() -> str | None:
     Returns ``None`` on any error so callers can fall back gracefully.
     """
     try:
-        container_id = Path("/etc/hostname").read_text().strip()
+        docker_bin = _find_executable("docker")
+        if docker_bin is None:
+            return None
+        container_id = Path("/etc/hostname").read_text(encoding="utf-8").strip()
         result = subprocess.run(
             [
-                "docker", "inspect",
-                "--format", "{{range $k,$v := .NetworkSettings.Networks}}{{$k}}\n{{end}}",
+                docker_bin,
+                "inspect",
+                "--format",
+                "{{range $k,$v := .NetworkSettings.Networks}}{{$k}}\n{{end}}",
                 container_id,
             ],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         networks = [n.strip() for n in result.stdout.splitlines() if n.strip()]
-        named = [n for n in networks if n not in ("bridge", "host", "none")]
+        named = [n for n in networks if n not in {"bridge", "host", "none"}]
         return named[0] if named else None
     except Exception:
         return None
 
 
 def _get_own_eth0_ip() -> str | None:
-    """Return this container's primary IP address (the one used for inter-container traffic).
+    """
+    Return this container's primary IP address (the one used for inter-container traffic).
 
     Used to pass AIST_ALLOWED_IP to the sidecar so tinyproxy can restrict
     Allow to the celeryworker's IP only.
@@ -157,36 +185,47 @@ def _get_own_eth0_ip() -> str | None:
         if ip and not ip.startswith("127."):
             return ip
     except Exception:
-        pass
+        logger.debug("vpn: socket-based eth0 IP detection failed", exc_info=True)
 
     # Method 2: ip command (iproute2 — not always installed in minimal images)
     try:
+        ip_bin = _find_executable("ip")
+        if ip_bin is None:
+            msg = "ip not found"
+            raise FileNotFoundError(msg)
         result = subprocess.run(
-            ["ip", "-4", "addr", "show", "eth0"],
-            capture_output=True, text=True,
+            [ip_bin, "-4", "addr", "show", "eth0"],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        for line in result.stdout.splitlines():
-            line = line.strip()
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
             if line.startswith("inet "):
                 # "inet 172.20.0.5/16 brd ..."
                 return line.split()[1].split("/")[0]
     except Exception:
-        pass
+        logger.debug("vpn: ip-command eth0 detection failed", exc_info=True)
 
     # Method 3: hostname -i (busybox / minimal Debian)
     try:
-        result = subprocess.run(["hostname", "-i"], capture_output=True, text=True)
+        hostname_bin = _find_executable("hostname")
+        if hostname_bin is None:
+            msg = "hostname not found"
+            raise FileNotFoundError(msg)
+        result = subprocess.run([hostname_bin, "-i"], capture_output=True, text=True, check=False)
         ip = result.stdout.strip().split()[0]
         if ip and not ip.startswith("127."):
             return ip
     except Exception:
-        pass
+        logger.debug("vpn: hostname-based eth0 detection failed", exc_info=True)
 
     return None
 
 
 def _b64(value: str) -> str:
-    """Base64-encode a string so it can be safely passed as a ``docker run -e`` value.
+    """
+    Base64-encode a string so it can be safely passed as a ``docker run -e`` value.
 
     Docker CLI truncates env-var values at the first embedded newline when they
     are passed as ``-e KEY=VALUE`` arguments.  Multi-line fields (PEM certs,
@@ -197,7 +236,8 @@ def _b64(value: str) -> str:
 
 
 def _extract_key_direction(ovpn_content: str) -> str:
-    """Extract key-direction value from .ovpn config body.
+    """
+    Extract key-direction value from .ovpn config body.
 
     Returns the value found in the config ("0" or "1"), or "1" as the default
     (standard OpenVPN client convention).  Only "0" and "1" are valid; any other
@@ -209,7 +249,7 @@ def _extract_key_direction(ovpn_content: str) -> str:
     """
     for line in ovpn_content.splitlines():
         parts = line.strip().split()
-        if len(parts) == 2 and parts[0] == "key-direction" and parts[1] in ("0", "1"):
+        if len(parts) == 2 and parts[0] == "key-direction" and parts[1] in {"0", "1"}:
             return parts[1]
     return "1"
 
@@ -228,15 +268,19 @@ def _assemble_env(vpn_secret) -> dict[str, str]:
     Non-secret metadata (tls_key_type, tls_key_direction) are added separately
     in vpn_sidecar_context alongside AIST_ALLOWED_IP.
     """
-    return {k: v for k, v in {
-        "AIST_VPN_OVPN_CONTENT": _b64(vpn_secret.ovpn_content) if vpn_secret.ovpn_content else "",
-        "AIST_VPN_CA_CERT":      _b64(vpn_secret.ca_cert)       if vpn_secret.ca_cert       else "",
-        "AIST_VPN_CLIENT_CERT":  _b64(vpn_secret.client_cert)   if vpn_secret.client_cert   else "",
-        "AIST_VPN_CLIENT_KEY":   _b64(vpn_secret.client_key)    if vpn_secret.client_key    else "",
-        "AIST_VPN_TLS_AUTH_KEY": _b64(vpn_secret.tls_auth_key)  if vpn_secret.tls_auth_key  else "",
-        "AIST_VPN_USERNAME":     vpn_secret.vpn_username,
-        "AIST_VPN_PASSWORD":     vpn_secret.vpn_password,
-    }.items() if v}
+    return {
+        k: v
+        for k, v in {
+            "AIST_VPN_OVPN_CONTENT": _b64(vpn_secret.ovpn_content) if vpn_secret.ovpn_content else "",
+            "AIST_VPN_CA_CERT": _b64(vpn_secret.ca_cert) if vpn_secret.ca_cert else "",
+            "AIST_VPN_CLIENT_CERT": _b64(vpn_secret.client_cert) if vpn_secret.client_cert else "",
+            "AIST_VPN_CLIENT_KEY": _b64(vpn_secret.client_key) if vpn_secret.client_key else "",
+            "AIST_VPN_TLS_AUTH_KEY": _b64(vpn_secret.tls_auth_key) if vpn_secret.tls_auth_key else "",
+            "AIST_VPN_USERNAME": vpn_secret.vpn_username,
+            "AIST_VPN_PASSWORD": vpn_secret.vpn_password,
+        }.items()
+        if v
+    }
 
 
 def _redact_vpn_log(raw: str) -> str:
@@ -251,7 +295,8 @@ def _redact_vpn_log(raw: str) -> str:
 
 
 def _parse_docker_created_at(raw: str) -> datetime | None:
-    """Parse Docker's CreatedAt string to an aware UTC datetime.
+    """
+    Parse Docker's CreatedAt string to an aware UTC datetime.
 
     Docker ps ``--format "{{json .}}"`` format: "2026-04-02 10:05:33 +0000 UTC"
     The original code used ``[:19]`` and appended UTC, silently ignoring the
@@ -265,7 +310,7 @@ def _parse_docker_created_at(raw: str) -> datetime | None:
     dt_naive = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
     sign = 1 if m.group(2) == "+" else -1
     offset = timezone(sign * timedelta(hours=int(m.group(3)), minutes=int(m.group(4))))
-    return dt_naive.replace(tzinfo=offset).astimezone(timezone.utc)
+    return dt_naive.replace(tzinfo=offset).astimezone(UTC)
 
 
 def _wait_for_sidecar_ready(container_name: str, timeout: float = _TUN_WAIT_SECS) -> None:
@@ -275,11 +320,16 @@ def _wait_for_sidecar_ready(container_name: str, timeout: float = _TUN_WAIT_SECS
     Dumps the last 50 log lines on timeout to aid diagnosis.
     DNS-related lines are redacted to avoid leaking client network details.
     """
+    docker_bin = _find_executable("docker")
+    if docker_bin is None:
+        msg = "Docker CLI is not available; cannot verify VPN sidecar readiness."
+        raise RuntimeError(msg)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         result = subprocess.run(
-            ["docker", "exec", container_name, "ip", "link", "show", "tun0"],
+            [docker_bin, "exec", container_name, "ip", "link", "show", "tun0"],
             capture_output=True,
+            check=False,
         )
         if result.returncode == 0:
             # Give tinyproxy a moment to bind after openvpn comes up
@@ -288,23 +338,30 @@ def _wait_for_sidecar_ready(container_name: str, timeout: float = _TUN_WAIT_SECS
         time.sleep(1.0)
 
     logs = subprocess.run(
-        ["docker", "logs", "--tail", "50", container_name],
-        capture_output=True, text=True,
+        [docker_bin, "logs", "--tail", "50", container_name],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     logger.error(
         "sidecar=%s did not become ready within %ss. logs:\n%s",
-        container_name, timeout, _redact_vpn_log(logs.stdout + logs.stderr),
+        container_name,
+        timeout,
+        _redact_vpn_log(logs.stdout + logs.stderr),
     )
-    raise RuntimeError(
-        f"VPN sidecar {container_name!r} did not become ready within {timeout:.0f}s"
-    )
+    msg = f"VPN sidecar {container_name!r} did not become ready within {timeout:.0f}s"
+    raise RuntimeError(msg)
 
 
 def _stop_sidecar(container_name: str) -> None:
-    r = subprocess.run(["docker", "stop", "--time", "5", container_name], capture_output=True)
+    docker_bin = _find_executable("docker")
+    if docker_bin is None:
+        logger.warning("vpn: docker CLI unavailable while stopping sidecar=%s", container_name)
+        return
+    r = subprocess.run([docker_bin, "stop", "--time", "5", container_name], capture_output=True, check=False)
     if r.returncode != 0:
         logger.warning("vpn: docker stop failed rc=%d name=%s", r.returncode, container_name)
-    r = subprocess.run(["docker", "rm", "--force", container_name], capture_output=True)
+    r = subprocess.run([docker_bin, "rm", "--force", container_name], capture_output=True, check=False)
     if r.returncode != 0:
         logger.warning("vpn: docker rm failed rc=%d name=%s", r.returncode, container_name)
 
@@ -314,7 +371,7 @@ def vpn_sidecar_context(
     resolved: ResolvedIntegration | None,
     *,
     execution_id: str,
-) -> Generator[tuple[str | None, str | None], None, None]:
+) -> Generator[tuple[str | None, str | None]]:
     """
     Start a VPN sidecar container and yield ``(container_name, proxy_url)``.
 
@@ -344,12 +401,21 @@ def vpn_sidecar_context(
 
     image = _get_vpn_sidecar_image()
     _build_vpn_sidecar_if_needed(image)
+    docker_bin = _find_executable("docker")
+    if docker_bin is None:
+        msg = "Docker CLI is not available; cannot start VPN sidecar."
+        raise RuntimeError(msg)
 
     cmd = [
-        "docker", "run", "-d",
-        "--name", container_name,
-        "--cap-add", "NET_ADMIN",
-        "--device", "/dev/net/tun",
+        docker_bin,
+        "run",
+        "-d",
+        "--name",
+        container_name,
+        "--cap-add",
+        "NET_ADMIN",
+        "--device",
+        "/dev/net/tun",
     ]
 
     if _running_in_docker():
@@ -378,7 +444,8 @@ def vpn_sidecar_context(
             proxy_url = f"http://host.docker.internal:{host_port}"
             logger.warning(
                 "execution=%s vpn=could not detect own network, falling back to port publish port=%d",
-                execution_id, host_port,
+                execution_id,
+                host_port,
             )
 
         # Pass our eth0 IP to the sidecar so tinyproxy restricts Allow to us only.
@@ -406,7 +473,9 @@ def vpn_sidecar_context(
 
     logger.info(
         "execution=%s vpn=starting sidecar=%s proxy=%s",
-        execution_id, container_name, proxy_url,
+        execution_id,
+        container_name,
+        proxy_url,
     )
     try:
         try:
@@ -420,10 +489,8 @@ def vpn_sidecar_context(
                 exc.returncode,
                 (exc.stderr or "")[:300],
             )
-            raise RuntimeError(
-                f"VPN sidecar failed to start for execution {execution_id!r} "
-                f"(docker rc={exc.returncode})"
-            ) from None  # drop CalledProcessError chain — it carries cmd with creds
+            msg = f"VPN sidecar failed to start for execution {execution_id!r} (docker rc={exc.returncode})"
+            raise RuntimeError(msg) from None  # drop CalledProcessError chain — it carries cmd with creds
 
         _wait_for_sidecar_ready(container_name)
         logger.info("execution=%s vpn=up sidecar=%s proxy=%s", execution_id, container_name, proxy_url)
@@ -444,11 +511,19 @@ def cleanup_orphaned_vpn_containers(max_age_minutes: int = 240) -> int:
     Returns the number of containers removed.
     """
     try:
+        docker_bin = _find_executable("docker")
+        if docker_bin is None:
+            logger.warning("cleanup_orphaned_vpn_containers: docker CLI not available")
+            return 0
         result = subprocess.run(
             [
-                "docker", "ps", "-a",
-                "--filter", "name=aist-vpn-",
-                "--format", "{{json .}}",
+                docker_bin,
+                "ps",
+                "-a",
+                "--filter",
+                "name=aist-vpn-",
+                "--format",
+                "{{json .}}",
             ],
             capture_output=True,
             text=True,
@@ -458,10 +533,10 @@ def cleanup_orphaned_vpn_containers(max_age_minutes: int = 240) -> int:
         logger.warning("cleanup_orphaned_vpn_containers: docker ps failed: %s", exc)
         return 0
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     removed = 0
-    for line in result.stdout.splitlines():
-        line = line.strip()
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         try:
@@ -475,7 +550,8 @@ def cleanup_orphaned_vpn_containers(max_age_minutes: int = 240) -> int:
         if created_at is None:
             logger.debug(
                 "cleanup_orphaned_vpn_containers: cannot parse CreatedAt=%r for %s",
-                created_at_raw, name,
+                created_at_raw,
+                name,
             )
             continue
 
@@ -485,10 +561,11 @@ def cleanup_orphaned_vpn_containers(max_age_minutes: int = 240) -> int:
 
         logger.warning(
             "cleanup_orphaned_vpn_containers: removing orphaned sidecar %s (age=%.0f min)",
-            name, age_minutes,
+            name,
+            age_minutes,
         )
-        subprocess.run(["docker", "stop", "--time", "5", name], capture_output=True)
-        subprocess.run(["docker", "rm", "--force", name], capture_output=True)
+        subprocess.run([docker_bin, "stop", "--time", "5", name], capture_output=True, check=False)
+        subprocess.run([docker_bin, "rm", "--force", name], capture_output=True, check=False)
         removed += 1
 
     if removed:

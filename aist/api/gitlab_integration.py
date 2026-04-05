@@ -1,5 +1,5 @@
-# --- add near other imports in api.py ---
-import gitlab
+from __future__ import annotations
+
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from dojo.authorization.authorization import (
@@ -18,6 +18,7 @@ from aist.api.schema import AISTApiTag
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import AISTProject, OrgIntegration, OrgIntegrationType, RepositoryInfo, ScmGitlabBinding, ScmType
 from aist.queries import get_authorized_aist_organizations
+from aist.tasks.integrations import fetch_gitlab_project_info
 from aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GH flow uses
 
 
@@ -70,8 +71,11 @@ class ImportProjectFromGitlabAPI(APIView):
         )
 
         integration = (
-            OrgIntegration.objects
-            .filter(organization=organization, integration_type=OrgIntegrationType.GITLAB, is_active=True)
+            OrgIntegration.objects.filter(
+                organization=organization,
+                integration_type=OrgIntegrationType.GITLAB,
+                is_active=True,
+            )
             .order_by("pk")
             .first()
         )
@@ -81,36 +85,26 @@ class ImportProjectFromGitlabAPI(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        token = (integration.secret or "").strip()
-        base_url = ((integration.config or {}).get("base_url") or "https://gitlab.com").strip()
-
-        gl = gitlab.Gitlab(base_url, private_token=token)
-
+        # Fetch project metadata via Celery worker (has Docker socket for VPN sidecar).
         try:
-            proj = gl.projects.get(project_id)
-        except gitlab.exceptions.GitlabGetError as exc:
-            if exc.response_code == 404:
+            proj_data = fetch_gitlab_project_info.delay(integration.pk, project_id).get(timeout=60)
+        except Exception:
+            return Response({"detail": "GitLab fetch timed out or failed."}, status=status.HTTP_502_BAD_GATEWAY)
+
+        if not proj_data.get("ok"):
+            if proj_data.get("response_code") == 404:
                 return Response({"detail": "GitLab project not found"}, status=status.HTTP_404_NOT_FOUND)
-            msg = f"GitLab API error: {exc}"
-            return Response({"detail": msg}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({"detail": proj_data.get("error", "GitLab API error")}, status=status.HTTP_502_BAD_GATEWAY)
 
         # path_with_namespace like "group/subgroup/name"
-        path_with_ns = getattr(proj, "path_with_namespace", None) or ""
+        path_with_ns = proj_data["path_with_namespace"]
         if "/" not in path_with_ns:
             return Response({"detail": "Unexpected path_with_namespace"}, status=status.HTTP_400_BAD_REQUEST)
 
         owner_ns, repo_name = path_with_ns.rsplit("/", 1)
-        description = getattr(proj, "description", None) or "Empty description. Admin, fix me"
-        web_url = (getattr(proj, "web_url", None) or base_url).rstrip("/")
-        # base host like https://gitlab.com or self-hosted origin
-        inferred_base = web_url.split("/" + path_with_ns)[0]
-
-        # 2) Fetch languages (dict {lang: percent})
-        try:
-            langs_raw = proj.languages() or {}
-        except gitlab.exceptions.GitlabGetError as exc:
-            msg = f"GitLab API error: {exc}"
-            return Response({"detail": msg}, status=status.HTTP_502_BAD_GATEWAY)
+        description = proj_data["description"] or "Empty description. Admin, fix me"
+        inferred_base = proj_data["inferred_base"]
+        langs_raw = proj_data["langs_raw"]
 
         cfg = _load_analyzers_config()
         if not cfg:
@@ -127,10 +121,7 @@ class ImportProjectFromGitlabAPI(APIView):
         if not created_product:
             user_has_permission_or_403(request.user, product, Permissions.Product_Edit)
             if product.prod_type_id != product_type.id:
-                msg = (
-                    "Product already exists under another product type. "
-                    "Move it first or choose another organization."
-                )
+                msg = "Product already exists under another product type. Move it first or choose another organization."
                 return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)
 
         DojoMeta.objects.update_or_create(
@@ -174,11 +165,13 @@ class ImportProjectFromGitlabAPI(APIView):
                     aist_project.organization = organization
                     aist_project.save(update_fields=["organization"])
 
-        out = ImportGitlabResponseSerializer({
-            "product_id": product.id,
-            "product_name": product.name,
-            "aist_project_id": aist_project.id,
-            "repository_id": repo_info.id,
-            "repo_full": f"{owner_ns}/{repo_name}",
-        })
+        out = ImportGitlabResponseSerializer(
+            {
+                "product_id": product.id,
+                "product_name": product.name,
+                "aist_project_id": aist_project.id,
+                "repository_id": repo_info.id,
+                "repo_full": f"{owner_ns}/{repo_name}",
+            },
+        )
         return Response(out.data, status=status.HTTP_201_CREATED)

@@ -871,6 +871,7 @@ class VpnProjectOverrideTests(AISTApiBase):
 
 
 class VpnOrgIsolationAPITests(AISTApiBase):
+
     """
     H-3: vpn_integration FK must always be validated against the target integration's org.
     The validator must reject cross-org VPN links unconditionally.
@@ -954,6 +955,7 @@ class VpnOrgIsolationAPITests(AISTApiBase):
 
 
 class ResolverCrossOrgDefenseTests(AISTApiBase):
+
     """
     M-2: resolve_integration must log and ignore cross-org overrides even if they
     somehow exist in the DB, and fall back to the org default.
@@ -1003,6 +1005,7 @@ class ResolverCrossOrgDefenseTests(AISTApiBase):
 
 
 class ValidateStatusTaskBindingTests(AISTApiBase):
+
     """
     M-4: validate status endpoint must verify task_id → integration_id binding
     in FAILURE state, just as it does in SUCCESS state.
@@ -1063,3 +1066,189 @@ class ValidateStatusTaskBindingTests(AISTApiBase):
             resp = self.client.get(self._status_url(self.my_integration.pk, "task-exc"))
         self.assertEqual(resp.data["state"], "PENDING")
         self.assertIsNone(resp.data["valid"])
+
+
+# ---------------------------------------------------------------------------
+# WorkItemProvider validate — async + VPN routing
+# ---------------------------------------------------------------------------
+
+class WorkItemProviderValidateAPITests(AISTApiBase):
+
+    """
+    POST /work-item-providers/<id>/validate/ must return 202 + task_id.
+    GET  /work-item-providers/<id>/validate/<task_id>/ must poll result with
+    provider_id binding to prevent cross-task disclosure.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from dojo.models import Product_Type  # noqa: PLC0415
+
+        from aist.models import Organization, WorkItemProvider  # noqa: PLC0415
+
+        self.org_pt = Product_Type.objects.create(name="WIP Validate PT")
+        self.org = Organization.objects.create(name="WIP Validate Org", product_type=self.org_pt)
+        from dojo.models import Product_Type_Member  # noqa: PLC0415
+        Product_Type_Member.objects.create(
+            product_type=self.org_pt, user=self.user, role=self.role_maintainer,
+        )
+        self.provider = WorkItemProvider.objects.create(
+            organization=self.org,
+            provider_type="JIRA",
+            name="Test Jira",
+            base_url="https://jira.example.com",
+        )
+
+    def _validate_url(self, provider_id: int) -> str:
+        return reverse("aist_api:work_item_provider_validate", kwargs={"provider_id": provider_id})
+
+    def _status_url(self, provider_id: int, task_id: str) -> str:
+        return reverse(
+            "aist_api:work_item_provider_validate_status",
+            kwargs={"provider_id": provider_id, "task_id": task_id},
+        )
+
+    @patch("aist.tasks.validate.validate_work_item_provider.delay")
+    def test_post_returns_202_with_task_id(self, mock_delay):
+        mock_delay.return_value = MagicMock(id="test-task-id")
+        resp = self.client.post(self._validate_url(self.provider.pk))
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(resp.data["task_id"], "test-task-id")
+        mock_delay.assert_called_once_with(self.provider.pk)
+
+    def test_status_success_matching_provider_id(self):
+        fake_ar = MagicMock()
+        fake_ar.state = "SUCCESS"
+        fake_ar.result = {"valid": True, "detail": "", "_provider_id": self.provider.pk}
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(self._status_url(self.provider.pk, "task-ok"))
+        self.assertEqual(resp.data["state"], "SUCCESS")
+        self.assertTrue(resp.data["valid"])
+
+    def test_status_success_wrong_provider_id_returns_pending(self):
+        """A task_id belonging to a different provider must not reveal its result."""
+        fake_ar = MagicMock()
+        fake_ar.state = "SUCCESS"
+        fake_ar.result = {"valid": False, "detail": "bad creds", "_provider_id": 999999}
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(self._status_url(self.provider.pk, "task-other"))
+        self.assertEqual(resp.data["state"], "PENDING")
+        self.assertIsNone(resp.data["valid"])
+
+    def test_status_failure_matching_provider_id(self):
+        fake_ar = MagicMock()
+        fake_ar.state = "FAILURE"
+        fake_ar.result = {"_provider_id": self.provider.pk}
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(self._status_url(self.provider.pk, "task-fail"))
+        self.assertEqual(resp.data["state"], "FAILURE")
+        self.assertFalse(resp.data["valid"])
+
+    def test_status_failure_wrong_provider_id_returns_pending(self):
+        fake_ar = MagicMock()
+        fake_ar.state = "FAILURE"
+        fake_ar.result = {"_provider_id": 999999}
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(self._status_url(self.provider.pk, "task-other-fail"))
+        self.assertEqual(resp.data["state"], "PENDING")
+        self.assertIsNone(resp.data["valid"])
+
+    def test_status_pending(self):
+        fake_ar = MagicMock()
+        fake_ar.state = "PENDING"
+        fake_ar.result = None
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(self._status_url(self.provider.pk, "task-pending"))
+        self.assertEqual(resp.data["state"], "PENDING")
+        self.assertIsNone(resp.data["valid"])
+
+
+class ValidateWorkItemProviderHelperTests(AISTApiBase):
+
+    """
+    _validate_work_item_provider helper: VPN sidecar started when vpn_integration
+    is configured; sanitized error on exception; NotImplementedError handled cleanly.
+    """
+
+    def _make_provider(self, vpn_integration=None):
+        from types import SimpleNamespace  # noqa: PLC0415
+        return SimpleNamespace(
+            pk=42,
+            provider_type="JIRA",
+            vpn_integration=vpn_integration,
+        )
+
+    @patch("aist.work_items.backends.registry.get_backend")
+    def test_no_vpn_backend_validate_credentials_called(self, mock_get_backend):
+        """When no VPN is configured, validate_credentials() is called via scoped_context."""
+        from contextlib import contextmanager  # noqa: PLC0415
+        mock_backend = MagicMock()
+        mock_backend.validate_credentials.return_value = True
+
+        @contextmanager
+        def _scoped_ctx(execution_id):
+            mock_backend.proxy_url = None
+            yield mock_backend
+
+        mock_backend.scoped_context.side_effect = _scoped_ctx
+        mock_get_backend.return_value = mock_backend
+
+        from aist.api.work_items import _validate_work_item_provider  # noqa: PLC0415
+        valid, detail = _validate_work_item_provider(self._make_provider())
+        self.assertTrue(valid)
+        self.assertEqual(detail, "")
+        mock_backend.validate_credentials.assert_called_once()
+        # get_backend must NOT receive proxy_url — proxy is set via scoped_context
+        _, kwargs = mock_get_backend.call_args
+        self.assertNotIn("proxy_url", kwargs)
+
+    @patch("aist.work_items.backends.registry.get_backend")
+    def test_vpn_proxy_url_set_on_backend_via_scoped_context(self, mock_get_backend):
+        """When VPN is configured, scoped_context sets proxy_url on the backend."""
+        from contextlib import contextmanager  # noqa: PLC0415
+        mock_backend = MagicMock()
+        mock_backend.validate_credentials.return_value = True
+
+        @contextmanager
+        def _scoped_ctx(execution_id):
+            mock_backend.proxy_url = "http://172.19.0.11:1080"
+            yield mock_backend
+
+        mock_backend.scoped_context.side_effect = _scoped_ctx
+        mock_get_backend.return_value = mock_backend
+
+        from aist.api.work_items import _validate_work_item_provider  # noqa: PLC0415
+        valid, _ = _validate_work_item_provider(self._make_provider())
+        self.assertTrue(valid)
+        mock_backend.validate_credentials.assert_called_once()
+
+    @patch("aist.work_items.backends.registry.get_backend")
+    def test_not_implemented_error_returns_false_with_message(self, mock_get_backend):
+        mock_get_backend.side_effect = NotImplementedError
+
+        from aist.api.work_items import _validate_work_item_provider  # noqa: PLC0415
+        valid, detail = _validate_work_item_provider(self._make_provider())
+        self.assertFalse(valid)
+        self.assertIn("not support", detail)
+
+    @patch("aist.work_items.backends.registry.get_backend")
+    def test_generic_exception_returns_sanitized_message(self, mock_get_backend):
+        """Exceptions must not leak raw exception details to the caller."""
+        from contextlib import contextmanager  # noqa: PLC0415
+        mock_backend = MagicMock()
+        mock_backend.validate_credentials.side_effect = RuntimeError("connection refused to 10.0.0.1")
+
+        @contextmanager
+        def _scoped_ctx(execution_id):
+            mock_backend.proxy_url = None
+            yield mock_backend
+
+        mock_backend.scoped_context.side_effect = _scoped_ctx
+        mock_get_backend.return_value = mock_backend
+
+        from aist.api.work_items import _validate_work_item_provider  # noqa: PLC0415
+        valid, detail = _validate_work_item_provider(self._make_provider())
+        self.assertFalse(valid)
+        # Must NOT expose raw exception message with internal IP
+        self.assertNotIn("10.0.0.1", detail)
+        self.assertIn("see server logs", detail)

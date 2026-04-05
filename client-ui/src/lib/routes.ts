@@ -7,6 +7,7 @@ type RouteMap = {
   work_item_link_detail_url: string;
   work_item_provider_detail_url: string;
   work_item_provider_validate_url: string;
+  work_item_provider_validate_status_url: string;
   work_item_provider_sync_url: string;
   ui_dashboard_path: string;
   logout_url: string;
