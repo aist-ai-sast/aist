@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import re
+import subprocess
 
+import requests as _requests
 from django.shortcuts import get_object_or_404
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
@@ -12,12 +15,16 @@ from rest_framework.views import APIView
 
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.integrations.resolver import ResolvedIntegration
 from aist.models import OrgIntegration, OrgIntegrationVPNSecret, OrgIntegrationType, ProjectIntegrationOverride
 from aist.queries import (
     get_authorized_aist_organizations,
     get_authorized_aist_projects,
     get_authorized_org_integrations,
 )
+from aist.utils.vpn import vpn_sidecar_context
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # OVPN helpers
@@ -25,11 +32,12 @@ from aist.queries import (
 
 # Maps OpenVPN XML-like tag names to VPNSecret model field names.
 _OVPN_TAG_TO_FIELD: dict[str, str] = {
-    "ca": "ca_cert",
-    "cert": "client_cert",
-    "key": "client_key",
-    "tls-auth": "tls_auth_key",
-    "tls-crypt": "tls_auth_key",  # tls-crypt uses same storage field
+    "ca":           "ca_cert",
+    "cert":         "client_cert",
+    "key":          "client_key",
+    "tls-auth":     "tls_auth_key",
+    "tls-crypt":    "tls_auth_key",     # tls-crypt uses same storage field
+    "tls-crypt-v2": "tls_auth_key",     # OpenVPN 2.5+ per-client wrapped keys
 }
 
 
@@ -43,13 +51,13 @@ def _split_ovpn_pem_blocks(ovpn_content: str) -> tuple[str, dict[str, str]]:
     - ``extracted`` — dict mapping model field names to the block content,
       e.g. ``{"ca_cert": "...", "client_key": "..."}``
 
-    Also sets ``extracted["tls_key_type"]`` to "tls-crypt" or "tls-auth"
+    Also sets ``extracted["tls_key_type"]`` to "tls-crypt", "tls-crypt-v2", or "tls-auth"
     so the entrypoint can reconstruct the correct block tag.  The distinction
     matters: ``tls-crypt`` and ``tls-auth`` are different OpenVPN protocols and
     the server will silently drop packets if the wrong one is used.
 
-    When multiple tags map to the same field (tls-auth / tls-crypt) the last
-    matched value wins, but in practice a valid .ovpn has only one of them.
+    When multiple tags map to the same field (tls-auth / tls-crypt / tls-crypt-v2)
+    the last matched value wins, but in practice a valid .ovpn has only one of them.
     """
     extracted: dict[str, str] = {}
     cleaned = ovpn_content
@@ -63,11 +71,11 @@ def _split_ovpn_pem_blocks(ovpn_content: str) -> tuple[str, dict[str, str]]:
             extracted[field] = match.group(1).strip()
             if field == "tls_auth_key":
                 # Record which tag was used so the sidecar entrypoint can
-                # reconstruct <tls-auth> vs <tls-crypt> correctly.
-                extracted["tls_key_type"] = tag  # "tls-auth" or "tls-crypt"
-                if tag == "tls-crypt":
-                    # tls-crypt does not use key-direction; remove it so the
-                    # entrypoint does not need to strip it from the base config.
+                # reconstruct <tls-auth> vs <tls-crypt> vs <tls-crypt-v2> correctly.
+                extracted["tls_key_type"] = tag
+                if tag != "tls-auth":
+                    # tls-crypt and tls-crypt-v2 do not use key-direction; remove it
+                    # so the entrypoint does not need to strip it from the base config.
                     cleaned = re.sub(r"\nkey-direction\s+\d+", "", cleaned)
             cleaned = pattern.sub("", cleaned)
     # Collapse runs of blank lines left after block removal
@@ -238,7 +246,13 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             organization_id = instance.organization_id
         else:
             organization_id = self.initial_data.get("organization")
-        if organization_id and str(value.organization_id) != str(organization_id):
+        # Unconditional check — raise even if organization_id is None/empty so that
+        # a missing context never silently allows cross-org VPN linkage.
+        if not organization_id:
+            raise serializers.ValidationError(
+                "Cannot determine organization context; VPN integration cannot be validated."
+            )
+        if str(value.organization_id) != str(organization_id):
             raise serializers.ValidationError(
                 "VPN integration must belong to the same organization."
             )
@@ -473,7 +487,13 @@ class OrgIntegrationValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
                 return Response({"state": "PENDING", "valid": None, "detail": ""})
             return Response({"state": "SUCCESS", "valid": result["valid"], "detail": result["detail"]})
         if ar.state == "FAILURE":
-            return Response({"state": "FAILURE", "valid": False, "detail": str(ar.result)})
+            # Verify task ownership before returning any error details to the caller.
+            # ar.result for FAILURE is the meta dict set in validate_integration task.
+            meta = ar.result if isinstance(ar.result, dict) else {}
+            if meta.get("_integration_id") != integration_id:
+                return Response({"state": "PENDING", "valid": None, "detail": ""})
+            return Response({"state": "FAILURE", "valid": False,
+                             "detail": "Validation failed — see server logs."})
         return Response({"state": ar.state, "valid": None, "detail": ""})
 
 
@@ -491,9 +511,6 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
             kwargs: dict = {"private_token": secret or None}
             vpn = getattr(integration, "vpn_integration", None)
             if vpn and vpn.is_active:
-                import requests as _requests  # noqa: PLC0415
-                from aist.integrations.resolver import ResolvedIntegration  # noqa: PLC0415
-                from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
                 vpn_resolved = ResolvedIntegration(integration=vpn, config=dict(vpn.config or {}))
                 with vpn_sidecar_context(vpn_resolved, execution_id=f"validate-{integration.pk}") as (_, proxy_url):
                     if proxy_url:
@@ -506,7 +523,8 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
                 gl = gitlab.Gitlab(base_url, **kwargs)
                 gl.auth()
         except Exception as exc:
-            return False, str(exc)
+            logger.exception("Integration[%s] GITLAB validation error", integration.pk)
+            return False, f"Validation failed ({type(exc).__name__}) — see server logs."
         else:
             return True, ""
 
@@ -517,7 +535,8 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
             mgr = AISTSlackNotificationManager()
             ok = mgr.test_token(secret)
         except Exception as exc:
-            return False, str(exc)
+            logger.exception("Integration[%s] SLACK validation error", integration.pk)
+            return False, f"Validation failed ({type(exc).__name__}) — see server logs."
         else:
             return ok, "" if ok else "Slack auth failed"
 
@@ -577,8 +596,9 @@ def _validate_vpn_integration(integration: OrgIntegration) -> tuple[bool, str]:
         return False, f"{ping_target} unreachable (ping returned {result.returncode})."
     except subprocess.TimeoutExpired:
         return False, f"Ping to {ping_target} timed out."
-    except Exception as exc:  # noqa: BLE001
-        return False, str(exc)
+    except Exception as exc:
+        logger.exception("VPN reachability check failed for %s", ping_target)
+        return False, f"Reachability check failed ({type(exc).__name__}) — see server logs."
 
 
 # ---------------------------------------------------------------------------

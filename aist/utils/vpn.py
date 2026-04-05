@@ -2,7 +2,7 @@
 VPN sidecar lifecycle management.
 
 vpn_sidecar_context() starts a per-execution Docker container that runs OpenVPN
-and a SOCKS5 proxy (microsocks on :1080).  It yields two values needed by callers:
+and an HTTP CONNECT proxy (tinyproxy on :1080).  It yields two values needed by callers:
 
   container_name  — pass to ``docker run --network container:<name>``
                     so the builder container shares the VPN tunnel transparently.
@@ -14,12 +14,12 @@ and a SOCKS5 proxy (microsocks on :1080).  It yields two values needed by caller
 Both values are None when no VPN integration is configured for the project/provider.
 
 Security notes:
-- Credentials are decrypted in Celery worker memory and passed directly to
-  ``docker run -e``; they are never written to disk on the host.
-- The SOCKS5 port is bound to 127.0.0.1 only (not accessible from other machines).
-- When running inside Docker (Celery worker), callers reach the SOCKS5 port via
-  `host.docker.internal` (Docker Desktop) or with `extra_hosts: host.docker.internal:host-gateway`
-  on Linux.
+- Credentials are decrypted in Celery worker memory and passed via ``docker run -e``.
+  Anyone with Docker socket access can read them via ``docker inspect``.
+  The Docker socket must be treated as a high-privilege boundary.
+- tinyproxy listens on the sidecar's eth0 interface only (not on tun0), so the
+  corporate-VPN side cannot reach the proxy.  Connections are restricted to
+  AIST_ALLOWED_IP (the celeryworker's eth0 IP) and 127.0.0.1.
 - The sidecar container is stopped and removed on context exit, even on exception.
 - The container name embeds the execution_id so cleanup_pipeline_containers()
   automatically covers it for pipeline-level cleanup.
@@ -29,12 +29,13 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import socket
 import subprocess
 import time
-from pathlib import Path
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Generator
 
 if TYPE_CHECKING:
@@ -42,7 +43,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TUN_WAIT_SECS = 35  # tun0 timeout (30 s in sidecar) + 5 s buffer for microsocks startup
+_TUN_WAIT_SECS = 35  # tun0 timeout (30 s in sidecar) + 5 s buffer for tinyproxy startup
+
+# Lines in docker logs output that may expose client DNS server IPs or search domains.
+_REDACT_LOG_PREFIXES = ("[VPN] DNS configured", "nameserver ", "search ")
 
 
 def _get_vpn_sidecar_image() -> str:
@@ -81,11 +85,18 @@ def _build_vpn_sidecar_if_needed(image: str) -> None:
     subprocess.run(
         ["docker", "build", "-t", image, dockerfile_dir],
         check=True,
+        timeout=300,  # 5-minute cap; a hung build would block the Celery worker indefinitely
     )
 
 
 def _find_free_port() -> int:
-    """Ask the OS for a free TCP port on localhost, then release it."""
+    """Ask the OS for a free TCP port on localhost, then release it.
+
+    Note: there is a TOCTOU race between releasing the socket here and Docker
+    binding to it.  This race is only active in the rarely-triggered fallback
+    path (when the primary named-network path cannot be used).  It is accepted
+    as a known limitation of the fallback.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
@@ -99,11 +110,11 @@ def _running_in_docker() -> bool:
 def _get_own_docker_network() -> str | None:
     """Return the first named Docker network this container is attached to.
 
-    Used to start the VPN sidecar on the same network so its SOCKS5 port is
-    reachable by container name — without publishing a host port.  This avoids
-    the Linux issue where ``-p 127.0.0.1:{port}:1080`` is NOT reachable via
-    ``host.docker.internal`` (unlike Docker Desktop on macOS which works around
-    this in its VM layer).
+    Used to start the VPN sidecar on the same network so its HTTP CONNECT proxy
+    port is reachable by container name — without publishing a host port.  This
+    avoids the Linux issue where ``-p 127.0.0.1:{port}:1080`` is NOT reachable
+    via ``host.docker.internal`` (unlike Docker Desktop on macOS which works
+    around this in its VM layer).
 
     Reads the container ID from ``/etc/hostname`` and inspects it via Docker
     socket (available in celeryworker via ``/var/run/docker.sock`` bind-mount).
@@ -127,6 +138,53 @@ def _get_own_docker_network() -> str | None:
         return None
 
 
+def _get_own_eth0_ip() -> str | None:
+    """Return this container's primary IP address (the one used for inter-container traffic).
+
+    Used to pass AIST_ALLOWED_IP to the sidecar so tinyproxy can restrict
+    Allow to the celeryworker's IP only.
+
+    Strategy (in order):
+    1. Python socket — gethostbyname(gethostname()) — always available, no external command.
+    2. ``ip -4 addr show eth0`` — more precise but requires iproute2 tools.
+    3. ``hostname -i`` — fallback when ip is unavailable (minimal container images).
+    Returns None if running outside a container or all methods fail.
+    """
+    # Method 1: Python socket — fastest, no subprocess, works everywhere
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        # gethostbyname may return 127.0.0.1 on some configurations — skip loopback
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+
+    # Method 2: ip command (iproute2 — not always installed in minimal images)
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show", "eth0"],
+            capture_output=True, text=True,
+        )
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("inet "):
+                # "inet 172.20.0.5/16 brd ..."
+                return line.split()[1].split("/")[0]
+    except Exception:
+        pass
+
+    # Method 3: hostname -i (busybox / minimal Debian)
+    try:
+        result = subprocess.run(["hostname", "-i"], capture_output=True, text=True)
+        ip = result.stdout.strip().split()[0]
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+
+    return None
+
+
 def _b64(value: str) -> str:
     """Base64-encode a string so it can be safely passed as a ``docker run -e`` value.
 
@@ -136,6 +194,24 @@ def _b64(value: str) -> str:
     line.  The VPN sidecar entrypoint decodes them with ``base64 -d``.
     """
     return base64.b64encode(value.encode()).decode()
+
+
+def _extract_key_direction(ovpn_content: str) -> str:
+    """Extract key-direction value from .ovpn config body.
+
+    Returns the value found in the config ("0" or "1"), or "1" as the default
+    (standard OpenVPN client convention).  Only "0" and "1" are valid; any other
+    value or absence defaults to "1".
+
+    This is not secret — it is passed as AIST_VPN_TLS_KEY_DIRECTION to the
+    entrypoint, which uses it when appending <tls-auth> blocks so the value
+    matches what the server expects instead of always hardcoding "1".
+    """
+    for line in ovpn_content.splitlines():
+        parts = line.strip().split()
+        if len(parts) == 2 and parts[0] == "key-direction" and parts[1] in ("0", "1"):
+            return parts[1]
+    return "1"
 
 
 def _assemble_env(vpn_secret) -> dict[str, str]:
@@ -148,6 +224,9 @@ def _assemble_env(vpn_secret) -> dict[str, str]:
 
     The VPN sidecar entrypoint (entrypoint.sh) decodes the base64 fields with
     ``base64 -d`` before writing them to disk.
+
+    Non-secret metadata (tls_key_type, tls_key_direction) are added separately
+    in vpn_sidecar_context alongside AIST_ALLOWED_IP.
     """
     return {k: v for k, v in {
         "AIST_VPN_OVPN_CONTENT": _b64(vpn_secret.ovpn_content) if vpn_secret.ovpn_content else "",
@@ -155,19 +234,46 @@ def _assemble_env(vpn_secret) -> dict[str, str]:
         "AIST_VPN_CLIENT_CERT":  _b64(vpn_secret.client_cert)   if vpn_secret.client_cert   else "",
         "AIST_VPN_CLIENT_KEY":   _b64(vpn_secret.client_key)    if vpn_secret.client_key    else "",
         "AIST_VPN_TLS_AUTH_KEY": _b64(vpn_secret.tls_auth_key)  if vpn_secret.tls_auth_key  else "",
-        # Pass the tls key type so the entrypoint uses the correct block tag
-        # ("tls-auth" vs "tls-crypt" — different OpenVPN protocols, not interchangeable).
-        "AIST_VPN_TLS_KEY_TYPE": getattr(vpn_secret, "tls_key_type", "tls-auth") or "tls-auth",
         "AIST_VPN_USERNAME":     vpn_secret.vpn_username,
         "AIST_VPN_PASSWORD":     vpn_secret.vpn_password,
     }.items() if v}
 
 
+def _redact_vpn_log(raw: str) -> str:
+    """Remove lines that may expose client DNS server IPs or internal search domains."""
+    lines = []
+    for line in raw.splitlines():
+        if any(line.lstrip().startswith(p) for p in _REDACT_LOG_PREFIXES):
+            lines.append("[VPN] <DNS config redacted>")
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _parse_docker_created_at(raw: str) -> datetime | None:
+    """Parse Docker's CreatedAt string to an aware UTC datetime.
+
+    Docker ps ``--format "{{json .}}"`` format: "2026-04-02 10:05:33 +0000 UTC"
+    The original code used ``[:19]`` and appended UTC, silently ignoring the
+    timezone offset.  On a Docker host with a non-UTC timezone (e.g. +0200 CEST)
+    this caused containers to appear N hours older or newer than actual, leading
+    to incorrect orphan cleanup decisions.
+    """
+    m = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([+-])(\d{2})(\d{2})", raw)
+    if not m:
+        return None
+    dt_naive = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+    sign = 1 if m.group(2) == "+" else -1
+    offset = timezone(sign * timedelta(hours=int(m.group(3)), minutes=int(m.group(4))))
+    return dt_naive.replace(tzinfo=offset).astimezone(timezone.utc)
+
+
 def _wait_for_sidecar_ready(container_name: str, timeout: float = _TUN_WAIT_SECS) -> None:
     """
     Poll ``docker exec <name> ip link show tun0`` until the tunnel interface
-    appears (meaning OpenVPN is up and microsocks is starting).
+    appears (meaning OpenVPN is up and tinyproxy is starting).
     Dumps the last 50 log lines on timeout to aid diagnosis.
+    DNS-related lines are redacted to avoid leaking client network details.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -176,7 +282,7 @@ def _wait_for_sidecar_ready(container_name: str, timeout: float = _TUN_WAIT_SECS
             capture_output=True,
         )
         if result.returncode == 0:
-            # Give microsocks a moment to bind after openvpn comes up
+            # Give tinyproxy a moment to bind after openvpn comes up
             time.sleep(0.5)
             return
         time.sleep(1.0)
@@ -187,7 +293,7 @@ def _wait_for_sidecar_ready(container_name: str, timeout: float = _TUN_WAIT_SECS
     )
     logger.error(
         "sidecar=%s did not become ready within %ss. logs:\n%s",
-        container_name, timeout, logs.stdout + logs.stderr,
+        container_name, timeout, _redact_vpn_log(logs.stdout + logs.stderr),
     )
     raise RuntimeError(
         f"VPN sidecar {container_name!r} did not become ready within {timeout:.0f}s"
@@ -195,8 +301,12 @@ def _wait_for_sidecar_ready(container_name: str, timeout: float = _TUN_WAIT_SECS
 
 
 def _stop_sidecar(container_name: str) -> None:
-    subprocess.run(["docker", "stop", "--time", "5", container_name], capture_output=True)
-    subprocess.run(["docker", "rm", "--force", container_name], capture_output=True)
+    r = subprocess.run(["docker", "stop", "--time", "5", container_name], capture_output=True)
+    if r.returncode != 0:
+        logger.warning("vpn: docker stop failed rc=%d name=%s", r.returncode, container_name)
+    r = subprocess.run(["docker", "rm", "--force", container_name], capture_output=True)
+    if r.returncode != 0:
+        logger.warning("vpn: docker rm failed rc=%d name=%s", r.returncode, container_name)
 
 
 @contextmanager
@@ -206,12 +316,12 @@ def vpn_sidecar_context(
     execution_id: str,
 ) -> Generator[tuple[str | None, str | None], None, None]:
     """
-    Start a VPN sidecar container and yield ``(container_name, socks5_proxy_url)``.
+    Start a VPN sidecar container and yield ``(container_name, proxy_url)``.
 
-    ``container_name``    — use as ``--network container:<name>`` for the builder
-                            container so it transparently shares the VPN tunnel.
-    ``socks5_proxy_url``  — use as ``proxies={"https": url}`` in HTTP clients
-                            (Jira, GitLab, YouTrack, etc.) for HTTP CONNECT proxy routing.
+    ``container_name``  — use as ``--network container:<name>`` for the builder
+                          container so it transparently shares the VPN tunnel.
+    ``proxy_url``       — use as ``proxies={"https": url}`` in HTTP clients
+                          (Jira, GitLab, YouTrack, etc.) for HTTP CONNECT routing.
 
     Both values are ``None`` when ``resolved`` is ``None`` (no VPN needed).
 
@@ -235,8 +345,6 @@ def vpn_sidecar_context(
     image = _get_vpn_sidecar_image()
     _build_vpn_sidecar_if_needed(image)
 
-    # The sidecar always runs on Docker's default bridge network so that it has a
-    # clean single-interface routing table and can reach the VPN server on the internet.
     cmd = [
         "docker", "run", "-d",
         "--name", container_name,
@@ -246,8 +354,8 @@ def vpn_sidecar_context(
 
     if _running_in_docker():
         # Running inside a Celery worker container.  Start the sidecar on the
-        # same Docker network so the SOCKS5 port is reachable by container name
-        # without publishing a host port.
+        # same Docker network so the HTTP CONNECT proxy port is reachable by
+        # container name without publishing a host port.
         #
         # Why NOT use -p 127.0.0.1:{port}:1080 here:
         #   On Linux Docker Engine, 127.0.0.1-bound ports are only accessible on
@@ -257,7 +365,7 @@ def vpn_sidecar_context(
         #   shim, but production Linux deployments fail silently with ECONNREFUSED.
         #
         # By sharing the same named network, Docker DNS resolves {container_name}
-        # directly to the sidecar's eth0 IP, and microsocks listens on :1080 there.
+        # directly to the sidecar's eth0 IP, and tinyproxy listens on :1080 there.
         own_network = _get_own_docker_network()
         if own_network:
             cmd += ["--network", own_network]
@@ -272,21 +380,51 @@ def vpn_sidecar_context(
                 "execution=%s vpn=could not detect own network, falling back to port publish port=%d",
                 execution_id, host_port,
             )
+
+        # Pass our eth0 IP to the sidecar so tinyproxy restricts Allow to us only.
+        # This prevents other containers on the shared Docker network from pivoting
+        # through the VPN tunnel.
+        own_ip = _get_own_eth0_ip()
+        if own_ip:
+            cmd += ["-e", f"AIST_ALLOWED_IP={own_ip}"]
     else:
         # Running directly on the host (local dev / tests).
         host_port = _find_free_port()
         cmd += ["-p", f"127.0.0.1:{host_port}:1080"]
         proxy_url = f"http://127.0.0.1:{host_port}"
+
+    # Non-secret metadata — single-line values, safe as env vars.
+    tls_key_type = getattr(vpn_secret, "tls_key_type", "tls-auth") or "tls-auth"
+    tls_key_dir = _extract_key_direction(vpn_secret.ovpn_content or "")
+    cmd += ["-e", f"AIST_VPN_TLS_KEY_TYPE={tls_key_type}"]
+    cmd += ["-e", f"AIST_VPN_TLS_KEY_DIRECTION={tls_key_dir}"]
+
+    # Credential env vars (base64-encoded multi-line, single-line strings).
     for k, v in env_dict.items():
         cmd += ["-e", f"{k}={v}"]
     cmd.append(image)
 
     logger.info(
-        "execution=%s vpn=starting sidecar=%s socks5=%s",
+        "execution=%s vpn=starting sidecar=%s proxy=%s",
         execution_id, container_name, proxy_url,
     )
     try:
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            # IMPORTANT: do NOT log exc or str(exc) — cmd contains -e KEY=VALUE
+            # credentials.  Log only rc and stderr (which has no credential values).
+            logger.error(
+                "execution=%s vpn=docker_run_failed rc=%d stderr=%s",
+                execution_id,
+                exc.returncode,
+                (exc.stderr or "")[:300],
+            )
+            raise RuntimeError(
+                f"VPN sidecar failed to start for execution {execution_id!r} "
+                f"(docker rc={exc.returncode})"
+            ) from None  # drop CalledProcessError chain — it carries cmd with creds
+
         _wait_for_sidecar_ready(container_name)
         logger.info("execution=%s vpn=up sidecar=%s proxy=%s", execution_id, container_name, proxy_url)
         yield container_name, proxy_url
@@ -333,12 +471,8 @@ def cleanup_orphaned_vpn_containers(max_age_minutes: int = 240) -> int:
 
         name = info.get("Names", "")
         created_at_raw = info.get("CreatedAt", "")
-        try:
-            # Docker format: "2026-04-02 10:05:33 +0000 UTC"
-            created_at = datetime.strptime(created_at_raw[:19], "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=timezone.utc
-            )
-        except ValueError:
+        created_at = _parse_docker_created_at(created_at_raw)
+        if created_at is None:
             logger.debug(
                 "cleanup_orphaned_vpn_containers: cannot parse CreatedAt=%r for %s",
                 created_at_raw, name,

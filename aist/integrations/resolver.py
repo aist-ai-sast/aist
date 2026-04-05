@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from aist.models import AISTProject, OrgIntegration, OrgIntegrationType
@@ -40,9 +43,22 @@ def resolve_integration(project: AISTProject, integration_type: OrgIntegrationTy
             return None  # explicitly disabled for this project — skip org default
         if override.org_integration and override.org_integration.is_active:
             integration = override.org_integration
-            effective_config = {**integration.config, **override.config_override}
-            return ResolvedIntegration(integration=integration, config=effective_config)
-        # override exists but no org_integration → fall through to org default
+            # SECURITY: defense-in-depth — verify org ownership even if the view already
+            # checked it.  Guards against corrupt or manually-inserted cross-org overrides
+            # that could route a project's traffic through another org's VPN credentials.
+            if integration.organization_id != project.organization_id:
+                logger.error(
+                    "resolve_integration: cross-org override detected — "
+                    "project=%s override=%s integration_org=%s project_org=%s; "
+                    "falling back to org default",
+                    project.pk, override.pk,
+                    integration.organization_id, project.organization_id,
+                )
+                # fall through to org default below
+            else:
+                effective_config = {**integration.config, **override.config_override}
+                return ResolvedIntegration(integration=integration, config=effective_config)
+        # override exists but no org_integration (or cross-org detected) → fall through to org default
 
     if project.organization_id is None:
         return None

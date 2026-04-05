@@ -868,3 +868,198 @@ class VpnProjectOverrideTests(AISTApiBase):
         result = resolve_integration(other_project, OrgIntegrationType.VPN)
         self.assertIsNotNone(result)
         self.assertEqual(result.integration.pk, self.vpn.pk)
+
+
+class VpnOrgIsolationAPITests(AISTApiBase):
+    """
+    H-3: vpn_integration FK must always be validated against the target integration's org.
+    The validator must reject cross-org VPN links unconditionally.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from dojo.models import Product_Type  # noqa: PLC0415
+
+        from aist.models import Organization  # noqa: PLC0415
+
+        self.org_pt = Product_Type.objects.create(name="VPN Iso PT")
+        self.org = Organization.objects.create(name="VPN Iso Org", product_type=self.org_pt)
+        Product_Type_Member.objects.create(
+            product_type=self.org_pt, user=self.user, role=self.role_maintainer,
+        )
+        self.project.organization = self.org
+        self.project.save(update_fields=["organization"])
+
+        # Own-org VPN
+        self.own_vpn = OrgIntegration.objects.create(
+            organization=self.org, integration_type="VPN", name="Own VPN",
+        )
+        # Own-org GitLab
+        self.gitlab = OrgIntegration.objects.create(
+            organization=self.org, integration_type="GITLAB", name="Own GitLab",
+        )
+        # Cross-org VPN (user has NO membership in this org)
+        other_pt = Product_Type.objects.create(name="Cross Org PT")
+        self.other_org = Organization.objects.create(name="Cross Org", product_type=other_pt)
+        self.cross_vpn = OrgIntegration.objects.create(
+            organization=self.other_org, integration_type="VPN", name="Cross VPN",
+        )
+
+        self.list_url = reverse("aist_api:org_integration_list_create", kwargs={"org_id": self.org.pk})
+        self.gitlab_url = reverse("aist_api:org_integration_detail",
+                                  kwargs={"integration_id": self.gitlab.pk})
+
+    def test_cross_org_vpn_link_rejected_on_create(self):
+        """Cannot link a VPN integration from another org at creation time."""
+        resp = self.client.post(self.list_url, {
+            "integration_type": "GITLAB",
+            "name": "Smuggled GitLab",
+            "config": {},
+            "vpn_integration": self.cross_vpn.pk,
+        }, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(OrgIntegration.objects.filter(name="Smuggled GitLab").exists())
+
+    def test_cross_org_vpn_link_rejected_on_patch(self):
+        """Cannot link a VPN integration from another org via PATCH."""
+        resp = self.client.patch(self.gitlab_url, {"vpn_integration": self.cross_vpn.pk}, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.gitlab.refresh_from_db()
+        self.assertIsNone(self.gitlab.vpn_integration_id)
+
+    def test_same_org_vpn_link_accepted_on_create(self):
+        """Linking an own-org VPN at creation must succeed."""
+        resp = self.client.post(self.list_url, {
+            "integration_type": "SLACK",
+            "name": "Slack With VPN",
+            "config": {},
+            "vpn_integration": self.own_vpn.pk,
+        }, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["vpn_integration"], self.own_vpn.pk)
+
+    def test_same_org_vpn_link_accepted_on_patch(self):
+        """Linking an own-org VPN via PATCH must succeed."""
+        resp = self.client.patch(self.gitlab_url, {"vpn_integration": self.own_vpn.pk}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["vpn_integration"], self.own_vpn.pk)
+
+    def test_null_vpn_integration_always_accepted(self):
+        """Setting vpn_integration=null must always be allowed (removes the link)."""
+        self.gitlab.vpn_integration = self.own_vpn
+        self.gitlab.save(update_fields=["vpn_integration"])
+        resp = self.client.patch(self.gitlab_url, {"vpn_integration": None}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.data["vpn_integration"])
+
+
+class ResolverCrossOrgDefenseTests(AISTApiBase):
+    """
+    M-2: resolve_integration must log and ignore cross-org overrides even if they
+    somehow exist in the DB, and fall back to the org default.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from dojo.models import Product_Type  # noqa: PLC0415
+
+        from aist.models import Organization  # noqa: PLC0415
+
+        self.org_pt = Product_Type.objects.create(name="Resolver Sec PT")
+        self.org = Organization.objects.create(name="Resolver Sec Org", product_type=self.org_pt)
+        self.project.organization = self.org
+        self.project.save(update_fields=["organization"])
+
+        # Legitimate org-level VPN
+        self.org_vpn = OrgIntegration.objects.create(
+            organization=self.org, integration_type="VPN", name="Org VPN", is_active=True,
+        )
+        # Cross-org VPN (different org)
+        other_pt = Product_Type.objects.create(name="CrossOrg PT Res")
+        self.other_org = Organization.objects.create(name="CrossOrg Res", product_type=other_pt)
+        self.cross_vpn = OrgIntegration.objects.create(
+            organization=self.other_org, integration_type="VPN", name="Cross VPN",
+        )
+
+    def test_cross_org_override_ignored_falls_back_to_org_default(self):
+        """
+        If a ProjectIntegrationOverride somehow points to a cross-org OrgIntegration,
+        resolve_integration must log an error and return the org default instead.
+        """
+        from aist.integrations.resolver import resolve_integration  # noqa: PLC0415
+
+        # Simulate a corrupt override bypassing the view-level check
+        ProjectIntegrationOverride.objects.create(
+            project=self.project,
+            integration_type="VPN",
+            org_integration=self.cross_vpn,  # cross-org!
+        )
+
+        result = resolve_integration(self.project, OrgIntegrationType.VPN)
+        # Must NOT return the cross-org integration
+        self.assertIsNotNone(result)
+        self.assertNotEqual(result.integration.pk, self.cross_vpn.pk)
+        self.assertEqual(result.integration.pk, self.org_vpn.pk)
+
+
+class ValidateStatusTaskBindingTests(AISTApiBase):
+    """
+    M-4: validate status endpoint must verify task_id → integration_id binding
+    in FAILURE state, just as it does in SUCCESS state.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from dojo.models import Product_Type  # noqa: PLC0415
+
+        from aist.models import Organization  # noqa: PLC0415
+
+        self.org = Organization.objects.create(
+            name="Binding Test Org",
+            product_type=Product_Type.objects.create(name="Binding Test PT"),
+        )
+        Product_Type_Member.objects.create(
+            product_type=self.org.product_type, user=self.user, role=self.role_maintainer,
+        )
+        self.project.organization = self.org
+        self.project.save(update_fields=["organization"])
+
+        self.my_integration = OrgIntegration.objects.create(
+            organization=self.org, integration_type="GITHUB", name="My GitHub",
+        )
+
+    def _status_url(self, integration_id, task_id):
+        return reverse(
+            "aist_api:org_integration_validate_status",
+            kwargs={"integration_id": integration_id, "task_id": task_id},
+        )
+
+    def test_failure_with_matching_integration_id_returned(self):
+        """FAILURE result for the correct integration must be returned."""
+        fake_ar = MagicMock()
+        fake_ar.state = "FAILURE"
+        fake_ar.result = {"_integration_id": self.my_integration.pk}
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(self._status_url(self.my_integration.pk, "task-mine"))
+        self.assertEqual(resp.data["state"], "FAILURE")
+        self.assertFalse(resp.data["valid"])
+
+    def test_failure_with_wrong_integration_id_returns_pending(self):
+        """FAILURE of task_id belonging to integration 999 must not be exposed for another."""
+        fake_ar = MagicMock()
+        fake_ar.state = "FAILURE"
+        fake_ar.result = {"_integration_id": 999999}  # different integration
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(self._status_url(self.my_integration.pk, "task-other"))
+        self.assertEqual(resp.data["state"], "PENDING")
+        self.assertIsNone(resp.data["valid"])
+
+    def test_failure_with_non_dict_result_returns_pending(self):
+        """If task meta is a plain exception (old task format), treat as PENDING."""
+        fake_ar = MagicMock()
+        fake_ar.state = "FAILURE"
+        fake_ar.result = Exception("something went wrong")
+        with patch("celery.result.AsyncResult", return_value=fake_ar):
+            resp = self.client.get(self._status_url(self.my_integration.pk, "task-exc"))
+        self.assertEqual(resp.data["state"], "PENDING")
+        self.assertIsNone(resp.data["valid"])

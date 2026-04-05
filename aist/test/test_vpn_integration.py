@@ -1,12 +1,16 @@
 """
 Tests for VPN integration: OVPN PEM-block parser, serializer validation,
-and _assemble_env base64 encoding.
+_assemble_env base64 encoding, key-direction extraction, orphan cleanup,
+and vpn_sidecar_context security properties.
 """
 from __future__ import annotations
 
 import base64
+import json
+from datetime import datetime, timedelta, timezone
+from subprocess import CalledProcessError
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.urls import reverse
 from dojo.models import Product_Type, Product_Type_Member
@@ -14,7 +18,7 @@ from dojo.models import Product_Type, Product_Type_Member
 from aist.api.org_integrations import _split_ovpn_pem_blocks
 from aist.models import OrgIntegration, OrgIntegrationType, Organization
 from aist.test.test_api import AISTApiBase
-from aist.utils.vpn import _assemble_env
+from aist.utils.vpn import _assemble_env, _extract_key_direction, cleanup_orphaned_vpn_containers
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -73,6 +77,26 @@ class SplitOvpnPemBlocksTests(AISTApiBase):
         self.assertIn("tls_auth_key", extracted)
         self.assertNotIn("<tls-crypt>", cleaned)
 
+    def test_tls_crypt_v2_extracted(self):
+        """tls-crypt-v2 (OpenVPN 2.5+) must be extracted and recorded correctly."""
+        ovpn = f"client\n<tls-crypt-v2>\n{_FAKE_TLS_AUTH}\n</tls-crypt-v2>\n"
+        cleaned, extracted = _split_ovpn_pem_blocks(ovpn)
+        self.assertIn("tls_auth_key", extracted)
+        self.assertEqual(extracted.get("tls_key_type"), "tls-crypt-v2")
+        self.assertNotIn("<tls-crypt-v2>", cleaned)
+
+    def test_tls_crypt_v2_key_direction_removed_from_config(self):
+        """tls-crypt-v2 does not use key-direction; it must be removed from the cleaned config."""
+        ovpn = f"client\nkey-direction 1\n<tls-crypt-v2>\n{_FAKE_TLS_AUTH}\n</tls-crypt-v2>\n"
+        cleaned, _ = _split_ovpn_pem_blocks(ovpn)
+        self.assertNotIn("key-direction", cleaned)
+
+    def test_key_direction_preserved_in_extracted_when_tls_auth(self):
+        """key-direction found in the config body is captured in extracted dict."""
+        ovpn = f"client\nkey-direction 0\n<tls-auth>\n{_FAKE_TLS_AUTH}\n</tls-auth>\n"
+        _, extracted = _split_ovpn_pem_blocks(ovpn)
+        self.assertEqual(extracted.get("tls_key_direction"), "0")
+
     def test_config_directives_preserved(self):
         ovpn = f"client\nremote vpn.example.com 1194\n<ca>\n{_FAKE_CA}\n</ca>\n"
         cleaned, _ = _split_ovpn_pem_blocks(ovpn)
@@ -89,16 +113,39 @@ class SplitOvpnPemBlocksTests(AISTApiBase):
         self.assertIn("ca_cert", extracted)
         self.assertIn("client_cert", extracted)
         self.assertIn("client_key", extracted)
-        # cleaned config should have no PEM tags
         for tag in ("<ca>", "<cert>", "<key>"):
             self.assertNotIn(tag, cleaned)
-        # but connection directives remain
         self.assertIn("remote vpn.example.com 1194", cleaned)
 
     def test_excessive_blank_lines_collapsed(self):
         ovpn = f"client\n\n\n\n<ca>\n{_FAKE_CA}\n</ca>\n\n\n"
         cleaned, _ = _split_ovpn_pem_blocks(ovpn)
         self.assertNotIn("\n\n\n", cleaned)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _extract_key_direction
+# ---------------------------------------------------------------------------
+
+class KeyDirectionExtractionTests(AISTApiBase):
+
+    def test_extracts_key_direction_0(self):
+        ovpn = "client\nkey-direction 0\nremote vpn.example.com 1194\n"
+        self.assertEqual(_extract_key_direction(ovpn), "0")
+
+    def test_extracts_key_direction_1(self):
+        ovpn = "client\nkey-direction 1\nremote vpn.example.com 1194\n"
+        self.assertEqual(_extract_key_direction(ovpn), "1")
+
+    def test_defaults_to_1_when_absent(self):
+        self.assertEqual(_extract_key_direction("client\nremote vpn.example.com 1194\n"), "1")
+
+    def test_ignores_invalid_value(self):
+        """Values other than 0/1 are not valid; function must default to '1'."""
+        self.assertEqual(_extract_key_direction("client\nkey-direction 5\n"), "1")
+
+    def test_empty_string_returns_1(self):
+        self.assertEqual(_extract_key_direction(""), "1")
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +207,220 @@ class AssembleEnvBase64Tests(AISTApiBase):
 
 
 # ---------------------------------------------------------------------------
+# Unit tests: _get_own_eth0_ip IP detection
+# ---------------------------------------------------------------------------
+
+class GetOwnEth0IpTests(AISTApiBase):
+    """Verify _get_own_eth0_ip falls back correctly across detection methods."""
+
+    @patch("socket.gethostbyname", return_value="172.19.0.8")
+    @patch("socket.gethostname", return_value="worker")
+    def test_socket_method_returns_non_loopback(self, _mock_name, _mock_addr):
+        from aist.utils.vpn import _get_own_eth0_ip  # noqa: PLC0415
+        self.assertEqual(_get_own_eth0_ip(), "172.19.0.8")
+
+    @patch("socket.gethostbyname", return_value="127.0.0.1")
+    @patch("socket.gethostname", return_value="worker")
+    @patch("subprocess.run")
+    def test_skips_loopback_falls_back_to_ip_command(self, mock_run, _mock_name, _mock_addr):
+        """When socket returns 127.x, fall back to 'ip' command."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="  inet 172.19.0.8/16 brd 172.19.255.255\n",
+        )
+        from aist.utils.vpn import _get_own_eth0_ip  # noqa: PLC0415
+        result = _get_own_eth0_ip()
+        self.assertEqual(result, "172.19.0.8")
+
+    @patch("socket.gethostbyname", side_effect=OSError("no name"))
+    @patch("socket.gethostname", return_value="worker")
+    @patch("subprocess.run", side_effect=FileNotFoundError("ip not found"))
+    def test_all_methods_fail_returns_none(self, _mock_run, _mock_name, _mock_addr):
+        from aist.utils.vpn import _get_own_eth0_ip  # noqa: PLC0415
+        result = _get_own_eth0_ip()
+        self.assertIsNone(result)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: vpn_sidecar_context security
+# ---------------------------------------------------------------------------
+
+class VpnSidecarContextSecurityTests(AISTApiBase):
+    """Verify that vpn_sidecar_context does not leak credentials via exceptions."""
+
+    def _make_resolved(self):
+        from aist.integrations.resolver import ResolvedIntegration  # noqa: PLC0415
+        secret = SimpleNamespace(
+            ovpn_content=_BASE_OVPN,
+            ca_cert=_FAKE_CA,
+            client_cert="",
+            client_key=_FAKE_KEY,
+            tls_auth_key="",
+            tls_key_type="tls-auth",
+            vpn_username="testuser",
+            vpn_password="hunter2",
+        )
+        integration = SimpleNamespace(vpn_secret=secret)
+        return ResolvedIntegration(integration=integration, config={})
+
+    @patch("aist.utils.vpn._build_vpn_sidecar_if_needed")
+    @patch("subprocess.run")
+    def test_docker_run_failure_raises_runtime_error_not_called_process_error(
+        self, mock_run, _mock_build,
+    ):
+        """CalledProcessError must NOT propagate — its .cmd contains credentials."""
+        mock_run.side_effect = CalledProcessError(
+            1, cmd=["docker", "run", "-e", "AIST_VPN_PASSWORD=hunter2"],
+        )
+        from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
+        resolved = self._make_resolved()
+        with self.assertRaises(RuntimeError) as ctx:
+            with vpn_sidecar_context(resolved, execution_id="sectest") as _:
+                pass  # pragma: no cover
+        # The RuntimeError message must NOT contain the credential value
+        self.assertNotIn("hunter2", str(ctx.exception))
+        self.assertNotIn("AIST_VPN_PASSWORD", str(ctx.exception))
+
+    @patch("aist.utils.vpn._build_vpn_sidecar_if_needed")
+    @patch("aist.utils.vpn._wait_for_sidecar_ready")
+    @patch("aist.utils.vpn._stop_sidecar")
+    @patch("subprocess.run")
+    def test_stop_sidecar_called_on_wait_failure(
+        self, mock_run, mock_stop, mock_wait, _mock_build,
+    ):
+        """_stop_sidecar must be called even when _wait_for_sidecar_ready raises."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_wait.side_effect = RuntimeError("tun0 timeout")
+        from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
+        resolved = self._make_resolved()
+        with self.assertRaises(RuntimeError):
+            with vpn_sidecar_context(resolved, execution_id="stoptest") as _:
+                pass  # pragma: no cover
+        mock_stop.assert_called_once()
+
+    @patch("aist.utils.vpn._build_vpn_sidecar_if_needed")
+    @patch("aist.utils.vpn._wait_for_sidecar_ready")
+    @patch("aist.utils.vpn._stop_sidecar")
+    @patch("subprocess.run")
+    def test_tls_key_type_and_direction_passed_as_env_not_credentials(
+        self, mock_run, mock_stop, _mock_wait, _mock_build,
+    ):
+        """Non-secret metadata must be in -e args; credential keys must also be present."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
+        resolved = self._make_resolved()
+        with vpn_sidecar_context(resolved, execution_id="envtest") as _:
+            pass
+        # Find the docker run call
+        run_calls = [c for c in mock_run.call_args_list if c.args and "run" in (c.args[0] or [])]
+        self.assertTrue(run_calls, "docker run was not called")
+        cmd = run_calls[0].args[0]
+        cmd_str = " ".join(str(x) for x in cmd)
+        # Non-secret metadata must be present
+        self.assertIn("AIST_VPN_TLS_KEY_TYPE", cmd_str)
+        self.assertIn("AIST_VPN_TLS_KEY_DIRECTION", cmd_str)
+        # Credentials also present (still via -e, known limitation)
+        self.assertIn("AIST_VPN_OVPN_CONTENT", cmd_str)
+
+    @patch("aist.utils.vpn._build_vpn_sidecar_if_needed")
+    @patch("aist.utils.vpn._wait_for_sidecar_ready")
+    @patch("aist.utils.vpn._stop_sidecar")
+    @patch("aist.utils.vpn._get_own_eth0_ip", return_value="172.19.0.8")
+    @patch("subprocess.run")
+    def test_allowed_ip_passed_to_sidecar_when_eth0_detected(
+        self, mock_run, _mock_ip, mock_stop, _mock_wait, _mock_build,
+    ):
+        """AIST_ALLOWED_IP must be included in docker run when own IP is detected."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
+        resolved = self._make_resolved()
+        with vpn_sidecar_context(resolved, execution_id="iptest") as _:
+            pass
+        run_calls = [c for c in mock_run.call_args_list if c.args and "run" in (c.args[0] or [])]
+        self.assertTrue(run_calls, "docker run was not called")
+        cmd = run_calls[0].args[0]
+        cmd_str = " ".join(str(x) for x in cmd)
+        self.assertIn("AIST_ALLOWED_IP=172.19.0.8", cmd_str)
+
+    @patch("aist.utils.vpn._build_vpn_sidecar_if_needed")
+    @patch("aist.utils.vpn._wait_for_sidecar_ready")
+    @patch("aist.utils.vpn._stop_sidecar")
+    @patch("aist.utils.vpn._get_own_eth0_ip", return_value=None)
+    @patch("subprocess.run")
+    def test_no_allowed_ip_when_eth0_not_detected(
+        self, mock_run, _mock_ip, mock_stop, _mock_wait, _mock_build,
+    ):
+        """AIST_ALLOWED_IP must not be added when own IP cannot be detected."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
+        resolved = self._make_resolved()
+        with vpn_sidecar_context(resolved, execution_id="noitest") as _:
+            pass
+        run_calls = [c for c in mock_run.call_args_list if c.args and "run" in (c.args[0] or [])]
+        self.assertTrue(run_calls, "docker run was not called")
+        cmd = run_calls[0].args[0]
+        cmd_str = " ".join(str(x) for x in cmd)
+        self.assertNotIn("AIST_ALLOWED_IP", cmd_str)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: orphaned container cleanup
+# ---------------------------------------------------------------------------
+
+class OrphanCleanupTests(AISTApiBase):
+
+    def _make_mock_run(self, containers: list[dict]):
+        lines = "\n".join(json.dumps(c) for c in containers)
+        return MagicMock(returncode=0, stdout=lines + "\n" if lines else "")
+
+    @patch("subprocess.run")
+    def test_removes_containers_older_than_max_age(self, mock_run):
+        old_ts = "2020-01-01 00:00:00 +0000 UTC"
+        mock_run.return_value = self._make_mock_run([
+            {"Names": "aist-vpn-old", "CreatedAt": old_ts},
+        ])
+        removed = cleanup_orphaned_vpn_containers(max_age_minutes=30)
+        self.assertEqual(removed, 1)
+
+    @patch("subprocess.run")
+    def test_skips_recent_containers(self, mock_run):
+        recent = (datetime.now(tz=timezone.utc) - timedelta(minutes=5)).strftime(
+            "%Y-%m-%d %H:%M:%S +0000 UTC"
+        )
+        mock_run.return_value = self._make_mock_run([
+            {"Names": "aist-vpn-recent", "CreatedAt": recent},
+        ])
+        removed = cleanup_orphaned_vpn_containers(max_age_minutes=30)
+        self.assertEqual(removed, 0)
+
+    @patch("subprocess.run")
+    def test_non_utc_timezone_parsed_correctly(self, mock_run):
+        """Container created 6h ago in +0200 zone must be detected as old (>30 min)."""
+        # 6 hours ago in UTC, expressed as +0200
+        base_utc = datetime.now(tz=timezone.utc) - timedelta(hours=6)
+        local_dt = base_utc.astimezone(timezone(timedelta(hours=2)))
+        ts = local_dt.strftime("%Y-%m-%d %H:%M:%S +0200 CEST")
+        mock_run.return_value = self._make_mock_run([
+            {"Names": "aist-vpn-tz", "CreatedAt": ts},
+        ])
+        removed = cleanup_orphaned_vpn_containers(max_age_minutes=30)
+        self.assertEqual(removed, 1)
+
+    @patch("subprocess.run")
+    def test_unparseable_created_at_skipped(self, mock_run):
+        mock_run.return_value = self._make_mock_run([
+            {"Names": "aist-vpn-bad", "CreatedAt": "not-a-date"},
+        ])
+        # Must not raise, must skip silently
+        removed = cleanup_orphaned_vpn_containers(max_age_minutes=30)
+        self.assertEqual(removed, 0)
+
+    @patch("subprocess.run")
+    def test_empty_output_returns_zero(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        self.assertEqual(cleanup_orphaned_vpn_containers(), 0)
+
+
+# ---------------------------------------------------------------------------
 # API / serializer tests: ovpn upload triggers PEM extraction
 # ---------------------------------------------------------------------------
 
@@ -192,11 +453,9 @@ class VpnSecretSerializerParseTests(AISTApiBase):
 
         from aist.models import OrgIntegrationVPNSecret  # noqa: PLC0415
         secret = OrgIntegrationVPNSecret.objects.get()
-        # Certs should be in separate fields
         self.assertIn("FAKECA", secret.ca_cert)
         self.assertIn("FAKECERT", secret.client_cert)
         self.assertIn("FAKEKEY", secret.client_key)
-        # ovpn_content should only have directives, no PEM tags
         self.assertNotIn("<ca>", secret.ovpn_content)
         self.assertNotIn("<cert>", secret.ovpn_content)
         self.assertNotIn("<key>", secret.ovpn_content)
@@ -219,7 +478,6 @@ class VpnSecretSerializerParseTests(AISTApiBase):
         self.assertTrue(vpn_secret_data["has_ovpn_content"])
         self.assertTrue(vpn_secret_data["has_client_cert"])
         self.assertTrue(vpn_secret_data["has_client_key"])
-        # raw values must never appear in response
         for field in ("ovpn_content", "ca_cert", "client_cert", "client_key", "tls_auth_key"):
             self.assertNotIn(field, vpn_secret_data)
 
@@ -251,3 +509,15 @@ class VpnSecretSerializerParseTests(AISTApiBase):
         }, format="json")
         self.assertEqual(resp.status_code, 201)
         self.assertNotIn("vpn_secret", resp.data)
+
+    def test_upload_ovpn_with_tls_crypt_v2(self):
+        """tls-crypt-v2 block must be extracted and tls_key_type set correctly."""
+        ovpn = _BASE_OVPN + f"<tls-crypt-v2>\n{_FAKE_TLS_AUTH}\n</tls-crypt-v2>\n"
+        resp = self._create_vpn_integration(ovpn)
+        self.assertEqual(resp.status_code, 201)
+
+        from aist.models import OrgIntegrationVPNSecret  # noqa: PLC0415
+        secret = OrgIntegrationVPNSecret.objects.get()
+        self.assertIn("FAKETLS", secret.tls_auth_key)
+        self.assertEqual(secret.tls_key_type, "tls-crypt-v2")
+        self.assertNotIn("<tls-crypt-v2>", secret.ovpn_content)
