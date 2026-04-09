@@ -100,3 +100,20 @@ test("empty findings state offers clear filters recovery", async ({ page }) => {
   await expect(page).not.toHaveURL(/file=/);
   await expect(page.getByText(/Findings · Total/i).first()).toBeVisible();
 });
+
+test("URL filters set on navigation are preserved after page load (no sync loop)", async ({ page }) => {
+  // Navigate with multiple severity values (comma-separated CSV format used by buildFindingsFilterSearch)
+  // Previously this caused an infinite loop: URL→state→URL churn due to array reference inequality.
+  // The fix: JSON.stringify guards on setSelectedSeverities / setSelectedTags / setSelectedRisk.
+  await page.goto("/findings?severity=High,Medium");
+
+  // Wait for page to stabilize (findings header rendered)
+  await expect(page.getByText(/Findings · Total/i).first()).toBeVisible({ timeout: 15_000 });
+
+  // URL must still contain both severities — no spurious redirect/clear
+  await expect(page).toHaveURL(/severity=High%2CMedium|severity=High,Medium/);
+
+  // Both severity filter chips must be active
+  await expect(page.getByRole("button", { name: "High" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Medium" }).first()).toBeVisible();
+});

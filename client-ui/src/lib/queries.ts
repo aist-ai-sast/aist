@@ -1087,3 +1087,55 @@ export function useOrgIntegrations(orgId?: number) {
     enabled: Boolean(orgId),
   });
 }
+
+export type DuplicateCandidate = { id: number; title: string; severity: string };
+
+/**
+ * Search for findings that could serve as the "original" when closing a finding
+ * as a duplicate.  Accepts either a numeric finding ID (exact match via detail
+ * endpoint) or a title substring (icontains search via list endpoint).
+ * The current finding (excludeId) is always excluded from results.
+ */
+export function useDuplicateCandidates(search: string, excludeId: number) {
+  const trimmed = search.trim();
+  const isNumeric = trimmed !== "" && /^\d+$/.test(trimmed);
+  const numericId = isNumeric ? parseInt(trimmed, 10) : undefined;
+
+  return useQuery<DuplicateCandidate[]>({
+    queryKey: ["duplicate-candidates", trimmed, excludeId],
+    queryFn: async () => {
+      if (!trimmed) return [];
+
+      const results: DuplicateCandidate[] = [];
+
+      if (isNumeric && numericId !== undefined && numericId !== excludeId) {
+        // Exact ID lookup via finding detail endpoint
+        try {
+          const data = await fetchJson<FindingApi>(getRoute("finding_detail_url", { id: numericId }));
+          if (data?.id) {
+            results.push({ id: data.id, title: data.title, severity: data.severity });
+          }
+        } catch {
+          // 404 or not authorised — no match
+        }
+      }
+
+      if (!isNumeric && trimmed.length >= 2) {
+        // Title substring search
+        const params = new URLSearchParams({ title: trimmed, limit: "8" });
+        const data = await fetchJson<ListResponse<FindingApi>>(
+          `${getRoute("findings_list_url")}?${params}`,
+        );
+        for (const f of data.results ?? []) {
+          if (f.id !== excludeId && !results.some((r) => r.id === f.id)) {
+            results.push({ id: f.id, title: f.title, severity: f.severity });
+          }
+        }
+      }
+
+      return results.slice(0, 7);
+    },
+    enabled: Boolean(trimmed),
+    staleTime: 30_000,
+  });
+}

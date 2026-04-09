@@ -6,25 +6,29 @@ import type { ChangeEvent, ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 import type { Finding } from "../types";
-import type { RiskApprovalStatus } from "../lib/queries";
+import type { DuplicateCandidate, RiskApprovalStatus } from "../lib/queries";
 import FindingStatusActions from "./FindingStatusActions";
 
 const closeMutate = vi.fn();
 const riskMutate = vi.fn();
 const reopenMutate = vi.fn();
 const revokeMutate = vi.fn();
+const markDuplicateMutate = vi.fn();
 
 let mockRiskApprovalStatus: RiskApprovalStatus | null = { enabled: true, current: null };
+let mockDuplicateCandidates: DuplicateCandidate[] = [];
 
 vi.mock("../lib/mutations", () => ({
   useCloseFinding: () => ({ mutate: closeMutate, isPending: false }),
   useRiskApproveFinding: () => ({ mutate: riskMutate, isPending: false }),
   useUpdateFindingStatus: () => ({ mutate: reopenMutate, isPending: false }),
   useRevokeRiskApproval: () => ({ mutate: revokeMutate, isPending: false }),
+  useMarkFindingDuplicate: () => ({ mutate: markDuplicateMutate, isPending: false }),
 }));
 
 vi.mock("../lib/queries", () => ({
   useRiskApprovalStatus: () => ({ data: mockRiskApprovalStatus, isLoading: false }),
+  useDuplicateCandidates: () => ({ data: mockDuplicateCandidates, isFetching: false }),
 }));
 
 vi.mock("./PermissionGate", () => ({
@@ -132,7 +136,9 @@ describe("FindingStatusActions", () => {
     riskMutate.mockReset();
     reopenMutate.mockReset();
     revokeMutate.mockReset();
+    markDuplicateMutate.mockReset();
     mockRiskApprovalStatus = { enabled: true, current: null };
+    mockDuplicateCandidates = [];
   });
 
   it("applies regular close action by default", () => {
@@ -158,7 +164,7 @@ describe("FindingStatusActions", () => {
     expect(riskMutate.mock.calls[0][0]).toMatchObject({
       id: 10,
       justification: "Risk accepted with compensating controls.",
-      reactivateExpired: true,
+      reactivateExpired: false,
     });
   });
 
@@ -296,5 +302,199 @@ describe("FindingStatusActions", () => {
 
     expect(revokeMutate).toHaveBeenCalledTimes(1);
     expect(revokeMutate.mock.calls[0][0]).toMatchObject({ id: 10 });
+  });
+
+  describe("reactivateExpired checkbox", () => {
+    it("checkbox is disabled by default when no expiration date is set", () => {
+      render(<FindingStatusActions finding={buildFinding()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Risk Approval" }));
+
+      const checkbox = screen.getByRole("checkbox", {
+        name: "Reopen finding automatically when approval expires",
+      });
+      expect(checkbox).toBeDisabled();
+      expect(checkbox).not.toBeChecked();
+    });
+
+    it("checkbox becomes enabled when expiration date is provided", () => {
+      render(<FindingStatusActions finding={buildFinding()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Risk Approval" }));
+      fireEvent.change(screen.getByLabelText("Expiration Date (optional)"), {
+        target: { value: "2027-01-01" },
+      });
+
+      const checkbox = screen.getByRole("checkbox", {
+        name: "Reopen finding automatically when approval expires",
+      });
+      expect(checkbox).not.toBeDisabled();
+    });
+
+    it("checkbox resets to unchecked and disabled when expiration date is cleared", async () => {
+      render(<FindingStatusActions finding={buildFinding()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Risk Approval" }));
+      const dateInput = screen.getByLabelText("Expiration Date (optional)");
+      fireEvent.change(dateInput, { target: { value: "2027-01-01" } });
+
+      const checkbox = screen.getByRole("checkbox", {
+        name: "Reopen finding automatically when approval expires",
+      });
+      fireEvent.click(checkbox);
+      expect(checkbox).toBeChecked();
+
+      // Clear the date — checkbox should reset
+      fireEvent.change(dateInput, { target: { value: "" } });
+
+      expect(checkbox).not.toBeChecked();
+      expect(checkbox).toBeDisabled();
+    });
+
+    it("mutation is called with reactivateExpired=true when date set and checkbox ticked", () => {
+      render(<FindingStatusActions finding={buildFinding()} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Risk Approval" }));
+      fireEvent.change(
+        screen.getByPlaceholderText("Explain why this risk is accepted and what controls exist."),
+        { target: { value: "Accepted." } },
+      );
+      fireEvent.change(screen.getByLabelText("Expiration Date (optional)"), {
+        target: { value: "2027-06-01" },
+      });
+      fireEvent.click(
+        screen.getByRole("checkbox", {
+          name: "Reopen finding automatically when approval expires",
+        }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Confirm Risk Approval" }));
+
+      expect(riskMutate.mock.calls[0][0]).toMatchObject({
+        reactivateExpired: true,
+        expirationDate: "2027-06-01",
+      });
+    });
+  });
+
+  describe("Duplicate-of selector", () => {
+    it("apply button is disabled when reason is duplicate and no original selected", () => {
+      render(<FindingStatusActions finding={buildFinding()} />);
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Close Action" }), {
+        target: { value: "duplicate" },
+      });
+
+      expect(screen.getByRole("button", { name: "Apply Close" })).toBeDisabled();
+    });
+
+    it("search input appears when reason is duplicate", () => {
+      render(<FindingStatusActions finding={buildFinding()} />);
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Close Action" }), {
+        target: { value: "duplicate" },
+      });
+
+      expect(
+        screen.getByRole("textbox", { name: "Search for original finding" }),
+      ).toBeInTheDocument();
+    });
+
+    it("selecting a candidate shows the badge and enables Apply", () => {
+      mockDuplicateCandidates = [{ id: 42, title: "SQL Injection in login", severity: "High" }];
+      render(<FindingStatusActions finding={buildFinding()} />);
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Close Action" }), {
+        target: { value: "duplicate" },
+      });
+
+      // Type to trigger dropdown open state
+      fireEvent.change(screen.getByRole("textbox", { name: "Search for original finding" }), {
+        target: { value: "SQL" },
+      });
+
+      // Candidate rendered by Radix Popover (portal → document.body)
+      const candidateButton = screen.getByRole("button", { name: /#42.*SQL Injection in login/i });
+      fireEvent.mouseDown(candidateButton);
+
+      // Badge shows the selected finding
+      expect(screen.getByText("SQL Injection in login")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Apply Close" })).not.toBeDisabled();
+    });
+
+    it("clearing selected original resets back to the search input", () => {
+      mockDuplicateCandidates = [{ id: 42, title: "SQL Injection in login", severity: "High" }];
+      render(<FindingStatusActions finding={buildFinding()} />);
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Close Action" }), {
+        target: { value: "duplicate" },
+      });
+      fireEvent.change(screen.getByRole("textbox", { name: "Search for original finding" }), {
+        target: { value: "SQL" },
+      });
+      fireEvent.mouseDown(screen.getByRole("button", { name: /#42.*SQL Injection in login/i }));
+
+      // Clear selection
+      fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
+
+      expect(
+        screen.getByRole("textbox", { name: "Search for original finding" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Apply Close" })).toBeDisabled();
+    });
+
+    it("applying duplicate reason calls close first then mark-duplicate on success", () => {
+      mockDuplicateCandidates = [{ id: 42, title: "SQL Injection in login", severity: "High" }];
+      const onApplied = vi.fn();
+      render(<FindingStatusActions finding={buildFinding()} onApplied={onApplied} />);
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Close Action" }), {
+        target: { value: "duplicate" },
+      });
+      fireEvent.change(screen.getByRole("textbox", { name: "Search for original finding" }), {
+        target: { value: "42" },
+      });
+      fireEvent.mouseDown(screen.getByRole("button", { name: /#42.*SQL Injection in login/i }));
+
+      // Mock close → triggers onSuccess immediately
+      closeMutate.mockImplementation((_vars: unknown, opts: { onSuccess?: () => void }) => {
+        opts?.onSuccess?.();
+      });
+      markDuplicateMutate.mockImplementation((_vars: unknown, opts: { onSuccess?: () => void }) => {
+        opts?.onSuccess?.();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Apply Close" }));
+
+      expect(closeMutate).toHaveBeenCalledTimes(1);
+      expect(markDuplicateMutate).toHaveBeenCalledTimes(1);
+      expect(markDuplicateMutate.mock.calls[0][0]).toMatchObject({
+        id: 10,
+        originalFindingId: 42,
+      });
+      expect(onApplied).toHaveBeenCalledWith("duplicate");
+    });
+
+    it("selector resets when close reason changes away from duplicate", () => {
+      mockDuplicateCandidates = [{ id: 42, title: "SQL Injection in login", severity: "High" }];
+      render(<FindingStatusActions finding={buildFinding()} />);
+
+      const reasonSelect = screen.getByRole("combobox", { name: "Close Action" });
+      fireEvent.change(reasonSelect, { target: { value: "duplicate" } });
+      fireEvent.change(screen.getByRole("textbox", { name: "Search for original finding" }), {
+        target: { value: "SQL" },
+      });
+      fireEvent.mouseDown(screen.getByRole("button", { name: /#42.*SQL Injection in login/i }));
+      expect(screen.getByText("SQL Injection in login")).toBeInTheDocument();
+
+      // Switch away from duplicate
+      fireEvent.change(reasonSelect, { target: { value: "mitigated" } });
+
+      // Search input should be gone (reason is now mitigated)
+      expect(
+        screen.queryByRole("textbox", { name: "Search for original finding" }),
+      ).not.toBeInTheDocument();
+      // Apply should be enabled (mitigated needs no extra selection)
+      expect(screen.getByRole("button", { name: "Apply Close" })).not.toBeDisabled();
+    });
   });
 });

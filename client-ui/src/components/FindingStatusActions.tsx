@@ -5,12 +5,13 @@ import * as Popover from "@radix-ui/react-popover";
 import type { Finding } from "../types";
 import {
   useCloseFinding,
+  useMarkFindingDuplicate,
   useRevokeRiskApproval,
   useRiskApproveFinding,
   useUpdateFindingStatus,
   type FindingCloseReason,
 } from "../lib/mutations";
-import { useRiskApprovalStatus } from "../lib/queries";
+import { useDuplicateCandidates, useRiskApprovalStatus, type DuplicateCandidate } from "../lib/queries";
 import { findingStatusBadgeClass } from "../lib/badgeStyles";
 import { useToast } from "./ToastProvider";
 import SelectField from "./SelectField";
@@ -25,7 +26,7 @@ const reasonOptions: { value: FindingCloseReason; label: string }[] = [
   { value: "mitigated", label: "Mitigated (Fixed)" },
   { value: "false_positive", label: "False Positive" },
   { value: "out_of_scope", label: "Out Of Scope" },
-  { value: "duplicate", label: "Duplicate" },
+  { value: "duplicate", label: "Duplicate of…" },
 ];
 
 const statusHelpRows = [
@@ -88,8 +89,16 @@ export default function FindingStatusActions({
   const [justification, setJustification] = useState("");
   const [acceptedBy, setAcceptedBy] = useState("");
   const [expirationDate, setExpirationDate] = useState("");
-  const [reactivateExpired, setReactivateExpired] = useState(true);
+  const [reactivateExpired, setReactivateExpired] = useState(false);
   const [isRiskModalOpen, setIsRiskModalOpen] = useState(false);
+
+  // Duplicate-of selector state
+  const [duplicateSearch, setDuplicateSearch] = useState("");
+  const [duplicateSearchDebounced, setDuplicateSearchDebounced] = useState("");
+  const [selectedOriginal, setSelectedOriginal] = useState<DuplicateCandidate | null>(null);
+  const [isDuplicateDropdownOpen, setIsDuplicateDropdownOpen] = useState(false);
+  const markDuplicate = useMarkFindingDuplicate();
+  const duplicateCandidatesQuery = useDuplicateCandidates(duplicateSearchDebounced, finding.id);
   // Local fallback: keeps the risk-accepted banner visible immediately after approval,
   // before the Dojo v2 finding refetch reflects risk_accepted=true.
   const [localRiskApproved, setLocalRiskApproved] = useState(false);
@@ -98,6 +107,21 @@ export default function FindingStatusActions({
   useEffect(() => {
     if (finding.riskAccepted) setLocalRiskApproved(false);
   }, [finding.riskAccepted]);
+
+  // Debounce duplicate search input (300 ms)
+  useEffect(() => {
+    const timer = setTimeout(() => setDuplicateSearchDebounced(duplicateSearch), 300);
+    return () => clearTimeout(timer);
+  }, [duplicateSearch]);
+
+  // Reset duplicate selector when close reason changes
+  useEffect(() => {
+    setSelectedOriginal(null);
+    setDuplicateSearch("");
+    setDuplicateSearchDebounced("");
+    setIsDuplicateDropdownOpen(false);
+  }, [reason]);
+
 
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -142,7 +166,11 @@ export default function FindingStatusActions({
   const currentApproval = riskApprovalQuery.data?.current ?? null;
   const showRiskBanner = !finding.active && (finding.riskAccepted || localRiskApproved);
   const isPendingAction =
-    closeFinding.isPending || riskApproveFinding.isPending || revokeRiskApproval.isPending;
+    closeFinding.isPending || riskApproveFinding.isPending || revokeRiskApproval.isPending || markDuplicate.isPending;
+  const canApply =
+    !isPendingAction &&
+    !isLocked &&
+    (reason !== "duplicate" || selectedOriginal !== null);
   const canSubmitRiskApproval =
     Boolean(justification.trim()) && !isPendingAction && !isLocked;
 
@@ -151,8 +179,26 @@ export default function FindingStatusActions({
       { id: finding.id, reason },
       {
         onSuccess: () => {
-          onApplied?.(reason);
-          toast.push("Finding closed.", "success");
+          if (reason === "duplicate" && selectedOriginal) {
+            markDuplicate.mutate(
+              { id: finding.id, originalFindingId: selectedOriginal.id },
+              {
+                onSuccess: () => {
+                  onApplied?.(reason);
+                  toast.push(`Finding closed as duplicate of #${selectedOriginal.id}.`, "success");
+                },
+                onError: (error) => {
+                  // The finding is already closed — warn but don't treat as full failure
+                  const message = error instanceof Error ? error.message : String(error);
+                  toast.push(`Closed as duplicate, but linking failed: ${message}`, "warning");
+                  onApplied?.(reason);
+                },
+              },
+            );
+          } else {
+            onApplied?.(reason);
+            toast.push("Finding closed.", "success");
+          }
         },
         onError: (error) => {
           const message = error instanceof Error ? error.message : String(error);
@@ -204,11 +250,16 @@ export default function FindingStatusActions({
     );
   };
 
+  // Auto-disable reactivateExpired when expiration date is cleared
+  useEffect(() => {
+    if (!expirationDate) setReactivateExpired(false);
+  }, [expirationDate]);
+
   const openRiskModal = () => {
     setJustification("");
     setAcceptedBy("");
     setExpirationDate("");
-    setReactivateExpired(true);
+    setReactivateExpired(false);
     setIsRiskModalOpen(true);
   };
 
@@ -316,7 +367,7 @@ export default function FindingStatusActions({
                   type="button"
                   className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-brand-500 pl-3 pr-4 text-xs font-semibold text-night-900 disabled:opacity-50"
                   onClick={handleApply}
-                  disabled={isPendingAction || isLocked}
+                  disabled={!canApply}
                 >
                   <svg
                     viewBox="0 0 24 24"
@@ -361,6 +412,121 @@ export default function FindingStatusActions({
                   </button>
                 </span>
               </div>
+
+              {/* ── Duplicate-of selector — appears only when reason is "duplicate" ── */}
+              {reason === "duplicate" ? (
+                <div className="mt-3">
+                  <div className="mb-1 flex items-center gap-1.5 text-xs text-slate-400">
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                    </svg>
+                    Original Finding
+                    <span className="rounded-full border border-danger-500/30 bg-danger-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-danger-400">Required</span>
+                  </div>
+
+                  {selectedOriginal ? (
+                    /* Selected state: show badge with selected finding + clear button */
+                    <div className="flex items-center gap-2">
+                      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-brand-600/40 bg-brand-500/10 px-3 py-2">
+                        <span className="shrink-0 text-[10px] font-semibold text-slate-400">#{selectedOriginal.id}</span>
+                        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                          selectedOriginal.severity === "Critical" ? "border-danger-500/50 bg-danger-500/10 text-danger-500"
+                          : selectedOriginal.severity === "High" ? "border-danger-500/30 bg-danger-500/10 text-danger-500/80"
+                          : selectedOriginal.severity === "Medium" ? "border-amber-400/40 bg-amber-400/10 text-amber-400"
+                          : "border-slate-500/40 bg-slate-500/10 text-slate-300"
+                        }`}>{selectedOriginal.severity}</span>
+                        <span className="min-w-0 truncate text-xs text-slate-200" title={selectedOriginal.title}>{selectedOriginal.title}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-night-500 text-slate-400 hover:border-danger-500/40 hover:text-danger-300"
+                        aria-label="Clear selection"
+                        onClick={() => { setSelectedOriginal(null); setDuplicateSearch(""); }}
+                      >
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                          <path d="M18 6 6 18M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ) : (
+                    /* Search input + Radix Popover dropdown (portal + auto-positioning) */
+                    <Popover.Root
+                      open={isDuplicateDropdownOpen}
+                      onOpenChange={setIsDuplicateDropdownOpen}
+                    >
+                      <Popover.Anchor asChild>
+                        <div className="flex items-center gap-2 rounded-xl border border-night-500 bg-night-600 px-3 py-2 focus-within:border-brand-600 focus-within:ring-2 focus-within:ring-brand-600/60">
+                          {duplicateCandidatesQuery.isFetching ? (
+                            <svg className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-400" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                            </svg>
+                          ) : (
+                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+                            </svg>
+                          )}
+                          <input
+                            type="text"
+                            className="min-w-0 flex-1 bg-transparent text-xs text-white outline-none placeholder:text-slate-500"
+                            placeholder="Search by title or finding ID…"
+                            value={duplicateSearch}
+                            onChange={(e) => {
+                              setDuplicateSearch(e.target.value);
+                              if (e.target.value) setIsDuplicateDropdownOpen(true);
+                            }}
+                            onFocus={() => {
+                              if (duplicateSearch) setIsDuplicateDropdownOpen(true);
+                            }}
+                            aria-label="Search for original finding"
+                            aria-autocomplete="list"
+                          />
+                        </div>
+                      </Popover.Anchor>
+
+                      {(duplicateCandidatesQuery.data?.length ?? 0) > 0 || (duplicateSearchDebounced && !duplicateCandidatesQuery.isFetching && duplicateCandidatesQuery.data?.length === 0) ? (
+                        <Popover.Portal>
+                          <Popover.Content
+                            side="bottom"
+                            align="start"
+                            sideOffset={4}
+                            avoidCollisions
+                            collisionPadding={8}
+                            onOpenAutoFocus={(e) => e.preventDefault()}
+                            className="aist-scrollbar z-[1400] w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl border border-night-500 bg-night-800 shadow-panel"
+                            style={{ maxHeight: "min(320px, var(--radix-popover-content-available-height))" }}
+                          >
+                            {(duplicateCandidatesQuery.data?.length ?? 0) > 0 ? duplicateCandidatesQuery.data!.map((candidate) => (
+                              <button
+                                key={candidate.id}
+                                type="button"
+                                className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition hover:bg-night-700 focus:bg-night-700 focus:outline-none"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  setSelectedOriginal(candidate);
+                                  setIsDuplicateDropdownOpen(false);
+                                }}
+                              >
+                                <span className="shrink-0 text-[10px] font-semibold text-slate-400">#{candidate.id}</span>
+                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                  candidate.severity === "Critical" ? "border-danger-500/50 bg-danger-500/10 text-danger-500"
+                                  : candidate.severity === "High" ? "border-danger-500/30 bg-danger-500/10 text-danger-500/80"
+                                  : candidate.severity === "Medium" ? "border-amber-400/40 bg-amber-400/10 text-amber-400"
+                                  : "border-slate-500/40 bg-slate-500/10 text-slate-300"
+                                }`}>{candidate.severity}</span>
+                                <span className="min-w-0 truncate text-xs text-slate-200">{candidate.title}</span>
+                              </button>
+                            )) : (
+                              <div className="px-3 py-2.5 text-xs text-slate-500">No findings found</div>
+                            )}
+                          </Popover.Content>
+                        </Popover.Portal>
+                      ) : null}
+                    </Popover.Root>
+                  )}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -562,11 +728,15 @@ export default function FindingStatusActions({
                     placeholder="No expiration"
                   />
                 </div>
-                <label className="inline-flex items-center gap-2 rounded-xl border border-night-500 bg-night-800/60 px-3 py-2 text-xs text-slate-300">
+                <label
+                  className={`inline-flex items-center gap-2 rounded-xl border border-night-500 bg-night-800/60 px-3 py-2 text-xs transition ${expirationDate ? "cursor-pointer text-slate-300" : "cursor-not-allowed text-slate-500"}`}
+                  title={!expirationDate ? "Set an expiration date to enable this option" : undefined}
+                >
                   <input
                     type="checkbox"
-                    className="h-4 w-4 rounded border-night-500 bg-night-600 accent-brand-500"
+                    className="h-4 w-4 rounded border-night-500 bg-night-600 accent-brand-500 disabled:opacity-50"
                     checked={reactivateExpired}
+                    disabled={!expirationDate}
                     onChange={(event) => setReactivateExpired(event.target.checked)}
                   />
                   Reopen finding automatically when approval expires

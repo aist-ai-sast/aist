@@ -38,6 +38,10 @@ def _build_routes() -> dict[str, Any]:
             "finding_id",
         ),
         "finding_close_url": _replace_int_placeholder(reverse("finding-close", args=[0]), "id"),
+        "finding_mark_duplicate_url": _replace_int_placeholder(
+            reverse("aist_api:finding_mark_duplicate", kwargs={"finding_id": 0}),
+            "finding_id",
+        ),
         "finding_bulk_status_url": reverse("aist_api:finding_bulk_status"),
         "finding_export_url": _replace_int_placeholder(
             reverse("aist_api:finding_export", kwargs={"finding_id": 0}),

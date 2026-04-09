@@ -16,6 +16,7 @@ from aist.api.findings import (
     AISTFindingBulkStatusAPI,
     AISTFindingExportAPI,
     AISTFindingListAPI,
+    AISTFindingMarkDuplicateAPI,
     AISTFindingNotesAPI,
     AISTFindingRiskApprovalAPI,
 )
@@ -118,6 +119,7 @@ __all__ = [
     "AISTFindingBulkStatusAPI",
     "AISTFindingExportAPI",
     "AISTFindingListAPI",
+    "AISTFindingMarkDuplicateAPI",
     "AISTFindingNotesAPI",
     "AISTFindingRiskApprovalAPI",
     "AISTFindingTimelineAPI",

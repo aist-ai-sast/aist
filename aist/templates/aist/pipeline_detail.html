@@ -722,7 +722,31 @@
                         const newContainer = doc.getElementById("pipeline-status-container");
                         if (!newContainer || !container) return;
 
+                        // Snapshot currently-open collapse IDs before replacing the DOM.
+                        // Bootstrap stores collapse state as a CSS class + aria attribute on
+                        // the live elements; innerHTML replacement wipes that state.
+                        const openIds = new Set(
+                            [...container.querySelectorAll('.collapse.show')]
+                                .map(el => el.id)
+                                .filter(Boolean)
+                        );
+
                         container.innerHTML = newContainer.innerHTML;
+
+                        // Restore open state so the user's expanded panels stay visible.
+                        openIds.forEach(id => {
+                            const el = container.querySelector('#' + CSS.escape(id));
+                            if (!el) return;
+                            el.classList.add('show');
+                            const btn = container.querySelector(
+                                '[data-bs-target="#' + CSS.escape(id) + '"],' +
+                                '[data-target="#' + CSS.escape(id) + '"]'
+                            );
+                            if (btn) {
+                                btn.setAttribute('aria-expanded', 'true');
+                                btn.classList.remove('collapsed');
+                            }
+                        });
 
                         const ds = newContainer.getAttribute("data-status");
                         const s = (ds || st?.textContent || "").trim();
@@ -757,14 +781,11 @@
                 startStatusPolling();
             };
 
-            document.getElementById('aist-ai-responses')?.addEventListener('shown.bs.collapse', function (ev) {
+            // Use event delegation on the outer container so the listener survives
+            // innerHTML replacement in refreshStatusPartial().
+            container.addEventListener('shown.bs.collapse', function (ev) {
                 hydrateAllJsonBlocks(ev.target);
             });
-            if (window.jQuery) {
-                jQuery('#aist-ai-responses').on('shown.bs.collapse', function (ev) {
-                    hydrateAllJsonBlocks(ev.target);
-                });
-            }
 
             const logsToggleBtn = document.getElementById("logsToggleBtn");
             const logsCollapse = document.getElementById("logsCollapse");

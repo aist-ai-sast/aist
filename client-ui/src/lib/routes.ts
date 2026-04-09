@@ -21,6 +21,7 @@ type RouteMap = {
   finding_notes_url: string;
   finding_risk_approval_url: string;
   finding_close_url: string;
+  finding_mark_duplicate_url: string;
   finding_bulk_status_url: string;
   finding_export_url: string;
   finding_tags_url: string;

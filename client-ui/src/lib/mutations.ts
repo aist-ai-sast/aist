@@ -126,6 +126,21 @@ export function useRevokeRiskApproval() {
   });
 }
 
+export function useMarkFindingDuplicate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, originalFindingId }: { id: number; originalFindingId: number }) =>
+      fetchJson(getRoute("finding_mark_duplicate_url", { finding_id: id }), {
+        method: "POST",
+        body: JSON.stringify({ original_finding_id: originalFindingId }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["findings"] });
+      queryClient.invalidateQueries({ queryKey: ["finding"] });
+    },
+  });
+}
+
 export function useUpdateFindingSeverity() {
   const queryClient = useQueryClient();
   return useMutation({

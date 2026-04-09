@@ -82,6 +82,7 @@ export default function FindingsPage() {
   const [bulkReasonNote, setBulkReasonNote] = useState<string>("");
   const [bulkLockedFindingIds, setBulkLockedFindingIds] = useState<number[]>([]);
   const hasHydratedStatusFromUrl = useRef(false);
+  const lastWrittenSearch = useRef(location.search);
   const toast = useToast();
   const searchParams = useMemo(
     () => new URLSearchParams(location.search),
@@ -261,10 +262,16 @@ export default function FindingsPage() {
     setSelectedTitle(parsed.title);
     setSelectedFile(parsed.file);
     setSelectedCwe(parsed.cwe);
-    setSelectedSeverities(parsed.severities);
-    setSelectedTags(parsed.tags);
+    setSelectedSeverities(prev =>
+      JSON.stringify(prev) === JSON.stringify(parsed.severities) ? prev : parsed.severities,
+    );
+    setSelectedTags(prev =>
+      JSON.stringify(prev) === JSON.stringify(parsed.tags) ? prev : parsed.tags,
+    );
     setSelectedStatus(parsed.status);
-    setSelectedRisk(parsed.risk);
+    setSelectedRisk(prev =>
+      JSON.stringify(prev) === JSON.stringify(parsed.risk) ? prev : parsed.risk,
+    );
     setSelectedAiResponse(parsed.aiStatus);
     setSelectedWorkItemStatus(parsed.workItemStatus);
     const rawPage = searchParams.get("page");
@@ -299,10 +306,11 @@ export default function FindingsPage() {
     });
     if (pageIndex > 0) filterParams.set("page", String(pageIndex + 1));
     const nextSearch = filterParams.toString();
-    const currentSearch = location.search.startsWith("?")
-      ? location.search.slice(1)
-      : location.search;
+    const currentSearch = lastWrittenSearch.current.startsWith("?")
+      ? lastWrittenSearch.current.slice(1)
+      : lastWrittenSearch.current;
     if (nextSearch === currentSearch) return;
+    lastWrittenSearch.current = nextSearch ? `?${nextSearch}` : "";
     navigate(
       {
         pathname: location.pathname,
@@ -314,7 +322,6 @@ export default function FindingsPage() {
     createdFrom,
     createdTo,
     location.pathname,
-    location.search,
     mitigatedFrom,
     mitigatedTo,
     navigate,

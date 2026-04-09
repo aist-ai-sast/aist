@@ -2250,3 +2250,103 @@ class LaunchConfigAPITests(AISTApiBase):
         self.assertEqual(kwargs["raw_params"]["rebuild_images"], True)
 
         mock_run_task.delay.assert_called_once()
+
+
+class FindingMarkDuplicateAPITests(AISTFindingAuthorizationTests):
+    """Tests for POST /api/v2/aist/findings/{id}/mark-duplicate/.
+
+    Verifies that:
+    - an authorised user can link a finding to its original
+    - the duplicate_finding FK is stored correctly
+    - a finding cannot be its own original
+    - cross-org originals are rejected
+    - unauthenticated requests are denied
+    """
+
+    def _url(self, finding_id: int) -> str:
+        return reverse("aist_api:finding_mark_duplicate", kwargs={"finding_id": finding_id})
+
+    def test_links_duplicate_to_original(self):
+        """Happy path: own finding is linked to another own finding."""
+        # Create a second own finding to act as the original
+        original = Finding.objects.create(
+            test=self.own_finding.test,
+            title="Original finding",
+            severity="Critical",
+            date=self.own_finding.date,
+            reporter=self.user,
+        )
+
+        resp = self.client.post(
+            self._url(self.own_finding.id),
+            data={"original_finding_id": original.id},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertTrue(resp.data.get("ok"))
+        self.assertEqual(resp.data.get("duplicate_finding_id"), original.id)
+
+        self.own_finding.refresh_from_db()
+        self.assertEqual(self.own_finding.duplicate_finding_id, original.id)
+
+    def test_rejects_self_reference(self):
+        """A finding cannot be marked as a duplicate of itself."""
+        resp = self.client.post(
+            self._url(self.own_finding.id),
+            data={"original_finding_id": self.own_finding.id},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertIn("original_finding_id", resp.data)
+
+    def test_rejects_cross_org_original(self):
+        """The original finding must belong to the same authorised scope."""
+        resp = self.client.post(
+            self._url(self.own_finding.id),
+            data={"original_finding_id": self.other_finding.id},
+            format="json",
+        )
+
+        # other_finding is outside the user's authorised queryset → 404
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+    def test_rejects_own_finding_used_as_duplicate_when_original_is_cross_org(self):
+        """Cross-org finding as the target (duplicate_id) is also rejected."""
+        original = Finding.objects.create(
+            test=self.own_finding.test,
+            title="Own original",
+            severity="High",
+            date=self.own_finding.date,
+            reporter=self.user,
+        )
+
+        # Attempt to mark other_finding (cross-org) as duplicate of our original —
+        # should 404 because other_finding is not in the authorised queryset.
+        resp = self.client.post(
+            self._url(self.other_finding.id),
+            data={"original_finding_id": original.id},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+    def test_unauthenticated_request_is_denied(self):
+        """Anonymous access must be rejected."""
+        anon_client = APIClient()
+        original = Finding.objects.create(
+            test=self.own_finding.test,
+            title="Auth-check original",
+            severity="Low",
+            date=self.own_finding.date,
+            reporter=self.user,
+        )
+
+        resp = anon_client.post(
+            self._url(self.own_finding.id),
+            data={"original_finding_id": original.id},
+            format="json",
+        )
+
+        self.assertIn(resp.status_code, (401, 403))

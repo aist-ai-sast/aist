@@ -885,3 +885,53 @@ def _bulk_accept_risk_finding(*, finding, user, justification: str, request, not
 def _add_bulk_note(*, finding, user, note_entry: str) -> None:
     note = Notes.objects.create(entry=note_entry, author=user, private=False)
     finding.notes.add(note)
+
+
+class AISTFindingMarkDuplicateRequestSerializer(serializers.Serializer):
+    original_finding_id = serializers.IntegerField(min_value=1)
+
+
+class AISTFindingMarkDuplicateAPI(AuthorizedQuerySetMixin, APIView):
+    """Set the duplicate_finding FK on an already-closed duplicate finding.
+
+    Called immediately after the vendor finding-close endpoint when the user
+    chooses "Duplicate of…" as the close reason.  Storing the FK is required
+    for the deduplication algorithm (aist/dedupe/custom.py) to recognise the
+    record as a valid duplicate; without it the algorithm resets the flag.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = AISTFindingMarkDuplicateRequestSerializer
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_findings,
+        permission=Permissions.Finding_Edit,
+    )
+
+    @extend_schema(
+        tags=[AISTApiTag.FINDINGS.value],
+        summary="Link a duplicate finding to its original",
+        request=AISTFindingMarkDuplicateRequestSerializer,
+        responses={
+            200: OpenApiResponse(description="Link saved"),
+            400: OpenApiResponse(description="Validation error"),
+            404: OpenApiResponse(description="Finding not found or not authorised"),
+        },
+    )
+    def post(self, request, finding_id: int):
+        finding = self.get_authorized_object(id=finding_id)
+        input_serializer = self.serializer_class(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        original_id = input_serializer.validated_data["original_finding_id"]
+        if original_id == finding_id:
+            return Response(
+                {"original_finding_id": "A finding cannot be a duplicate of itself."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        original = self.get_authorized_object(id=original_id)
+
+        finding.duplicate_finding = original
+        finding.save(update_fields=["duplicate_finding"])
+
+        return Response({"ok": True, "duplicate_finding_id": original.id})

@@ -10,6 +10,7 @@ from aist.api import (
     AISTFindingBulkStatusAPI,
     AISTFindingExportAPI,
     AISTFindingListAPI,
+    AISTFindingMarkDuplicateAPI,
     AISTFindingNotesAPI,
     AISTFindingRiskApprovalAPI,
     AISTFindingTimelineAPI,
@@ -183,6 +184,7 @@ urlpatterns = [
     path("findings/<int:finding_id>/notes/", AISTFindingNotesAPI.as_view(), name="finding_notes"),
     path("findings/<int:finding_id>/risk-approval/", AISTFindingRiskApprovalAPI.as_view(), name="finding_risk_approval"),
     path("findings/<int:finding_id>/export/", AISTFindingExportAPI.as_view(), name="finding_export"),
+    path("findings/<int:finding_id>/mark-duplicate/", AISTFindingMarkDuplicateAPI.as_view(), name="finding_mark_duplicate"),
     path(
         "projects_version/<int:project_version_id>/files/blob/<path:subpath>",
         ProjectVersionFileBlobAPI.as_view(),
