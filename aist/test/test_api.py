@@ -2253,7 +2253,9 @@ class LaunchConfigAPITests(AISTApiBase):
 
 
 class FindingMarkDuplicateAPITests(AISTFindingAuthorizationTests):
-    """Tests for POST /api/v2/aist/findings/{id}/mark-duplicate/.
+
+    """
+    Tests for POST /api/v2/aist/findings/{id}/mark-duplicate/.
 
     Verifies that:
     - an authorised user can link a finding to its original

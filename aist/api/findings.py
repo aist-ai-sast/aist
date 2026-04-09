@@ -892,7 +892,9 @@ class AISTFindingMarkDuplicateRequestSerializer(serializers.Serializer):
 
 
 class AISTFindingMarkDuplicateAPI(AuthorizedQuerySetMixin, APIView):
-    """Set the duplicate_finding FK on an already-closed duplicate finding.
+
+    """
+    Set the duplicate_finding FK on an already-closed duplicate finding.
 
     Called immediately after the vendor finding-close endpoint when the user
     chooses "Duplicate of…" as the close reason.  Storing the FK is required
