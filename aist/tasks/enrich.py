@@ -1,6 +1,9 @@
 import logging
 import os
+from collections import defaultdict
+from hashlib import sha256
 from math import ceil
+from pathlib import Path
 from typing import Any
 
 from celery import chain, chord, shared_task
@@ -50,6 +53,7 @@ def after_upload_enrich_and_watch(results: list[int],
                                   test_ids: list[int],
                                   log_level,
                                   async_user=None) -> None:
+    from aist.dedupe.evolution import run_evolution_dedup  # noqa: PLC0415
     from aist.tasks.ai import auto_push_to_ai_if_configured  # noqa: PLC0415
     from aist.tasks.regression import detect_regressions_for_pipeline  # noqa: PLC0415
 
@@ -66,6 +70,11 @@ def after_upload_enrich_and_watch(results: list[int],
         set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
 
     logger.info("Enrichment finished: %s findings enriched.", enriched)
+
+    try:
+        run_evolution_dedup(pipeline_id=pipeline_id, test_ids=test_ids, logger=logger)
+    except Exception:
+        logger.exception("Evolution dedup failed (pipeline_id=%s); continuing.", pipeline_id)
 
     pipeline = AISTPipeline.objects.get(id=pipeline_id)
     try:
@@ -152,6 +161,60 @@ def enrich_finding_task(
 
 
 @shared_task(bind=False)
+def annotate_line_hash_batch(
+    finding_ids: list[int],
+    source_root: str,
+    async_user=None,
+) -> int:
+    """
+    Compute a content fingerprint (SHA-256 of the vulnerable line) for each
+    finding and persist it as DojoMeta(name="aist:lhash").
+
+    Groups findings by file path so each source file is read at most once per
+    batch. Must run before enrich_finding_batch within the same chunk — see
+    make_enrich_chord for the chain ordering.
+    """
+    if not source_root:
+        return 0
+
+    findings = list(
+        Finding.objects
+        .filter(id__in=finding_ids)
+        .only("id", "file_path", "line"),
+    )
+
+    by_file: dict[str, list[Finding]] = defaultdict(list)
+    for f in findings:
+        if f.file_path and f.line:
+            by_file[f.file_path].append(f)
+
+    to_create = []
+    for file_path, file_findings in by_file.items():
+        full = (
+            Path(file_path)
+            if Path(file_path).is_absolute()
+            else Path(source_root) / file_path
+        )
+        try:
+            lines = full.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for f in file_findings:
+            try:
+                content = lines[f.line - 1].strip()
+            except IndexError:
+                continue
+            if not content:
+                continue
+            h = sha256(content.encode()).hexdigest()[:16]
+            to_create.append(DojoMeta(name="aist:lhash", value=h, finding_id=f.id))
+
+    if to_create:
+        DojoMeta.objects.bulk_create(to_create, ignore_conflicts=True)
+    return len(to_create)
+
+
+@shared_task(bind=False)
 def enrich_finding_batch(
     finding_ids: list[int],
     trim_path: str,
@@ -178,18 +241,20 @@ def make_enrich_chord(*, pipeline_id: str):
       1) Re-fetch finding IDs from DB (reflects post-dedup state).
       2) Split findings into K chunks (K ~= number of active workers).
       3) Initialize Redis progress (total = live finding count, done = 0).
-      4) Run one batch task per chunk, aggregate in chord body.
+      4) Per chunk: annotate line hashes first, then enrich (sequential within chunk).
+         Chunks run in parallel across workers.
 
     Returns:
         celery.canvas.Signature: A chord (or simple task) signature ready to dispatch.
 
     """
-    pipeline = AISTPipeline.objects.get(id=pipeline_id)
+    pipeline = AISTPipeline.objects.select_related("project__product").get(id=pipeline_id)
     ld = PipelineLaunchData(pipeline.launch_data)
     log_level = ld.log_level
     test_ids = list(pipeline.tests.values_list("id", flat=True))
     trim_path = ld.trim_path
     project_version_descriptor = ld.project_version_descriptor
+    source_root = ld.resolve_source_root(pipeline.project.product.name)
 
     # Re-fetch finding IDs after dedup — duplicates may have been deleted.
     finding_ids = list(Finding.objects.filter(test_id__in=test_ids).values_list("id", flat=True))
@@ -211,9 +276,12 @@ def make_enrich_chord(*, pipeline_id: str):
     redis = get_redis()
     redis.hset(f"aist:progress:{pipeline_id}:enrich", mapping={"total": total, "done": 0})
 
+    # annotate_line_hash_batch runs first (before enrich trims file_path and
+    # potentially deletes excluded-path findings), then enrich runs on the same chunk.
     header = [
         chain(
-            enrich_finding_batch.s(chunk, trim_path, project_version_descriptor),
+            annotate_line_hash_batch.si(chunk, source_root),
+            enrich_finding_batch.si(chunk, trim_path, project_version_descriptor),
             report_enrich_done.s(pipeline_id),
         )
         for chunk in chunks

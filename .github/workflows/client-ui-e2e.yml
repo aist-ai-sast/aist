@@ -53,7 +53,7 @@ jobs:
         working-directory: .
 
       - name: Build app images
-        run: docker compose $COMPOSE_FILES build uwsgi nginx
+        run: docker compose $COMPOSE_FILES build uwsgi nginx context-extractor-mcp
         working-directory: .
 
       - name: Prepare host mount paths
@@ -73,7 +73,7 @@ jobs:
         working-directory: .
 
       - name: Start app
-        run: docker compose $COMPOSE_FILES up --no-deps -d uwsgi nginx
+        run: docker compose $COMPOSE_FILES up --no-deps -d uwsgi nginx context-extractor-mcp
         working-directory: .
 
       - name: Wait for app readiness
