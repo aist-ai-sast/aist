@@ -18,6 +18,7 @@ from aist.api.schema import AISTApiTag
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.integrations.resolver import resolve_integration
 from aist.models import AISTProject, AISTProjectScript, Organization, OrgIntegrationType
+from aist.profile import ProjectProfile
 from aist.queries import (
     get_authorized_aist_organizations,
     get_authorized_aist_projects,
@@ -144,11 +145,12 @@ class AISTProjectCreateRequestSerializer(serializers.Serializer):
         return fields
 
     def validate_profile(self, value):
-        if value is None or value == {}:
+        if not value:
             return {}
-        if not isinstance(value, dict):
-            msg = 'Profile must be a JSON object (e.g. {"paths": {"exclude": []}}).'
-            raise serializers.ValidationError(msg)
+        try:
+            ProjectProfile.validate_dict(value)
+        except (TypeError, ValueError) as exc:
+            raise serializers.ValidationError(str(exc)) from exc
         return value
 
 
@@ -191,11 +193,12 @@ class ProjectUpdateRequestSerializer(serializers.Serializer):
         return super().to_internal_value(mutable)
 
     def validate_profile(self, value):
-        if value is None or not value:
+        if not value:
             return {}
-        if not isinstance(value, dict):
-            msg = 'Profile must be a JSON object (e.g. {"paths": {"exclude": []}}).'
-            raise serializers.ValidationError(msg)
+        try:
+            ProjectProfile.validate_dict(value)
+        except (TypeError, ValueError) as exc:
+            raise serializers.ValidationError(str(exc)) from exc
         return value
 
 

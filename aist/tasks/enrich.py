@@ -104,6 +104,14 @@ def enrich_finding_task(
     else:
         file_path = f.file_path or ""
         test_id = getattr(f, "test_id", None)
+
+        # Severity exclusion — evaluated before any further work so that excluded
+        # findings never reach the link-building stage.
+        excluded_severities = project_version_descriptor.get("excluded_severities", [])
+        if excluded_severities and f.severity in excluded_severities:
+            f.delete()
+            return 1
+
         try:
             if trim_path and file_path.startswith(trim_path):
                 tp = trim_path if trim_path.endswith("/") else trim_path + "/"

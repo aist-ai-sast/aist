@@ -111,10 +111,12 @@ def _normalize_ids(raw_ids) -> list[int]:
 
 def _build_version_descriptor(pipeline: AISTPipeline) -> dict:
     pv = pipeline.project_version
+    project = pipeline.project if pipeline.project_id else None
     return {
         "id": pv.id if pv else "",
         "type": pv.version_type if pv else VersionType.FILE_HASH,
-        "excluded_paths": pipeline.project.get_excluded_paths() if pipeline.project_id else [],
+        "excluded_paths": project.get_excluded_paths() if project else [],
+        "excluded_severities": project.get_excluded_severities() if project else [],
     }
 
 

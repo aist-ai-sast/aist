@@ -47,6 +47,7 @@ class PipelineArguments:
         configured_pipeline = getattr(settings, "AIST_PIPELINE_CODE_PATH", None)
         self.pipeline_path: Path | None = Path(configured_pipeline) if configured_pipeline else None
         self.project_version["excluded_paths"] = self.project.get_excluded_paths()
+        self.project_version["excluded_severities"] = self.project.get_excluded_severities()
 
     def build_project_version_descriptor(self) -> dict:
         """
@@ -55,6 +56,7 @@ class PipelineArguments:
         """
         base = dict(self.project_version or {})
         base["excluded_paths"] = self.project.get_excluded_paths()
+        base["excluded_severities"] = self.project.get_excluded_severities()
         return base
 
     def enrich_config(self) -> dict:

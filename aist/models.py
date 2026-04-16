@@ -24,6 +24,8 @@ from django_github_app.models import Installation
 from dojo.models import Finding, Product, Product_Type, Test
 from encrypted_model_fields.fields import EncryptedCharField
 
+from aist.profile import ProjectProfile
+
 _repo_part_validator = RegexValidator(
     regex=r"^[A-Za-z0-9._/\-]+$",
     message="Only letters, digits, dot, underscore, hyphen and slash are allowed.",
@@ -490,10 +492,10 @@ class AISTProject(models.Model):
         return self.product.name
 
     def get_excluded_paths(self) -> list[str]:
-        excluded_paths = []
-        if self.profile:
-            excluded_paths.extend(self.profile.get("paths", {}).get("exclude", []))
-        return excluded_paths
+        return ProjectProfile.from_dict(self.profile).get_excluded_paths()
+
+    def get_excluded_severities(self) -> list[str]:
+        return ProjectProfile.from_dict(self.profile).get_excluded_severities()
 
     @property
     def active_script(self) -> AISTProjectScript:

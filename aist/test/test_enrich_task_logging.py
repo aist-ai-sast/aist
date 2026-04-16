@@ -8,6 +8,82 @@ from django.test import SimpleTestCase
 from aist.tasks.enrich import enrich_finding_task
 
 
+class EnrichFindingTaskSeverityExclusionTests(SimpleTestCase):
+
+    """Findings whose severity appears in excluded_severities must be deleted."""
+
+    def _make_finding(self, severity: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            file_path="src/main.py",
+            test_id=1,
+            severity=severity,
+            save=MagicMock(),
+            delete=MagicMock(),
+        )
+
+    @patch("aist.tasks.enrich.Finding")
+    def test_excluded_severity_deletes_finding_and_returns_1(self, mock_finding):
+        finding = self._make_finding("Info")
+        mock_finding.objects.select_related.return_value.get.return_value = finding
+
+        result = enrich_finding_task(
+            finding_id=1,
+            trim_path="",
+            project_version_descriptor={"excluded_severities": ["Info", "Low"]},
+        )
+
+        finding.delete.assert_called_once()
+        self.assertEqual(result, 1)
+
+    @patch("aist.tasks.enrich.DojoMeta")
+    @patch("aist.tasks.enrich.Finding")
+    @patch("aist.tasks.enrich.LinkBuilder")
+    def test_non_excluded_severity_proceeds_to_enrichment(
+        self, mock_link_builder, mock_finding, mock_dojometa,
+    ):
+        finding = self._make_finding("High")
+        mock_finding.objects.select_related.return_value.get.return_value = finding
+
+        linker = MagicMock()
+        linker.build.return_value = "https://example.com/src/main.py"
+        linker.contains_excluded_path.return_value = False
+        mock_link_builder.return_value = linker
+        mock_dojometa.objects.update_or_create.return_value = (MagicMock(), True)
+
+        result = enrich_finding_task(
+            finding_id=1,
+            trim_path="",
+            project_version_descriptor={"excluded_severities": ["Info", "Low"]},
+        )
+
+        finding.delete.assert_not_called()
+        self.assertEqual(result, 1)
+
+    @patch("aist.tasks.enrich.DojoMeta")
+    @patch("aist.tasks.enrich.Finding")
+    @patch("aist.tasks.enrich.LinkBuilder")
+    def test_empty_excluded_severities_does_not_delete(
+        self, mock_link_builder, mock_finding, mock_dojometa,
+    ):
+        finding = self._make_finding("Critical")
+        mock_finding.objects.select_related.return_value.get.return_value = finding
+
+        linker = MagicMock()
+        linker.build.return_value = "https://example.com/src/main.py"
+        linker.contains_excluded_path.return_value = False
+        mock_link_builder.return_value = linker
+        mock_dojometa.objects.update_or_create.return_value = (MagicMock(), True)
+
+        result = enrich_finding_task(
+            finding_id=1,
+            trim_path="",
+            project_version_descriptor={},  # no excluded_severities key at all
+        )
+
+        finding.delete.assert_not_called()
+        self.assertEqual(result, 1)
+
+
 class EnrichFindingTaskLoggingTests(SimpleTestCase):
     @patch("aist.tasks.enrich.Finding")
     @patch("aist.tasks.enrich.LinkBuilder")
