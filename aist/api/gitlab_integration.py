@@ -33,6 +33,7 @@ class ImportGitlabRequestSerializer(serializers.Serializer):
     # GitLab numeric project id
     project_id = serializers.IntegerField(required=True)
     organization_id = OptionalIntField(required=True, allow_null=False)
+    auto_analyze = serializers.BooleanField(default=False, required=False)
 
 
 class ImportGitlabResponseSerializer(serializers.Serializer):
@@ -164,6 +165,11 @@ class ImportProjectFromGitlabAPI(APIView):
                 if aist_project.organization_id is None:
                     aist_project.organization = organization
                     aist_project.save(update_fields=["organization"])
+
+        if serializer.validated_data.get("auto_analyze") and aist_project.repository:
+            from aist.tasks.codex import analyze_project_after_import  # noqa: PLC0415
+            pid = aist_project.id
+            analyze_project_after_import.delay(pid)
 
         out = ImportGitlabResponseSerializer(
             {

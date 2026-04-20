@@ -1,4 +1,5 @@
-from aist.tasks.ai import push_request_to_ai
+from aist.tasks.ai import push_request_to_ai, push_request_to_local_triage
+from aist.tasks.codex import analyze_project_after_import
 from aist.tasks.dedup import reconcile_deduplication, watch_deduplication
 from aist.tasks.enrich import (
     after_upload_enrich_and_watch,
@@ -16,12 +17,14 @@ from aist.tasks.work_items import sync_all_work_item_providers, sync_work_item_p
 
 __all__ = [
     "after_upload_enrich_and_watch",
+    "analyze_project_after_import",
     "dispatch_queued_pipelines",
     "enrich_finding_batch",
     "enrich_finding_task",
     "flush_logs_once",
     "process_launch_schedules",
     "push_request_to_ai",
+    "push_request_to_local_triage",
     "reconcile_deduplication",
     "reconcile_pipeline_orphans_task",
     "reconcile_recent_orphans_task",

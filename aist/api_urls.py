@@ -63,7 +63,13 @@ from aist.api import (
     WorkItemProviderValidateAPI,
     WorkItemProviderValidateStatusAPI,
 )
-from aist.api.ai import AIDeleteResponseAPI, AIFindingResponseListAPI, AIPipelineCallbackAPI, AISendRequestAPI
+from aist.api.ai import (
+    AIDeleteResponseAPI,
+    AIFindingResponseListAPI,
+    AIPipelineCallbackAPI,
+    AISendRequestAPI,
+    LocalTriageCompleteAPI,
+)
 from aist.api.gitlab_integration import ImportProjectFromGitlabAPI
 from aist.api.pipelines import (
     ExportAIResultsAPI,
@@ -121,6 +127,7 @@ urlpatterns = [
     path("pipelines/<str:pipeline_id>/source-info/", PipelineSourceInfoAPI.as_view(), name="pipeline_source_info"),
     path("pipelines/<str:pipeline_id>/send-request-to-ai/", AISendRequestAPI.as_view(), name="pipeline_send_request"),
     path("pipelines/<str:pipeline_id>/callback/", AIPipelineCallbackAPI.as_view(), name="pipeline_callback"),
+    path("pipelines/<str:pipeline_id>/local-triage-complete/", LocalTriageCompleteAPI.as_view(), name="pipeline_local_triage_complete"),
     path("ai-finding-responses/", AIFindingResponseListAPI.as_view(), name="ai_finding_responses"),
     path(
         "pipelines/<str:pipeline_id>/ai-response/<int:response_id>/",

@@ -34,6 +34,7 @@ class PipelineArguments:
     log_level: str = "INFO"
     rebuild_images: bool = False
     ai_mode: str = "MANUAL"  # MANUAL | AUTO_DEFAULT
+    ai_triage_type: str | None = None  # None = use project default; "n8n" | "local"
     ai_filter_snapshot: dict | None = None  # resolved effective default at launch time
     time_class_level: str = "slow"  # TODO: change to enum
     is_initialized: bool = False
@@ -223,6 +224,13 @@ class PipelineArguments:
         env["PROJECT_NAME"] = PipelineArguments.normalize_project_name(project)
         normalized["env"] = env
 
+        # ---- AI triage type (optional per-launch override) ----
+        ai_triage_type = normalized.get("ai_triage_type")
+        if ai_triage_type is not None and ai_triage_type not in {"n8n", "local"}:
+            msg = "Unsupported ai_triage_type; allowed: n8n, local"
+            raise ValueError(msg)
+        normalized["ai_triage_type"] = ai_triage_type
+
         # ---- AI mode + snapshot rules ----
         ai_mode = normalized.get("ai_mode", "MANUAL") or "MANUAL"
         if ai_mode not in {"MANUAL", "AUTO_DEFAULT"}:
@@ -235,12 +243,16 @@ class PipelineArguments:
             normalized["ai_filter_snapshot"] = None
             return normalized
 
-        # AUTO_DEFAULT: snapshot must be explicitly provided (no project/org defaults).
+        # AUTO_DEFAULT: snapshot is required for n8n, optional for local.
         snap = normalized.get("ai_filter_snapshot")
-        if snap is None:
-            msg = "ai_filter_snapshot is required for AUTO_DEFAULT"
+        resolved_triage = ai_triage_type  # may be None (resolved later from project profile)
+        if snap is None and resolved_triage != "local":
+            msg = "ai_filter_snapshot is required for AUTO_DEFAULT (n8n triage)"
             raise ValueError(msg)
-        normalized["ai_filter_snapshot"] = validate_and_normalize_filter(snap)
+        if snap is not None:
+            normalized["ai_filter_snapshot"] = validate_and_normalize_filter(snap)
+        else:
+            normalized["ai_filter_snapshot"] = None
 
         return normalized
 
@@ -266,6 +278,7 @@ class PipelineArguments:
             log_level=normalized.get("log_level") or "INFO",
             rebuild_images=normalized.get("rebuild_images") or False,
             ai_mode=(normalized.get("ai_mode") or "MANUAL"),
+            ai_triage_type=normalized.get("ai_triage_type"),
             ai_filter_snapshot=normalized.get("ai_filter_snapshot"),
             time_class_level=normalized.get("time_class_level") or "slow",
             additional_environments=normalized.get("env") or {},

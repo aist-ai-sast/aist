@@ -117,6 +117,7 @@ class GithubImportExecuteSerializer(serializers.Serializer):
         child=serializers.RegexField(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"),
         min_length=1,
     )
+    auto_analyze = serializers.BooleanField(default=False, required=False)
 
 
 class GithubImportResultItemSerializer(serializers.Serializer):
@@ -290,6 +291,8 @@ class GithubImportExecuteAPI(APIView):
         repos_by_name = {repo["full_name"]: repo for repo in _list_installation_repositories(installation_id)}
         result: dict[str, list[dict[str, str | int]]] = {"imported": [], "skipped": [], "failed": []}
 
+        auto_analyze = serializer.validated_data.get("auto_analyze", False)
+
         for repo_full in requested_repos:
             repo = repos_by_name.get(repo_full)
             if repo is None:
@@ -300,6 +303,7 @@ class GithubImportExecuteAPI(APIView):
                     installation_id=installation_id,
                     organization=org,
                     repo_full=repo_full,
+                    auto_analyze=auto_analyze,
                 )
             except _ImportConflictError as exc:
                 result["skipped"].append({"repo": repo_full, "reason": str(exc)})
@@ -608,7 +612,13 @@ class _ImportConflictError(Exception):
     pass
 
 
-def _import_github_repository(*, installation_id: int, organization: Organization, repo_full: str) -> AISTProject:
+def _import_github_repository(
+    *,
+    installation_id: int,
+    organization: Organization,
+    repo_full: str,
+    auto_analyze: bool = False,
+) -> AISTProject:
     owner, name = repo_full.split("/", 1)
     details, languages = _fetch_repository_details(installation_id, repo_full)
 
@@ -665,6 +675,10 @@ def _import_github_repository(*, installation_id: int, organization: Organizatio
 
         if created_project:
             _create_initial_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
+            if auto_analyze:
+                from aist.tasks.codex import analyze_project_after_import  # noqa: PLC0415
+                pid = aist_project.id
+                transaction.on_commit(lambda: analyze_project_after_import.delay(pid))
         else:
             if aist_project.organization_id and aist_project.organization_id != organization.id:
                 reason = "project_linked_to_another_organization"

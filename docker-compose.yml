@@ -164,6 +164,7 @@ services:
         - type: bind
           source: ${AIST_TMP_DIR:-/tmp/aist}
           target: /tmp/aist
+        - codex_bridge_sock:/run/codex-bridge
   initializer:
     image: "aist/aist-django:${DJANGO_VERSION:-latest}"
     depends_on:
@@ -249,6 +250,38 @@ services:
         target: /tmp/aist/projects
         read_only: true
     restart: unless-stopped
+
+  codex-bridge:
+    build:
+      context: ./tools/aist-triage-bridge
+      dockerfile: Dockerfile
+    depends_on:
+      uwsgi:
+        condition: service_started
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - type: bind
+        source: ${AIST_TMP_DIR:-/tmp/aist}
+        target: /tmp/aist
+      - codex_bridge_sock:/run/codex-bridge
+      - type: bind
+        source: ./
+        target: /app/aist
+        read_only: true
+    environment:
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      AIST_WORKING_DIR: /app/aist
+      AIST_SERVICE_TOKEN: "${AIST_SERVICE_TOKEN:-}"
+      AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-1800}"
+      AIST_LOCAL_TRIAGE_BRIDGE_SOCKET: /run/codex-bridge/bridge.sock
+    healthcheck:
+      test: ["CMD-SHELL", "curl --unix-socket /run/codex-bridge/bridge.sock http://localhost/health -sf || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
 volumes:
   defectdojo_postgres:
     driver: local
@@ -259,3 +292,4 @@ volumes:
   defectdojo_media: {}
   defectdojo_redis: {}
   pgadmin_data: {}
+  codex_bridge_sock: {}

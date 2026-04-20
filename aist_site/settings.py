@@ -83,6 +83,14 @@ AIST_AI_TRIAGE_WEBHOOK_URL = env(  # noqa: F405
 )
 AIST_AI_TRIAGE_SECRET = ""
 
+# Local AI triage via Codex CLI bridge
+AIST_LOCAL_TRIAGE_BRIDGE_SOCKET = env(  # noqa: F405
+    "AIST_LOCAL_TRIAGE_BRIDGE_SOCKET",
+    default="/run/codex-bridge/bridge.sock",
+)
+AIST_LOCAL_TRIAGE_TIMEOUT = int(env("AIST_LOCAL_TRIAGE_TIMEOUT", default="1800"))  # noqa: F405
+AIST_WORKING_DIR = env("AIST_WORKING_DIR", default="/app/aist")  # noqa: F405
+
 REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] += ("rest_framework.permissions.IsAuthenticated",)  # noqa: F405
 AIST_AUTH_LOGIN_THROTTLE_RATE = env("DD_AIST_AUTH_LOGIN_THROTTLE_RATE", default="10/min")  # noqa: F405
 REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {})["aist_auth_login"] = AIST_AUTH_LOGIN_THROTTLE_RATE  # noqa: F405

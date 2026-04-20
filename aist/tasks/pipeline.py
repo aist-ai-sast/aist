@@ -178,6 +178,7 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
         ld.languages = languages
         ld.ai = {
             "mode": getattr(params, "ai_mode", "MANUAL"),
+            "triage_type": getattr(params, "ai_triage_type", None),
             "filter_snapshot": getattr(params, "ai_filter_snapshot", None),
         }
         if launch_config_id:

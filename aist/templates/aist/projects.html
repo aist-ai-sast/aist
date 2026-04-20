@@ -399,6 +399,12 @@
                             Import selected
                         </button>
                     </div>
+                    <div class="form-check mt-3">
+                        <input type="checkbox" class="form-check-input" id="gitlab-auto-analyze">
+                        <label class="form-check-label" for="gitlab-auto-analyze">
+                            Auto-analyze project (generate init script &amp; exclusions via Codex)
+                        </label>
+                    </div>
                 </form>
             </div>
         </div>
@@ -449,6 +455,12 @@
                                 </table>
                             </div>
                         </div>
+                    </div>
+                    <div class="form-check mt-3 ml-3">
+                        <input type="checkbox" class="form-check-input" id="github-auto-analyze">
+                        <label class="form-check-label" for="github-auto-analyze">
+                            Auto-analyze project (generate init script &amp; exclusions via Codex)
+                        </label>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
@@ -1643,7 +1655,8 @@
                         body: JSON.stringify({
                             organization_id: Number(orgId),
                             installation_id: Number(installationId),
-                            repositories: repositories
+                            repositories: repositories,
+                            auto_analyze: document.getElementById("github-auto-analyze").checked
                         })
                     }).then(function (resp) {
                         return resp.json().then(function (data) {
@@ -1946,10 +1959,12 @@
                     });
 
                     // Send one request per selected project.
+                    var autoAnalyze = document.getElementById("gitlab-auto-analyze").checked;
                     var promises = ids.map(function (id) {
                         var payload = {
                             project_id: id,
-                            organization_id: org
+                            organization_id: org,
+                            auto_analyze: autoAnalyze
                         };
                         return fetch(gitlabImportUrl, {
                             method: "POST",

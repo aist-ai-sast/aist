@@ -103,6 +103,11 @@ class PipelineLaunchData:
         self._data["ai"] = value
 
     @property
+    def ai_triage_type(self) -> str | None:
+        """Resolved triage type stored at launch time (``ai.triage_type``)."""
+        return self.ai.get("triage_type")
+
+    @property
     def launch_config_id(self) -> str | None:
         return self._data.get("launch_config_id")
 

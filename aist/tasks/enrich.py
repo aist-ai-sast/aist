@@ -84,9 +84,13 @@ def after_upload_enrich_and_watch(results: list[int],
         )
     except Exception:
         logger.exception("Regression detection failed (pipeline_id=%s); continuing.", pipeline_id)
-    ai = PipelineLaunchData(pipeline.launch_data).ai
-    if (ai.get("mode") == "AUTO_DEFAULT") and ai.get("filter_snapshot"):
-        auto_push_to_ai_if_configured.delay(pipeline_id)
+    ld = PipelineLaunchData(pipeline.launch_data)
+    ai = ld.ai
+    if ai.get("mode") == "AUTO_DEFAULT":
+        # n8n requires filter_snapshot; local triage can work without it.
+        triage_type = ai.get("triage_type") or "n8n"
+        if ai.get("filter_snapshot") or triage_type == "local":
+            auto_push_to_ai_if_configured.delay(pipeline_id)
 
 
 @shared_task(bind=False)

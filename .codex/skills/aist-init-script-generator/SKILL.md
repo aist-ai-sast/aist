@@ -19,6 +19,9 @@ This skill adapts generic AIST initialization behavior to a real project.
 
 ## Inputs
 
+* `project_id` **(required)**
+  AIST project ID. Used to persist the generated script in the platform database.
+
 * `target_repo_path` **(required)**
   Absolute path to the repository that must be prepared for build and SAST analysis.
 
@@ -141,9 +144,25 @@ Produce a **full Python script** that:
 * has clear logging
 * fails fast
 
-Default output path:
+---
 
-`{target_repo_path}/project_init_script.py`
+## Persistence (MANDATORY)
+
+1. Use `docker compose` to persist the generated script to the platform database.
+2. Create an `AISTProjectScript` record for the project via Django ORM:
+   ```
+   docker compose exec uwsgi python manage.py shell -c "
+   from aist.models import AISTProject, AISTProjectScript
+   project = AISTProject.objects.get(id=<project_id>)
+   script, created = AISTProjectScript.get_or_create_for_project(
+       content='''<generated script content>''',
+       project=project,
+   )
+   print(f'Script {script.id} {"created" if created else "reused"} for project {project.id}')
+   "
+   ```
+3. Do NOT write the script to a file on disk as primary output.
+4. The chat response is secondary to the persisted database state.
 
 ---
 
@@ -169,13 +188,13 @@ What was adapted and why
 
 ### 5. Final script (FULL CODE)
 
-### 6. Save action
+### 6. Persist to database
 
-Write script to target repo root
+Save script via `docker compose exec` as described in Persistence section above.
 
-### 7. Usage
+### 7. Summary
 
-How to run
+What was persisted and the script ID.
 
 ---
 
@@ -197,6 +216,7 @@ How to run
 * Project-specific logic correctly adapted
 * Script prepares repo for SAST
 * Works in CI
+* `AISTProjectScript` record created in the database for the given `project_id`
 
 ---
 
@@ -205,10 +225,11 @@ How to run
 ```id="aist-skill-example"
 Use this skill:
 
-target_repo_path="/Users/butkevichveronika/work/nx-maps-ui"
+project_id=42
+target_repo_path="/tmp/aist/projects/my-project/codex-analysis"
 ```
 
 Result:
 
 * project-specific init script generated
-* saved to target repo root
+* persisted as AISTProjectScript in the database

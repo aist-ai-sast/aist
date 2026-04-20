@@ -61,3 +61,9 @@ def build_callback_url(pipeline_id: str) -> str:
     base = get_public_base_url()
     path = reverse("aist_api:pipeline_callback", kwargs={"pipeline_id": str(pipeline_id)})
     return urljoin(base + "/", path.lstrip("/"))
+
+
+def build_local_triage_callback_url(pipeline_id: str) -> str:
+    base = get_public_base_url()
+    path = reverse("aist_api:pipeline_local_triage_complete", kwargs={"pipeline_id": str(pipeline_id)})
+    return urljoin(base + "/", path.lstrip("/"))

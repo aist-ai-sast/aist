@@ -2,6 +2,7 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
+import httpx
 import requests
 from celery import shared_task
 from django.conf import settings
@@ -12,12 +13,13 @@ from aist.ai_filter import apply_ai_filter
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTPipeline, AISTStatus
+from aist.profile import ProjectProfile
 from aist.utils.pipeline import (
     finish_pipeline,
     is_terminal_pipeline_status,
     set_pipeline_status,
 )
-from aist.utils.urls import build_callback_url
+from aist.utils.urls import build_callback_url, build_local_triage_callback_url
 
 
 def _csv(items: Iterable[Any]) -> str:
@@ -119,6 +121,113 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
         set_pipeline_status(pipeline, AISTStatus.WAITING_RESULT_FROM_AI)
 
 
+def _resolve_triage_type(pipeline: AISTPipeline) -> str:
+    """
+    Resolve the effective triage type for a pipeline.
+
+    Priority: launch_data.ai.triage_type > project.profile.ai_triage.type > "n8n".
+    """
+    ld = PipelineLaunchData(pipeline.launch_data)
+    per_launch = ld.ai_triage_type
+    if per_launch in {"n8n", "local"}:
+        return per_launch
+    profile = ProjectProfile.from_dict(pipeline.project.profile)
+    return profile.get_ai_triage_type()
+
+
+def _resolve_effective_filter(snap: dict | None, triage_type: str) -> dict | None:
+    """
+    Resolve per-type filter from the snapshot.
+
+    1. If snap has ``per_type[triage_type]`` → use it.
+    2. Otherwise → use the root-level filter (backward compat).
+    """
+    if not snap:
+        return None
+    per_type = snap.get("per_type")
+    if isinstance(per_type, dict) and triage_type in per_type:
+        return per_type[triage_type]
+    return snap
+
+
+@shared_task(bind=True)
+def push_request_to_local_triage(
+    self,
+    pipeline_id: str,
+    finding_ids: list[int],
+    log_level: str = "INFO",
+    async_user=None,
+) -> None:
+    """Send a triage request to the local Codex bridge via Unix domain socket."""
+    log = install_pipeline_logging(pipeline_id, log_level)
+    socket_path = getattr(settings, "AIST_LOCAL_TRIAGE_BRIDGE_SOCKET", "/tmp/aist/triage-bridge.sock")  # noqa: S108
+
+    # ── 1. Validate state and gather data ──
+    status_ok = True
+    source_path = ""
+    callback_url = ""
+    try:
+        with transaction.atomic():
+            pipeline = (
+                AISTPipeline.objects
+                .select_for_update()
+                .select_related("project__product")
+                .get(id=pipeline_id)
+            )
+            if pipeline.status != AISTStatus.PUSH_TO_AI:
+                log.error(
+                    "Unexpected pipeline status %s for local triage push (pipeline_id=%s)",
+                    pipeline.status,
+                    pipeline_id,
+                )
+                status_ok = False
+            else:
+                ld = PipelineLaunchData(pipeline.launch_data)
+                product_name = getattr(pipeline.project.product, "name", "") or ""
+                source_path = ld.resolve_source_root(product_name)
+                callback_url = build_local_triage_callback_url(pipeline_id)
+    except AISTPipeline.DoesNotExist:
+        log.error("Pipeline not found (pipeline_id=%s)", pipeline_id)
+        return
+
+    if not status_ok:
+        finish_pipeline(pipeline_id, degraded=True)
+        return
+
+    # ── 2. HTTP call over Unix socket — outside the transaction ──
+    payload = {
+        "skill_name": "aist-finding-triage",
+        "project_id": str(pipeline_id),
+        "source_path": source_path,
+        "callback_url": callback_url,
+    }
+
+    try:
+        log.info("Sending local triage request via UDS: socket=%s", socket_path)
+        transport = httpx.HTTPTransport(uds=socket_path)
+        with httpx.Client(transport=transport, timeout=10) as client:
+            resp = client.post("http://localhost/analyze", json=payload)
+            resp.raise_for_status()
+    except Exception:
+        log.exception("Local triage bridge request failed (pipeline_id=%s)", pipeline_id)
+        finish_pipeline(pipeline_id, degraded=True)
+        return
+
+    log.info("Local triage request accepted: status=%s", resp.status_code)
+
+    # ── 3. Confirm success ──
+    with transaction.atomic():
+        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        if is_terminal_pipeline_status(pipeline.status):
+            log.warning(
+                "Pipeline already in terminal state %s after local triage call (pipeline_id=%s); skipping.",
+                pipeline.status,
+                pipeline_id,
+            )
+            return
+        set_pipeline_status(pipeline, AISTStatus.WAITING_RESULT_FROM_AI)
+
+
 def _prepare_auto_push(pipeline_id: str, logger) -> bool | None:
     """
     Lock the pipeline, validate pre-conditions, and schedule the AI push via on_commit.
@@ -137,6 +246,7 @@ def _prepare_auto_push(pipeline_id: str, logger) -> bool | None:
         pipeline = (
             AISTPipeline.objects
             .select_for_update()
+            .select_related("project")
             .prefetch_related("tests")
             .get(id=pipeline_id)
         )
@@ -149,12 +259,42 @@ def _prepare_auto_push(pipeline_id: str, logger) -> bool | None:
             )
             return True  # degraded
 
+        triage_type = _resolve_triage_type(pipeline)
         snap = PipelineLaunchData(pipeline.launch_data).ai.get("filter_snapshot")
-        if not snap:
+        effective_filter = _resolve_effective_filter(snap, triage_type)
+
+        qs = Finding.objects.filter(test__in=pipeline.tests.all(), active=True)
+
+        if triage_type == "local":
+            # Local triage: apply per-type filter if configured, otherwise take all.
+            if effective_filter:
+                qs = apply_ai_filter(qs, effective_filter)
+                raw_limit = effective_filter.get("limit")
+                if raw_limit is not None:
+                    try:
+                        limit = int(raw_limit)
+                    except (TypeError, ValueError):
+                        limit = None
+                    if limit:
+                        qs = qs[:limit]
+            finding_ids = list(qs.values_list("id", flat=True))
+
+            if not finding_ids:
+                logger.warning("AUTO_DEFAULT (local): 0 active findings (pipeline_id=%s)", pipeline_id)
+                return False  # finish ok
+
+            set_pipeline_status(pipeline, AISTStatus.PUSH_TO_AI)
+            transaction.on_commit(
+                lambda: push_request_to_local_triage.delay(pipeline_id, finding_ids),
+            )
+            return None  # dispatched
+
+        # n8n triage (default)
+        if not effective_filter:
             logger.warning("AUTO_DEFAULT: Filter snapshot not configured (pipeline_id=%s)", pipeline_id)
             return False  # finish ok
 
-        raw_limit = snap.get("limit")
+        raw_limit = effective_filter.get("limit")
         try:
             limit = int(raw_limit)
         except (TypeError, ValueError):
@@ -163,8 +303,7 @@ def _prepare_auto_push(pipeline_id: str, logger) -> bool | None:
             )
             return True  # degraded
 
-        qs = Finding.objects.filter(test__in=pipeline.tests.all(), active=True)
-        qs = apply_ai_filter(qs, snap)
+        qs = apply_ai_filter(qs, effective_filter)
         finding_ids = list(qs.values_list("id", flat=True)[:limit])
 
         if not finding_ids:
@@ -173,7 +312,7 @@ def _prepare_auto_push(pipeline_id: str, logger) -> bool | None:
 
         set_pipeline_status(pipeline, AISTStatus.PUSH_TO_AI)
         transaction.on_commit(
-            lambda: push_request_to_ai.delay(pipeline_id, finding_ids, {"filter": snap}),
+            lambda: push_request_to_ai.delay(pipeline_id, finding_ids, {"filter": effective_filter}),
         )
         return None  # dispatched
 

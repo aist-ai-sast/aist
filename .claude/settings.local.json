@@ -7,7 +7,10 @@
       "WebFetch(domain:docs.n8n.io)",
       "WebFetch(domain:blog.thalheim.io)",
       "WebFetch(domain:docs.anthropic.com)",
-      "Skill(update-config)"
+      "Skill(update-config)",
+      "WebFetch(domain:developers.openai.com)",
+      "WebFetch(domain:platform.openai.com)",
+      "Bash(docker compose *)"
     ]
   }
 }

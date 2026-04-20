@@ -20,7 +20,8 @@ from aist.api.schema import AISTApiTag
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline, AISTStatus
 from aist.queries import get_authorized_aist_pipelines, get_authorized_findings
-from aist.tasks import push_request_to_ai
+from aist.tasks import push_request_to_ai, push_request_to_local_triage
+from aist.tasks.ai import _resolve_triage_type
 from aist.utils.ai_response import sync_ai_finding_responses
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 
@@ -84,7 +85,11 @@ def send_request_to_ai_for_pipeline(
                 {"error": "Attempt to push to AI before receiving confirmation"},
                 status=400,
             )
-        push_request_to_ai.delay(pipeline.id, ids_int, filters)
+        triage_type = _resolve_triage_type(locked)
+        if triage_type == "local":
+            push_request_to_local_triage.delay(pipeline.id, ids_int)
+        else:
+            push_request_to_ai.delay(pipeline.id, ids_int, filters)
     except Exception as exc:
         return JsonResponse({"ok": False, "error": str(exc)}, status=500)
 
@@ -185,6 +190,45 @@ class AIPipelineCallbackAPI(AuthorizedQuerySetMixin, APIView):
                     "Dropped %s AI findings that could not be matched to existing findings.",
                     sync_stats.dropped,
                 )
+
+        finish_pipeline(pipeline_id, degraded=has_errors)
+        return Response({"ok": True})
+
+
+class LocalTriageCompleteSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=["success", "error"], required=True)
+    detail = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class LocalTriageCompleteAPI(AuthorizedQuerySetMixin, APIView):
+
+    """
+    Callback endpoint for the local triage bridge.
+
+    Unlike ``AIPipelineCallbackAPI``, this does NOT run ``sync_ai_finding_responses``
+    because the Codex skill writes ``AISTAIFindingResponse`` records directly to the DB.
+    This endpoint only calls ``finish_pipeline()``.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=LocalTriageCompleteSerializer,
+        responses={200: OpenApiResponse(description="Pipeline finished")},
+        tags=[AISTApiTag.AI.value],
+    )
+    def post(self, request, pipeline_id: str):
+        get_object_or_404(AISTPipeline, id=pipeline_id)
+        serializer = LocalTriageCompleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        logger = install_pipeline_logging(pipeline_id)
+        status = serializer.validated_data["status"]
+        detail = serializer.validated_data.get("detail", "")
+        has_errors = status == "error"
+
+        if has_errors and detail:
+            logger.error("Local triage bridge reported error: %s", detail)
 
         finish_pipeline(pipeline_id, degraded=has_errors)
         return Response({"ok": True})
