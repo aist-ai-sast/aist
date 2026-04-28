@@ -167,7 +167,8 @@ class LocalTriageCompleteAPITests(AISTApiBase):
         mock_finish.assert_called_once_with("local-pipe-1", degraded=False)
 
     @patch("aist.api.ai.finish_pipeline")
-    def test_error_callback(self, mock_finish):
+    def test_error_callback_without_responses_is_degraded(self, mock_finish):
+        """Bridge error with no AI responses persisted → pipeline is degraded."""
         pipeline = AISTPipeline.objects.create(
             id="local-pipe-2",
             project=self.project,
@@ -183,6 +184,47 @@ class LocalTriageCompleteAPITests(AISTApiBase):
 
         self.assertEqual(resp.status_code, 200)
         mock_finish.assert_called_once_with("local-pipe-2", degraded=True)
+
+    @patch("aist.api.ai.finish_pipeline")
+    def test_error_callback_with_existing_responses_is_not_degraded(self, mock_finish):
+        """
+        Regression (pipeline d5d0aa24): bridge timed out after claude -p already
+        wrote the triage facts. The callback says ``error`` but the pipeline has
+        218 AISTAIFindingResponse rows — we must not mask that as warnings.
+        """
+        pipeline = AISTPipeline.objects.create(
+            id="local-pipe-2-ok",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.WAITING_RESULT_FROM_AI,
+        )
+        engagement = Engagement.objects.create(
+            name="E", target_start=timezone.now(), target_end=timezone.now(),
+            product=self.product,
+        )
+        tt = Test_Type.objects.create(name="BridgeErrTestType")
+        test = Test.objects.create(
+            engagement=engagement, target_start=timezone.now(),
+            target_end=timezone.now(), test_type=tt,
+        )
+        finding = Finding.objects.create(
+            test=test, title="F", severity="High",
+            date=timezone.now(), reporter=self.user,
+        )
+        AISTAIFindingResponse.objects.create(
+            pipeline=pipeline, finding=finding,
+            verdict="true_positive", title="TP", summary="ok",
+        )
+
+        url = reverse("aist_api:pipeline_local_triage_complete", kwargs={"pipeline_id": pipeline.id})
+        resp = self.client.post(
+            url,
+            data={"status": "error", "detail": "claude -p timed out after 1800s"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        mock_finish.assert_called_once_with("local-pipe-2-ok", degraded=False)
 
     def test_invalid_status_rejected(self):
         pipeline = AISTPipeline.objects.create(

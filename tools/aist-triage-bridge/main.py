@@ -12,8 +12,10 @@ Communication:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import logging.handlers
 import os
 import signal
 from contextlib import asynccontextmanager
@@ -26,12 +28,24 @@ from pydantic import BaseModel
 logger = logging.getLogger("aist-triage-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
+# ── Suppress health-check noise from uvicorn access log ──────────────────────
+
+class _HealthCheckFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
+
 # ── Configuration via environment variables ──────────────────────────────────
 
 AIST_WORKING_DIR = os.environ.get("AIST_WORKING_DIR", "/app/aist")
 AIST_SERVICE_TOKEN = os.environ.get("AIST_SERVICE_TOKEN", "")
 CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "claude")
 TRIAGE_TIMEOUT = int(os.environ.get("AIST_LOCAL_TRIAGE_TIMEOUT", "1800"))  # 30 min
+# Grace period after a result event before SIGTERM → SIGKILL of the claude CLI.
+POST_RESULT_GRACE = int(os.environ.get("AIST_LOCAL_TRIAGE_POST_RESULT_GRACE", "10"))
+# Optional: directory where per-pipeline .log files are written (same path as Django MEDIA_ROOT/aist_logs).
+AIST_LOG_DIR = os.environ.get("AIST_LOG_DIR", "")
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -54,14 +68,44 @@ class CallbackPayload(BaseModel):
 _running_tasks: set[asyncio.Task] = set()
 
 
-def _log_claude_event(task_label: str, raw: str) -> None:
-    """Parse a stream-json line from Claude Code and log a human-readable summary."""
+def _open_pipeline_log_handler(pipeline_id: str) -> logging.handlers.RotatingFileHandler | None:
+    """Return a file handler writing to the shared pipeline log, or None if AIST_LOG_DIR is unset."""
+    if not AIST_LOG_DIR:
+        return None
+    log_path = Path(AIST_LOG_DIR) / f"{pipeline_id}.log"
     try:
-        ev = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.info("[%s] %s", task_label, raw[:300])
-        return
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        return handler
+    except OSError:
+        logger.warning("Cannot open pipeline log file %s", log_path)
+        return None
 
+
+def _payload_from_result_event(ev: dict) -> CallbackPayload:
+    """
+    Map a stream-json ``result`` event to a bridge ``CallbackPayload``.
+
+    Claude CLI emits ``subtype=success`` on normal completion and
+    ``error_max_turns`` / ``error_during_execution`` on failure. Anything
+    other than ``success`` is treated as an error and the detail is the
+    first ~500 chars of the result text so it shows up in pipeline logs.
+    """
+    subtype = ev.get("subtype", "") or ""
+    result_text = (ev.get("result", "") or "")[:500]
+    if subtype == "success":
+        return CallbackPayload(status="success")
+    detail = f"claude -p result subtype={subtype or 'unknown'}"
+    if result_text:
+        detail = f"{detail}: {result_text}"
+    return CallbackPayload(status="error", detail=detail)
+
+
+def _log_claude_event(log: logging.Logger, task_label: str, ev: dict) -> None:
+    """Log a pre-parsed stream-json event from Claude Code."""
     ev_type = ev.get("type", "")
 
     if ev_type == "assistant":
@@ -84,36 +128,36 @@ def _log_claude_event(task_label: str, raw: str) -> None:
                     detail = inp.get("file_path", "")
                 else:
                     detail = str(inp)[:100]
-                logger.info("[%s] Tool %s: %s", task_label, name, detail)
+                log.info("[%s] Tool %s: %s", task_label, name, detail)
             elif btype == "text":
                 text = block.get("text", "")
                 if text:
-                    logger.info("[%s] %s", task_label, text[:500])
+                    log.info("[%s] %s", task_label, text[:500])
             elif btype == "thinking":
                 thinking = block.get("thinking", "")
                 if thinking:
-                    logger.info("[%s] Thinking: %s", task_label, thinking[:200])
+                    log.info("[%s] Thinking: %s", task_label, thinking[:200])
 
     elif ev_type == "result":
         subtype = ev.get("subtype", "")
         duration = ev.get("duration_ms", 0)
         turns = ev.get("num_turns", 0)
         result_text = ev.get("result", "")[:300]
-        logger.info("[%s] Result: %s (%ds, %d turns) %s", task_label, subtype, duration // 1000, turns, result_text)
+        log.info("[%s] Result: %s (%ds, %d turns) %s", task_label, subtype, duration // 1000, turns, result_text)
 
     elif ev_type == "system":
         subtype = ev.get("subtype", "")
         if subtype == "init":
-            logger.info("[%s] Session started (cwd=%s)", task_label, ev.get("cwd", "?"))
+            log.info("[%s] Session started (cwd=%s)", task_label, ev.get("cwd", "?"))
         elif subtype == "task_started":
-            logger.info("[%s] Subagent started: %s", task_label, ev.get("description", ""))
+            log.info("[%s] Subagent started: %s", task_label, ev.get("description", ""))
         elif subtype == "task_notification":
             status = ev.get("status", "")
-            logger.info("[%s] Subagent %s: %s", task_label, status, ev.get("summary", ""))
+            log.info("[%s] Subagent %s: %s", task_label, status, ev.get("summary", ""))
 
     elif ev_type == "rate_limit_event":
         info = ev.get("rate_limit_info", {})
-        logger.warning("[%s] Rate limit: %s (resets %s)", task_label, info.get("status"), info.get("resetsAt"))
+        log.warning("[%s] Rate limit: %s (resets %s)", task_label, info.get("status"), info.get("resetsAt"))
 
 
 def _build_skill_prompt(skill_name: str, project_id: str, source_path: str, extra_args: str) -> str:
@@ -137,7 +181,20 @@ def _build_skill_prompt(skill_name: str, project_id: str, source_path: str, extr
 
 
 async def _run_claude_skill(req: AnalyzeRequest) -> None:
-    """Run claude -p in a subprocess, then optionally POST result to the callback URL."""
+    """
+    Run claude -p in a subprocess, then optionally POST result to the callback URL.
+
+    Completion is signalled by the stream-json ``result`` event rather than by the
+    OS exit code: Claude CLI sometimes lingers after emitting its final result
+    (background work, subagent cleanup). Waiting for process exit made a
+    successful triage look like a timeout (see pipeline d5d0aa24). We instead:
+
+    1. Trust the first ``result`` event as the authoritative outcome.
+    2. SIGTERM the process and allow ``POST_RESULT_GRACE`` seconds for a clean
+       shutdown; SIGKILL if it still refuses to exit.
+    3. Fall back to the ``TRIAGE_TIMEOUT`` / exit-code paths only when no
+       result event is emitted at all.
+    """
     prompt = _build_skill_prompt(req.skill_name, req.project_id, req.source_path, req.extra_args)
 
     cmd = [
@@ -148,9 +205,18 @@ async def _run_claude_skill(req: AnalyzeRequest) -> None:
         "--output-format", "stream-json",
     ]
     task_label = f"{req.skill_name} project={req.project_id}"
-    logger.info("Starting claude -p for %s cwd=%s", task_label, AIST_WORKING_DIR)
+
+    # Per-task logger: propagates to root (uvicorn stream) AND optionally writes to pipeline log file.
+    log = logging.getLogger(f"aist-triage-bridge.task.{req.project_id}")
+    log.propagate = True
+    file_handler = _open_pipeline_log_handler(req.project_id)
+    if file_handler:
+        log.addHandler(file_handler)
+
+    log.info("Starting claude -p for %s cwd=%s", task_label, AIST_WORKING_DIR)
 
     result: CallbackPayload
+    proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -159,53 +225,118 @@ async def _run_claude_skill(req: AnalyzeRequest) -> None:
             cwd=AIST_WORKING_DIR,
         )
 
-        async def _stream_stderr(stream, collect: list[bytes]) -> None:
+        stderr_lines: list[bytes] = []
+        result_event = asyncio.Event()
+        result_payload: dict[str, CallbackPayload] = {}
+
+        async def _stream_stderr(stream) -> None:
             async for line in stream:
-                collect.append(line)
+                stderr_lines.append(line)
                 text = line.decode("utf-8", errors="replace").rstrip()
                 if text:
-                    logger.warning("[%s] stderr: %s", task_label, text)
+                    log.warning("[%s] stderr: %s", task_label, text)
 
         async def _stream_stdout(stream) -> None:
             async for line in stream:
                 text = line.decode("utf-8", errors="replace").rstrip()
                 if not text:
                     continue
-                _log_claude_event(task_label, text)
+                try:
+                    ev = json.loads(text)
+                except json.JSONDecodeError:
+                    log.info("[%s] %s", task_label, text[:300])
+                    continue
+                _log_claude_event(log, task_label, ev)
+                if ev.get("type") == "result" and not result_event.is_set():
+                    result_payload["payload"] = _payload_from_result_event(ev)
+                    result_event.set()
 
-        stderr_lines: list[bytes] = []
+        stdout_task = asyncio.create_task(_stream_stdout(proc.stdout))
+        stderr_task = asyncio.create_task(_stream_stderr(proc.stderr))
+        proc_wait_task = asyncio.create_task(proc.wait())
+        result_wait_task = asyncio.create_task(result_event.wait())
 
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(
-                    _stream_stdout(proc.stdout),
-                    _stream_stderr(proc.stderr, stderr_lines),
-                    proc.wait(),
-                ),
-                timeout=TRIAGE_TIMEOUT,
+        done, _pending = await asyncio.wait(
+            {result_wait_task, proc_wait_task},
+            return_when=asyncio.FIRST_COMPLETED,
+            timeout=TRIAGE_TIMEOUT,
+        )
+
+        if result_wait_task in done:
+            result = result_payload.get("payload") or CallbackPayload(
+                status="error", detail="claude -p result event missing payload",
             )
-        except TimeoutError:
-            proc.send_signal(signal.SIGTERM)
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=10)
-            except TimeoutError:
-                proc.kill()
-            logger.error("claude -p timed out after %ds for %s", TRIAGE_TIMEOUT, task_label)
+            log.info(
+                "claude -p result event received for %s status=%s; terminating CLI (pid=%s)",
+                task_label, result.status, proc.pid,
+            )
+            if proc.returncode is None:
+                proc.send_signal(signal.SIGTERM)
+                try:
+                    await asyncio.wait_for(asyncio.shield(proc_wait_task), timeout=POST_RESULT_GRACE)
+                except TimeoutError:
+                    log.warning(
+                        "claude -p did not exit %ds after result event for %s pid=%s; killing",
+                        POST_RESULT_GRACE, task_label, proc.pid,
+                    )
+                    proc.kill()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await proc_wait_task
+        elif proc_wait_task in done:
+            rc = proc.returncode
+            if rc == 0:
+                log.info("claude -p succeeded for %s (no result event, exit=0)", task_label)
+                result = CallbackPayload(status="success")
+            else:
+                err = b"".join(stderr_lines).decode("utf-8", errors="replace")[:2000]
+                log.error("claude -p failed for %s exit=%s", task_label, rc)
+                result = CallbackPayload(status="error", detail=err or f"claude -p exit={rc}")
+        else:
+            last_stderr = b"".join(stderr_lines[-20:]).decode("utf-8", errors="replace")[:1000]
+            log.error(
+                "claude -p timed out after %ds for %s pid=%s returncode=%s; last stderr: %s",
+                TRIAGE_TIMEOUT, task_label, proc.pid, proc.returncode, last_stderr or "<empty>",
+            )
+            if proc.returncode is None:
+                proc.send_signal(signal.SIGTERM)
+                try:
+                    await asyncio.wait_for(asyncio.shield(proc_wait_task), timeout=POST_RESULT_GRACE)
+                except TimeoutError:
+                    proc.kill()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await proc_wait_task
             result = CallbackPayload(
                 status="error",
                 detail=f"claude -p timed out after {TRIAGE_TIMEOUT}s",
             )
-        else:
-            if proc.returncode == 0:
-                logger.info("claude -p succeeded for %s", task_label)
-                result = CallbackPayload(status="success")
-            else:
-                err = b"".join(stderr_lines).decode("utf-8", errors="replace")[:2000]
-                logger.error("claude -p failed for %s exit=%s", task_label, proc.returncode)
-                result = CallbackPayload(status="error", detail=err)
+
+        # Drain streaming tasks so we don't leak them; short deadline is enough
+        # because the process is either gone or about to be killed.
+        for drain_task in (stdout_task, stderr_task):
+            if drain_task.done():
+                continue
+            try:
+                await asyncio.wait_for(asyncio.shield(drain_task), timeout=5)
+            except TimeoutError:
+                drain_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await drain_task
+        if not result_wait_task.done():
+            result_wait_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await result_wait_task
     except Exception:
-        logger.exception("claude -p crashed for %s", task_label)
+        log.exception("claude -p crashed for %s", task_label)
+        if proc is not None and proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
         result = CallbackPayload(status="error", detail="bridge internal error")
+    finally:
+        if file_handler:
+            log.removeHandler(file_handler)
+            file_handler.close()
 
     # POST callback (optional — analyze skills persist directly, triage uses callback)
     if req.callback_url:

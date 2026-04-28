@@ -225,12 +225,28 @@ class LocalTriageCompleteAPI(AuthorizedQuerySetMixin, APIView):
         logger = install_pipeline_logging(pipeline_id)
         status = serializer.validated_data["status"]
         detail = serializer.validated_data.get("detail", "")
-        has_errors = status == "error"
+        bridge_failed = status == "error"
 
-        if has_errors and detail:
-            logger.error("Local triage bridge reported error: %s", detail)
+        degraded = bridge_failed
+        if bridge_failed:
+            has_responses = AISTAIFindingResponse.objects.filter(pipeline_id=pipeline_id).exists()
+            if has_responses:
+                # Triage facts are already persisted — the bridge just failed
+                # to observe completion (e.g. claude -p lingered past its
+                # result event and timed out). Don't mask successful work as
+                # degraded; log the bridge error separately for diagnostics.
+                logger.error(
+                    "Local triage bridge reported error but AI responses exist for pipeline %s; "
+                    "finishing as non-degraded. Bridge detail: %s",
+                    pipeline_id, detail or "<empty>",
+                )
+                degraded = False
+            elif detail:
+                logger.error("Local triage bridge reported error: %s", detail)
+            else:
+                logger.error("Local triage bridge reported error with no detail")
 
-        finish_pipeline(pipeline_id, degraded=has_errors)
+        finish_pipeline(pipeline_id, degraded=degraded)
         return Response({"ok": True})
 
 

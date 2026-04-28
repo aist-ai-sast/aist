@@ -268,12 +268,14 @@ services:
         source: ./
         target: /app/aist
         read_only: true
+      - defectdojo_media:${DD_MEDIA_ROOT:-/app/media}
     environment:
       CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
       AIST_WORKING_DIR: /app/aist
       AIST_SERVICE_TOKEN: "${AIST_SERVICE_TOKEN:-}"
       AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-1800}"
       AIST_LOCAL_TRIAGE_BRIDGE_SOCKET: /run/codex-bridge/bridge.sock
+      AIST_LOG_DIR: "${DD_MEDIA_ROOT:-/app/media}/aist_logs"
     healthcheck:
       test: ["CMD-SHELL", "curl --unix-socket /run/codex-bridge/bridge.sock http://localhost/health -sf || exit 1"]
       interval: 30s

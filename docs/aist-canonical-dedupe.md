@@ -3,7 +3,8 @@
 ## Strategy
 - Keep UI-friendly titles, but make dedupe inputs stable.
 - Use cross-scanner canonical matching with a strict hard gate: same normalized `file_path` and `line`.
-- Auto-mark duplicates only on strong confidence (`score >= 5`), tag medium confidence as candidates (`score 3-4`).
+- Auto-mark duplicates only on strong confidence (`score >= 4`), tag medium confidence as candidates (`score >= 2`).
+- Production defaults are more aggressive: `>= 2` for auto-duplicate, `>= 1` for candidate (configurable via `DD_AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD` / `DD_AIST_CANONICAL_CANDIDATE_MIN_SCORE`).
 
 ## Family Mapping
 | Family | Typical Patterns | CWE fallback |
@@ -27,10 +28,10 @@
 - `+2` same normalized rule
 - `+1` same component name or version
 
-Decision:
-- `>= 4`: duplicate
-- `2..3`: candidate tag only
-- `< 2`: no match
+Decision (code defaults, overridable via env):
+- `>= 4`: duplicate (`DEFAULT_AUTO_DUPLICATE_THRESHOLD`; production default: `2`)
+- `>= 2`: candidate tag only (`DEFAULT_CANDIDATE_MIN_SCORE`; production default: `1`)
+- below candidate threshold: no match
 
 ## Runtime Dedupe Config
 - Algorithm for Snyk/Semgrep/Horusec/Bearer: `unique_id_from_tool_or_hash_code`

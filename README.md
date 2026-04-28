@@ -106,12 +106,12 @@ mkdir -p "${ACME_WEBROOT_HOST}" "${NGINX_SSL_HOST_DIR}"
 ```
 3. Issue certificate:
 ```bash
-sudo certbot certonly --webroot -w /var/www/certbot -d aist.itsec-europe.com
+sudo certbot certonly --webroot -w /var/www/certbot -d your-domain.com
 ```
 4. Deploy cert to nginx mount path:
 ```bash
-sudo cp /etc/letsencrypt/live/aist.itsec-europe.com/fullchain.pem "${NGINX_SSL_HOST_DIR}/nginx.crt"
-sudo cp /etc/letsencrypt/live/aist.itsec-europe.com/privkey.pem "${NGINX_SSL_HOST_DIR}/nginx.key"
+sudo cp /etc/letsencrypt/live/your-domain.com/fullchain.pem "${NGINX_SSL_HOST_DIR}/nginx.crt"
+sudo cp /etc/letsencrypt/live/your-domain.com/privkey.pem "${NGINX_SSL_HOST_DIR}/nginx.key"
 sudo chmod 640 "${NGINX_SSL_HOST_DIR}/nginx.key"
 ```
 5. Reload nginx:

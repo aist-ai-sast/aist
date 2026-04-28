@@ -130,6 +130,10 @@ docker/extra_settings/*
 dojo/settings/pro_settings.py
 
 
+# Local run artifacts
+unit_test_result.txt
+test_ai_response.json
+
 # Helm dependencies
 helm/defectdojo/charts
 
