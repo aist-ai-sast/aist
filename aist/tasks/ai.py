@@ -2,7 +2,6 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-import httpx
 import requests
 from celery import shared_task
 from django.conf import settings
@@ -12,8 +11,9 @@ from dojo.models import Finding
 from aist.ai_filter import apply_ai_filter
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging
-from aist.models import AISTPipeline, AISTStatus
+from aist.models import AISTAIResponse, AISTPipeline, AISTStatus
 from aist.profile import ProjectProfile
+from aist.utils.bridge_client_factory import build_bridge_client_from_settings
 from aist.utils.pipeline import (
     finish_pipeline,
     is_terminal_pipeline_status,
@@ -160,7 +160,7 @@ def push_request_to_local_triage(
 ) -> None:
     """Send a triage request to the local Codex bridge via Unix domain socket."""
     log = install_pipeline_logging(pipeline_id, log_level)
-    socket_path = getattr(settings, "AIST_LOCAL_TRIAGE_BRIDGE_SOCKET", "/tmp/aist/triage-bridge.sock")  # noqa: S108
+    bridge_client = build_bridge_client_from_settings()
 
     # ── 1. Validate state and gather data ──
     status_ok = True
@@ -194,26 +194,21 @@ def push_request_to_local_triage(
         finish_pipeline(pipeline_id, degraded=True)
         return
 
-    # ── 2. HTTP call over Unix socket — outside the transaction ──
-    payload = {
-        "skill_name": "aist-finding-triage",
-        "project_id": str(pipeline_id),
-        "source_path": source_path,
-        "callback_url": callback_url,
-    }
-
+    # ── 2. Bridge call over Unix socket — outside the transaction ──
+    log.info("Sending local triage request via bridge_client (UDS)")
     try:
-        log.info("Sending local triage request via UDS: socket=%s", socket_path)
-        transport = httpx.HTTPTransport(uds=socket_path)
-        with httpx.Client(transport=transport, timeout=10) as client:
-            resp = client.post("http://localhost/analyze", json=payload)
-            resp.raise_for_status()
+        bridge_client.analyze_async(
+            skill_name="aist-finding-triage",
+            project_id=str(pipeline_id),
+            source_path=source_path,
+            callback_url=callback_url,
+        )
     except Exception:
         log.exception("Local triage bridge request failed (pipeline_id=%s)", pipeline_id)
         finish_pipeline(pipeline_id, degraded=True)
         return
 
-    log.info("Local triage request accepted: status=%s", resp.status_code)
+    log.info("Local triage request accepted")
 
     # ── 3. Confirm success ──
     with transaction.atomic():
@@ -263,7 +258,12 @@ def _prepare_auto_push(pipeline_id: str, logger) -> bool | None:
         snap = PipelineLaunchData(pipeline.launch_data).ai.get("filter_snapshot")
         effective_filter = _resolve_effective_filter(snap, triage_type)
 
-        qs = Finding.objects.filter(test__in=pipeline.tests.all(), active=True)
+        # Findings already triaged by analyzer-produced AI artifacts carry
+        # pre-judged TP/FP verdicts. Re-running them through post-import triage
+        # would either waste budget or overwrite the analyzer verdict.
+        qs = Finding.objects.filter(test__in=pipeline.tests.all(), active=True).exclude(
+            aist_ai_responses__source_response__source=AISTAIResponse.Source.AGENT_ANALYZER,
+        )
 
         if triage_type == "local":
             # Local triage: apply per-type filter if configured, otherwise take all.

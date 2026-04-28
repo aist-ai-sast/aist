@@ -37,6 +37,8 @@ class PipelineLaunchDataReadTest(SimpleTestCase):
             "launch_config_id": "cfg-1",
             "project_version_descriptor": {"version": "v1"},
             "imported_test_ids": [10, 20],
+            "analyzer_outcomes": [{"name": "agent-security"}],
+            "analyzer_degraded_reasons": [{"code": "missing_result"}],
         })
         self.assertEqual(ld.log_level, "DEBUG")
         self.assertEqual(ld.languages, ["python", "java"])
@@ -44,6 +46,8 @@ class PipelineLaunchDataReadTest(SimpleTestCase):
         self.assertEqual(ld.launch_config_id, "cfg-1")
         self.assertEqual(ld.project_version_descriptor, {"version": "v1"})
         self.assertEqual(ld.imported_test_ids, [10, 20])
+        self.assertEqual(ld.analyzer_outcomes, [{"name": "agent-security"}])
+        self.assertTrue(ld.has_analyzer_degraded_reasons)
 
     def test_defaults_for_missing_fields(self):
         ld = PipelineLaunchData({})
@@ -57,6 +61,9 @@ class PipelineLaunchDataReadTest(SimpleTestCase):
         self.assertEqual(ld.ai, {})
         self.assertEqual(ld.project_version_descriptor, {})
         self.assertEqual(ld.imported_test_ids, [])
+        self.assertEqual(ld.analyzer_outcomes, [])
+        self.assertEqual(ld.analyzer_degraded_reasons, [])
+        self.assertFalse(ld.has_analyzer_degraded_reasons)
 
     def test_none_data_treated_as_empty(self):
         ld = PipelineLaunchData(None)
@@ -76,6 +83,7 @@ class PipelineLaunchDataWriteTest(SimpleTestCase):
         ld.launch_config_id = "cfg-42"
         ld.project_version_descriptor = {"version": "abc"}
         ld.imported_test_ids = [1, 2, 3]
+        ld.add_analyzer_degraded_reasons([{"code": "missing_result"}])
 
         d = ld.as_dict()
         self.assertEqual(d["log_level"], "DEBUG")
@@ -84,6 +92,7 @@ class PipelineLaunchDataWriteTest(SimpleTestCase):
         self.assertEqual(d["launch_config_id"], "cfg-42")
         self.assertEqual(d["project_version_descriptor"], {"version": "abc"})
         self.assertEqual(d["imported_test_ids"], [1, 2, 3])
+        self.assertEqual(d["analyzer_degraded_reasons"], [{"code": "missing_result"}])
 
     def test_merge_applies_fields(self):
         ld = PipelineLaunchData({"log_level": "INFO"})

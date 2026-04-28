@@ -16,6 +16,13 @@ mkdir -p "$(dirname "$SOCKET_PATH")"
 chown claude:claude "$(dirname "$SOCKET_PATH")"
 rm -f "$SOCKET_PATH"
 
+# Ensure the bridge can append to per-pipeline logs after dropping privileges.
+# Keep this scoped to AIST_LOG_DIR rather than broadening permissions on /app/media.
+if [ -n "${AIST_LOG_DIR:-}" ]; then
+    mkdir -p "$AIST_LOG_DIR"
+    chown claude:claude "$AIST_LOG_DIR"
+fi
+
 # ── Drop to claude user ──────────────────────────────────────────────────
 # Verify Claude Code auth
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then

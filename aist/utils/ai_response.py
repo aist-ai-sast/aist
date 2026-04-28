@@ -147,8 +147,12 @@ def sync_ai_finding_responses(
 ) -> SyncAIFindingResponsesResult:
     payload = ai_response.payload or {}
     parsed_entries = iter_ai_payload_entries(payload)
+    # Stale-deletion is scoped to this AISTAIResponse so multiple AI sources
+    # on the same pipeline (n8n triage, analyzer artifacts, ...) do not
+    # clobber each other's AISTAIFindingResponse rows.
+    same_source_qs = pipeline.ai_finding_responses.filter(source_response=ai_response)
     if not parsed_entries:
-        deleted, _ = pipeline.ai_finding_responses.all().delete()
+        deleted, _ = same_source_qs.delete()
         return SyncAIFindingResponsesResult(saved=0, dropped=0, deleted=deleted)
 
     candidate_ids: list[int] = []
@@ -158,7 +162,7 @@ def sync_ai_finding_responses(
             candidate_ids.append(finding_id)
 
     if not candidate_ids:
-        deleted, _ = pipeline.ai_finding_responses.all().delete()
+        deleted, _ = same_source_qs.delete()
         return SyncAIFindingResponsesResult(saved=0, dropped=len(parsed_entries), deleted=deleted)
 
     # select_for_update() prevents TOCTOU: between ID validation and the subsequent
@@ -220,6 +224,6 @@ def sync_ai_finding_responses(
         )
         saved += 1
 
-    stale_qs = pipeline.ai_finding_responses.exclude(finding_id__in=seen_finding_ids)
+    stale_qs = same_source_qs.exclude(finding_id__in=seen_finding_ids)
     deleted, _ = stale_qs.delete()
     return SyncAIFindingResponsesResult(saved=saved, dropped=dropped, deleted=deleted)

@@ -17,6 +17,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -30,9 +31,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 # ── Suppress health-check noise from uvicorn access log ──────────────────────
 
+
 class _HealthCheckFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return "/health" not in record.getMessage()
+
 
 logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
 
@@ -78,11 +81,12 @@ def _open_pipeline_log_handler(pipeline_id: str) -> logging.handlers.RotatingFil
         handler = logging.handlers.RotatingFileHandler(
             log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8",
         )
-        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-        return handler
     except OSError:
         logger.warning("Cannot open pipeline log file %s", log_path)
         return None
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        return handler
 
 
 def _payload_from_result_event(ev: dict) -> CallbackPayload:
@@ -160,16 +164,38 @@ def _log_claude_event(log: logging.Logger, task_label: str, ev: dict) -> None:
         log.warning("[%s] Rate limit: %s (resets %s)", task_label, info.get("status"), info.get("resetsAt"))
 
 
+_SKILL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
 def _build_skill_prompt(skill_name: str, project_id: str, source_path: str, extra_args: str) -> str:
     """Read SKILL.md and build a prompt with arguments."""
     # .codex/skills/ contains the actual skill content
-    # .claude/skills/ contains only redirects
-    skill_path = f"{AIST_WORKING_DIR}/.codex/skills/{skill_name}/SKILL.md"
+    # .claude/skills/ contains only redirects.
+    # Validate skill_name against a strict allow-list before using it as a
+    # path component — otherwise a caller controlling skill_name (any
+    # process with access to the bridge UDS) could traverse out of the
+    # skills directory and read arbitrary files into the Claude prompt.
+    if not _SKILL_NAME_RE.match(skill_name or ""):
+        return f"Error: invalid skill name {skill_name!r}"
+
+    skills_root = (Path(AIST_WORKING_DIR) / ".codex" / "skills").resolve()
+    skill_path = (skills_root / skill_name / "SKILL.md").resolve()
+    try:
+        skill_path.relative_to(skills_root)
+    except ValueError:
+        return f"Error: skill path escapes skills directory: {skill_path}"
 
     try:
-        skill_content = Path(skill_path).read_text(encoding="utf-8")
+        skill_content = skill_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return f"Error: skill {skill_name} not found at {skill_path}"
+
+    # extra_args is appended verbatim into the skill prompt. Reject newlines
+    # so YAML values that carry one cannot inject prompt content. The
+    # bridge already runs claude in a constrained environment, but
+    # defense-in-depth on the prompt boundary is cheap.
+    if extra_args and any(ch in extra_args for ch in ("\n", "\r")):
+        return "Error: extra_args contains forbidden newline characters"
 
     args = f"project_id={project_id} source_path={source_path}"
     if "target_repo_path" in skill_content:
@@ -180,9 +206,9 @@ def _build_skill_prompt(skill_name: str, project_id: str, source_path: str, extr
     return f"Execute the following skill with these arguments: {args}\n\n{skill_content}"
 
 
-async def _run_claude_skill(req: AnalyzeRequest) -> None:
+async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
     """
-    Run claude -p in a subprocess, then optionally POST result to the callback URL.
+    Run claude -p in a subprocess and return its CallbackPayload.
 
     Completion is signalled by the stream-json ``result`` event rather than by the
     OS exit code: Claude CLI sometimes lingers after emitting its final result
@@ -194,6 +220,10 @@ async def _run_claude_skill(req: AnalyzeRequest) -> None:
        shutdown; SIGKILL if it still refuses to exit.
     3. Fall back to the ``TRIAGE_TIMEOUT`` / exit-code paths only when no
        result event is emitted at all.
+
+    Callers decide what to do with the payload:
+    - ``_run_claude_skill`` POSTs it to ``req.callback_url`` (existing async flow).
+    - The ``/analyze-sync`` endpoint returns it directly to the HTTP caller.
     """
     prompt = _build_skill_prompt(req.skill_name, req.project_id, req.source_path, req.extra_args)
 
@@ -338,7 +368,20 @@ async def _run_claude_skill(req: AnalyzeRequest) -> None:
             log.removeHandler(file_handler)
             file_handler.close()
 
-    # POST callback (optional — analyze skills persist directly, triage uses callback)
+    return result
+
+
+async def _run_claude_skill(req: AnalyzeRequest) -> None:
+    """
+    Execute the skill and POST the result to ``req.callback_url`` (if set).
+
+    Used by the async ``/analyze`` endpoint where the caller registers a
+    callback URL and continues without waiting. ``/analyze-sync`` callers
+    use ``_execute_claude_skill`` directly instead.
+    """
+    task_label = f"{req.skill_name} project={req.project_id}"
+    result = await _execute_claude_skill(req)
+
     if req.callback_url:
         headers = {"Content-Type": "application/json"}
         if AIST_SERVICE_TOKEN:
@@ -381,6 +424,21 @@ async def analyze(req: AnalyzeRequest):
         raise HTTPException(status_code=400, detail="skill_name and source_path are required")
     _schedule_task(req)
     return {"accepted": True, "skill_name": req.skill_name, "project_id": req.project_id}
+
+
+@app.post("/analyze-sync")
+async def analyze_sync(req: AnalyzeRequest):
+    """
+    Run the skill and block until it produces a result.
+
+    Used by the SAST pipeline's analyzer_runner when it needs the skill's
+    output file on disk before continuing the pipeline (e.g.
+    claude-diff-security writing its Generic Findings Import JSON).
+    """
+    if not req.skill_name or not req.source_path:
+        raise HTTPException(status_code=400, detail="skill_name and source_path are required")
+    result = await _execute_claude_skill(req)
+    return result.model_dump()
 
 
 @app.get("/health")

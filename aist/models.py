@@ -1042,6 +1042,13 @@ class ProcessedFinding(models.Model):
 
 
 class AISTAIResponse(models.Model):
+    class Source(models.TextChoices):
+        # Default value: existing post-import Claude/n8n triage flow.
+        AI_TRIAGE = "ai_triage", "AI Triage"
+        # Analyzer-produced AI verdict artifacts imported as part of the SAST
+        # pipeline before the regular post-import triage queue.
+        AGENT_ANALYZER = "agent_analyzer", "Agent Analyzer"
+
     pipeline = models.ForeignKey(
         "AISTPipeline",
         on_delete=models.CASCADE,
@@ -1050,6 +1057,12 @@ class AISTAIResponse(models.Model):
     )
     created = models.DateTimeField(auto_now_add=True, db_index=True)
     payload = models.JSONField(default=dict, blank=True)
+    source = models.CharField(
+        max_length=32,
+        choices=Source.choices,
+        default=Source.AI_TRIAGE,
+        db_index=True,
+    )
 
     class Meta:
         ordering = ["-created"]  # last one is on top

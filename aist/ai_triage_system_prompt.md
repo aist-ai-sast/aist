@@ -1,4 +1,13 @@
 
+## Pre-triaged findings (agent analyzers)
+
+Findings whose pipeline already has an `AISTAIFindingResponse` produced by the
+analyzer artifact flow (source `AGENT_ANALYZER`) are **already
+classified**. Those findings are filtered out of the input to this prompt at
+queue time — you should never receive them. If one slips through, treat the
+existing `AISTAIFindingResponse` as the source of truth and do not overwrite
+it.
+
 ## FLOW A: Code findings (SQLi, XSS, Command Injection, Path Traversal, etc.)
 
 ### Step 1 — Quick classification

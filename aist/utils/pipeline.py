@@ -10,6 +10,7 @@ from celery.result import AsyncResult
 from django.conf import settings
 from django.db import transaction
 
+from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import uninstall_pipeline_file_logging
 from aist.models import AISTPipeline, AISTStatus
 from aist.signals import pipeline_finished, pipeline_status_changed
@@ -170,12 +171,6 @@ def finish_pipeline(pipeline_id: str, *, degraded: bool = False) -> None:
         _logger.exception("Pipeline reconciliation failed (pipeline_id=%s)", pipeline_id)
         reconcile_stats = {"remaining_violations": 1}
 
-    target_status = (
-        AISTStatus.FINISHED_WITH_WARNINGS
-        if degraded or (reconcile_stats.get("remaining_violations") or 0) > 0
-        else AISTStatus.FINISHED
-    )
-
     # Phase 2: status update in its own independent transaction
     try:
         with transaction.atomic():
@@ -184,6 +179,12 @@ def finish_pipeline(pipeline_id: str, *, degraded: bool = False) -> None:
                 # Already finished - skip to avoid overwriting a terminal status
                 # (e.g. FINISHED -> FINISHED_WITH_WARNINGS on a stale degraded=True call).
                 return
+            launch_data_degraded = PipelineLaunchData(pipeline.launch_data).has_analyzer_degraded_reasons
+            target_status = (
+                AISTStatus.FINISHED_WITH_WARNINGS
+                if degraded or launch_data_degraded or (reconcile_stats.get("remaining_violations") or 0) > 0
+                else AISTStatus.FINISHED
+            )
             set_pipeline_status(pipeline, target_status)
             transaction.on_commit(lambda: pipeline_finished.send(
                 sender=AISTPipeline, pipeline_id=pipeline_id,

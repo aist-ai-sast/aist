@@ -140,6 +140,27 @@ class PipelineLaunchData:
         self._data["imported_test_ids"] = value
 
     @property
+    def analyzer_outcomes(self) -> list[dict]:
+        return self._data.get("analyzer_outcomes") or []
+
+    @property
+    def analyzer_degraded_reasons(self) -> list[dict]:
+        return self._data.get("analyzer_degraded_reasons") or []
+
+    @analyzer_degraded_reasons.setter
+    def analyzer_degraded_reasons(self, value: list[dict]) -> None:
+        self._data["analyzer_degraded_reasons"] = value
+
+    @property
+    def has_analyzer_degraded_reasons(self) -> bool:
+        return bool(self.analyzer_degraded_reasons)
+
+    def add_analyzer_degraded_reasons(self, reasons: list[dict]) -> None:
+        if not reasons:
+            return
+        self.analyzer_degraded_reasons = [*self.analyzer_degraded_reasons, *reasons]
+
+    @property
     def action_runs(self) -> list[dict]:
         return self._data.get("action_runs") or []
 

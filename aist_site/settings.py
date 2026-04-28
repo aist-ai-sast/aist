@@ -91,6 +91,20 @@ AIST_LOCAL_TRIAGE_BRIDGE_SOCKET = env(  # noqa: F405
 AIST_LOCAL_TRIAGE_TIMEOUT = int(env("AIST_LOCAL_TRIAGE_TIMEOUT", default="1800"))  # noqa: F405
 AIST_WORKING_DIR = env("AIST_WORKING_DIR", default="/app/aist")  # noqa: F405
 
+# Limits for the claude-diff-security analyzer. Values larger than the diff
+# being analyzed force the skill into the "truncated" code path which marks
+# the pipeline FINISHED_WITH_WARNINGS instead of analyzing partial data.
+CLAUDE_DIFF_MAX_FILES = int(env("CLAUDE_DIFF_MAX_FILES", default="200"))  # noqa: F405
+CLAUDE_DIFF_MAX_BYTES = int(env("CLAUDE_DIFF_MAX_BYTES", default="1000000"))  # noqa: F405
+
+# Limits for full-project agent analyzers (e.g. claude-full-security). Per-project
+# overrides live in AISTProject.profile.agent_analyzers.full_security; these are
+# the global defaults used when no override is set.
+AGENT_FULL_MAX_FILES = int(env("AGENT_FULL_MAX_FILES", default="1500"))  # noqa: F405
+AGENT_FULL_MAX_BYTES = int(env("AGENT_FULL_MAX_BYTES", default="8000000"))  # noqa: F405
+AGENT_FULL_MAX_FILE_BYTES = int(env("AGENT_FULL_MAX_FILE_BYTES", default="200000"))  # noqa: F405
+AGENT_FULL_MAX_FINDINGS = int(env("AGENT_FULL_MAX_FINDINGS", default="50"))  # noqa: F405
+
 REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] += ("rest_framework.permissions.IsAuthenticated",)  # noqa: F405
 AIST_AUTH_LOGIN_THROTTLE_RATE = env("DD_AIST_AUTH_LOGIN_THROTTLE_RATE", default="10/min")  # noqa: F405
 REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {})["aist_auth_login"] = AIST_AUTH_LOGIN_THROTTLE_RATE  # noqa: F405

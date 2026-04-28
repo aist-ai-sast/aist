@@ -14,6 +14,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import main
@@ -194,6 +196,72 @@ class RunClaudeSkillTests(unittest.IsolatedAsyncioTestCase):
         # and then SIGKILL because exits_on_sigterm=False.
         self.assertIn(signal.SIGTERM, fake.signals)
         self.assertIn(signal.SIGKILL, fake.signals)
+
+
+class AnalyzeSyncEndpointTests(unittest.IsolatedAsyncioTestCase):
+
+    """The /analyze-sync endpoint blocks until _execute_claude_skill returns."""
+
+    async def test_returns_payload_dict_on_success(self):
+        success = main.CallbackPayload(status="success")
+        with patch("main._execute_claude_skill", AsyncMock(return_value=success)):
+            response = await main.analyze_sync(
+                AnalyzeRequest(
+                    skill_name="aist-diff-security-review",
+                    project_id="pipe-sync-1",
+                    source_path="/tmp/proj",  # noqa: S108 — test-only path
+                ),
+            )
+        self.assertEqual(response, {"status": "success", "detail": ""})
+
+    async def test_returns_error_payload_when_skill_fails(self):
+        failure = main.CallbackPayload(status="error", detail="claude crashed")
+        with patch("main._execute_claude_skill", AsyncMock(return_value=failure)):
+            response = await main.analyze_sync(
+                AnalyzeRequest(
+                    skill_name="aist-diff-security-review",
+                    project_id="pipe-sync-2",
+                    source_path="/tmp/proj",  # noqa: S108
+                ),
+            )
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["detail"], "claude crashed")
+
+    async def test_400_when_required_args_missing(self):
+        with self.assertRaises(HTTPException) as ctx:
+            await main.analyze_sync(
+                AnalyzeRequest(skill_name="", project_id="p", source_path=""),
+            )
+        self.assertEqual(ctx.exception.status_code, 400)
+
+
+class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
+
+    """_execute_claude_skill must return a CallbackPayload that callers can use."""
+
+    async def asyncSetUp(self):
+        self._orig_timeout = main.TRIAGE_TIMEOUT
+        self._orig_grace = main.POST_RESULT_GRACE
+        main.TRIAGE_TIMEOUT = 2
+        main.POST_RESULT_GRACE = 1
+
+    async def asyncTearDown(self):
+        main.TRIAGE_TIMEOUT = self._orig_timeout
+        main.POST_RESULT_GRACE = self._orig_grace
+
+    async def test_returns_success_payload_on_result_success_event(self):
+        fake = FakeProcess(
+            stdout_lines=[b'{"type":"result","subtype":"success","result":"done"}\n'],
+        )
+        req = AnalyzeRequest(
+            skill_name="aist-diff-security-review",
+            project_id="pipe-exec-1",
+            source_path="/tmp/proj",  # noqa: S108
+        )
+        with patch("main._build_skill_prompt", return_value="prompt"), \
+             patch("main.asyncio.create_subprocess_exec", AsyncMock(return_value=fake)):
+            payload = await main._execute_claude_skill(req)
+        self.assertEqual(payload.status, "success")
 
 
 if __name__ == "__main__":

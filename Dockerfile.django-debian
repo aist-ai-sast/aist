@@ -102,6 +102,7 @@ COPY \
 COPY wsgi.py manage.py ./
 COPY aist/ ./aist/
 COPY aist_site/ ./aist_site/
+COPY .codex/ ./.codex/
 COPY vendor/defectdojo/ ./vendor/defectdojo/
 COPY --from=client-build /app/client-ui/dist/ /app/client-ui/dist/
 

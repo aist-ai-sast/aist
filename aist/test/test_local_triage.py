@@ -381,8 +381,8 @@ class PushLocalTriageTaskTests(AISTApiBase):
 
     """Tests for push_request_to_local_triage Celery task."""
 
-    @patch("aist.tasks.ai.httpx")
-    def test_dispatches_to_bridge_via_uds(self, mock_httpx):
+    @patch("aist.tasks.ai.build_bridge_client_from_settings")
+    def test_dispatches_to_bridge_via_uds(self, mock_bridge_factory):
         pipeline = AISTPipeline.objects.create(
             id="push-local-1",
             project=self.project,
@@ -391,30 +391,24 @@ class PushLocalTriageTaskTests(AISTApiBase):
             launch_data={"project_path": "/tmp/aist/projects/test"},  # noqa: S108
         )
         mock_client = MagicMock()
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.post.return_value = mock_resp
-        mock_httpx.Client.return_value = mock_client
-        mock_httpx.HTTPTransport.return_value = MagicMock()
+        mock_bridge_factory.return_value = mock_client
 
         push_request_to_local_triage(str(pipeline.id), [1, 2, 3])
 
-        mock_httpx.HTTPTransport.assert_called_once()
-        mock_client.post.assert_called_once()
-        call_args = mock_client.post.call_args
-        self.assertIn("/analyze", call_args[0][0])
-        payload = call_args[1]["json"]
-        self.assertEqual(payload["project_id"], str(pipeline.id))
-        self.assertEqual(payload["skill_name"], "aist-finding-triage")
+        mock_bridge_factory.assert_called_once()
+        mock_client.analyze_async.assert_called_once()
+        call_kwargs = mock_client.analyze_async.call_args.kwargs
+        self.assertEqual(call_kwargs["project_id"], str(pipeline.id))
+        self.assertEqual(call_kwargs["skill_name"], "aist-finding-triage")
+        self.assertEqual(call_kwargs["source_path"], "/tmp/aist/projects/test")  # noqa: S108
+        self.assertIn(str(pipeline.id), call_kwargs["callback_url"])
 
         pipeline.refresh_from_db()
         self.assertEqual(pipeline.status, AISTStatus.WAITING_RESULT_FROM_AI)
 
     @patch("aist.tasks.ai.finish_pipeline")
-    @patch("aist.tasks.ai.httpx")
-    def test_bridge_unreachable_finishes_degraded(self, mock_httpx, mock_finish):
+    @patch("aist.tasks.ai.build_bridge_client_from_settings")
+    def test_bridge_unreachable_finishes_degraded(self, mock_bridge_factory, mock_finish):
         pipeline = AISTPipeline.objects.create(
             id="push-local-2",
             project=self.project,
@@ -422,7 +416,9 @@ class PushLocalTriageTaskTests(AISTApiBase):
             status=AISTStatus.PUSH_TO_AI,
             launch_data={"project_path": "/tmp/aist/projects/test"},  # noqa: S108
         )
-        mock_httpx.HTTPTransport.side_effect = Exception("socket not found")
+        mock_client = MagicMock()
+        mock_client.analyze_async.side_effect = Exception("socket not found")
+        mock_bridge_factory.return_value = mock_client
 
         push_request_to_local_triage(str(pipeline.id), [1])
 

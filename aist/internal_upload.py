@@ -56,7 +56,10 @@ class ImportResult:
     were created in core and ``enriched_count`` counts the
     number of findings for which a source file link was successfully
     attached. ``raw`` contains the underlying test object for
-    introspection by advanced callers.
+    introspection by advanced callers. ``analyzer_name`` is the name
+    of the analyzer (from analyzers.yaml) that produced this report,
+    so callers can correlate analyzer outcomes/artifacts with the imported
+    Test for follow-up work.
     """
 
     engagement_id: int
@@ -65,6 +68,7 @@ class ImportResult:
     imported_findings: int
     enriched_count: int
     raw: Test
+    analyzer_name: str = ""
 
 
 def derive_engagement_name(analyzer_name: str, branch: str | None, commit: str | None, name_mode: str) -> str:
@@ -253,6 +257,7 @@ def upload_report_internal(
         imported_findings=imported_count,
         enriched_count=0,  # will be updated in enrichment callback
         raw=test_obj,
+        analyzer_name=analyzer_name,
     )
 
 

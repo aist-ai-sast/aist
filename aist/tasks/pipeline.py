@@ -15,6 +15,9 @@ from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, OrgIntegrationType, VersionType
 from aist.pipeline_args import PipelineArguments
 from aist.tasks.dedup import watch_deduplication
+from aist.utils.agent_runtime import build_agent_runtime_env
+from aist.utils.analyzer_outcomes import consume_analyzer_outcomes
+from aist.utils.bridge_client_factory import build_bridge_client_from_settings
 from aist.utils.pipeline import (
     cleanup_terminal_project_build_paths,
     finish_pipeline,
@@ -141,6 +144,17 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
         # Isolate output directory per pipeline run to prevent concurrent-write collisions.
         output_dir = str(Path(output_dir) / pipeline_id)
 
+        # Per-pipeline runtime config for agent-bridge analyzers. This goes
+        # straight to the bridge runner via configure_project_run_analyses
+        # (NOT through additional_environments, which is the builder
+        # container's env — the bridge runs in its own container and reads
+        # this from a sidecar JSON file written by agent_bridge_runner).
+        agent_runtime_env = build_agent_runtime_env(pipeline)
+
+        # Bridge client constructed once from Django settings, single source
+        # of truth for socket path / timeouts (see aist/utils/bridge_client_factory.py).
+        bridge_client = build_bridge_client_from_settings()
+
         vpn_resolved = resolve_integration(pipeline.project, OrgIntegrationType.VPN)
         logger.info("Starting configure_project_run_analyses")
         with vpn_sidecar_context(vpn_resolved, execution_id=pipeline_id) as (vpn_container, _vpn_proxy):
@@ -173,6 +187,8 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
                     pipeline_id=pipeline_id,
                     additional_env=params.additional_environments,
                     network=vpn_network,
+                    bridge_client=bridge_client,
+                    agent_bridge_runtime_env=agent_runtime_env,
                 ))
 
         ld.languages = languages
@@ -246,6 +262,15 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
                             logger=logger,
                         )
                         parent_stats.log(logger=logger, pv_id=parent.id, label="Parent PV")
+
+        consume_analyzer_outcomes(
+            pipeline_id=pipeline_id,
+            outcomes=ld.analyzer_outcomes,
+            import_results=results,
+            output_dir=ld.output_dir or output_dir,
+            user=async_user,
+            logger=logger,
+        )
 
         if not finding_ids:
             logger.info("No findings to enrich; Finishing pipeline")
