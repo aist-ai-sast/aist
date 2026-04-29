@@ -83,13 +83,19 @@ AIST_AI_TRIAGE_WEBHOOK_URL = env(  # noqa: F405
 )
 AIST_AI_TRIAGE_SECRET = ""
 
-# Local AI triage via Codex CLI bridge
+# Local AI triage via Claude CLI bridge
 AIST_LOCAL_TRIAGE_BRIDGE_SOCKET = env(  # noqa: F405
     "AIST_LOCAL_TRIAGE_BRIDGE_SOCKET",
-    default="/run/codex-bridge/bridge.sock",
+    default="/run/claude-bridge/bridge.sock",
 )
 AIST_LOCAL_TRIAGE_TIMEOUT = int(env("AIST_LOCAL_TRIAGE_TIMEOUT", default="1800"))  # noqa: F405
 AIST_WORKING_DIR = env("AIST_WORKING_DIR", default="/app/aist")  # noqa: F405
+
+# Directory where per-pipeline `<id>.log` (celeryworker) and
+# `<id>.bridge.log` (claude-bridge) files live. Must point at the same
+# shared volume both containers mount — see docker-compose.yml. Empty
+# string falls back to MEDIA_ROOT/aist_logs.
+AIST_LOG_DIR = env("AIST_LOG_DIR", default="")  # noqa: F405
 
 # Limits for the claude-diff-security analyzer. Values larger than the diff
 # being analyzed force the skill into the "truncated" code path which marks

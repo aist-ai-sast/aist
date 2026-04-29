@@ -25,12 +25,15 @@ def pipeline_logs_progressive(request, pipeline_id: str):
     """
     Progressive log API similar to Jenkins/GitLab.
     GET params:
-    - start=<int>: byte offset to read from (default 0). Returns data from this offset to EOF.
-    - tail=<int>: last N lines to return initially (ignored if start is provided).
+    - start=<int>: byte offset into <id>.log (celeryworker). Default 0.
+    - bridge_start=<int>: byte offset into <id>.bridge.log (claude-bridge). Default 0.
+    - tail=<int>: last N merged lines to return initially (ignored if start
+      / bridge_start are provided).
     Response headers:
-    - X-Log-Size: current file size in bytes (use as next start).
+    - X-Log-Size: current size of <id>.log (use as next start).
+    - X-Bridge-Log-Size: current size of <id>.bridge.log (use as next bridge_start).
     Body:
-    - plain text chunk (UTF-8).
+    - timestamp-merged delta from both files; bridge lines prefixed `[bridge] `.
     """
     pipeline = get_object_or_404(
         get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
@@ -43,6 +46,7 @@ def pipeline_logs_progressive(request, pipeline_id: str):
         pipeline=pipeline,
         start=serializer.validated_data.get("start"),
         tail=serializer.validated_data.get("tail"),
+        bridge_start=serializer.validated_data.get("bridge_start"),
     )
 
 

@@ -65,7 +65,7 @@ analyzer applicable to enterprise codebases without runaway cost.
 | Setting                       | Type     | Default     | Purpose                                                    |
 |-------------------------------|----------|-------------|------------------------------------------------------------|
 | `CLAUDE_CODE_OAUTH_TOKEN`     | env      | —           | Set on the bridge container; auth for `claude -p`.         |
-| `AIST_LOCAL_TRIAGE_BRIDGE_SOCKET` | env  | `/run/codex-bridge/bridge.sock` | Bridge Unix socket path.                  |
+| `AIST_LOCAL_TRIAGE_BRIDGE_SOCKET` | env  | `/run/claude-bridge/bridge.sock` | Bridge Unix socket path.                  |
 | `AIST_LOCAL_TRIAGE_TIMEOUT`   | env      | `1800`      | Bridge timeout (seconds).                                  |
 | `AGENT_FULL_MAX_FILES`        | Django   | `1500`      | Hard cap on candidate file count.                          |
 | `AGENT_FULL_MAX_BYTES`        | Django   | `8_000_000` | Hard cap on aggregate candidate-body bytes.                |

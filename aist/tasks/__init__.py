@@ -1,5 +1,5 @@
 from aist.tasks.ai import push_request_to_ai, push_request_to_local_triage
-from aist.tasks.codex import analyze_project_after_import
+from aist.tasks.claude import analyze_project_after_import
 from aist.tasks.dedup import reconcile_deduplication, watch_deduplication
 from aist.tasks.enrich import (
     after_upload_enrich_and_watch,

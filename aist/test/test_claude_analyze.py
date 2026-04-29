@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from aist.api.github_integration import GithubImportExecuteSerializer
 from aist.api.gitlab_integration import ImportGitlabRequestSerializer
 from aist.models import RepositoryInfo, ScmType
-from aist.tasks.codex import _send_to_bridge, analyze_project_after_import
+from aist.tasks.claude import _send_to_bridge, analyze_project_after_import
 from aist.test.test_api import AISTApiBase
 
 
@@ -30,10 +30,10 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
         self.project.repository = self.repo_info
         self.project.save(update_fields=["repository"])
 
-    @patch("aist.tasks.codex._send_to_bridge")
-    @patch("aist.tasks.codex.subprocess")
-    @patch("aist.tasks.codex.vpn_sidecar_context", _fake_vpn_ctx)
-    @patch("aist.tasks.codex.resolve_integration", return_value=None)
+    @patch("aist.tasks.claude._send_to_bridge")
+    @patch("aist.tasks.claude.subprocess")
+    @patch("aist.tasks.claude.vpn_sidecar_context", _fake_vpn_ctx)
+    @patch("aist.tasks.claude.resolve_integration", return_value=None)
     def test_clones_and_sends_two_skills(self, mock_resolve, mock_subprocess, mock_bridge):
         mock_bridge.return_value = True
 
@@ -49,10 +49,10 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
         self.assertEqual(calls[0][1]["skill_name"], "aist-init-script-generator")
         self.assertEqual(calls[1][1]["skill_name"], "aist-project-profile-analyzer")
 
-    @patch("aist.tasks.codex._send_to_bridge")
-    @patch("aist.tasks.codex.subprocess")
-    @patch("aist.tasks.codex.vpn_sidecar_context", _fake_vpn_ctx)
-    @patch("aist.tasks.codex.resolve_integration", return_value=None)
+    @patch("aist.tasks.claude._send_to_bridge")
+    @patch("aist.tasks.claude.subprocess")
+    @patch("aist.tasks.claude.vpn_sidecar_context", _fake_vpn_ctx)
+    @patch("aist.tasks.claude.resolve_integration", return_value=None)
     def test_clone_failure_does_not_call_bridge(self, mock_resolve, mock_subprocess, mock_bridge):
         mock_subprocess.run.side_effect = Exception("clone failed")
 
@@ -73,7 +73,7 @@ class SendToBridgeTests(AISTApiBase):
 
     """Tests for _send_to_bridge helper."""
 
-    @patch("aist.tasks.codex.httpx")
+    @patch("aist.tasks.claude.httpx")
     def test_success(self, mock_httpx):
         mock_client = MagicMock()
         mock_resp = MagicMock()
@@ -95,7 +95,7 @@ class SendToBridgeTests(AISTApiBase):
         self.assertEqual(payload["skill_name"], "test-skill")
         self.assertEqual(payload["project_id"], "1")
 
-    @patch("aist.tasks.codex.httpx")
+    @patch("aist.tasks.claude.httpx")
     def test_failure_returns_false(self, mock_httpx):
         mock_httpx.HTTPTransport.side_effect = Exception("socket missing")
 

@@ -167,7 +167,7 @@ class ImportProjectFromGitlabAPI(APIView):
                     aist_project.save(update_fields=["organization"])
 
         if serializer.validated_data.get("auto_analyze") and aist_project.repository:
-            from aist.tasks.codex import analyze_project_after_import  # noqa: PLC0415
+            from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415
             pid = aist_project.id
             analyze_project_after_import.delay(pid)
 

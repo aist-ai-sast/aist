@@ -22,7 +22,7 @@ def build_bridge_client_from_settings() -> BridgeClient:
     Return a ``BridgeClient`` bound to the bridge UDS configured in settings.
 
     - ``socket_path`` from ``settings.AIST_LOCAL_TRIAGE_BRIDGE_SOCKET``
-      (default ``/run/codex-bridge/bridge.sock`` per the docker-compose layout).
+      (default ``/run/claude-bridge/bridge.sock`` per the docker-compose layout).
     - ``sync_timeout_seconds`` from ``settings.AIST_LOCAL_TRIAGE_TIMEOUT + 60``
       so the HTTP read timeout is always larger than the bridge's own
       internal claude-CLI timeout.

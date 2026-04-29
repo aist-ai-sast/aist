@@ -14,16 +14,16 @@ from aist.models import AISTProject, OrgIntegrationType
 from aist.pipeline_args import PipelineArguments
 from aist.utils.vpn import vpn_sidecar_context
 
-logger = logging.getLogger("aist.tasks.codex")
+logger = logging.getLogger("aist.tasks.claude")
 
 
 def _send_to_bridge(*, skill_name: str, project_id: int | str, source_path: str) -> bool:
     """
-    Send an analyze request to the codex-bridge via Unix domain socket.
+    Send an analyze request to the claude-bridge via Unix domain socket.
 
     Returns True on success (202 accepted), False on failure.
     """
-    socket_path = getattr(settings, "AIST_LOCAL_TRIAGE_BRIDGE_SOCKET", "/tmp/aist/triage-bridge.sock")  # noqa: S108
+    socket_path = getattr(settings, "AIST_LOCAL_TRIAGE_BRIDGE_SOCKET", "/run/claude-bridge/bridge.sock")
     payload = {
         "skill_name": skill_name,
         "project_id": str(project_id),
@@ -45,7 +45,7 @@ def _send_to_bridge(*, skill_name: str, project_id: int | str, source_path: str)
 @shared_task(bind=True)
 def analyze_project_after_import(self, project_id: int, async_user=None) -> None:
     """
-    Clone a project repository and run Codex analysis skills.
+    Clone a project repository and run Claude analysis skills.
 
     Triggered after project import when ``auto_analyze=True``.
     Uses existing integration infrastructure for auth (GitHub tokens, GitLab PATs)
@@ -73,9 +73,9 @@ def analyze_project_after_import(self, project_id: int, async_user=None) -> None
     clone_dir = os.path.join(  # noqa: PTH118
         getattr(settings, "AIST_PROJECTS_BUILD_DIR", "/tmp/aist/projects"),  # noqa: S108
         project_name,
-        "codex-analysis",
+        "claude-analysis",
     )
-    execution_id = f"codex-analyze-{project_id}"
+    execution_id = f"claude-analyze-{project_id}"
 
     # ── 1. Clone via integrations (auth + VPN) ──────────────────────────────
     try:

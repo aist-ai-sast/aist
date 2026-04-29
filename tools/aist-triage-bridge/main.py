@@ -4,7 +4,7 @@ from the celeryworker (via Unix domain socket) and runs Claude Code CLI in
 the container to execute AIST skills.
 
 Communication:
-    celeryworker → UDS /run/codex-bridge/bridge.sock → this server
+    celeryworker → UDS /run/claude-bridge/bridge.sock → this server
     this server  → claude -p (subprocess in container)
     this server  → POST callback_url (AIST API via Docker network, optional)
 """
@@ -72,10 +72,23 @@ _running_tasks: set[asyncio.Task] = set()
 
 
 def _open_pipeline_log_handler(pipeline_id: str) -> logging.handlers.RotatingFileHandler | None:
-    """Return a file handler writing to the shared pipeline log, or None if AIST_LOG_DIR is unset."""
+    """
+    Return a file handler writing to ``<pipeline_id>.bridge.log``.
+
+    The bridge container runs as the unprivileged ``claude`` user (see
+    ``entrypoint.sh: gosu claude``), while ``celeryworker`` writes the
+    primary pipeline log file (``<pipeline_id>.log``) as root. On Linux
+    these UIDs are real, so an attempt to append to a root-owned file
+    fails with PermissionError and the bridge silently loses its logs.
+
+    Writing to a separate ``<pipeline_id>.bridge.log`` keeps the bridge
+    as the sole writer to its own file. The Django log API merges both
+    files when the operator opens "Full Logs" / "Download" and exposes a
+    second progressive endpoint so the UI can show bridge events live.
+    """
     if not AIST_LOG_DIR:
         return None
-    log_path = Path(AIST_LOG_DIR) / f"{pipeline_id}.log"
+    log_path = Path(AIST_LOG_DIR) / f"{pipeline_id}.bridge.log"
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         handler = logging.handlers.RotatingFileHandler(

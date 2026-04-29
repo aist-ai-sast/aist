@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import csv
 import json
-import pathlib
+import re
 import time
 from contextlib import suppress
 from dataclasses import dataclass
 from io import BytesIO, StringIO
+from operator import itemgetter
+from typing import TYPE_CHECKING
 
 from django.db import close_old_connections, transaction
 from django.db.models import Count
@@ -29,7 +31,14 @@ from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.launch_data import PipelineLaunchData
-from aist.logging_transport import BACKLOG_COUNT, PUBSUB_CHANNEL_TPL, STREAM_KEY, get_pipeline_log_path, get_redis
+from aist.logging_transport import (
+    BACKLOG_COUNT,
+    PUBSUB_CHANNEL_TPL,
+    STREAM_KEY,
+    get_pipeline_bridge_log_path,
+    get_pipeline_log_path,
+    get_redis,
+)
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, TestDeduplicationProgress
 from aist.pipeline_args import PipelineArguments
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_project_versions
@@ -41,6 +50,9 @@ from aist.utils.pipeline import (
     is_terminal_pipeline_status,
     stop_pipeline,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +122,10 @@ class ExportAIResultsRequestSerializer(serializers.Serializer):
 class PipelineLogsProgressiveQuerySerializer(serializers.Serializer):
     start = serializers.IntegerField(required=False, min_value=0)
     tail = serializers.IntegerField(required=False, min_value=0)
+    # Independent offset into <pipeline_id>.bridge.log; the response carries
+    # both X-Log-Size (main) and X-Bridge-Log-Size headers so the client can
+    # advance each cursor without losing byte stability per source.
+    bridge_start = serializers.IntegerField(required=False, min_value=0)
 
 
 class PipelineStartAPI(AuthorizedQuerySetMixin, APIView):
@@ -408,35 +424,143 @@ def export_ai_results_response(*, pipeline: AISTPipeline, params: dict) -> HttpR
     return resp
 
 
-def pipeline_logs_progressive_response(*, pipeline: AISTPipeline, start: int | None, tail: int | None) -> HttpResponse:
-    path = get_pipeline_log_path(pipeline.id)
-    data = ""
-    size = 0
-    if pathlib.Path(path).exists():
-        size = pathlib.Path(path).stat().st_size
-        if tail:
-            with pathlib.Path(path).open("rb") as f:
-                lines = f.readlines()[-tail:]
-            decoded = [ln.decode("utf-8", errors="ignore").rstrip("\r\n") for ln in lines]
-            data = "\n".join(decoded)
-        elif start is not None:
-            start = max(0, min(start, size))
-            with pathlib.Path(path).open("rb") as f:
-                f.seek(start)
-                chunk = f.read()
-            data = chunk.decode("utf-8", errors="ignore")
-        else:
-            data = pathlib.Path(path).read_text(encoding="utf-8", errors="ignore")
+# Leading timestamp emitted by ``RotatingFileHandler`` formatter
+# ``%(asctime)s [%(levelname)s] %(message)s`` — lexicographically sortable.
+_LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:[,.]\d+)?)")
 
-    resp = HttpResponse(data, content_type="text/plain; charset=utf-8")
-    resp["X-Log-Size"] = str(size)
+
+def _read_file_text(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+
+
+def _merged_pipeline_log_text(pipeline_id: str) -> str:
+    """Full timestamp-merged view of celeryworker + aist-triage-bridge files."""
+    return _merge_log_chunks(
+        _read_file_text(get_pipeline_log_path(pipeline_id)),
+        _read_file_text(get_pipeline_bridge_log_path(pipeline_id)),
+    )
+
+
+def _read_file_chunk(path: Path, *, start: int | None, tail: int | None) -> tuple[str, int]:
+    """
+    Return ``(text, file_size)`` from ``path`` honoring ``start`` / ``tail``.
+
+    ``start`` reads bytes from that offset to EOF; ``tail`` returns the last N
+    lines. Missing file → empty text + size 0.
+    """
+    if not path.exists():
+        return "", 0
+    size = path.stat().st_size
+    if tail:
+        with path.open("rb") as f:
+            lines = f.readlines()[-tail:]
+        text = "\n".join(ln.decode("utf-8", errors="ignore").rstrip("\r\n") for ln in lines)
+    elif start is not None:
+        clamped = max(0, min(start, size))
+        with path.open("rb") as f:
+            f.seek(clamped)
+            chunk = f.read()
+        text = chunk.decode("utf-8", errors="ignore")
+    else:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    return text, size
+
+
+def _merge_log_chunks(main_text: str, bridge_text: str) -> str:
+    """
+    Merge a main-log chunk and a bridge-log chunk by leading timestamp.
+
+    Each side already arrives in chronological order. We tag bridge lines
+    with a ``[bridge]`` prefix so the operator can distinguish them, then
+    interleave by parsed timestamp. Lines without a timestamp (continuation
+    lines from multi-line messages) inherit the previous line's timestamp
+    so they stay glued to their header.
+    """
+    if not bridge_text:
+        return main_text
+    if not main_text:
+        return _annotate_bridge_lines(bridge_text)
+
+    main_records = _records_with_timestamp(main_text, source_tag="")
+    bridge_records = _records_with_timestamp(bridge_text, source_tag="[bridge] ")
+    # Stable merge: equal timestamps preserve "main before bridge".
+    indexed = [(ts, 0, txt) for ts, txt in main_records] + [(ts, 1, txt) for ts, txt in bridge_records]
+    indexed.sort(key=itemgetter(0, 1))
+    return "\n".join(txt for _, _, txt in indexed)
+
+
+def _records_with_timestamp(text: str, *, source_tag: str) -> list[tuple[str, str]]:
+    """Split ``text`` into ``(ts, line_block)`` records with continuation folding."""
+    records: list[list[str]] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        match = _LOG_TS_RE.match(line)
+        if match:
+            current = [match.group(1), source_tag + line]
+            records.append(current)
+        elif current is not None:
+            current.append(source_tag + line)
+        else:
+            current = ["", source_tag + line]
+            records.append(current)
+    return [(rec[0], "\n".join(rec[1:])) for rec in records]
+
+
+def _annotate_bridge_lines(bridge_text: str) -> str:
+    """Prefix every line with ``[bridge] `` so operators can tell sources apart."""
+    return "\n".join(f"[bridge] {line}" for line in bridge_text.splitlines())
+
+
+def pipeline_logs_progressive_response(
+    *,
+    pipeline: AISTPipeline,
+    start: int | None,
+    tail: int | None,
+    bridge_start: int | None = None,
+) -> HttpResponse:
+    """
+    Progressive log read merging celeryworker + aist-triage-bridge files.
+
+    Each source is byte-stable on its own (append-only). The client tracks
+    two independent offsets (``start`` for the main file, ``bridge_start``
+    for the bridge file) and the response carries two size headers so the
+    next poll can resume from the correct byte position in EACH file.
+
+    Body is the timestamp-merged delta of both files since the supplied
+    offsets, with bridge lines prefixed ``[bridge] `` so operators can
+    distinguish sources at a glance. Initial requests use ``tail=N`` to
+    fetch the last N merged lines.
+    """
+    main_path = get_pipeline_log_path(pipeline.id)
+    bridge_path = get_pipeline_bridge_log_path(pipeline.id)
+
+    if tail:
+        main_full, main_size = _read_file_chunk(main_path, start=None, tail=None)
+        bridge_full, bridge_size = _read_file_chunk(bridge_path, start=None, tail=None)
+        merged = _merge_log_chunks(main_full, bridge_full)
+        merged_lines = merged.splitlines()
+        body = "\n".join(merged_lines[-tail:]) if tail else merged
+    else:
+        main_chunk, main_size = _read_file_chunk(main_path, start=start, tail=None)
+        bridge_chunk, bridge_size = _read_file_chunk(bridge_path, start=bridge_start, tail=None)
+        body = _merge_log_chunks(main_chunk, bridge_chunk)
+
+    resp = HttpResponse(body, content_type="text/plain; charset=utf-8")
+    resp["X-Log-Size"] = str(main_size)
+    resp["X-Bridge-Log-Size"] = str(bridge_size)
     return resp
 
 
 def pipeline_logs_full_response(pipeline: AISTPipeline) -> HttpResponse:
-    path = get_pipeline_log_path(pipeline.id)
-    content = pathlib.Path(path).read_text(encoding="utf-8", errors="ignore") if pathlib.Path(path).exists() else ""
-    return HttpResponse(content, content_type="text/plain; charset=utf-8")
+    return HttpResponse(
+        _merged_pipeline_log_text(pipeline.id),
+        content_type="text/plain; charset=utf-8",
+    )
 
 
 def pipeline_logs_download_response(pipeline: AISTPipeline) -> HttpResponse:

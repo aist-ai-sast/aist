@@ -1,6 +1,7 @@
 # aist/logging_transport.py
 
 import logging
+import os
 from contextlib import suppress
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -22,15 +23,50 @@ def get_redis():
     return redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 
+def _aist_log_dir() -> Path:
+    """
+    Resolve the per-pipeline log directory.
+
+    Honors the ``AIST_LOG_DIR`` env var first (the bridge container reads it
+    too — keeping celeryworker and the bridge pointed at the same shared
+    volume), then ``settings.AIST_LOG_DIR``, then ``MEDIA_ROOT/aist_logs`` as
+    the historical default.
+    """
+    env_dir = os.environ.get("AIST_LOG_DIR")
+    if env_dir:
+        return Path(env_dir)
+    settings_dir = getattr(settings, "AIST_LOG_DIR", "")
+    if settings_dir:
+        return Path(settings_dir)
+    media_root = getattr(settings, "MEDIA_ROOT", "media")
+    return Path(media_root) / "aist_logs"
+
+
 def get_pipeline_log_path(pipeline_id: str) -> Path:
     """
     Returns the absolute filesystem path to the pipeline log file.
     Used both by logging setup and by log reading APIs in views.
     """
-    media_root = getattr(settings, "MEDIA_ROOT", "media")
-    log_dir = Path(media_root) / "aist_logs"
+    log_dir = _aist_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir / f"{pipeline_id}.log"
+
+
+def get_pipeline_bridge_log_path(pipeline_id: str) -> Path:
+    """
+    Returns the absolute filesystem path to the aist-triage-bridge log file.
+
+    The bridge container writes here from the ``claude`` user; the primary
+    pipeline log (``get_pipeline_log_path``) is owned by ``root`` because
+    celeryworker runs as root. Splitting the files avoids a Linux UID
+    ownership clash that silently dropped bridge log lines.
+
+    The file may not exist if the bridge has never been invoked for the
+    pipeline (no skill executions). Callers must handle missing files.
+    """
+    log_dir = _aist_log_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / f"{pipeline_id}.bridge.log"
 
 
 def install_pipeline_logging(pipeline_id: str, level=logging.INFO) -> logging.Logger:

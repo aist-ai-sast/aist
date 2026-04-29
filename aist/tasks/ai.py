@@ -158,7 +158,7 @@ def push_request_to_local_triage(
     log_level: str = "INFO",
     async_user=None,
 ) -> None:
-    """Send a triage request to the local Codex bridge via Unix domain socket."""
+    """Send a triage request to the local Claude bridge via Unix domain socket."""
     log = install_pipeline_logging(pipeline_id, log_level)
     bridge_client = build_bridge_client_from_settings()
 

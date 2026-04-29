@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOCKET_PATH="${AIST_LOCAL_TRIAGE_BRIDGE_SOCKET:-/run/codex-bridge/bridge.sock}"
+SOCKET_PATH="${AIST_LOCAL_TRIAGE_BRIDGE_SOCKET:-/run/claude-bridge/bridge.sock}"
 
 # ── Run as root: fix permissions ──────────────────────────────────────────
 # Give claude user access to docker socket (needed for `docker compose exec`)

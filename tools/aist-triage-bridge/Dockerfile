@@ -32,7 +32,7 @@ COPY main.py .
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && \
     chown -R claude:claude /app/bridge && \
-    mkdir -p /run/codex-bridge && chown claude:claude /run/codex-bridge
+    mkdir -p /run/claude-bridge && chown claude:claude /run/claude-bridge
 
 # Entrypoint runs as root to fix docker socket perms, then drops to claude
 ENTRYPOINT ["/entrypoint.sh"]

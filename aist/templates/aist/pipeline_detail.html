@@ -650,8 +650,15 @@
             if (initialStatus) runHydratorFor(initialStatus, document);
 
             // ---------- Logs SSE ----------
+            // Two independent byte offsets — one per source file. The server
+            // merges <id>.log (celeryworker) and <id>.bridge.log (claude-bridge)
+            // by leading timestamp on each poll. Tracking offsets per source
+            // keeps the streams byte-stable and avoids duplicates when the
+            // bridge writes a line whose timestamp is older than the latest
+            // main-log line (which would shift bytes in a single merged file).
             let autoScroll = true;
             let logOffset = 0;
+            let bridgeLogOffset = 0;
             const tailCount = 1000; // how many lines to load initially
             const fetchIntervalMs = 1000; // polling interval
 
@@ -659,6 +666,7 @@
                 fetch("{% url 'aist:pipeline_logs_progressive' pipeline.id %}?tail=" + tailCount)
                     .then(resp => {
                         logOffset = parseInt(resp.headers.get("X-Log-Size") || "0", 10);
+                        bridgeLogOffset = parseInt(resp.headers.get("X-Bridge-Log-Size") || "0", 10);
                         return resp.text();
                     })
                     .then(txt => {
@@ -670,12 +678,16 @@
             }
 
             function pollNewLogs() {
-                fetch("{% url 'aist:pipeline_logs_progressive' pipeline.id %}?start=" + logOffset)
+                const url = "{% url 'aist:pipeline_logs_progressive' pipeline.id %}"
+                    + "?start=" + logOffset
+                    + "&bridge_start=" + bridgeLogOffset;
+                fetch(url)
                     .then(resp => {
                         const newSize = parseInt(resp.headers.get("X-Log-Size") || logOffset, 10);
-                        return resp.text().then(txt => ({txt, newSize}));
+                        const newBridgeSize = parseInt(resp.headers.get("X-Bridge-Log-Size") || bridgeLogOffset, 10);
+                        return resp.text().then(txt => ({txt, newSize, newBridgeSize}));
                     })
-                    .then(({txt, newSize}) => {
+                    .then(({txt, newSize, newBridgeSize}) => {
                         if (txt) {
                             if (logbox && logbox.textContent.trim() === "Loading last 1000 lines…") {
                                 logbox.textContent = "";
@@ -686,6 +698,7 @@
                             }
                         }
                         logOffset = newSize;
+                        bridgeLogOffset = newBridgeSize;
                     });
             }
 

@@ -8,8 +8,10 @@ own container so it is not picked up by the Django test runner.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import signal
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -262,6 +264,66 @@ class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
              patch("main.asyncio.create_subprocess_exec", AsyncMock(return_value=fake)):
             payload = await main._execute_claude_skill(req)
         self.assertEqual(payload.status, "success")
+
+
+class OpenPipelineLogHandlerTests(unittest.TestCase):
+
+    """
+    Bridge logs must land in ``<pid>.bridge.log``, not the main pipeline log.
+
+    On Linux the main log file is owned by root (celeryworker writes it as
+    ``user: 0:0``) and the bridge runs as ``claude``. Appending to a
+    root-owned file would fail and the bridge would silently lose its logs.
+    Writing to a separate file keeps the bridge as the sole writer.
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="bridge-log-test-")
+        self._orig_log_dir = main.AIST_LOG_DIR
+        main.AIST_LOG_DIR = self._tmpdir
+
+    def tearDown(self):
+        main.AIST_LOG_DIR = self._orig_log_dir
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_handler_writes_to_bridge_suffixed_file(self):
+        handler = main._open_pipeline_log_handler("pipeline-abc")
+        self.assertIsNotNone(handler)
+        try:
+            self.assertEqual(
+                Path(handler.baseFilename).name,
+                "pipeline-abc.bridge.log",
+            )
+            self.assertEqual(
+                Path(handler.baseFilename).parent,
+                Path(self._tmpdir),
+            )
+        finally:
+            handler.close()
+
+    def test_handler_does_not_collide_with_main_pipeline_log(self):
+        # If the celeryworker has already created the main log, the bridge
+        # must still be able to open its own file (different filename → no
+        # ownership collision on Linux).
+        (Path(self._tmpdir) / "pipeline-xyz.log").write_text("root-owned-line\n", encoding="utf-8")
+        handler = main._open_pipeline_log_handler("pipeline-xyz")
+        self.assertIsNotNone(handler)
+        try:
+            self.assertNotEqual(
+                Path(handler.baseFilename).name,
+                "pipeline-xyz.log",
+                "bridge must NOT open the main pipeline log file",
+            )
+            self.assertTrue(Path(handler.baseFilename).name.endswith(".bridge.log"))
+        finally:
+            handler.close()
+
+    def test_handler_returns_none_when_log_dir_unset(self):
+        main.AIST_LOG_DIR = ""
+        try:
+            self.assertIsNone(main._open_pipeline_log_handler("any"))
+        finally:
+            main.AIST_LOG_DIR = self._tmpdir
 
 
 if __name__ == "__main__":

@@ -676,7 +676,7 @@ def _import_github_repository(
         if created_project:
             _create_initial_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
             if auto_analyze:
-                from aist.tasks.codex import analyze_project_after_import  # noqa: PLC0415
+                from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415
                 pid = aist_project.id
                 transaction.on_commit(lambda: analyze_project_after_import.delay(pid))
         else:

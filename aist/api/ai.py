@@ -206,7 +206,7 @@ class LocalTriageCompleteAPI(AuthorizedQuerySetMixin, APIView):
     Callback endpoint for the local triage bridge.
 
     Unlike ``AIPipelineCallbackAPI``, this does NOT run ``sync_ai_finding_responses``
-    because the Codex skill writes ``AISTAIFindingResponse`` records directly to the DB.
+    because the Claude skill writes ``AISTAIFindingResponse`` records directly to the DB.
     This endpoint only calls ``finish_pipeline()``.
     """
 

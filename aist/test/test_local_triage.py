@@ -178,7 +178,7 @@ class LocalTriageCompleteAPITests(AISTApiBase):
         url = reverse("aist_api:pipeline_local_triage_complete", kwargs={"pipeline_id": pipeline.id})
         resp = self.client.post(
             url,
-            data={"status": "error", "detail": "codex timed out"},
+            data={"status": "error", "detail": "claude timed out"},
             format="json",
         )
 
@@ -268,7 +268,7 @@ class LocalTriageCompleteAPITests(AISTApiBase):
             test=test, title="Test", severity="High",
             date=timezone.now(), reporter=self.user,
         )
-        # Pre-create a response (as if Codex skill wrote it)
+        # Pre-create a response (as if Claude skill wrote it)
         AISTAIFindingResponse.objects.create(
             pipeline=pipeline, finding=finding,
             verdict="true_positive", title="TP", summary="ok",

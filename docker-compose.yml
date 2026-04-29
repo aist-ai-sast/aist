@@ -158,7 +158,7 @@ services:
       DD_CREDENTIAL_AES_256_KEY: "${DD_CREDENTIAL_AES_256_KEY:-&91a*agLqesc*0DJ+2*bAbsUZfR*4nLw}"
       DD_DATABASE_READINESS_TIMEOUT: "${DD_DATABASE_READINESS_TIMEOUT:-30}"
       AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-1800}"
-      AIST_LOCAL_TRIAGE_BRIDGE_SOCKET: /run/codex-bridge/bridge.sock
+      AIST_LOCAL_TRIAGE_BRIDGE_SOCKET: /run/claude-bridge/bridge.sock
       CLAUDE_DIFF_MAX_FILES: "${CLAUDE_DIFF_MAX_FILES:-1500}"
       CLAUDE_DIFF_MAX_BYTES: "${CLAUDE_DIFF_MAX_BYTES:-6000000}"
       AGENT_FULL_MAX_FILES: "${AGENT_FULL_MAX_FILES:-16000}"
@@ -178,7 +178,7 @@ services:
         - type: bind
           source: ${AIST_TMP_DIR:-/tmp/aist}
           target: /tmp/aist
-        - codex_bridge_sock:/run/codex-bridge
+        - claude_bridge_sock:/run/claude-bridge
   initializer:
     image: "aist/aist-django:${DJANGO_VERSION:-latest}"
     depends_on:
@@ -265,7 +265,7 @@ services:
         read_only: true
     restart: unless-stopped
 
-  codex-bridge:
+  claude-bridge:
     build:
       context: ./tools/aist-triage-bridge
       dockerfile: Dockerfile
@@ -277,7 +277,7 @@ services:
       - type: bind
         source: ${AIST_TMP_DIR:-/tmp/aist}
         target: /tmp/aist
-      - codex_bridge_sock:/run/codex-bridge
+      - claude_bridge_sock:/run/claude-bridge
       - type: bind
         source: ./
         target: /app/aist
@@ -288,10 +288,10 @@ services:
       AIST_WORKING_DIR: /app/aist
       AIST_SERVICE_TOKEN: "${AIST_SERVICE_TOKEN:-}"
       AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-1800}"
-      AIST_LOCAL_TRIAGE_BRIDGE_SOCKET: /run/codex-bridge/bridge.sock
+      AIST_LOCAL_TRIAGE_BRIDGE_SOCKET: /run/claude-bridge/bridge.sock
       AIST_LOG_DIR: "${DD_MEDIA_ROOT:-/app/media}/aist_logs"
     healthcheck:
-      test: ["CMD-SHELL", "curl --unix-socket /run/codex-bridge/bridge.sock http://localhost/health -sf || exit 1"]
+      test: ["CMD-SHELL", "curl --unix-socket /run/claude-bridge/bridge.sock http://localhost/health -sf || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -308,4 +308,4 @@ volumes:
   defectdojo_media: {}
   defectdojo_redis: {}
   pgadmin_data: {}
-  codex_bridge_sock: {}
+  claude_bridge_sock: {}
