@@ -156,12 +156,21 @@ class DiffSecurityReviewSkillContractTests(unittest.TestCase):
             r"file_path.*relative to `source_path`",
             "result file paths must be relative to source_path",
         )
-        self.assertIn(
-            "Never prefix it with the basename of `source_path`",
+        # The skill has to teach the canonical "WRONG vs RIGHT" example for
+        # the basename-prefix mistake, plus tell the model how to verify the
+        # relative path against the filesystem (the `test -e` recipe).
+        self.assertRegex(
             self.text,
+            r"\*\*WRONG\*\*:[^\n]*relative to the \*parent\* of `source_path`",
+            "skill must show the basename-prefix WRONG example",
+        )
+        self.assertRegex(
+            self.text,
+            r"\*\*RIGHT\*\*:[^\n]*relative to `source_path` itself",
+            "skill must show the RIGHT example computed from source_path",
         )
         self.assertIn(
-            "Path(source_path) / file_path",
+            'test -e "ACTUAL_SOURCE_PATH/CANDIDATE_FILE_PATH"',
             self.text,
         )
 
@@ -175,13 +184,17 @@ class DiffSecurityReviewSkillContractTests(unittest.TestCase):
         self.assertIn("CLAUDE_DIFF_MAX_BYTES", self.text)
 
     def test_exclusion_pattern_semantics_documented(self):
-        for phrase in (
-            "same simple rule as AIST post-processing",
-            "exclusion string is contained",
-            "cloud/tests/foo.py",
-            ".spec.ts",
-        ):
-            self.assertIn(phrase, self.text)
+        # Some phrases get word-wrapped across lines in the rendered SKILL.md;
+        # use whitespace-tolerant regexes for those, exact-match for the
+        # concrete examples that should never wrap.
+        self.assertIn("same simple rule as AIST post-processing", self.text)
+        self.assertRegex(
+            self.text,
+            r"exclusion\s+string\s+is\s+contained",
+            "exclusion semantics must mention the substring-match rule",
+        )
+        self.assertIn("cloud/tests/foo.py", self.text)
+        self.assertIn(".spec.ts", self.text)
 
     # ── Framework-agnostic phrasing ─────────────────────────────────────
 

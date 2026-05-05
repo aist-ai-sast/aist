@@ -12,6 +12,7 @@ from aist.dedupe.canonical import (
     normalize_canonical_rule_key,
     normalize_file_path,
     score_findings,
+    tokenize_title,
 )
 
 
@@ -131,6 +132,102 @@ class CanonicalDedupeTests(SimpleTestCase):
 
         self.assertEqual(secret_alias, "secret_jwt_or_noncrypto_hardcoded")
         self.assertEqual(non_secret_rule, "python_sql_injection")
+
+    def test_family_inference_for_missing_authentication(self):
+        family = infer_canonical_family(
+            vuln_id="",
+            title="Log Collector Read and Write Endpoints Have No Authentication",
+        )
+        self.assertEqual(family, CanonicalFamily.MISSING_AUTHENTICATION)
+
+    def test_family_inference_for_cors_misconfig(self):
+        family = infer_canonical_family(
+            vuln_id="",
+            title="Permissive CORS Origin Reflection in proxy service",
+        )
+        self.assertEqual(family, CanonicalFamily.CORS_MISCONFIG)
+
+    def test_family_inference_for_ssrf(self):
+        family = infer_canonical_family(
+            vuln_id="",
+            title="Server-side request forgery via webhook URL",
+        )
+        self.assertEqual(family, CanonicalFamily.SSRF)
+
+    def test_family_inference_for_host_header_injection(self):
+        family = infer_canonical_family(
+            vuln_id="",
+            title="Host header injection on redirect endpoint",
+        )
+        self.assertEqual(family, CanonicalFamily.HOST_HEADER_INJECTION)
+
+    def test_score_duplicate_for_missing_authentication_cluster(self):
+        # Cluster 3 reproduction: missing authentication on log_collector
+        # service line 64 — paraphrased titles, identical CWE/file/line.
+        left = DummyFinding(
+            title="Log Collector Read and Write Endpoints Have No Authentication",
+            vuln_id_from_tool="claude:306:cloud/infra/log_collector/service.go:12:missing_authentication",
+            file_path="cloud/infra/log_collector/internal/log_collector/service.go",
+            line=64,
+            cwe=306,
+        )
+        right = DummyFinding(
+            title="Log Collector Service Exposes Read/Write Endpoints Without Authentication",
+            vuln_id_from_tool="claude:306:cloud/infra/log_collector/service.go:12:missing_authentication",
+            file_path="cloud/infra/log_collector/internal/log_collector/service.go",
+            line=64,
+            cwe=306,
+        )
+        match = score_findings(left, right)
+        self.assertEqual(match.verdict, MatchVerdict.DUPLICATE)
+
+    def test_score_duplicate_for_cross_scanner_cors_cluster(self):
+        # Cross-scanner regression guard: Snyk + Claude on the same file/line
+        # both report CORS misconfig with CWE 942 → must remain DUPLICATE.
+        snyk = DummyFinding(
+            title="Cross-Origin Resource Sharing misconfiguration",
+            vuln_id_from_tool="javascript_corsmisconfig",
+            file_path="src/api.ts",
+            line=22,
+            cwe=942,
+        )
+        claude = DummyFinding(
+            title="Permissive CORS Origin Reflection on API endpoint",
+            vuln_id_from_tool="claude:942:src/api.ts:4:cors_misconfig",
+            file_path="src/api.ts",
+            line=22,
+            cwe=942,
+        )
+        match = score_findings(snyk, claude)
+        self.assertEqual(match.verdict, MatchVerdict.DUPLICATE)
+
+    def test_title_token_overlap_alone_yields_candidate(self):
+        # Title-only signal — same file/line, no CWE, family inferred to
+        # UNKNOWN. Score ends at 1 → CANDIDATE (tag, no link).
+        left = DummyFinding(
+            title="Unsafe handling of customer payment workflow notifications",
+            vuln_id_from_tool="rule_alpha",
+            file_path="src/handler.go",
+            line=15,
+        )
+        right = DummyFinding(
+            title="Unsafe customer payment workflow notification handling logic",
+            vuln_id_from_tool="rule_beta",
+            file_path="src/handler.go",
+            line=15,
+        )
+        match = score_findings(left, right)
+        self.assertEqual(match.verdict, MatchVerdict.CANDIDATE)
+
+    def test_tokenize_title_filters_stopwords_and_short_tokens(self):
+        tokens = tokenize_title("The Service Exposes No Authentication In Endpoints")
+        self.assertNotIn("the", tokens)
+        self.assertNotIn("in", tokens)
+        self.assertNotIn("service", tokens)
+        self.assertNotIn("exposes", tokens)
+        self.assertNotIn("no", tokens)
+        self.assertNotIn("endpoints", tokens)
+        self.assertIn("authentication", tokens)
 
     def test_score_duplicate_for_cross_scanner_jwt_secret_variants(self):
         semgrep = DummyFinding(

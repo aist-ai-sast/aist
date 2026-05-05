@@ -157,7 +157,7 @@ services:
       DD_CSRF_TRUSTED_ORIGINS: "${DD_CSRF_TRUSTED_ORIGINS:-[]}"
       DD_CREDENTIAL_AES_256_KEY: "${DD_CREDENTIAL_AES_256_KEY:-&91a*agLqesc*0DJ+2*bAbsUZfR*4nLw}"
       DD_DATABASE_READINESS_TIMEOUT: "${DD_DATABASE_READINESS_TIMEOUT:-30}"
-      AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-1800}"
+      AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-10800}"
       AIST_LOCAL_TRIAGE_BRIDGE_SOCKET: /run/claude-bridge/bridge.sock
       CLAUDE_DIFF_MAX_FILES: "${CLAUDE_DIFF_MAX_FILES:-1500}"
       CLAUDE_DIFF_MAX_BYTES: "${CLAUDE_DIFF_MAX_BYTES:-6000000}"
@@ -269,6 +269,11 @@ services:
     build:
       context: ./tools/aist-triage-bridge
       dockerfile: Dockerfile
+    # Run uvicorn under tini so claude grandchildren that outlive the CLI
+    # are reaped. Without this they accumulate as zombies under PID 1
+    # (uvicorn) and keep the parent's pipe FDs alive — one of the failure
+    # modes that hung the bridge after SIGKILL on the claude CLI.
+    init: true
     depends_on:
       uwsgi:
         condition: service_started
@@ -287,7 +292,7 @@ services:
       CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
       AIST_WORKING_DIR: /app/aist
       AIST_SERVICE_TOKEN: "${AIST_SERVICE_TOKEN:-}"
-      AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-1800}"
+      AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-10800}"
       AIST_LOCAL_TRIAGE_BRIDGE_SOCKET: /run/claude-bridge/bridge.sock
       AIST_LOG_DIR: "${DD_MEDIA_ROOT:-/app/media}/aist_logs"
     healthcheck:

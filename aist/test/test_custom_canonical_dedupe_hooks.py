@@ -227,6 +227,64 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
         self.assertEqual(imported.duplicate_finding_id, original.id)
         self.assertIn(AIST_DEDUPE_AUTO_TAG, set(imported.tags.values_list("name", flat=True)))
 
+    def test_batch_hook_marks_duplicate_for_claude_sql_cluster(self):
+        # Cluster 1 reproduction — SQL injection at the same line, three
+        # paraphrased titles produced by the LLM. Canonical dedupe collapses
+        # them to one root + N duplicates.
+        claude_test = self._create_test("Claude Diff Security")
+        original = self._create_finding(
+            test=claude_test,
+            title="SQL Injection in user-controlled query",
+            vuln_id="claude:89:cloud/storage/dao.go:204:sql_injection",
+            file_path="cloud/storage/analytics_db_service/internal/dao/ch_tracks_dao.go",
+            line=1020,
+            cwe=89,
+        )
+        imported = self._create_finding(
+            test=claude_test,
+            title="Untrusted input concatenated into SQL query",
+            vuln_id="claude:89:cloud/storage/dao.go:204:sql_injection",
+            file_path="cloud/storage/analytics_db_service/internal/dao/ch_tracks_dao.go",
+            line=1020,
+            cwe=89,
+        )
+
+        dedupe_batch_of_findings([imported])
+        imported.refresh_from_db()
+
+        self.assertTrue(imported.duplicate)
+        self.assertEqual(imported.duplicate_finding_id, original.id)
+        self.assertIn(AIST_DEDUPE_AUTO_TAG, set(imported.tags.values_list("name", flat=True)))
+
+    def test_batch_hook_marks_duplicate_across_claude_and_semgrep(self):
+        # Cross-scanner regression guard: Semgrep and Claude both report a CORS
+        # misconfiguration on the same (file, line, CWE).
+        claude_test = self._create_test("Claude Full Security")
+        semgrep_test = self._create_test("Semgrep JSON Report")
+        original = self._create_finding(
+            test=semgrep_test,
+            title="CORS misconfiguration in proxy origin reflection",
+            vuln_id="javascript_corsmisconfig",
+            file_path="cloud/connectivity/cloud_connect/redirecting_proxy/internal/proxy/service.go",
+            line=40,
+            cwe=942,
+        )
+        imported = self._create_finding(
+            test=claude_test,
+            title="Permissive CORS Origin Reflection",
+            vuln_id="claude:942:cloud/connectivity/proxy/service.go:8:cors_misconfig",
+            file_path="cloud/connectivity/cloud_connect/redirecting_proxy/internal/proxy/service.go",
+            line=40,
+            cwe=942,
+        )
+
+        dedupe_batch_of_findings([imported])
+        imported.refresh_from_db()
+
+        self.assertTrue(imported.duplicate)
+        self.assertEqual(imported.duplicate_finding_id, original.id)
+        self.assertIn(AIST_DEDUPE_AUTO_TAG, set(imported.tags.values_list("name", flat=True)))
+
     def test_batch_hook_uses_previous_finding_as_root_when_duplicate_chain_is_broken(self):
         semgrep_test = self._create_test("Semgrep JSON Report")
         snyk_test = self._create_test("Snyk Code Scan")

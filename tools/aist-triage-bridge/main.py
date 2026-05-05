@@ -18,13 +18,19 @@ import logging
 import logging.handlers
 import os
 import re
+import shutil
 import signal
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger("aist-triage-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -44,11 +50,95 @@ logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
 AIST_WORKING_DIR = os.environ.get("AIST_WORKING_DIR", "/app/aist")
 AIST_SERVICE_TOKEN = os.environ.get("AIST_SERVICE_TOKEN", "")
 CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "claude")
-TRIAGE_TIMEOUT = int(os.environ.get("AIST_LOCAL_TRIAGE_TIMEOUT", "1800"))  # 30 min
+TRIAGE_TIMEOUT = int(os.environ.get("AIST_LOCAL_TRIAGE_TIMEOUT", "10800"))  # 3 hours
 # Grace period after a result event before SIGTERM → SIGKILL of the claude CLI.
 POST_RESULT_GRACE = int(os.environ.get("AIST_LOCAL_TRIAGE_POST_RESULT_GRACE", "10"))
 # Optional: directory where per-pipeline .log files are written (same path as Django MEDIA_ROOT/aist_logs).
 AIST_LOG_DIR = os.environ.get("AIST_LOG_DIR", "")
+
+# Per-run CLAUDE_CONFIG_DIR root — session jsonl files land here so we can tail them.
+# CLAUDE_CONFIG_DIR is the documented env var that redirects ~/.claude to a custom path.
+_CLAUDE_RUNS_DIR = Path("/tmp/claude-bridge-runs")  # noqa: S108  -- runs inside the bridge container
+_RESULT_POLL_INTERVAL = 5.0   # seconds between result-file existence checks
+_JSONL_POLL_INTERVAL = 5.0    # seconds between jsonl tail reads
+_JSONL_FIND_MAX_WAIT = 60     # seconds to wait for jsonl file to appear after session init
+
+# ── Claude stream-json / jsonl schema anchors ────────────────────────────────
+#
+# Every literal string the bridge looks up in a Claude event lives here.
+# If Anthropic renames a field or subtype in a future Claude Code release,
+# fix the constant once — none of the readers below reference the raw
+# strings directly. Layout is also a schema anchor: claude writes the
+# session jsonl under ``CLAUDE_CONFIG_DIR/projects/<derived-cwd>/<sid>.jsonl``
+# (internal layout, not officially documented; ``_JSONL_PROJECTS_DIR``
+# captures the leading segment so a single edit covers a future move).
+
+# Top-level fields on every stream-json / jsonl envelope.
+_F_TYPE = "type"
+_F_SUBTYPE = "subtype"
+_F_SESSION_ID = "session_id"
+_F_MESSAGE = "message"
+_F_CONTENT = "content"
+_F_RESULT = "result"
+
+# Event ``type`` values.
+_T_SYSTEM = "system"
+_T_RESULT = "result"
+_T_ASSISTANT = "assistant"
+_T_USER = "user"
+_T_RATE_LIMIT = "rate_limit_event"
+
+# ``system`` event subtypes claude emits on stdout.
+_SYS_INIT = "init"
+_SYS_API_RETRY = "api_retry"
+_SYS_COMPACT_BOUNDARY = "compact_boundary"
+_SYS_TASK_STARTED = "task_started"
+_SYS_TASK_NOTIFICATION = "task_notification"
+
+# ``result`` subtype that maps to a successful run; everything else is error.
+_RESULT_SUCCESS = "success"
+
+# Inner message-content block ``type`` discriminators (the value of the
+# ``type`` key inside a content block).
+_BLOCK_TYPE_TOOL_USE = "tool_use"
+_BLOCK_TYPE_TOOL_RESULT = "tool_result"
+_BLOCK_TYPE_TEXT = "text"
+_BLOCK_TYPE_THINKING = "thinking"
+
+# Field names where the actual content of text/thinking blocks lives. Today
+# these collide with the type-discriminator strings above (a ``"text"``
+# block stores its content under ``"text"``), but they're distinct schema
+# concepts — keeping them as separate constants means a future Anthropic
+# split (e.g. ``{"type": "text", "value": "..."}``) is a one-line change.
+_FIELD_TEXT = "text"
+_FIELD_THINKING = "thinking"
+
+# Truncation budgets for log lines emitted by ``_log_claude_event``. Three
+# tiers cover the spectrum from a one-line summary (Result text in the
+# CallbackPayload) up to verbose tool stdout. Keep these consistent so a
+# bridge log line never has surprising width.
+_LOG_TRUNC_SHORT = 500    # CallbackPayload detail field
+_LOG_TRUNC_MED = 1000     # thinking blocks, end-of-run result text, last stderr
+_LOG_TRUNC_LONG = 2000    # tool commands, assistant text, tool result content
+
+# Filesystem layout under CLAUDE_CONFIG_DIR (claude internal structure):
+#   <projects>/<derived-cwd>/<session_id>.jsonl              -- parent session
+#   <projects>/<derived-cwd>/<session_id>/<subagents>/agent-*.jsonl
+#                                                            -- one per Task subagent
+# For skills that delegate to sub-agents (aist-full-security-review,
+# aist-diff-security-review, ...) almost all the real Read/Bash/thinking
+# happens inside the agent-*.jsonl files, so the tailer must watch them
+# in addition to the parent jsonl. Sub-agent files are created lazily,
+# so the watcher rescans on every tick rather than once at startup.
+_JSONL_PROJECTS_DIR = "projects"
+_JSONL_SUBAGENTS_DIR = "subagents"
+
+# Event types that exist only in the stream-json stdout channel and are
+# NOT mirrored to the session jsonl. ``_stream_stdout`` logs these so the
+# operator still sees the session header, API-retry warnings and the
+# final result summary; everything else (assistant/user content) flows
+# from ``_tail_jsonl`` to keep one authoritative timeline in the bridge log.
+_STDOUT_ONLY_LOG_TYPES = frozenset({_T_SYSTEM, _T_RESULT, _T_RATE_LIMIT})
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -69,6 +159,35 @@ class CallbackPayload(BaseModel):
 # ── Background task runner ───────────────────────────────────────────────────
 
 _running_tasks: set[asyncio.Task] = set()
+
+
+def _task_label(req: AnalyzeRequest) -> str:
+    """Compose the operator-facing label used in every bridge log line."""
+    return f"{req.skill_name} project={req.project_id}"
+
+
+@dataclass
+class _RunContext:
+
+    """
+    Shared state across the coroutines that make up one ``claude -p`` run.
+
+    Replaces what used to be a fistful of free variables captured in
+    nested closures inside ``_execute_claude_skill`` (``result_event``,
+    ``session_id_holder``, ``stderr_lines``, ...). Lifting them into a
+    dataclass lets ``_stream_stdout`` / ``_tail_jsonl`` etc. live at
+    module level, where they can be tested in isolation.
+    """
+
+    log: logging.Logger
+    task_label: str
+    claude_config_dir: Path
+    result_file_path: Path | None
+    stderr_lines: list[bytes] = field(default_factory=list)
+    result_event: asyncio.Event = field(default_factory=asyncio.Event)
+    payload: CallbackPayload | None = None
+    session_id_known: asyncio.Event = field(default_factory=asyncio.Event)
+    session_id: str = ""
 
 
 def _open_pipeline_log_handler(pipeline_id: str) -> logging.handlers.RotatingFileHandler | None:
@@ -102,6 +221,66 @@ def _open_pipeline_log_handler(pipeline_id: str) -> logging.handlers.RotatingFil
         return handler
 
 
+def _signal_pgroup(pid: int, sig: int) -> None:
+    """
+    Send ``sig`` to the entire process group led by ``pid``.
+
+    Claude is spawned with ``start_new_session=True`` so the CLI and every
+    descendant it forks (Bash, sub-agents, ...) share one process group.
+    Killing only ``pid`` leaves grandchildren alive holding the
+    stdout/stderr pipes open — the bridge then never observes EOF, the
+    drain coroutines never finish, and ``_execute_claude_skill`` hangs
+    indefinitely (see incident with pipeline a2a7ed26 where
+    aist-full-security-review sub-agents survived a SIGKILL on the CLI).
+    """
+    try:
+        pgid = os.getpgid(pid)
+    except (ProcessLookupError, PermissionError):
+        return
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        return
+
+
+async def _terminate_subprocess(
+    proc: asyncio.subprocess.Process,
+    proc_wait_task: asyncio.Task,
+    log: logging.Logger,
+    task_label: str,
+) -> None:
+    """
+    SIGTERM → grace → SIGKILL on the claude CLI's process group.
+
+    Always targets the whole pgroup, never just ``proc.pid``, otherwise
+    descendants outlive the CLI and keep the stdout/stderr pipes open.
+    Both waits are time-bounded so a stuck child watcher cannot hold the
+    /analyze-sync request open forever.
+    """
+    if proc.returncode is not None:
+        return
+    _signal_pgroup(proc.pid, signal.SIGTERM)
+    try:
+        await asyncio.wait_for(asyncio.shield(proc_wait_task), timeout=POST_RESULT_GRACE)
+    except TimeoutError:
+        log.warning(
+            "claude -p did not exit %ds after SIGTERM for %s pid=%s; "
+            "SIGKILL on process group",
+            POST_RESULT_GRACE, task_label, proc.pid,
+        )
+    else:
+        return
+    _signal_pgroup(proc.pid, signal.SIGKILL)
+    try:
+        await asyncio.wait_for(asyncio.shield(proc_wait_task), timeout=POST_RESULT_GRACE)
+    except TimeoutError:
+        log.error(
+            "claude -p still alive %ds after SIGKILL on pgroup for %s pid=%s; "
+            "abandoning subprocess",
+            POST_RESULT_GRACE, task_label, proc.pid,
+        )
+
+
 def _payload_from_result_event(ev: dict) -> CallbackPayload:
     """
     Map a stream-json ``result`` event to a bridge ``CallbackPayload``.
@@ -111,70 +290,224 @@ def _payload_from_result_event(ev: dict) -> CallbackPayload:
     other than ``success`` is treated as an error and the detail is the
     first ~500 chars of the result text so it shows up in pipeline logs.
     """
-    subtype = ev.get("subtype", "") or ""
-    result_text = (ev.get("result", "") or "")[:500]
-    if subtype == "success":
+    subtype = ev.get(_F_SUBTYPE, "") or ""
+    if subtype == _RESULT_SUCCESS:
         return CallbackPayload(status="success")
+    result_text = (ev.get(_F_RESULT, "") or "")[:_LOG_TRUNC_SHORT]
     detail = f"claude -p result subtype={subtype or 'unknown'}"
     if result_text:
         detail = f"{detail}: {result_text}"
     return CallbackPayload(status="error", detail=detail)
 
 
+def _format_tool_use_detail(name: str, inp: dict) -> str:
+    """
+    Compose the human-readable detail string for a ``tool_use`` block.
+
+    Centralizes the per-tool extraction rules so ``_log_assistant_event``
+    stays a single line per block. Each branch picks the field that's
+    most informative for the operator (a Bash command, a file path, a
+    glob pattern, ...) and falls back to the raw input dict otherwise.
+    """
+    if name == "Bash":
+        return inp.get("description") or inp.get("command", "")[:_LOG_TRUNC_LONG]
+    if name == "Read":
+        return inp.get("file_path", "")
+    if name in {"Glob", "Grep"}:
+        return inp.get("pattern", "")
+    if name in {"Agent", "Skill", "Task"}:
+        return inp.get("description", "") or inp.get("skill", "")
+    if name in {"Edit", "Write"}:
+        return inp.get("file_path", "")
+    return str(inp)[:_LOG_TRUNC_SHORT]
+
+
+def _log_assistant_event(log: logging.Logger, task_label: str, ev: dict) -> None:
+    msg = ev.get(_F_MESSAGE) or {}
+    content = msg.get(_F_CONTENT)
+    if not isinstance(content, list):
+        return
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get(_F_TYPE, "")
+        if btype == _BLOCK_TYPE_TOOL_USE:
+            name = block.get("name", "?")
+            detail = _format_tool_use_detail(name, block.get("input", {}))
+            log.info("[%s] Tool %s: %s", task_label, name, detail)
+        elif btype == _BLOCK_TYPE_TEXT:
+            text = block.get(_FIELD_TEXT, "")
+            if text:
+                log.info("[%s] %s", task_label, text[:_LOG_TRUNC_LONG])
+        elif btype == _BLOCK_TYPE_THINKING:
+            thinking = block.get(_FIELD_THINKING, "")
+            if thinking:
+                log.info("[%s] Thinking: %s", task_label, thinking[:_LOG_TRUNC_MED])
+
+
+def _log_user_event(log: logging.Logger, task_label: str, ev: dict) -> None:
+    # Tool results — output of every tool execution (bash stdout, file
+    # contents, etc.). The first user turn in the JSONL session is the
+    # initial prompt as a raw string; that's logged via stream-json
+    # ``system/init`` instead, so we silently skip string content here.
+    msg = ev.get(_F_MESSAGE) or {}
+    msg_content = msg.get(_F_CONTENT)
+    if not isinstance(msg_content, list):
+        return
+    for block in msg_content:
+        if not isinstance(block, dict):
+            continue
+        if block.get(_F_TYPE) != _BLOCK_TYPE_TOOL_RESULT:
+            continue
+        tool_use_id = block.get("tool_use_id", "?")
+        content = block.get(_F_CONTENT, "")
+        if isinstance(content, list):
+            parts = [
+                c.get(_FIELD_TEXT, "")
+                for c in content
+                if isinstance(c, dict) and c.get(_F_TYPE) == _BLOCK_TYPE_TEXT
+            ]
+            text = "\n".join(parts)
+        elif isinstance(content, str):
+            text = content
+        else:
+            text = str(content)
+        if text:
+            log.info("[%s] Tool result (%s): %s", task_label, tool_use_id, text[:_LOG_TRUNC_LONG])
+
+
+def _log_result_event(log: logging.Logger, task_label: str, ev: dict) -> None:
+    subtype = ev.get(_F_SUBTYPE, "")
+    duration = ev.get("duration_ms", 0)
+    turns = ev.get("num_turns", 0)
+    result_text = (ev.get(_F_RESULT) or "")[:_LOG_TRUNC_MED]
+    log.info(
+        "[%s] Result: %s (%ds, %d turns) %s",
+        task_label, subtype, duration // 1000, turns, result_text,
+    )
+
+
+def _log_system_event(log: logging.Logger, task_label: str, ev: dict) -> None:
+    subtype = ev.get(_F_SUBTYPE, "")
+    if subtype == _SYS_INIT:
+        log.info(
+            "[%s] Session started (cwd=%s session_id=%s model=%s)",
+            task_label,
+            ev.get("cwd", "?"),
+            ev.get(_F_SESSION_ID, "?"),
+            ev.get("model", "?"),
+        )
+    elif subtype == _SYS_API_RETRY:
+        log.warning(
+            "[%s] API retry attempt=%s/%s delay=%sms error=%s status=%s",
+            task_label,
+            ev.get("attempt"), ev.get("max_retries"),
+            ev.get("retry_delay_ms"), ev.get("error"), ev.get("error_status"),
+        )
+    elif subtype == _SYS_COMPACT_BOUNDARY:
+        meta = ev.get("compact_metadata", {})
+        log.info(
+            "[%s] Conversation compacted (trigger=%s pre_tokens=%s)",
+            task_label, meta.get("trigger"), meta.get("pre_tokens"),
+        )
+    elif subtype == _SYS_TASK_STARTED:
+        log.info("[%s] Subagent started: %s", task_label, ev.get("description", ""))
+    elif subtype == _SYS_TASK_NOTIFICATION:
+        log.info(
+            "[%s] Subagent %s: %s",
+            task_label, ev.get("status", ""), ev.get("summary", ""),
+        )
+
+
+def _log_rate_limit_event(log: logging.Logger, task_label: str, ev: dict) -> None:
+    info = ev.get("rate_limit_info", {})
+    log.warning(
+        "[%s] Rate limit: tokens %s/%s (resets %s) requests %s/%s",
+        task_label,
+        info.get("tokens_remaining"),
+        info.get("tokens_limit"),
+        info.get("tokens_reset_date"),
+        info.get("requests_remaining"),
+        info.get("requests_limit"),
+    )
+
+
+# Dispatch table — keep this in sync with the ``_T_*`` constants above.
+# A missing handler is fine: events of types we don't render are silently
+# dropped (claude may add new types in future versions).
+_EVENT_LOGGERS: dict[str, Callable[[logging.Logger, str, dict], None]] = {
+    _T_ASSISTANT: _log_assistant_event,
+    _T_USER: _log_user_event,
+    _T_RESULT: _log_result_event,
+    _T_SYSTEM: _log_system_event,
+    _T_RATE_LIMIT: _log_rate_limit_event,
+}
+
+
 def _log_claude_event(log: logging.Logger, task_label: str, ev: dict) -> None:
-    """Log a pre-parsed stream-json event from Claude Code."""
-    ev_type = ev.get("type", "")
+    """
+    Log a pre-parsed event from Claude Code.
 
-    if ev_type == "assistant":
-        msg = ev.get("message", {})
-        for block in msg.get("content", []):
-            btype = block.get("type", "")
-            if btype == "tool_use":
-                name = block.get("name", "?")
-                inp = block.get("input", {})
-                detail = ""
-                if name == "Bash":
-                    detail = inp.get("description") or inp.get("command", "")[:120]
-                elif name == "Read":
-                    detail = inp.get("file_path", "")
-                elif name in {"Glob", "Grep"}:
-                    detail = inp.get("pattern", "")
-                elif name in {"Agent", "Skill"}:
-                    detail = inp.get("description", "") or inp.get("skill", "")
-                elif name in {"Edit", "Write"}:
-                    detail = inp.get("file_path", "")
-                else:
-                    detail = str(inp)[:100]
-                log.info("[%s] Tool %s: %s", task_label, name, detail)
-            elif btype == "text":
-                text = block.get("text", "")
-                if text:
-                    log.info("[%s] %s", task_label, text[:500])
-            elif btype == "thinking":
-                thinking = block.get("thinking", "")
-                if thinking:
-                    log.info("[%s] Thinking: %s", task_label, thinking[:200])
+    Tolerates the shape differences between stream-json (stdout) and the
+    session jsonl: ``message`` may be missing or ``None``, ``content``
+    may be a string (initial prompt in jsonl) or a list, and individual
+    blocks may not be dicts. A single off-spec event must NOT raise —
+    otherwise it kills ``_tail_jsonl``'s loop and silences the bridge
+    log for the rest of the run (incident 7e002960: 93 parent-jsonl
+    events lost because the first one was a string-content user event).
+    """
+    handler = _EVENT_LOGGERS.get(ev.get(_F_TYPE, ""))
+    if handler is not None:
+        handler(log, task_label, ev)
 
-    elif ev_type == "result":
-        subtype = ev.get("subtype", "")
-        duration = ev.get("duration_ms", 0)
-        turns = ev.get("num_turns", 0)
-        result_text = ev.get("result", "")[:300]
-        log.info("[%s] Result: %s (%ds, %d turns) %s", task_label, subtype, duration // 1000, turns, result_text)
 
-    elif ev_type == "system":
-        subtype = ev.get("subtype", "")
-        if subtype == "init":
-            log.info("[%s] Session started (cwd=%s)", task_label, ev.get("cwd", "?"))
-        elif subtype == "task_started":
-            log.info("[%s] Subagent started: %s", task_label, ev.get("description", ""))
-        elif subtype == "task_notification":
-            status = ev.get("status", "")
-            log.info("[%s] Subagent %s: %s", task_label, status, ev.get("summary", ""))
+def _process_jsonl_chunk(
+    chunk: bytes,
+    log: logging.Logger,
+    task_label: str,
+) -> None:
+    """
+    Route every event in a jsonl chunk through ``_log_claude_event``.
 
-    elif ev_type == "rate_limit_event":
-        info = ev.get("rate_limit_info", {})
-        log.warning("[%s] Rate limit: %s (resets %s)", task_label, info.get("status"), info.get("resetsAt"))
+    The session jsonl at
+    ``CLAUDE_CONFIG_DIR/projects/<derived-cwd>/<session_id>.jsonl`` is
+    the SOLE source of bridge-log content. stream-json on stdout is
+    used only for flow control (system/init → session id, result →
+    completion event) and is intentionally not logged: claude buffers
+    stdout in batches and an out-of-order arrival between channels
+    used to silence jsonl events via uuid-based deduplication
+    (incident pipeline 05bdd13d: bridge log empty 5+ minutes while
+    jsonl grew by 300+ KB). Single source of truth → no race.
+    """
+    for raw_line in chunk.decode("utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        # Defense-in-depth around _log_claude_event: even with shape
+        # guards in place, an unknown future event variant must not
+        # poison the rest of the chunk (or the whole tail loop). Log
+        # the exception and move on — never propagate up.
+        try:
+            _log_claude_event(log, task_label, ev)
+        except Exception as exc:
+            log.warning(
+                "[%s] _log_claude_event failed on event type=%s: %s",
+                task_label, ev.get(_F_TYPE), exc,
+            )
+
+
+def _parse_extra_args(extra_args: str) -> dict[str, str]:
+    """Parse space-separated key=value pairs from an extra_args string."""
+    parsed: dict[str, str] = {}
+    for part in (extra_args or "").split():
+        k, sep, v = part.partition("=")
+        if sep:
+            parsed[k] = v
+    return parsed
 
 
 _SKILL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
@@ -219,26 +552,260 @@ def _build_skill_prompt(skill_name: str, project_id: str, source_path: str, extr
     return f"Execute the following skill with these arguments: {args}\n\n{skill_content}"
 
 
+async def _stream_stderr(stream: asyncio.StreamReader, ctx: _RunContext) -> None:
+    """Capture claude stderr to ``ctx.stderr_lines`` and mirror to the bridge log."""
+    async for line in stream:
+        ctx.stderr_lines.append(line)
+        text = line.decode("utf-8", errors="replace").rstrip()
+        if text:
+            ctx.log.warning("[%s] stderr: %s", ctx.task_label, text)
+
+
+async def _stream_stdout(stream: asyncio.StreamReader, ctx: _RunContext) -> None:
+    """
+    Drive flow control + log stream-json-only event types.
+
+    Assistant/user turns are deliberately NOT logged here — those arrive
+    on stdout in delayed batches and would race the live jsonl tail.
+    They're handled exclusively by ``_tail_jsonl``. What this DOES log:
+    types that don't appear in the session jsonl at all (``system``,
+    ``result``, ``rate_limit_event``) so the operator still sees session
+    start, API-retry warnings and the final ``Result: ...`` line.
+    """
+    async for line in stream:
+        text = line.decode("utf-8", errors="replace").rstrip()
+        if not text:
+            continue
+        try:
+            ev = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        ev_type = ev.get(_F_TYPE, "")
+        if ev_type in _STDOUT_ONLY_LOG_TYPES:
+            _log_claude_event(ctx.log, ctx.task_label, ev)
+        if ev_type == _T_SYSTEM and ev.get(_F_SUBTYPE) == _SYS_INIT:
+            sid = ev.get(_F_SESSION_ID, "")
+            if sid and not ctx.session_id_known.is_set():
+                ctx.session_id = sid
+                ctx.session_id_known.set()
+        if ev_type == _T_RESULT and ctx.payload is None:
+            ctx.payload = _payload_from_result_event(ev)
+            ctx.result_event.set()
+
+
+async def _watch_result_file(ctx: _RunContext) -> None:
+    """Complete when ``ctx.result_file_path`` appears on disk."""
+    if ctx.result_file_path is None:
+        # No path configured — sleep until cancelled.
+        await asyncio.sleep(TRIAGE_TIMEOUT + 1)
+        return
+    while True:
+        if ctx.result_file_path.exists():
+            ctx.log.info(
+                "[%s] Result file detected on disk: %s",
+                ctx.task_label, ctx.result_file_path,
+            )
+            return
+        await asyncio.sleep(_RESULT_POLL_INTERVAL)
+
+
+async def _tail_jsonl(ctx: _RunContext) -> None:
+    """
+    Tail every jsonl file claude writes for this session.
+
+    Claude writes turns to multiple files:
+      <projects>/<derived-cwd>/<session_id>.jsonl       parent
+      <projects>/<derived-cwd>/<session_id>/subagents/agent-*.jsonl
+                                                        per Task subagent
+    For skills that delegate work to sub-agents (incident 3e565a58
+    running aist-full-security-review) almost all the real
+    Read/Bash/Grep/thinking happens INSIDE the subagent files. The
+    parent jsonl only records the Task tool_use + the aggregated
+    result. Watching only the parent leaves operators with
+    "Subagent started/completed" headers and nothing in between.
+
+    Subagents are spawned lazily, so we rescan ``subagents/`` on every
+    tick rather than once at startup. Each tailed file carries its own
+    offset and a per-file task_label so log lines attribute correctly
+    to parent vs each subagent.
+
+    Sole bridge-log writer — formats every event via
+    ``_log_claude_event``. Earlier iterations of this code used
+    ``log.debug`` (silently dropped by basicConfig level=INFO, incident
+    a2a7ed26) and a uuid dedup that silenced jsonl events whenever
+    stdout flushed first (incident 05bdd13d).
+    """
+    await ctx.session_id_known.wait()
+    if not ctx.session_id:
+        return
+
+    parent_jsonl = await _find_parent_jsonl(ctx)
+    if parent_jsonl is None:
+        return
+
+    ctx.log.info("[%s] Tailing session jsonl: %s", ctx.task_label, parent_jsonl)
+
+    subagents_dir = parent_jsonl.parent / parent_jsonl.stem / _JSONL_SUBAGENTS_DIR
+    offsets: dict[Path, int] = {parent_jsonl: 0}
+    labels: dict[Path, str] = {parent_jsonl: ctx.task_label}
+
+    while True:
+        # Outer guard: this loop must survive ANY error other than
+        # CancelledError (which is BaseException, not caught by
+        # Exception). Without it, a single anomaly (file system blip,
+        # pathlib edge case, future code tweak that raises) silently
+        # kills the tail and the bridge log goes dark for the rest of
+        # the run. The exception is logged via log.exception and the
+        # next tick proceeds normally — defense-in-depth, NOT
+        # error-hiding.
+        try:
+            _discover_new_subagents(subagents_dir, offsets, labels, ctx)
+            for path, offset in list(offsets.items()):
+                _read_jsonl_delta(path, offset, offsets, labels, ctx)
+        except Exception:
+            ctx.log.exception(
+                "[%s] tail loop iteration failed; continuing",
+                ctx.task_label,
+            )
+
+        await asyncio.sleep(_JSONL_POLL_INTERVAL)
+
+
+async def _find_parent_jsonl(ctx: _RunContext) -> Path | None:
+    """Wait up to ``_JSONL_FIND_MAX_WAIT`` for the parent session jsonl."""
+    retries = int(_JSONL_FIND_MAX_WAIT / _JSONL_POLL_INTERVAL)
+    for _ in range(retries):
+        candidates = list(
+            ctx.claude_config_dir.glob(
+                f"{_JSONL_PROJECTS_DIR}/**/{ctx.session_id}.jsonl",
+            ),
+        )
+        if candidates:
+            return candidates[0]
+        await asyncio.sleep(_JSONL_POLL_INTERVAL)
+    ctx.log.warning(
+        "[%s] Session jsonl not found for session_id=%s within %ds",
+        ctx.task_label, ctx.session_id, _JSONL_FIND_MAX_WAIT,
+    )
+    return None
+
+
+def _discover_new_subagents(
+    subagents_dir: Path,
+    offsets: dict[Path, int],
+    labels: dict[Path, str],
+    ctx: _RunContext,
+) -> None:
+    """
+    Pick up jsonls for sub-agents that have appeared since the last tick.
+
+    Glob on a missing directory returns empty without raising — safe before
+    any Task tool fires.
+    """
+    for sub_path in subagents_dir.glob("*.jsonl"):
+        if sub_path in offsets:
+            continue
+        offsets[sub_path] = 0
+        labels[sub_path] = f"{ctx.task_label} {sub_path.stem}"
+        ctx.log.info("[%s] Tailing subagent jsonl: %s", ctx.task_label, sub_path)
+
+
+def _read_jsonl_delta(
+    path: Path,
+    offset: int,
+    offsets: dict[Path, int],
+    labels: dict[Path, str],
+    ctx: _RunContext,
+) -> None:
+    """
+    Read everything appended since ``offset``, commit only up to the last
+    complete line, and forward to ``_process_jsonl_chunk``.
+
+    Holds the trailing partial bytes back: POSIX ``write(2)`` on a
+    regular file is not atomic for ``len > 1``, so a poll that lands
+    mid-write reads a partial line. Advancing the offset past those
+    bytes would orphan both halves — ``json.loads`` would fail on the
+    prefix this tick and on the suffix next tick, dropping the event.
+    """
+    try:
+        size = path.stat().st_size
+        if size <= offset:
+            return
+        with path.open("rb") as f:
+            f.seek(offset)
+            chunk = f.read()
+    except OSError:
+        # File may be momentarily unreadable mid-write — next tick will
+        # retry from the same offset.
+        return
+
+    last_nl = chunk.rfind(b"\n")
+    if last_nl < 0:
+        return  # entire chunk is one in-progress line; wait for more
+    complete = chunk[: last_nl + 1]
+    offsets[path] = offset + len(complete)
+    _process_jsonl_chunk(complete, ctx.log, labels[path])
+
+
+async def _cleanup_run_tasks(
+    bg_tasks: tuple[asyncio.Task, ...],
+    drain_tasks: tuple[asyncio.Task, ...],
+) -> None:
+    """
+    Cancel background tasks; drain stdout/stderr so we don't leak coroutines.
+
+    Drain tasks get up to 5 seconds to see EOF naturally before being
+    cancelled — the pgroup-kill in ``_terminate_subprocess`` should have
+    already closed the pipes. Background tasks (jsonl tailer, result
+    waiter, ...) are cancelled outright; they hold no external state we
+    care about preserving.
+    """
+    for bg_task in bg_tasks:
+        if not bg_task.done():
+            bg_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await bg_task
+    for drain_task in drain_tasks:
+        if drain_task.done():
+            continue
+        try:
+            await asyncio.wait_for(asyncio.shield(drain_task), timeout=5)
+        except TimeoutError:
+            drain_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await drain_task
+
+
 async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
     """
     Run claude -p in a subprocess and return its CallbackPayload.
 
-    Completion is signalled by the stream-json ``result`` event rather than by the
-    OS exit code: Claude CLI sometimes lingers after emitting its final result
-    (background work, subagent cleanup). Waiting for process exit made a
-    successful triage look like a timeout (see pipeline d5d0aa24). We instead:
+    Completion is detected via three independent signals (whichever fires first):
+    1. stream-json ``result`` event on stdout — the normal path.
+    2. Result file appears on disk — fallback when stdout goes silent
+       mid-session (observed when Claude uses subagents).
+    3. Process exits — final fallback; rc=0 → success, rc≠0 → error.
 
-    1. Trust the first ``result`` event as the authoritative outcome.
-    2. SIGTERM the process and allow ``POST_RESULT_GRACE`` seconds for a clean
-       shutdown; SIGKILL if it still refuses to exit.
-    3. Fall back to the ``TRIAGE_TIMEOUT`` / exit-code paths only when no
-       result event is emitted at all.
-
-    Callers decide what to do with the payload:
-    - ``_run_claude_skill`` POSTs it to ``req.callback_url`` (existing async flow).
-    - The ``/analyze-sync`` endpoint returns it directly to the HTTP caller.
+    SIGTERM is sent (to the whole pgroup) after a result is detected;
+    SIGKILL follows after ``POST_RESULT_GRACE`` seconds if the process
+    hasn't exited. ``TRIAGE_TIMEOUT`` is the hard ceiling. The ``finally``
+    block runs cleanup unconditionally — on success, on error, and on
+    cancellation — so no background task or pipe FD leaks past return.
     """
     prompt = _build_skill_prompt(req.skill_name, req.project_id, req.source_path, req.extra_args)
+
+    # Parse result file location from extra_args — our own protocol set by agent_bridge_runner.
+    parsed_args = _parse_extra_args(req.extra_args)
+    output_path = parsed_args.get("output_path", "")
+    result_filename = parsed_args.get("result_filename", "")
+    result_file_path = (
+        Path(output_path) / result_filename if output_path and result_filename else None
+    )
+
+    # Per-run CLAUDE_CONFIG_DIR so session jsonl files land at a known path.
+    claude_config_dir = _CLAUDE_RUNS_DIR / req.project_id
+    claude_config_dir.mkdir(parents=True, exist_ok=True)
+    subprocess_env = {**os.environ, "CLAUDE_CONFIG_DIR": str(claude_config_dir)}
 
     cmd = [
         CLAUDE_PATH,
@@ -247,141 +814,157 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
         "--verbose",
         "--output-format", "stream-json",
     ]
-    task_label = f"{req.skill_name} project={req.project_id}"
+    task_label = _task_label(req)
 
-    # Per-task logger: propagates to root (uvicorn stream) AND optionally writes to pipeline log file.
     log = logging.getLogger(f"aist-triage-bridge.task.{req.project_id}")
     log.propagate = True
     file_handler = _open_pipeline_log_handler(req.project_id)
-    if file_handler:
+    if file_handler is not None:
         log.addHandler(file_handler)
 
-    log.info("Starting claude -p for %s cwd=%s", task_label, AIST_WORKING_DIR)
+    log.info(
+        "Starting claude -p for %s cwd=%s result_file=%s",
+        task_label, AIST_WORKING_DIR, result_file_path or "<none>",
+    )
 
-    result: CallbackPayload
+    ctx = _RunContext(
+        log=log,
+        task_label=task_label,
+        claude_config_dir=claude_config_dir,
+        result_file_path=result_file_path,
+    )
+
+    result: CallbackPayload | None = None
     proc: asyncio.subprocess.Process | None = None
+    bg_tasks: tuple[asyncio.Task, ...] = ()
+    drain_tasks: tuple[asyncio.Task, ...] = ()
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=AIST_WORKING_DIR,
+            env=subprocess_env,
+            # New session/pgroup: lets _signal_pgroup take down the CLI
+            # plus every Bash/Agent subprocess Claude spawns. Without
+            # this, a SIGKILL on proc.pid orphans grandchildren that
+            # keep the stdout/stderr pipes open and hang the drain
+            # coroutines (incident a2a7ed26).
+            start_new_session=True,
         )
 
-        stderr_lines: list[bytes] = []
-        result_event = asyncio.Event()
-        result_payload: dict[str, CallbackPayload] = {}
-
-        async def _stream_stderr(stream) -> None:
-            async for line in stream:
-                stderr_lines.append(line)
-                text = line.decode("utf-8", errors="replace").rstrip()
-                if text:
-                    log.warning("[%s] stderr: %s", task_label, text)
-
-        async def _stream_stdout(stream) -> None:
-            async for line in stream:
-                text = line.decode("utf-8", errors="replace").rstrip()
-                if not text:
-                    continue
-                try:
-                    ev = json.loads(text)
-                except json.JSONDecodeError:
-                    log.info("[%s] %s", task_label, text[:300])
-                    continue
-                _log_claude_event(log, task_label, ev)
-                if ev.get("type") == "result" and not result_event.is_set():
-                    result_payload["payload"] = _payload_from_result_event(ev)
-                    result_event.set()
-
-        stdout_task = asyncio.create_task(_stream_stdout(proc.stdout))
-        stderr_task = asyncio.create_task(_stream_stderr(proc.stderr))
+        stdout_task = asyncio.create_task(_stream_stdout(proc.stdout, ctx))
+        stderr_task = asyncio.create_task(_stream_stderr(proc.stderr, ctx))
         proc_wait_task = asyncio.create_task(proc.wait())
-        result_wait_task = asyncio.create_task(result_event.wait())
+        result_wait_task = asyncio.create_task(ctx.result_event.wait())
+        file_watch_task = asyncio.create_task(_watch_result_file(ctx))
+        jsonl_tail_task = asyncio.create_task(_tail_jsonl(ctx))
+
+        drain_tasks = (stdout_task, stderr_task)
+        bg_tasks = (file_watch_task, jsonl_tail_task, result_wait_task, proc_wait_task)
 
         done, _pending = await asyncio.wait(
-            {result_wait_task, proc_wait_task},
+            {result_wait_task, proc_wait_task, file_watch_task},
             return_when=asyncio.FIRST_COMPLETED,
             timeout=TRIAGE_TIMEOUT,
         )
 
-        if result_wait_task in done:
-            result = result_payload.get("payload") or CallbackPayload(
-                status="error", detail="claude -p result event missing payload",
-            )
-            log.info(
-                "claude -p result event received for %s status=%s; terminating CLI (pid=%s)",
-                task_label, result.status, proc.pid,
-            )
-            if proc.returncode is None:
-                proc.send_signal(signal.SIGTERM)
-                try:
-                    await asyncio.wait_for(asyncio.shield(proc_wait_task), timeout=POST_RESULT_GRACE)
-                except TimeoutError:
-                    log.warning(
-                        "claude -p did not exit %ds after result event for %s pid=%s; killing",
-                        POST_RESULT_GRACE, task_label, proc.pid,
-                    )
-                    proc.kill()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await proc_wait_task
+        if result_wait_task in done or file_watch_task in done:
+            if result_wait_task in done:
+                result = ctx.payload or CallbackPayload(
+                    status="error", detail="claude -p result event missing payload",
+                )
+                log.info(
+                    "claude -p result event received for %s status=%s; terminating (pid=%s)",
+                    task_label, result.status, proc.pid,
+                )
+            else:
+                log.info(
+                    "Result file appeared for %s (stdout was silent); treating as success (pid=%s)",
+                    task_label, proc.pid,
+                )
+                result = CallbackPayload(status="success")
+            await _terminate_subprocess(proc, proc_wait_task, log, task_label)
+
         elif proc_wait_task in done:
             rc = proc.returncode
             if rc == 0:
                 log.info("claude -p succeeded for %s (no result event, exit=0)", task_label)
                 result = CallbackPayload(status="success")
             else:
-                err = b"".join(stderr_lines).decode("utf-8", errors="replace")[:2000]
+                err = b"".join(ctx.stderr_lines).decode("utf-8", errors="replace")[:_LOG_TRUNC_LONG]
                 log.error("claude -p failed for %s exit=%s", task_label, rc)
                 result = CallbackPayload(status="error", detail=err or f"claude -p exit={rc}")
+
         else:
-            last_stderr = b"".join(stderr_lines[-20:]).decode("utf-8", errors="replace")[:1000]
+            last_stderr = (
+                b"".join(ctx.stderr_lines[-20:])
+                .decode("utf-8", errors="replace")[:_LOG_TRUNC_MED]
+            )
             log.error(
                 "claude -p timed out after %ds for %s pid=%s returncode=%s; last stderr: %s",
                 TRIAGE_TIMEOUT, task_label, proc.pid, proc.returncode, last_stderr or "<empty>",
             )
-            if proc.returncode is None:
-                proc.send_signal(signal.SIGTERM)
-                try:
-                    await asyncio.wait_for(asyncio.shield(proc_wait_task), timeout=POST_RESULT_GRACE)
-                except TimeoutError:
-                    proc.kill()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await proc_wait_task
+            await _terminate_subprocess(proc, proc_wait_task, log, task_label)
             result = CallbackPayload(
                 status="error",
                 detail=f"claude -p timed out after {TRIAGE_TIMEOUT}s",
             )
 
-        # Drain streaming tasks so we don't leak them; short deadline is enough
-        # because the process is either gone or about to be killed.
-        for drain_task in (stdout_task, stderr_task):
-            if drain_task.done():
-                continue
-            try:
-                await asyncio.wait_for(asyncio.shield(drain_task), timeout=5)
-            except TimeoutError:
-                drain_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await drain_task
-        if not result_wait_task.done():
-            result_wait_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await result_wait_task
     except Exception:
         log.exception("claude -p crashed for %s", task_label)
-        if proc is not None and proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            with contextlib.suppress(Exception):
-                await proc.wait()
         result = CallbackPayload(status="error", detail="bridge internal error")
     finally:
-        if file_handler:
+        # ── Sync cleanup ────────────────────────────────────────────────
+        # Runs unconditionally — including during CancelledError
+        # propagation, where any subsequent ``await`` may be interrupted.
+        # Order: kill the pgroup, free the parent-side pipe FDs via
+        # transport.close, drop the file handler, wipe the per-run
+        # config dir.
+        #
+        # Cancellation path (handler cancelled, e.g. client disconnect):
+        # ``_terminate_subprocess`` never ran. Killing the whole pgroup
+        # here prevents grandchildren from surviving and holding the
+        # pipes (regression of incident a2a7ed26 in cancellation edge
+        # case).
+        if proc is not None and proc.returncode is None:
+            _signal_pgroup(proc.pid, signal.SIGKILL)
+        if proc is not None:
+            transport = getattr(proc, "_transport", None)
+            if transport is not None:
+                with contextlib.suppress(Exception):
+                    transport.close()
+        if file_handler is not None:
             log.removeHandler(file_handler)
             file_handler.close()
+        shutil.rmtree(claude_config_dir, ignore_errors=True)
 
-    return result
+        # ── Async cleanup ───────────────────────────────────────────────
+        # Cancel every task we created — covers success, exception, AND
+        # cancellation paths uniformly. Without this the except path
+        # used to leak 5 of 6 background tasks per crashed request
+        # until lifespan shutdown.
+        #
+        # On cancellation this ``await`` may itself be interrupted; the
+        # critical sync cleanup above has already freed the pipe FDs by
+        # then, so the worst case is bg_tasks dangling briefly until
+        # uvicorn shutdown collects them — not a correctness issue.
+        if bg_tasks or drain_tasks:
+            try:
+                await asyncio.wait_for(
+                    _cleanup_run_tasks(bg_tasks, drain_tasks), timeout=30,
+                )
+            except TimeoutError:
+                log.error(
+                    "Cleanup timed out for %s; abandoning background tasks",
+                    task_label,
+                )
+
+    # Falls through to here only if try/except set ``result``. Cancellation
+    # propagates as BaseException through finally and never reaches this.
+    return result if result is not None else CallbackPayload(
+        status="error", detail="bridge internal error",
+    )
 
 
 async def _run_claude_skill(req: AnalyzeRequest) -> None:
@@ -392,7 +975,7 @@ async def _run_claude_skill(req: AnalyzeRequest) -> None:
     callback URL and continues without waiting. ``/analyze-sync`` callers
     use ``_execute_claude_skill`` directly instead.
     """
-    task_label = f"{req.skill_name} project={req.project_id}"
+    task_label = _task_label(req)
     result = await _execute_claude_skill(req)
 
     if req.callback_url:
@@ -411,8 +994,14 @@ async def _run_claude_skill(req: AnalyzeRequest) -> None:
 
 
 def _schedule_task(req: AnalyzeRequest) -> None:
-    """Schedule the claude skill coroutine and track it."""
-    task = asyncio.get_event_loop().create_task(_run_claude_skill(req))
+    """
+    Schedule the claude skill coroutine and track it.
+
+    Strong-references the task in ``_running_tasks`` so the loop doesn't
+    GC it mid-flight (canonical asyncio pattern), then auto-discards on
+    completion.
+    """
+    task = asyncio.create_task(_run_claude_skill(req))
     _running_tasks.add(task)
     task.add_done_callback(_running_tasks.discard)
 

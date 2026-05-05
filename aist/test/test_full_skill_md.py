@@ -173,12 +173,18 @@ class FullSecurityReviewSkillContractTests(unittest.TestCase):
             r"file_path.*relative to `source_path`",
             "result file paths must be relative to source_path",
         )
-        self.assertIn(
-            "Never prefix it with the basename of `source_path`",
+        self.assertRegex(
             self.text,
+            r"\*\*WRONG\*\*:[^\n]*relative to the \*parent\* of `source_path`",
+            "skill must show the basename-prefix WRONG example",
+        )
+        self.assertRegex(
+            self.text,
+            r"\*\*RIGHT\*\*:[^\n]*relative to `source_path` itself",
+            "skill must show the RIGHT example computed from source_path",
         )
         self.assertIn(
-            "Path(source_path) / file_path",
+            'test -e "ACTUAL_SOURCE_PATH/CANDIDATE_FILE_PATH"',
             self.text,
         )
 

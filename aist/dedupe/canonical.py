@@ -22,6 +22,10 @@ class CanonicalFamily(StrEnum):
     COMMAND_INJECTION = "command_injection"
     SQL_INJECTION = "sql_injection"
     POSTMESSAGE_ORIGIN = "postmessage_origin"
+    MISSING_AUTHENTICATION = "missing_authentication"
+    CORS_MISCONFIG = "cors_misconfig"
+    SSRF = "ssrf"
+    HOST_HEADER_INJECTION = "host_header_injection"
     UNKNOWN = "unknown"
 
 
@@ -38,6 +42,27 @@ SCORE_CWE_MIXED_CONFIDENCE_MATCH = 2
 SCORE_FAMILY_MATCH = 3
 SCORE_RULE_MATCH = 2
 SCORE_COMPONENT_MATCH = 1
+SCORE_TITLE_TOKEN_OVERLAP = 1
+TITLE_TOKEN_MIN_OVERLAP = 3
+TITLE_TOKEN_MIN_JACCARD = 0.4
+_TITLE_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+_TITLE_STOPWORDS: frozenset[str] = frozenset({
+    "a", "an", "and", "or", "the", "is", "are", "was", "were", "be", "been",
+    "being", "to", "of", "in", "on", "for", "with", "without", "by", "as",
+    "at", "from", "into", "via", "this", "that", "these", "those", "it",
+    "its", "their", "his", "her", "our", "your", "any", "some", "no", "not",
+    "do", "does", "did", "has", "have", "had", "having",
+    "should", "will", "would", "than", "then", "but", "if", "else", "when",
+    "while", "after", "before", "during", "between", "within", "across",
+    "over", "under", "above", "below", "up", "down", "off", "out", "very",
+    # SAST jargon and noise tokens
+    "vulnerability", "vulnerabilities", "issue", "issues", "finding",
+    "findings", "warning", "warnings", "alert", "alerts", "security",
+    "detected", "detect", "detection", "exposed", "exposes", "exposure",
+    "potential", "possible", "may", "could", "service", "services",
+    "endpoint", "endpoints", "code", "scan", "scanner", "tool",
+    "context", "report", "result", "results",
+})
 
 
 _FAMILY_PATTERNS: dict[CanonicalFamily, tuple[re.Pattern[str], ...]] = {
@@ -93,6 +118,31 @@ _FAMILY_PATTERNS: dict[CanonicalFamily, tuple[re.Pattern[str], ...]] = {
         re.compile(r"postmessage", re.IGNORECASE),
         re.compile(r"origin[_\s-]?check", re.IGNORECASE),
     ),
+    CanonicalFamily.MISSING_AUTHENTICATION: (
+        re.compile(r"(no|missing|without|absent|lack(?:s|ing)?\s+of)\s+(authentication|authn|auth)\b", re.IGNORECASE),
+        re.compile(r"\bunauthenticated\b", re.IGNORECASE),
+        re.compile(r"accessible\s+without\s+(auth|authentication)", re.IGNORECASE),
+        re.compile(r"endpoints?\s+(are\s+)?exposed", re.IGNORECASE),
+        re.compile(r"endpoints?\s+(have|expose)\s+no\s+(auth|authentication)", re.IGNORECASE),
+        re.compile(r"\bno\s+authn\b", re.IGNORECASE),
+        re.compile(r"missing[_\s-]?auth(?:entication)?[_\s-]?check", re.IGNORECASE),
+    ),
+    CanonicalFamily.CORS_MISCONFIG: (
+        re.compile(r"\bcors\b", re.IGNORECASE),
+        re.compile(r"origin\s+(reflection|reflects|wildcard)", re.IGNORECASE),
+        re.compile(r"access[-_\s]control[-_\s]allow[-_\s]origin", re.IGNORECASE),
+        re.compile(r"credentials.*origin|origin.*credentials", re.IGNORECASE),
+        re.compile(r"cross[-_\s]origin\s+(misconfig|policy|resource)", re.IGNORECASE),
+    ),
+    CanonicalFamily.SSRF: (
+        re.compile(r"\bssrf\b", re.IGNORECASE),
+        re.compile(r"server[-_\s]side\s+request\s+forgery", re.IGNORECASE),
+        re.compile(r"(host[-_\s]header|webhook|user[-_\s]controlled\s+url).*request", re.IGNORECASE),
+    ),
+    CanonicalFamily.HOST_HEADER_INJECTION: (
+        re.compile(r"host\s+header\s+(injection|impersonation|bypass|spoof(?:ing)?)", re.IGNORECASE),
+        re.compile(r"\bhost[-_\s]header[-_\s]attack", re.IGNORECASE),
+    ),
 }
 
 _FAMILY_CWE: dict[CanonicalFamily, int] = {
@@ -108,6 +158,10 @@ _FAMILY_CWE: dict[CanonicalFamily, int] = {
     CanonicalFamily.COMMAND_INJECTION: 78,
     CanonicalFamily.SQL_INJECTION: 89,
     CanonicalFamily.POSTMESSAGE_ORIGIN: 346,
+    CanonicalFamily.MISSING_AUTHENTICATION: 306,
+    CanonicalFamily.CORS_MISCONFIG: 942,
+    CanonicalFamily.SSRF: 918,
+    CanonicalFamily.HOST_HEADER_INJECTION: 644,
 }
 _HARDCODED_SECRET_RULE_ALIASES: tuple[tuple[re.Pattern[str], str], ...] = (
     (
@@ -131,6 +185,7 @@ class CanonicalSignature:
     normalized_rule: str
     component_name: str
     component_version: str
+    title_tokens: frozenset[str] = frozenset()
 
 
 @dataclass(slots=True)
@@ -205,6 +260,32 @@ def _as_non_negative_int(raw: Any, default: int) -> int:
     return parsed if parsed >= 0 else default
 
 
+def tokenize_title(*texts: str | None) -> frozenset[str]:
+    tokens: set[str] = set()
+    for text in texts:
+        if not text:
+            continue
+        for raw in _TITLE_TOKEN_PATTERN.findall(text.lower()):
+            if len(raw) <= 2 or raw in _TITLE_STOPWORDS:
+                continue
+            tokens.add(raw)
+    return frozenset(tokens)
+
+
+def title_tokens_overlap_score(left: frozenset[str], right: frozenset[str]) -> int:
+    if not left or not right:
+        return 0
+    intersection = left & right
+    if len(intersection) < TITLE_TOKEN_MIN_OVERLAP:
+        return 0
+    union = left | right
+    if not union:
+        return 0
+    if (len(intersection) / len(union)) < TITLE_TOKEN_MIN_JACCARD:
+        return 0
+    return SCORE_TITLE_TOKEN_OVERLAP
+
+
 def canonical_scoring_thresholds() -> tuple[int, int]:
     auto_threshold = _as_non_negative_int(
         getattr(settings, "AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD", DEFAULT_AUTO_DUPLICATE_THRESHOLD),
@@ -233,9 +314,10 @@ def _component_evidence_matches(left: CanonicalSignature, right: CanonicalSignat
 
 def finding_signature(finding: Any) -> CanonicalSignature:
     # Build a normalized, scanner-agnostic signature used by score_signatures().
+    title = str(getattr(finding, "title", "") or "")
     family = infer_canonical_family(
         vuln_id=str(getattr(finding, "vuln_id_from_tool", "") or ""),
-        title=str(getattr(finding, "title", "") or ""),
+        title=title,
     )
     cwe = _normalize_cwe(getattr(finding, "cwe", None))
     cwe_inferred = cwe is None
@@ -257,6 +339,7 @@ def finding_signature(finding: Any) -> CanonicalSignature:
         normalized_rule=normalized_rule,
         component_name=component_name,
         component_version=component_version,
+        title_tokens=tokenize_title(title),
     )
 
 
@@ -295,12 +378,19 @@ def score_signatures(left: CanonicalSignature, right: CanonicalSignature) -> Mat
         component_match = True
         score += SCORE_COMPONENT_MATCH
 
+    # Title-token overlap is a content-based corroboration signal. It is bounded
+    # by Jaccard >= TITLE_TOKEN_MIN_JACCARD AND >= TITLE_TOKEN_MIN_OVERLAP shared
+    # content tokens — strict enough that random title noise does not score.
+    title_overlap = title_tokens_overlap_score(left.title_tokens, right.title_tokens)
+    score += title_overlap
+
     # Avoid candidate matches based only on inferred family classification.
     if (
         family_match
         and not cwe_match
         and not rule_match
         and not component_match
+        and not title_overlap
         and left.cwe_inferred
         and right.cwe_inferred
     ):

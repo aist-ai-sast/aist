@@ -208,6 +208,11 @@ AIST_CANONICAL_DEDUPE_SCAN_TYPES = (
     "Semgrep JSON Report",
     "Horusec Scan",
     "Bearer CLI",
+    # Claude agent-bridge analyzers — imported via "Generic Findings Import"
+    # parser but renamed to these test_type names by aist/internal_upload.py
+    # so canonical dedupe handles them as a first-class scan type.
+    "Claude Diff Security",
+    "Claude Full Security",
 )
 AIST_CANONICAL_HASH_FIELDS = ["vuln_id_from_tool", "file_path", "line", "cwe"]
 
@@ -221,6 +226,11 @@ for _scan_type in AIST_CANONICAL_DEDUPE_SCAN_TYPES:
 
 HASHCODE_ALLOWS_NULL_CWE = dict(globals().get("HASHCODE_ALLOWS_NULL_CWE", {}))
 HASHCODE_ALLOWS_NULL_CWE["Horusec Scan"] = True
+# Claude analyzers may emit findings without a CWE (e.g. when the model declines
+# to assign one). Allow the vendor fallback to dedup such findings via
+# (vuln_id_from_tool, file_path, line) without filtering them out for null CWE.
+HASHCODE_ALLOWS_NULL_CWE["Claude Diff Security"] = True
+HASHCODE_ALLOWS_NULL_CWE["Claude Full Security"] = True
 
 AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD = env.int("DD_AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD", default=2)  # noqa: F405
 AIST_CANONICAL_CANDIDATE_MIN_SCORE = env.int("DD_AIST_CANONICAL_CANDIDATE_MIN_SCORE", default=1)  # noqa: F405

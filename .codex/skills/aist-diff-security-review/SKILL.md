@@ -45,6 +45,16 @@ These are **never** findings, even when present, because they produce noise with
 - XSS in framework-templated outputs that auto-escape — only flag if the diff explicitly opts out of escaping.
 - Test files, fixtures, documentation, examples, generated code, build scripts and other non-deployable artifacts — exclude unless the diff puts them on the runtime path.
 
+# file_path rule — common mistake
+
+`file_path` in every finding must be the path of the file **relative to `source_path`**, with no extra leading segment.
+
+`source_path` is the git repository root. All files in the project live directly under it. If `source_path` is `/tmp/aist/projects/dev/myapp/runs/abc/dev_myapp` and the file is `/tmp/aist/projects/dev/myapp/runs/abc/dev_myapp/src/api.ts`:
+- **WRONG**: `dev_myapp/src/api.ts` — computed relative to the *parent* of `source_path`
+- **RIGHT**: `src/api.ts` — computed relative to `source_path` itself
+
+Do not list the contents of `source_path`'s parent directory and do not navigate above `source_path`.
+
 # Inputs
 
 Two arg blocks reach you:
@@ -126,6 +136,18 @@ A hunk where none of these changed is not a security finding, even if it is larg
 - A multi-step ceremony (request, challenge, confirm) collapsed into a single call.
 
 When a diff changes a security ceremony, compare old and new invariants, not just old and new checks. A replacement barrier is equivalent only if it protects the same sink, on the same trust boundary, before the privileged action, and with the same or stronger durability. Cache-only checks, response-code changes, UI checks, logging, or best-effort cleanup are not equivalent to durable pre-sink validation or authorization.
+
+## Depth requirement — mandatory gate before Phase 3
+
+A hunk that survived Phase 2 is eligible for Phase 3 **only if all three conditions are met**:
+
+1. You have read the **full body** of the file containing the sink (not just the diff hunk or a surrounding snippet).
+2. You have read the **full body** of at least one file that passes untrusted input into that file — the immediate caller or the route handler.
+3. You can name the **specific variable or parameter** carrying attacker-controlled data at each step of the path from entry point to sink.
+
+A diff hunk alone, a grep match, or a single-line snippet is not sufficient evidence. "Could be exploitable" without a named data path is not a finding — drop it.
+
+If reading the required files would push aggregate bytes past `CLAUDE_DIFF_MAX_BYTES`, skip the candidate; uncertainty is too high to emit.
 
 ## Phase 3 — Trace
 
@@ -226,7 +248,7 @@ Write atomically — write each file to `<name>.tmp` and then rename. Both files
       "cwe": <int>,
       "mitigation": "Markdown.",
       "impact": "Plain text.",
-      "steps_to_reproduce": "Concrete, copy-paste-ready.",
+      "steps_to_reproduce": "Concrete, copy-paste-ready. MUST include: exact HTTP method+URL (or CLI invocation/queue message), exact payload/parameter demonstrating the attack, expected observable behavior. A reviewer must be able to execute this without modification.",
       "references": ["https://..."],
       "unique_id_from_tool": "<32-hex-char hash, see formula below>",
       "vuln_id_from_tool": "<32-hex-char hash, see formula below>",
@@ -238,13 +260,18 @@ Write atomically — write each file to `<name>.tmp` and then rename. Both files
 }
 ```
 
-`file_path` MUST be relative to `source_path` exactly as the file is addressed
-from that directory. Never prefix it with the basename of `source_path`. For
-example, if `source_path=/tmp/aist/projects/acme_service` and the vulnerable file
-is `/tmp/aist/projects/acme_service/app.py`, emit `"file_path": "app.py"`, not
-`"acme_service/app.py"`. Before writing output, verify that
-`Path(source_path) / file_path` exists for every finding; if it does not, fix the
-path or drop the finding.
+`file_path` MUST be relative to `source_path`. See the **file_path rule** section at the top for the common mistake.
+
+**Mandatory Bash tool call for every finding before adding it to the JSON:**
+```bash
+test -e "ACTUAL_SOURCE_PATH/CANDIDATE_FILE_PATH" && echo VALID || echo INVALID
+```
+Replace `ACTUAL_SOURCE_PATH` with the `source_path` argument value and `CANDIDATE_FILE_PATH` with your computed path. If output is `INVALID`, recompute using:
+```bash
+python3 -c "import sys; from pathlib import Path; print(str(Path(sys.argv[1]).relative_to(Path(sys.argv[2]))))" \
+  "/absolute/path/to/file" "ACTUAL_SOURCE_PATH"
+```
+Use the printed value as `file_path`. Verify again. If still `INVALID`, **drop the finding**.
 
 `unique_id_from_tool` is `sha256(normalized_file_path | category | symbol_or_function_name | code_fingerprint)[:32]`. It deliberately excludes `line` and commit hashes so the same vulnerability re-surfacing on a different line in a later run dedups against itself. `code_fingerprint` is a normalized hash of the relevant source span — whitespace-collapsed, comments stripped, identifiers preserved.
 
@@ -321,7 +348,6 @@ For every finding, verify all of:
 - `unique_id_from_tool` and `vuln_id_from_tool` are 32 hex chars each.
 - For TP, `fix` is populated with class-appropriate guidance. The `false_positives[]` and `uncertainly[]` arrays stay empty (TP-only emission policy).
 - No scanner / tool / vendor name appears anywhere in the output.
-- `Path(source_path) / file_path` exists for every emitted finding; `file_path`
-  never includes the basename of `source_path` as an extra leading segment.
+- Every `file_path` passed the mandatory `test -e` Bash call in the Output section. No finding with an unverified path appears in the output.
 
 If any check fails, **drop the finding** rather than emitting a weak one.

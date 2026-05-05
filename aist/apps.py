@@ -11,6 +11,7 @@ class AistConfig(AppConfig):
         from .monkeypatch import install_deduplication_monkeypatch  # noqa: PLC0415
         from .parser_overrides import (  # noqa: PLC0415
             install_bearer_parser_override,
+            install_claude_parsers,
             install_horusec_parser_override,
             install_semgrep_parser_override,
             install_snyk_code_parser_override,
@@ -21,3 +22,4 @@ class AistConfig(AppConfig):
         install_semgrep_parser_override()
         install_horusec_parser_override()
         install_bearer_parser_override()
+        install_claude_parsers()

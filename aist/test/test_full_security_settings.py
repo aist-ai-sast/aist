@@ -37,10 +37,18 @@ class FullSecuritySettingsTests(AISTApiBase):
     def test_default_values_are_conservative(self):
         # The plan's documented defaults — sized to fit enterprise repos but
         # not unbounded. These also drive the docker-compose env pass-through.
-        self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_FILES"), 1500)
-        self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_BYTES"), 8000000)
-        self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_FILE_BYTES"), 200000)
-        self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_FINDINGS"), 50)
+        # Pin via override_settings so the test is independent of env vars
+        # the runtime container may set on top of settings.py defaults.
+        with self.settings(
+            AGENT_FULL_MAX_FILES=1500,
+            AGENT_FULL_MAX_BYTES=8000000,
+            AGENT_FULL_MAX_FILE_BYTES=200000,
+            AGENT_FULL_MAX_FINDINGS=50,
+        ):
+            self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_FILES"), 1500)
+            self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_BYTES"), 8000000)
+            self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_FILE_BYTES"), 200000)
+            self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_FINDINGS"), 50)
 
     def test_zero_or_negative_setting_is_rejected(self):
         for name in FULL_SCAN_SETTINGS:

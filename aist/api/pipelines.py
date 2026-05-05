@@ -860,6 +860,7 @@ class PipelineLogsProgressiveAPI(AuthorizedQuerySetMixin, APIView):
             pipeline=pipeline,
             start=serializer.validated_data.get("start"),
             tail=serializer.validated_data.get("tail"),
+            bridge_start=serializer.validated_data.get("bridge_start"),
         )
 
 

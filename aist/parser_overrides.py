@@ -6,12 +6,19 @@ import textwrap
 
 from dojo.tools import factory
 from dojo.tools.bearer_cli.parser import BearerCLIParser
+from dojo.tools.generic.parser import GenericParser
 from dojo.tools.horusec.parser import HorusecParser
 from dojo.tools.sarif.parser import SarifParser
 from dojo.tools.semgrep.parser import SemgrepParser
 from dojo.tools.snyk_code.parser import SnykCodeParser
 
-from aist.dedupe.canonical import cwe_for_family, infer_canonical_family, normalize_rule_key
+from aist.dedupe.canonical import (
+    CanonicalFamily,
+    cwe_for_family,
+    infer_canonical_family,
+    normalize_file_path,
+    normalize_rule_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +26,13 @@ SNYK_CODE_SCAN_TYPE = "Snyk Code Scan"
 SEMGREP_SCAN_TYPE = "Semgrep JSON Report"
 HORUSEC_SCAN_TYPE = "Horusec Scan"
 BEARER_SCAN_TYPE = "Bearer CLI"
+# Claude agent-bridge analyzers register dedicated parsers (subclasses of
+# GenericParser) so their findings carry distinct test_type / scan_type names
+# and route through canonical dedupe like every other supported scanner.
+# sast-pipeline's analyzers.yaml uses these as ``output_type``.
+CLAUDE_DIFF_SECURITY_SCAN_TYPE = "Claude Diff Security"
+CLAUDE_FULL_SECURITY_SCAN_TYPE = "Claude Full Security"
+CLAUDE_LINE_BUCKET_SIZE = 5
 SNYK_RULE_TITLE_OVERRIDES = {
     "OR": "Open Redirect Vulnerability",
 }
@@ -228,3 +242,113 @@ def install_bearer_parser_override() -> None:
 
     factory.PARSERS[BEARER_SCAN_TYPE] = HumanizedBearerParser()
     logger.info("Installed humanized parser override for '%s'", BEARER_SCAN_TYPE)
+
+
+def build_claude_vuln_id_from_tool(
+    *,
+    cwe: int | None,
+    file_path: str | None,
+    line: int | None,
+    title: str | None,
+    raw_vuln_id: str | None = None,
+) -> str:
+    """
+    Deterministic dedupe-friendly token for Claude analyzer findings.
+
+    Format: ``claude:{cwe}:{normalized_file_path}:{line_bucket}:{family}``.
+    ``line_bucket = line // CLAUDE_LINE_BUCKET_SIZE`` collapses small line
+    drift across runs (the LLM occasionally re-anchors to a slightly
+    different line of the same hunk). This token is used for the standard
+    DefectDojo fallback hash dedup so it converges across runs even when the
+    LLM paraphrases the title or shifts the anchor by a few lines.
+    """
+    cwe_token = str(cwe) if (isinstance(cwe, int) and cwe > 0) else "0"
+    path_token = normalize_file_path(file_path) or "unknown"
+    bucket = line // CLAUDE_LINE_BUCKET_SIZE if isinstance(line, int) and line > 0 else 0
+    family = infer_canonical_family(vuln_id=raw_vuln_id, title=title)
+    family_token = family.value if family != CanonicalFamily.UNKNOWN else CanonicalFamily.UNKNOWN.value
+    return f"claude:{cwe_token}:{path_token}:{bucket}:{family_token}"
+
+
+def _stabilize_claude_finding(finding) -> None:  # type: ignore[no-untyped-def]
+    raw_vuln_id = str(getattr(finding, "vuln_id_from_tool", "") or "")
+    title = str(getattr(finding, "title", "") or "")
+    cwe = getattr(finding, "cwe", None)
+    if not (isinstance(cwe, int) and cwe > 0):
+        family = infer_canonical_family(vuln_id=raw_vuln_id, title=title)
+        family_cwe = cwe_for_family(family)
+        if family_cwe:
+            finding.cwe = family_cwe
+            cwe = family_cwe
+    finding.vuln_id_from_tool = build_claude_vuln_id_from_tool(
+        cwe=cwe if isinstance(cwe, int) else None,
+        file_path=getattr(finding, "file_path", None),
+        line=getattr(finding, "line", None),
+        title=title,
+        raw_vuln_id=raw_vuln_id,
+    )
+
+
+class _ClaudeGenericParserBase(GenericParser):
+
+    """
+    Generic-format parser for Claude agent-bridge analyzers.
+
+    Inherits the JSON/CSV reading logic from ``GenericParser`` but reports a
+    distinct ``ID`` so the imported Test gets a Claude-specific
+    ``test_type``. Findings are stabilized in place so dedupe keys are
+    reproducible across runs (paraphrased titles / drifting line anchors).
+    """
+
+    ID: str = ""
+
+    def get_scan_types(self):
+        return [self.ID]
+
+    def get_label_for_scan_types(self, scan_type):
+        return scan_type
+
+    def get_description_for_scan_types(self, scan_type):
+        return (
+            "Generic Findings Import emitted by the Claude agent-bridge "
+            "analyzer. Findings carry a deterministic vuln_id_from_tool so "
+            "the standard DefectDojo dedup converges across runs."
+        )
+
+    def get_findings(self, filename, test):  # type: ignore[no-untyped-def]
+        findings = super().get_findings(filename, test)
+        for finding in findings:
+            _stabilize_claude_finding(finding)
+        return findings
+
+    def get_tests(self, scan_type, filename):  # type: ignore[no-untyped-def]
+        tests = super().get_tests(scan_type, filename)
+        for parser_test in tests:
+            # GenericJSONParser defaults ParserTest.type to its own ID
+            # ("Generic Findings Import"). Reassign so consolidate_dynamic_tests
+            # in base_importer keeps our Claude scan_type as the final
+            # test_type_name (otherwise it produces "Generic Findings Import
+            # Scan (Claude Diff Security)").
+            parser_test.type = scan_type
+            for finding in getattr(parser_test, "findings", None) or []:
+                _stabilize_claude_finding(finding)
+        return tests
+
+
+class ClaudeDiffSecurityParser(_ClaudeGenericParserBase):
+    ID = CLAUDE_DIFF_SECURITY_SCAN_TYPE
+
+
+class ClaudeFullSecurityParser(_ClaudeGenericParserBase):
+    ID = CLAUDE_FULL_SECURITY_SCAN_TYPE
+
+
+def install_claude_parsers() -> None:
+    for scan_type, parser_cls in (
+        (CLAUDE_DIFF_SECURITY_SCAN_TYPE, ClaudeDiffSecurityParser),
+        (CLAUDE_FULL_SECURITY_SCAN_TYPE, ClaudeFullSecurityParser),
+    ):
+        if isinstance(factory.PARSERS.get(scan_type), parser_cls):
+            continue
+        factory.PARSERS[scan_type] = parser_cls()
+        logger.info("Registered Claude analyzer parser for '%s'", scan_type)

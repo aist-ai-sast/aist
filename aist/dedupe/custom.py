@@ -11,7 +11,14 @@ from dojo.finding.deduplication import set_duplicate
 from dojo.models import Finding
 
 from aist.dedupe.canonical import CanonicalSignature, MatchVerdict, finding_signature, score_signatures
-from aist.parser_overrides import BEARER_SCAN_TYPE, HORUSEC_SCAN_TYPE, SEMGREP_SCAN_TYPE, SNYK_CODE_SCAN_TYPE
+from aist.parser_overrides import (
+    BEARER_SCAN_TYPE,
+    CLAUDE_DIFF_SECURITY_SCAN_TYPE,
+    CLAUDE_FULL_SECURITY_SCAN_TYPE,
+    HORUSEC_SCAN_TYPE,
+    SEMGREP_SCAN_TYPE,
+    SNYK_CODE_SCAN_TYPE,
+)
 
 AIST_DEDUPE_AUTO_TAG = "aist:duplicate:auto"
 AIST_DEDUPE_CANDIDATE_TAG = "aist:duplicate:candidate"
@@ -22,6 +29,8 @@ SUPPORTED_SCAN_TYPES = (
     SEMGREP_SCAN_TYPE,
     HORUSEC_SCAN_TYPE,
     BEARER_SCAN_TYPE,
+    CLAUDE_DIFF_SECURITY_SCAN_TYPE,
+    CLAUDE_FULL_SECURITY_SCAN_TYPE,
 )
 
 
