@@ -916,6 +916,88 @@
                 scopeLocalRadio.addEventListener("change", updateVersionGroupVisibility);
             }
 
+            function buildVersionScriptUrl(projectId, versionId) {
+                return projectVersionScriptUrlTemplate
+                    .replace("/0/versions/0/", "/" + projectId + "/versions/" + versionId + "/");
+            }
+
+            function applyScriptMeta(data) {
+                if (!scriptMeta) return;
+                if (!data || !data.sha256) {
+                    scriptMeta.textContent = "";
+                    return;
+                }
+                var badge = "";
+                if (data.source === "shared_default") {
+                    badge = ' <span class="label label-warning">inherited from global default</span>';
+                } else if (data.source === "project_revision" && data.inherited) {
+                    badge = ' <span class="label label-info">inherited from project default</span>';
+                }
+                scriptMeta.innerHTML = "sha256: " + data.sha256.slice(0, 12) + "…" + badge;
+            }
+
+            function applyScriptResult(result) {
+                if (scriptLoading) scriptLoading.style.display = "none";
+                if (!(result.ok && result.data && result.data.content != null)) {
+                    if (fieldScriptContent) fieldScriptContent.style.display = "";
+                    if (scriptMeta) scriptMeta.textContent = "No script loaded.";
+                    return;
+                }
+                originalScriptContent = result.data.content;
+                currentScriptIsShared = !!result.data.is_shared;
+                if (fieldScriptContent) {
+                    fieldScriptContent.value = result.data.content;
+                    fieldScriptContent.style.display = "";
+                }
+                applyScriptMeta(result.data);
+                // Show scope selector only when the underlying script is the shared singleton.
+                if (scriptScopeBlock) {
+                    if (currentScriptIsShared) {
+                        scriptScopeBlock.style.display = "block";
+                        if (scopeGlobalRadio) scopeGlobalRadio.checked = true;
+                        if (scriptHelp) scriptHelp.textContent =
+                            "Select scope above: update the shared default or fork a project-specific copy.";
+                    } else {
+                        scriptScopeBlock.style.display = "none";
+                        if (scriptHelp) scriptHelp.textContent =
+                            "Saving changes creates a new project-specific revision.";
+                    }
+                }
+                updateVersionGroupVisibility();
+            }
+
+            function loadScriptForCurrentSelection(projectId) {
+                if (!projectId) return;
+                var versionId = (fieldScriptVersion && fieldScriptVersion.value) || "";
+                var url = versionId
+                    ? buildVersionScriptUrl(projectId, versionId)
+                    : activeScriptUrlTemplate.replace("/0/", "/" + projectId + "/");
+                if (scriptLoading) scriptLoading.style.display = "block";
+                fetch(url, {credentials: "same-origin"})
+                    .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, data: d}; }); })
+                    .then(applyScriptResult)
+                    .catch(function () {
+                        if (scriptLoading) scriptLoading.style.display = "none";
+                        if (fieldScriptContent) fieldScriptContent.style.display = "";
+                        if (scriptMeta) scriptMeta.textContent = "Failed to load script.";
+                    });
+            }
+
+            if (fieldScriptVersion) {
+                fieldScriptVersion.addEventListener("change", function () {
+                    var projectId = fieldId ? (fieldId.value || "") : "";
+                    if (!projectId) return;
+                    // Warn before overwriting unsaved edits.
+                    var dirty = fieldScriptContent && fieldScriptContent.value !== originalScriptContent;
+                    if (dirty && !window.confirm(
+                        "You have unsaved changes in the script. Loading another version will discard them. Continue?"
+                    )) {
+                        return;
+                    }
+                    loadScriptForCurrentSelection(projectId);
+                });
+            }
+
             // GitLab import modal elements
             var gitlabOpenBtn = document.getElementById("gitlab-import-open");
             var gitlabModal = document.getElementById("gitlabImportModal");
@@ -1059,7 +1141,6 @@
                 if (fieldScriptVersion) {
                     fieldScriptVersion.innerHTML = '<option value="">— Latest version (default) —</option>';
                 }
-                if (scriptLoading) scriptLoading.style.display = "block";
 
                 // Populate version selector from the row's data attribute (pre-rendered by server).
                 if (fieldScriptVersion) {
@@ -1079,47 +1160,8 @@
                     }
                 }
 
-                var scriptUrl = activeScriptUrlTemplate.replace("/0/", "/" + id + "/");
-                fetch(scriptUrl, {credentials: "same-origin"})
-                    .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, data: d}; }); })
-                    .then(function (result) {
-                        if (scriptLoading) scriptLoading.style.display = "none";
-                        if (result.ok && result.data && result.data.content != null) {
-                            originalScriptContent = result.data.content;
-                            currentScriptIsShared = !!result.data.is_shared;
-                            if (fieldScriptContent) {
-                                fieldScriptContent.value = result.data.content;
-                                fieldScriptContent.style.display = "";
-                            }
-                            if (scriptMeta && result.data.sha256) {
-                                var sharedBadge = currentScriptIsShared
-                                    ? ' <span class="label label-default">shared default</span>' : "";
-                                scriptMeta.innerHTML = "sha256: " + result.data.sha256.slice(0, 12) + "…" + sharedBadge;
-                            }
-                            // Show scope selector only for shared default; default to "global".
-                            if (scriptScopeBlock) {
-                                if (currentScriptIsShared) {
-                                    scriptScopeBlock.style.display = "block";
-                                    if (scopeGlobalRadio) scopeGlobalRadio.checked = true;
-                                    if (scriptHelp) scriptHelp.textContent =
-                                        "Select scope above: update the shared default or fork a project-specific copy.";
-                                } else {
-                                    scriptScopeBlock.style.display = "none";
-                                    if (scriptHelp) scriptHelp.textContent =
-                                        "Saving changes creates a new project-specific revision.";
-                                }
-                            }
-                            updateVersionGroupVisibility();
-                        } else {
-                            if (fieldScriptContent) fieldScriptContent.style.display = "";
-                            if (scriptMeta) scriptMeta.textContent = "No script loaded.";
-                        }
-                    })
-                    .catch(function () {
-                        if (scriptLoading) scriptLoading.style.display = "none";
-                        if (fieldScriptContent) fieldScriptContent.style.display = "";
-                        if (scriptMeta) scriptMeta.textContent = "Failed to load script.";
-                    });
+                // Load the script for the currently-selected version (defaults to latest).
+                loadScriptForCurrentSelection(id);
 
                 if (window.jQuery && window.jQuery.fn.modal) {
                     window.jQuery(modal).modal("show");

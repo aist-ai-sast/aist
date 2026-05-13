@@ -9,7 +9,7 @@ from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
-from aist.models import AISTProjectVersion, RepositoryInfo, ScmType, VersionType
+from aist.models import AISTProjectScript, AISTProjectVersion, RepositoryInfo, ScmType, VersionType
 from aist.test.test_api import AISTApiBase
 
 
@@ -238,4 +238,88 @@ class ProjectVersionsAPITests(AISTApiBase):
             kwargs={"project_version_id": other_version.id, "subpath": "main.py"},
         )
         resp = self.client.get(blob_url)
+        self.assertEqual(resp.status_code, 404)
+
+
+class ProjectVersionScriptGetAPITests(AISTApiBase):
+
+    """GET on the per-version script endpoint with inheritance resolution."""
+
+    def _json(self, resp):
+        return json.loads(resp.content.decode("utf-8") or "{}")
+
+    def _url(self, project_id: int, version_id: int) -> str:
+        return reverse(
+            "aist_api:project_version_script_update",
+            kwargs={"project_id": project_id, "version_id": version_id},
+        )
+
+    def test_returns_versions_own_script(self):
+        own_script = AISTProjectScript.objects.create(
+            project=self.project,
+            is_shared=False,
+            content="#!/bin/bash\necho version-own\n",
+        )
+        self.pv.script = own_script
+        self.pv.save(update_fields=["script"])
+
+        resp = self.client.get(self._url(self.project.id, self.pv.id))
+        self.assertEqual(resp.status_code, 200)
+        data = self._json(resp)
+        own_script.refresh_from_db()
+        self.assertEqual(data["id"], own_script.id)
+        self.assertEqual(data["content"].rstrip("\n"), own_script.content.rstrip("\n"))
+        self.assertFalse(data["inherited"])
+        self.assertEqual(data["source"], "version")
+        self.assertFalse(data["is_shared"])
+
+    def test_falls_back_to_latest_project_revision_when_version_has_no_script(self):
+        # version intentionally created without script in AISTApiBase.setUp
+        self.assertIsNone(self.pv.script_id)
+
+        older_rev = AISTProjectScript.objects.create(
+            project=self.project,
+            is_shared=False,
+            content="#!/bin/bash\necho old\n",
+        )
+        newer_rev = AISTProjectScript.objects.create(
+            project=self.project,
+            is_shared=False,
+            content="#!/bin/bash\necho new\n",
+        )
+
+        resp = self.client.get(self._url(self.project.id, self.pv.id))
+        self.assertEqual(resp.status_code, 200)
+        data = self._json(resp)
+        self.assertEqual(data["id"], newer_rev.id)
+        newer_rev.refresh_from_db()
+        self.assertEqual(data["content"].rstrip("\n"), newer_rev.content.rstrip("\n"))
+        self.assertNotEqual(data["id"], older_rev.id)
+        self.assertTrue(data["inherited"])
+        self.assertEqual(data["source"], "project_revision")
+        self.assertFalse(data["is_shared"])
+
+    def test_falls_back_to_shared_default_when_no_revisions(self):
+        self.assertIsNone(self.pv.script_id)
+        self.assertFalse(self.project.script_revisions.exists())
+
+        resp = self.client.get(self._url(self.project.id, self.pv.id))
+        self.assertEqual(resp.status_code, 200)
+        data = self._json(resp)
+        self.assertEqual(data["content"].rstrip("\n"), AISTProjectScript.get_shared_default().content.rstrip("\n"))
+        self.assertTrue(data["inherited"])
+        self.assertEqual(data["source"], "shared_default")
+        self.assertTrue(data["is_shared"])
+
+    def test_returns_404_for_other_org_project(self):
+        resp = self.client.get(self._url(self.other_project.id, self.other_pv.id))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_returns_404_for_version_not_in_project(self):
+        # other_pv belongs to other_project, not self.project; must not leak.
+        resp = self.client.get(self._url(self.project.id, self.other_pv.id))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_returns_404_for_unknown_version(self):
+        resp = self.client.get(self._url(self.project.id, 99999999))
         self.assertEqual(resp.status_code, 404)

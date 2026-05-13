@@ -13,6 +13,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from aist.api.project_versions import (
+    SCRIPT_SOURCE_PROJECT_REVISION,
+    SCRIPT_SOURCE_SHARED_DEFAULT,
+    SCRIPT_SOURCE_VERSION,
+    _serialize_version_script,
+)
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
@@ -482,13 +488,28 @@ class AISTProjectActiveScriptAPI(AuthorizedQuerySetMixin, APIView):
         description=(
             "Returns the active script for the project. "
             "Resolution order: latest version's script → latest project-scoped revision → shared default. "
-            "Always returns 200 — the shared default is the final fallback."
+            "Always returns 200 — the shared default is the final fallback. "
+            "Response includes `inherited` and `source` flags matching the version-script endpoint."
         ),
     )
     def get(self, request, project_id: int) -> Response:
         project = self.get_authorized_object(id=project_id)
-        script = project.active_script
-        return Response(AISTProjectScriptContentSerializer(script).data)
+        source = self._resolve_active_script_source(project)
+        return Response(_serialize_version_script(project.active_script, source))
+
+    @staticmethod
+    def _resolve_active_script_source(project: AISTProject) -> str:
+        latest_version = (
+            project.versions
+            .order_by("-created")
+            .only("id", "script_id")
+            .first()
+        )
+        if latest_version and latest_version.script_id:
+            return SCRIPT_SOURCE_VERSION
+        if project.script_revisions.exists():
+            return SCRIPT_SOURCE_PROJECT_REVISION
+        return SCRIPT_SOURCE_SHARED_DEFAULT
 
 
 def project_meta_payload(project: AISTProject) -> dict:

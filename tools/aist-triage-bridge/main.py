@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import signal
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,7 +28,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SecretStr
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -55,6 +56,13 @@ TRIAGE_TIMEOUT = int(os.environ.get("AIST_LOCAL_TRIAGE_TIMEOUT", "10800"))  # 3 
 POST_RESULT_GRACE = int(os.environ.get("AIST_LOCAL_TRIAGE_POST_RESULT_GRACE", "10"))
 # Optional: directory where per-pipeline .log files are written (same path as Django MEDIA_ROOT/aist_logs).
 AIST_LOG_DIR = os.environ.get("AIST_LOG_DIR", "")
+
+# Mirror of ``aist.logging_transport.LOG_ROTATION_BACKUP_COUNT`` — the bridge
+# runs in a separate container and cannot import from the Django app. The
+# Full Log / Download endpoints in ``aist/api/pipelines.py`` enumerate this
+# many numbered backups; keep both values in lockstep.
+LOG_ROTATION_BACKUP_COUNT = 5
+LOG_ROTATION_MAX_BYTES = 10 * 1024 * 1024
 
 # Per-run CLAUDE_CONFIG_DIR root — session jsonl files land here so we can tail them.
 # CLAUDE_CONFIG_DIR is the documented env var that redirects ~/.claude to a custom path.
@@ -95,8 +103,26 @@ _SYS_COMPACT_BOUNDARY = "compact_boundary"
 _SYS_TASK_STARTED = "task_started"
 _SYS_TASK_NOTIFICATION = "task_notification"
 
-# ``result`` subtype that maps to a successful run; everything else is error.
+# ``result`` subtype mapping. Use sets (not single literals) so future
+# Anthropic additions can be onboarded with a one-line change instead of
+# branch surgery in ``_payload_from_result_event``. Anything not in
+# either set is treated as error with the subtype name surfaced for
+# operator triage.
 _RESULT_SUCCESS = "success"
+_RESULT_SUCCESS_SUBTYPES = frozenset({_RESULT_SUCCESS})
+_RESULT_ERROR_MAX_TURNS = "error_max_turns"
+_RESULT_ERROR_DURING_EXECUTION = "error_during_execution"
+_RESULT_KNOWN_ERROR_SUBTYPES = frozenset({
+    _RESULT_ERROR_MAX_TURNS,
+    _RESULT_ERROR_DURING_EXECUTION,
+})
+
+# Heuristic for Anthropic-issued credential values. Used as
+# defence-in-depth when populating the ``_RedactingFilter``: even if a
+# token snuck into the bridge container env (against the policy in
+# Task 9 of docs/plans/2026-05-12-claude-as-org-integration.md) and
+# claude echoes it on stderr, we still mask it from logs.
+_TOKEN_SHAPED = re.compile(r"^sk-ant-[A-Za-z0-9_-]{20,}$")
 
 # Inner message-content block ``type`` discriminators (the value of the
 # ``type`` key inside a content block).
@@ -144,11 +170,27 @@ _STDOUT_ONLY_LOG_TYPES = frozenset({_T_SYSTEM, _T_RESULT, _T_RATE_LIMIT})
 # ── Models ───────────────────────────────────────────────────────────────────
 
 class AnalyzeRequest(BaseModel):
-    skill_name: str
-    project_id: str
+    # ``skill_name`` is used as a path component when reading SKILL.md.
+    # ``_build_skill_prompt`` has its own defensive check too, but
+    # validating here returns 422 immediately rather than 202-then-fail.
+    skill_name: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
+    # ``project_id`` is used as a path component for ``claude_config_dir``
+    # AND for the per-pipeline bridge log filename. Without strict
+    # validation, a caller could traverse out of /tmp/claude-bridge-runs
+    # (``shutil.rmtree`` in ``_execute_claude_skill``'s finally) and out
+    # of ``AIST_LOG_DIR``. Limit to a generous alphabet covering pipeline
+    # UUIDs and integer project ids.
+    project_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,128}$")
     source_path: str
     callback_url: str = ""
     extra_args: str = ""
+    # Generic per-run environment overlay injected into the claude
+    # subprocess. Values are ``SecretStr`` so they mask in repr/dump/log
+    # by default. The bridge is agent-agnostic at this layer: the caller
+    # decides which env vars to inject (Claude OAuth token, future
+    # agents' credentials, etc.). Bridge container env MUST NOT contain
+    # these credentials (Task 9 enforces).
+    subprocess_env: dict[str, SecretStr] = Field(default_factory=dict)
 
 
 class CallbackPayload(BaseModel):
@@ -188,9 +230,66 @@ class _RunContext:
     payload: CallbackPayload | None = None
     session_id_known: asyncio.Event = field(default_factory=asyncio.Event)
     session_id: str = ""
+    # Fires when ``_stream_stdout``'s async-for loop ends — i.e. the stdout
+    # pipe write-end has been closed by ALL processes that inherited it
+    # (parent claude + every subagent spawned via the Task tool). This is
+    # the strongest "claude is fully done" signal we have, because subagents
+    # inherit the parent's fd1 and the pipe only EOFs once every one of
+    # them has exited. Used as a defence-in-depth fallback in
+    # ``_execute_claude_skill`` for the asyncio ThreadedChildWatcher ↔
+    # tini race that wedges ``proc.wait()`` (incident pipeline 4a1912d7).
+    stdout_done: asyncio.Event = field(default_factory=asyncio.Event)
+    # Set on the first non-empty assistant turn observed (from either the
+    # stdout stream or the session jsonl tail — see ``_stream_stdout`` and
+    # ``_process_jsonl_chunk``). The EOF-fallback uses this to distinguish
+    # "claude finished its work and exited" from "claude crashed before
+    # producing any output".
+    had_assistant_turn: bool = False
 
 
-def _open_pipeline_log_handler(pipeline_id: str) -> logging.handlers.RotatingFileHandler | None:
+class _RedactingFilter(logging.Filter):
+
+    """
+    Mask known secret values in any log message routed through this filter.
+
+    Installed once per ``_execute_claude_skill`` invocation onto the
+    per-task logger; receives the raw secret values extracted from
+    ``req.subprocess_env``. The filter operates on the **formatted**
+    message (post-args substitution) so that secrets passed as %s
+    arguments don't slip through.
+
+    Agent-agnostic: holds only the specific values from the current run,
+    no hardcoded prefixes / patterns. Mirrors
+    ``aist/integrations/claude.py::redact_claude_secret`` on the Django
+    side — the bridge cannot import from aist, hence the duplicated
+    logic.
+    """
+
+    _REDACTED = "***REDACTED***"
+
+    def __init__(self, secret_values):
+        super().__init__()
+        # Filter out empties so ``str.replace("", "X")`` does not insert
+        # the redaction marker between every character of every message.
+        self._secrets = [s for s in secret_values if s]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not self._secrets:
+            return True
+        msg = record.getMessage()
+        original = msg
+        for secret in self._secrets:
+            msg = msg.replace(secret, self._REDACTED)
+        if msg != original:
+            record.msg = msg
+            record.args = ()
+        return True
+
+
+def _open_pipeline_log_handler(
+    pipeline_id: str,
+    log: logging.Logger | None = None,
+) -> logging.handlers.RotatingFileHandler | None:
     """
     Return a file handler writing to ``<pipeline_id>.bridge.log``.
 
@@ -204,14 +303,30 @@ def _open_pipeline_log_handler(pipeline_id: str) -> logging.handlers.RotatingFil
     as the sole writer to its own file. The Django log API merges both
     files when the operator opens "Full Logs" / "Download" and exposes a
     second progressive endpoint so the UI can show bridge events live.
+
+    When ``log`` is supplied and already has a handler pointing at the
+    same path (concurrent runs sharing a ``pipeline_id``), returns
+    ``None`` so the caller skips both attaching a second writer and
+    removing it in its own ``finally`` — only the run that created the
+    handler is responsible for closing it.
     """
     if not AIST_LOG_DIR:
         return None
     log_path = Path(AIST_LOG_DIR) / f"{pipeline_id}.bridge.log"
+    if log is not None:
+        for existing in log.handlers:
+            if (
+                isinstance(existing, logging.handlers.RotatingFileHandler)
+                and Path(existing.baseFilename) == log_path
+            ):
+                return None
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         handler = logging.handlers.RotatingFileHandler(
-            log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8",
+            log_path,
+            maxBytes=LOG_ROTATION_MAX_BYTES,
+            backupCount=LOG_ROTATION_BACKUP_COUNT,
+            encoding="utf-8",
         )
     except OSError:
         logger.warning("Cannot open pipeline log file %s", log_path)
@@ -285,19 +400,38 @@ def _payload_from_result_event(ev: dict) -> CallbackPayload:
     """
     Map a stream-json ``result`` event to a bridge ``CallbackPayload``.
 
-    Claude CLI emits ``subtype=success`` on normal completion and
-    ``error_max_turns`` / ``error_during_execution`` on failure. Anything
-    other than ``success`` is treated as an error and the detail is the
-    first ~500 chars of the result text so it shows up in pipeline logs.
+    Claude CLI today emits ``subtype=success`` on normal completion and
+    ``error_max_turns`` / ``error_during_execution`` on failure. Both
+    sets are configurable above (``_RESULT_SUCCESS_SUBTYPES`` /
+    ``_RESULT_KNOWN_ERROR_SUBTYPES``) so a future Anthropic addition is
+    a one-line update instead of branch surgery. Unknown subtypes are
+    treated as errors but logged distinctively so the operator can spot
+    a drifted CLI version quickly.
     """
     subtype = ev.get(_F_SUBTYPE, "") or ""
-    if subtype == _RESULT_SUCCESS:
+    if subtype in _RESULT_SUCCESS_SUBTYPES:
         return CallbackPayload(status="success")
     result_text = (ev.get(_F_RESULT, "") or "")[:_LOG_TRUNC_SHORT]
-    detail = f"claude -p result subtype={subtype or 'unknown'}"
+    if subtype in _RESULT_KNOWN_ERROR_SUBTYPES:
+        detail = f"claude -p {subtype}"
+    else:
+        detail = f"claude -p result subtype={subtype or 'unknown'}"
     if result_text:
         detail = f"{detail}: {result_text}"
     return CallbackPayload(status="error", detail=detail)
+
+
+def _scan_env_for_anthropic_secrets() -> list[str]:
+    """
+    Return any ``os.environ`` values that look like Anthropic credentials.
+
+    Used to seed the per-run ``_RedactingFilter`` with values the caller
+    didn't pass through ``req.subprocess_env``. Task 9 of the
+    Claude-as-Integration refactor mandates the bridge container env
+    NOT contain agent credentials — this scan is the runtime guard
+    against an operator who forgot.
+    """
+    return [v for v in os.environ.values() if isinstance(v, str) and _TOKEN_SHAPED.match(v)]
 
 
 def _format_tool_use_detail(name: str, inp: dict) -> str:
@@ -461,10 +595,34 @@ def _log_claude_event(log: logging.Logger, task_label: str, ev: dict) -> None:
         handler(log, task_label, ev)
 
 
+def _has_assistant_content(ev: dict) -> bool:
+    """
+    True iff an ``assistant`` event carries any content blocks.
+
+    Used by the stdout-EOF fallback in ``_execute_claude_skill`` to
+    distinguish:
+    - claude produced real output then exited (success-on-EOF)
+    - claude crashed before producing anything (error-on-EOF)
+
+    Liberal definition: any non-empty content list counts (text,
+    tool_use, thinking, etc.). A claude run that emitted even a single
+    tool call is doing real work and an EOF after that should be treated
+    as a normal completion modulo the missing ``result`` event.
+    """
+    msg = ev.get(_F_MESSAGE) or {}
+    content = msg.get(_F_CONTENT)
+    if isinstance(content, list):
+        return len(content) > 0
+    if isinstance(content, str):
+        return bool(content.strip())
+    return False
+
+
 def _process_jsonl_chunk(
     chunk: bytes,
     log: logging.Logger,
     task_label: str,
+    ctx: _RunContext | None = None,
 ) -> None:
     """
     Route every event in a jsonl chunk through ``_log_claude_event``.
@@ -478,6 +636,12 @@ def _process_jsonl_chunk(
     used to silence jsonl events via uuid-based deduplication
     (incident pipeline 05bdd13d: bridge log empty 5+ minutes while
     jsonl grew by 300+ KB). Single source of truth → no race.
+
+    When ``ctx`` is provided, also updates ``ctx.had_assistant_turn``
+    so the stdout-EOF fallback in ``_execute_claude_skill`` can tell
+    success-after-EOF from crash-after-EOF. The jsonl path is more
+    reliable than stdout for this (stdout can be swallowed by buffering
+    on abrupt exit; jsonl is fsynced by claude as it goes).
     """
     for raw_line in chunk.decode("utf-8", errors="replace").splitlines():
         line = raw_line.strip()
@@ -498,6 +662,16 @@ def _process_jsonl_chunk(
                 "[%s] _log_claude_event failed on event type=%s: %s",
                 task_label, ev.get(_F_TYPE), exc,
             )
+        # Track assistant-turn presence for the stdout-EOF fallback.
+        # Done after the logging dispatch so a buggy logger can't mask
+        # the flag update.
+        if (
+            ctx is not None
+            and not ctx.had_assistant_turn
+            and ev.get(_F_TYPE) == _T_ASSISTANT
+            and _has_assistant_content(ev)
+        ):
+            ctx.had_assistant_turn = True
 
 
 def _parse_extra_args(extra_args: str) -> dict[str, str]:
@@ -571,26 +745,44 @@ async def _stream_stdout(stream: asyncio.StreamReader, ctx: _RunContext) -> None
     types that don't appear in the session jsonl at all (``system``,
     ``result``, ``rate_limit_event``) so the operator still sees session
     start, API-retry warnings and the final ``Result: ...`` line.
+
+    Side-effects on ``ctx``:
+    - ``ctx.session_id`` / ``ctx.session_id_known`` from ``system/init``
+    - ``ctx.payload`` / ``ctx.result_event`` from ``result``
+    - ``ctx.had_assistant_turn`` from any non-empty ``assistant`` event
+      (used by the EOF fallback below)
+    - ``ctx.stdout_done`` is set in the ``finally`` block — this is the
+      strongest "claude tree is fully done" signal because subagents
+      inherit fd1 and the pipe only EOFs once all of them are gone.
     """
-    async for line in stream:
-        text = line.decode("utf-8", errors="replace").rstrip()
-        if not text:
-            continue
-        try:
-            ev = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        ev_type = ev.get(_F_TYPE, "")
-        if ev_type in _STDOUT_ONLY_LOG_TYPES:
-            _log_claude_event(ctx.log, ctx.task_label, ev)
-        if ev_type == _T_SYSTEM and ev.get(_F_SUBTYPE) == _SYS_INIT:
-            sid = ev.get(_F_SESSION_ID, "")
-            if sid and not ctx.session_id_known.is_set():
-                ctx.session_id = sid
-                ctx.session_id_known.set()
-        if ev_type == _T_RESULT and ctx.payload is None:
-            ctx.payload = _payload_from_result_event(ev)
-            ctx.result_event.set()
+    try:
+        async for line in stream:
+            text = line.decode("utf-8", errors="replace").rstrip()
+            if not text:
+                continue
+            try:
+                ev = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            ev_type = ev.get(_F_TYPE, "")
+            if ev_type in _STDOUT_ONLY_LOG_TYPES:
+                _log_claude_event(ctx.log, ctx.task_label, ev)
+            if ev_type == _T_ASSISTANT and not ctx.had_assistant_turn and _has_assistant_content(ev):
+                ctx.had_assistant_turn = True
+            if ev_type == _T_SYSTEM and ev.get(_F_SUBTYPE) == _SYS_INIT:
+                sid = ev.get(_F_SESSION_ID, "")
+                if sid and not ctx.session_id_known.is_set():
+                    ctx.session_id = sid
+                    ctx.session_id_known.set()
+            if ev_type == _T_RESULT and ctx.payload is None:
+                ctx.payload = _payload_from_result_event(ev)
+                ctx.result_event.set()
+    finally:
+        # Signal EOF / drain-complete unconditionally — even on
+        # CancelledError. ``_execute_claude_skill`` uses this as the
+        # defence-in-depth completion signal when proc.wait() is wedged
+        # by the asyncio child-watcher race with tini.
+        ctx.stdout_done.set()
 
 
 async def _watch_result_file(ctx: _RunContext) -> None:
@@ -744,7 +936,7 @@ def _read_jsonl_delta(
         return  # entire chunk is one in-progress line; wait for more
     complete = chunk[: last_nl + 1]
     offsets[path] = offset + len(complete)
-    _process_jsonl_chunk(complete, ctx.log, labels[path])
+    _process_jsonl_chunk(complete, ctx.log, labels[path], ctx=ctx)
 
 
 async def _cleanup_run_tasks(
@@ -759,11 +951,18 @@ async def _cleanup_run_tasks(
     already closed the pipes. Background tasks (jsonl tailer, result
     waiter, ...) are cancelled outright; they hold no external state we
     care about preserving.
+
+    All exceptions are swallowed: cleanup is best-effort and MUST NOT
+    propagate. If it did, the caller's ``finally`` would not finish, the
+    callback to AIST would never POST, and the pipeline would hang in
+    ``WAITING_RESULT_FROM_AI`` until the bridge restarts. The drain
+    tasks themselves are logging-only; their failures are useful as
+    breadcrumbs but never load-bearing.
     """
     for bg_task in bg_tasks:
         if not bg_task.done():
             bg_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(BaseException):
                 await bg_task
     for drain_task in drain_tasks:
         if drain_task.done():
@@ -772,7 +971,14 @@ async def _cleanup_run_tasks(
             await asyncio.wait_for(asyncio.shield(drain_task), timeout=5)
         except TimeoutError:
             drain_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(BaseException):
+                await drain_task
+        except Exception:
+            # Drain coroutine raised mid-loop (e.g. logging filter bug).
+            # Cancel idempotently so it doesn't dangle, then move on —
+            # propagating would block the callback POST upstream.
+            drain_task.cancel()
+            with contextlib.suppress(BaseException):
                 await drain_task
 
 
@@ -802,10 +1008,30 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
         Path(output_path) / result_filename if output_path and result_filename else None
     )
 
-    # Per-run CLAUDE_CONFIG_DIR so session jsonl files land at a known path.
-    claude_config_dir = _CLAUDE_RUNS_DIR / req.project_id
+    # Per-run CLAUDE_CONFIG_DIR with a UUID suffix so concurrent invocations
+    # for the same ``project_id`` (retry storms, upstream races) do not
+    # share session jsonl files or stomp each other's cleanup. The
+    # finally-block ``shutil.rmtree`` only ever touches paths derived
+    # from this run's ``run_id``.
+    run_id = uuid.uuid4().hex[:8]
+    claude_config_dir = _CLAUDE_RUNS_DIR / f"{req.project_id}-{run_id}"
     claude_config_dir.mkdir(parents=True, exist_ok=True)
+    # Inherit container env (PATH/HOME/LANG) and overlay the per-request
+    # subprocess_env coming from the caller. Generic mechanism: the
+    # bridge does not know which keys are Claude credentials vs unrelated
+    # env vars — it just forwards what the caller sent. Task 9 guarantees
+    # the container env itself never contains agent credentials, so the
+    # inherited keys are safe.
     subprocess_env = {**os.environ, "CLAUDE_CONFIG_DIR": str(claude_config_dir)}
+    # Defence-in-depth redaction seed: include any token-shaped value
+    # that leaked into the bridge container env, on top of the values
+    # the caller explicitly passed through ``req.subprocess_env``.
+    secret_values: list[str] = _scan_env_for_anthropic_secrets()
+    for var_name, secret in req.subprocess_env.items():
+        raw_value = secret.get_secret_value()
+        subprocess_env[var_name] = raw_value
+        if raw_value:
+            secret_values.append(raw_value)
 
     cmd = [
         CLAUDE_PATH,
@@ -818,7 +1044,14 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
 
     log = logging.getLogger(f"aist-triage-bridge.task.{req.project_id}")
     log.propagate = True
-    file_handler = _open_pipeline_log_handler(req.project_id)
+    # Per-run redaction: masks any literal secret value present in this
+    # request's subprocess_env from every log line emitted via ``log``.
+    # Defence-in-depth — claude CLI is observed to echo rejected tokens
+    # in auth-error stderr lines (Task 4 e2e test).
+    redacting_filter = _RedactingFilter(secret_values) if secret_values else None
+    if redacting_filter is not None:
+        log.addFilter(redacting_filter)
+    file_handler = _open_pipeline_log_handler(req.project_id, log=log)
     if file_handler is not None:
         log.addHandler(file_handler)
 
@@ -859,12 +1092,18 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
         result_wait_task = asyncio.create_task(ctx.result_event.wait())
         file_watch_task = asyncio.create_task(_watch_result_file(ctx))
         jsonl_tail_task = asyncio.create_task(_tail_jsonl(ctx))
+        # Fourth completion signal: stdout pipe EOF. Strongest available
+        # "claude tree is fully done" signal — subagents inherit fd1 so
+        # the pipe only EOFs after every process in the group exits.
+        # Defence-in-depth against the asyncio ThreadedChildWatcher race
+        # with tini that wedges proc.wait() (incident pipeline 4a1912d7).
+        stdout_done_task = asyncio.create_task(ctx.stdout_done.wait())
 
         drain_tasks = (stdout_task, stderr_task)
-        bg_tasks = (file_watch_task, jsonl_tail_task, result_wait_task, proc_wait_task)
+        bg_tasks = (file_watch_task, jsonl_tail_task, result_wait_task, proc_wait_task, stdout_done_task)
 
         done, _pending = await asyncio.wait(
-            {result_wait_task, proc_wait_task, file_watch_task},
+            {result_wait_task, proc_wait_task, file_watch_task, stdout_done_task},
             return_when=asyncio.FIRST_COMPLETED,
             timeout=TRIAGE_TIMEOUT,
         )
@@ -895,6 +1134,55 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
                 err = b"".join(ctx.stderr_lines).decode("utf-8", errors="replace")[:_LOG_TRUNC_LONG]
                 log.error("claude -p failed for %s exit=%s", task_label, rc)
                 result = CallbackPayload(status="error", detail=err or f"claude -p exit={rc}")
+
+        elif stdout_done_task in done:
+            # Stdout EOF arrived but neither a result event nor proc exit
+            # was observed. This is the asyncio child-watcher race signature:
+            # claude actually exited (and tini reaped it), the pipe is in
+            # EOF, but ``proc.wait()`` is wedged because the SIGCHLD was
+            # delivered to tini before asyncio could observe it. The pipe
+            # EOF is authoritative — every fd1-holding process is gone,
+            # so it is safe to terminate the run now rather than spinning
+            # for ``TRIAGE_TIMEOUT`` more seconds.
+            log.warning(
+                "claude -p stdout EOF for %s pid=%s without result event; "
+                "had_assistant_turn=%s — treating as %s (asyncio child-watcher "
+                "race fallback)",
+                task_label, proc.pid, ctx.had_assistant_turn,
+                "success" if ctx.had_assistant_turn else "error",
+            )
+            if ctx.had_assistant_turn:
+                result = CallbackPayload(status="success")
+            else:
+                result = CallbackPayload(
+                    status="error",
+                    detail="claude -p exited without producing any assistant output",
+                )
+            # Fast-path: if the OS confirms the child is already reaped
+            # (tini got there first; ``ECHILD`` from waitpid), skip the
+            # SIGTERM/SIGKILL dance in ``_terminate_subprocess`` which
+            # would otherwise spin for POST_RESULT_GRACE*2 seconds
+            # waiting for asyncio's wedged proc.wait() to return. This
+            # is what makes the EOF fallback take seconds rather than
+            # tens of seconds.
+            process_already_reaped = False
+            try:
+                wait_pid, _ = os.waitpid(proc.pid, os.WNOHANG)  # noqa: ASYNC222
+                # Nonzero pid → we just reaped it; 0 → still alive
+                # (rare false EOF — fall through to normal terminate).
+                process_already_reaped = wait_pid != 0
+            except ChildProcessError:
+                # ECHILD — already reaped by tini, exactly the 4a1912d7 case.
+                process_already_reaped = True
+            except OSError as exc:
+                log.warning(
+                    "waitpid(%s, WNOHANG) failed for %s: %s — falling back "
+                    "to terminate", proc.pid, task_label, exc,
+                )
+            if process_already_reaped and not proc_wait_task.done():
+                proc_wait_task.cancel()
+            elif not process_already_reaped:
+                await _terminate_subprocess(proc, proc_wait_task, log, task_label)
 
         else:
             last_stderr = (
@@ -937,6 +1225,8 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
         if file_handler is not None:
             log.removeHandler(file_handler)
             file_handler.close()
+        if redacting_filter is not None:
+            log.removeFilter(redacting_filter)
         shutil.rmtree(claude_config_dir, ignore_errors=True)
 
         # ── Async cleanup ───────────────────────────────────────────────
@@ -949,6 +1239,14 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
         # critical sync cleanup above has already freed the pipe FDs by
         # then, so the worst case is bg_tasks dangling briefly until
         # uvicorn shutdown collects them — not a correctness issue.
+        #
+        # All non-cancellation exceptions are swallowed here: this finally
+        # block runs BEFORE the callback POST in ``_run_claude_skill``,
+        # and we cannot let cleanup break the callback contract — the
+        # pipeline upstream would hang in WAITING_RESULT_FROM_AI until
+        # the bridge container restarts. ``_cleanup_run_tasks`` already
+        # swallows its own task-level exceptions; the catch here is a
+        # last-resort guard against future regressions.
         if bg_tasks or drain_tasks:
             try:
                 await asyncio.wait_for(
@@ -957,6 +1255,11 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
             except TimeoutError:
                 log.error(
                     "Cleanup timed out for %s; abandoning background tasks",
+                    task_label,
+                )
+            except Exception:
+                log.exception(
+                    "Cleanup itself raised for %s; abandoning background tasks",
                     task_label,
                 )
 
@@ -1010,6 +1313,17 @@ def _schedule_task(req: AnalyzeRequest) -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Operator-visible startup warning. /analyze-sync (used by SAST
+    # analyzers) does not need the service token, so we do NOT fail-fast
+    # here — but /analyze with a callback_url will 401 silently at AIST
+    # without it. The per-request guard below upgrades that to a clean
+    # 503 so the caller knows immediately.
+    if not AIST_SERVICE_TOKEN:
+        logger.warning(
+            "AIST_SERVICE_TOKEN is not set. /analyze requests carrying a "
+            "callback_url will be rejected with HTTP 503 until the env is "
+            "configured. /analyze-sync is unaffected.",
+        )
     yield
     for task in list(_running_tasks):
         task.cancel()
@@ -1024,6 +1338,20 @@ app = FastAPI(title="aist-triage-bridge", lifespan=lifespan)
 async def analyze(req: AnalyzeRequest):
     if not req.skill_name or not req.source_path:
         raise HTTPException(status_code=400, detail="skill_name and source_path are required")
+    if req.callback_url and not AIST_SERVICE_TOKEN:
+        # Without the service token AIST's LocalTriageCompleteAPI (which
+        # has ``IsAuthenticated``) returns 401 to our callback, the
+        # bridge logs the failure but the pipeline stays in
+        # WAITING_RESULT_FROM_AI forever. Fail loudly at request time
+        # so the caller can either set the token or omit callback_url.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "bridge has no AIST_SERVICE_TOKEN configured; "
+                "callbacks to AIST would fail authentication. "
+                "Set the env var or omit callback_url."
+            ),
+        )
     _schedule_task(req)
     return {"accepted": True, "skill_name": req.skill_name, "project_id": req.project_id}
 

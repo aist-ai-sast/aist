@@ -289,7 +289,6 @@ services:
         read_only: true
       - defectdojo_media:${DD_MEDIA_ROOT:-/app/media}
     environment:
-      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
       AIST_WORKING_DIR: /app/aist
       AIST_SERVICE_TOKEN: "${AIST_SERVICE_TOKEN:-}"
       AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-10800}"

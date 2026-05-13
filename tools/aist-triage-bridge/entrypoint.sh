@@ -24,13 +24,14 @@ if [ -n "${AIST_LOG_DIR:-}" ]; then
 fi
 
 # ── Drop to claude user ──────────────────────────────────────────────────
-# Verify Claude Code auth
-if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-    echo "ERROR: CLAUDE_CODE_OAUTH_TOKEN not set."
-    exit 1
-fi
-
-echo "Claude Code OAuth token configured."
+# Claude OAuth tokens are no longer global env. The bridge accepts a
+# per-request `subprocess_env` field on /analyze[-sync] (Task 4 of
+# docs/plans/2026-05-12-claude-as-org-integration.md). The platform
+# resolves the right token from OrgIntegration(type=CLAUDE_CODE) for
+# the project being analysed and passes it in the request body. If the
+# token is missing for a given request, the spawn of `claude -p` will
+# fail with claude's own auth-error and the bridge surfaces that as
+# an error CallbackPayload.
 echo "Starting aist-triage-bridge on UDS: $SOCKET_PATH"
 echo "  AIST_WORKING_DIR=${AIST_WORKING_DIR:-/app/aist}"
 echo "  AIST_LOCAL_TRIAGE_TIMEOUT=${AIST_LOCAL_TRIAGE_TIMEOUT:-1800}"

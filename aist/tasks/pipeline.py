@@ -9,6 +9,7 @@ from django.utils import timezone
 from dojo.models import Finding, Test
 
 from aist.celery_signals import _update_action_run
+from aist.integrations.claude import claude_auth_env
 from aist.integrations.resolver import resolve_integration
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging
@@ -153,7 +154,16 @@ def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> 
 
         # Bridge client constructed once from Django settings, single source
         # of truth for socket path / timeouts (see aist/utils/bridge_client_factory.py).
-        bridge_client = build_bridge_client_from_settings()
+        # Claude credentials (when configured for the project's org) are
+        # resolved here and passed through as a generic auth_env. The
+        # factory itself stays integration-agnostic (invariant I4) and
+        # all Claude-specific mapping lives in aist/integrations/claude.py
+        # (invariant I1).
+        claude_auth = {
+            var: secret.get_secret_value()
+            for var, secret in claude_auth_env(pipeline.project).items()
+        }
+        bridge_client = build_bridge_client_from_settings(auth_env=claude_auth)
 
         vpn_resolved = resolve_integration(pipeline.project, OrgIntegrationType.VPN)
         logger.info("Starting configure_project_run_analyses")

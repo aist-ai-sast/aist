@@ -381,6 +381,36 @@ class PushLocalTriageTaskTests(AISTApiBase):
 
     """Tests for push_request_to_local_triage Celery task."""
 
+    def setUp(self):
+        super().setUp()
+        from dojo.models import Product_Type  # noqa: PLC0415
+
+        from aist.models import (  # noqa: PLC0415
+            Organization,
+            OrgIntegration,
+            OrgIntegrationType,
+        )
+
+        # The triage flow resolves Claude credentials per project; for the
+        # bridge to be invoked, the project's org must have an active
+        # CLAUDE_CODE OrgIntegration. Mirrors the setup in
+        # ``test_claude_analyze.py``.
+        self.org_prod_type = Product_Type.objects.create(name="Local Triage PT")
+        self.org = Organization.objects.create(
+            name="Local Triage Org",
+            product_type=self.org_prod_type,
+        )
+        self.project.organization = self.org
+        self.project.save(update_fields=["organization"])
+        self.claude_integration = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type=OrgIntegrationType.CLAUDE_CODE,
+            name="primary",
+            secret="sk-ant-oat01-local-triage-test-token-12345",  # noqa: S106
+            is_active=True,
+            config={"auth_mode": "oauth"},
+        )
+
     @patch("aist.tasks.ai.build_bridge_client_from_settings")
     def test_dispatches_to_bridge_via_uds(self, mock_bridge_factory):
         pipeline = AISTPipeline.objects.create(
@@ -396,12 +426,24 @@ class PushLocalTriageTaskTests(AISTApiBase):
         push_request_to_local_triage(str(pipeline.id), [1, 2, 3])
 
         mock_bridge_factory.assert_called_once()
+        # Factory must receive Claude credentials resolved from the
+        # project's org integration.
+        factory_kwargs = mock_bridge_factory.call_args.kwargs
+        self.assertEqual(
+            factory_kwargs.get("auth_env"),
+            {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-local-triage-test-token-12345"},
+        )
         mock_client.analyze_async.assert_called_once()
         call_kwargs = mock_client.analyze_async.call_args.kwargs
         self.assertEqual(call_kwargs["project_id"], str(pipeline.id))
         self.assertEqual(call_kwargs["skill_name"], "aist-finding-triage")
         self.assertEqual(call_kwargs["source_path"], "/tmp/aist/projects/test")  # noqa: S108
         self.assertIn(str(pipeline.id), call_kwargs["callback_url"])
+        # Completion-marker convention — without these the bridge can only
+        # detect completion via the (3h) AIST_LOCAL_TRIAGE_TIMEOUT.
+        self.assertIn("output_path=", call_kwargs["extra_args"])
+        self.assertIn("result_filename=triage_done.flag", call_kwargs["extra_args"])
+        self.assertIn(str(pipeline.id), call_kwargs["extra_args"])  # per-pipeline subdir
 
         pipeline.refresh_from_db()
         self.assertEqual(pipeline.status, AISTStatus.WAITING_RESULT_FROM_AI)
@@ -422,6 +464,29 @@ class PushLocalTriageTaskTests(AISTApiBase):
 
         push_request_to_local_triage(str(pipeline.id), [1])
 
+        mock_finish.assert_called_once_with(str(pipeline.id), degraded=True)
+
+    @patch("aist.tasks.ai.finish_pipeline")
+    @patch("aist.tasks.ai.build_bridge_client_from_settings")
+    def test_missing_claude_integration_skips_bridge_and_finishes_degraded(
+        self, mock_bridge_factory, mock_finish,
+    ):
+        # Deactivate the integration set up by setUp() — the triage flow
+        # must short-circuit BEFORE building the bridge client.
+        self.claude_integration.is_active = False
+        self.claude_integration.save(update_fields=["is_active"])
+
+        pipeline = AISTPipeline.objects.create(
+            id="push-local-3",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.PUSH_TO_AI,
+            launch_data={"project_path": "/tmp/aist/projects/test"},  # noqa: S108
+        )
+
+        push_request_to_local_triage(str(pipeline.id), [1, 2, 3])
+
+        mock_bridge_factory.assert_not_called()
         mock_finish.assert_called_once_with(str(pipeline.id), degraded=True)
 
 

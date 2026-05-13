@@ -12,6 +12,10 @@ from aist.api.schema import AISTApiTag
 from aist.models import AISTProjectScript, AISTProjectVersion, VersionType
 from aist.queries import get_authorized_aist_projects
 
+SCRIPT_SOURCE_VERSION = "version"
+SCRIPT_SOURCE_PROJECT_REVISION = "project_revision"
+SCRIPT_SOURCE_SHARED_DEFAULT = "shared_default"
+
 
 def _resolve_script_for_new_version(project) -> AISTProjectScript:
     """
@@ -159,15 +163,74 @@ class ProjectVersionCreateAPI(AuthorizedQuerySetMixin, APIView):
         return Response(out.data, status=status.HTTP_201_CREATED)
 
 
+def _resolve_version_script(version, project) -> tuple[AISTProjectScript, str]:
+    """
+    Return the script for a project version with inheritance fallback.
+
+    Resolution order:
+    1. version.script (source="version")
+    2. latest project-scoped revision (source="project_revision")
+    3. shared default singleton (source="shared_default")
+    """
+    if version.script_id:
+        return version.script, SCRIPT_SOURCE_VERSION
+    latest_revision = project.script_revisions.order_by("-created_at").first()
+    if latest_revision:
+        return latest_revision, SCRIPT_SOURCE_PROJECT_REVISION
+    return AISTProjectScript.get_shared_default(), SCRIPT_SOURCE_SHARED_DEFAULT
+
+
+def _serialize_version_script(script: AISTProjectScript, source: str) -> dict:
+    return {
+        "id": script.id,
+        "content": script.content,
+        "sha256": script.sha256,
+        "is_shared": script.is_shared,
+        "created_at": script.created_at.isoformat() if script.created_at else None,
+        "created_by_id": script.created_by_id,
+        "created_by_username": script.created_by.username if script.created_by else None,
+        "inherited": source != SCRIPT_SOURCE_VERSION,
+        "source": source,
+    }
+
+
 class ProjectVersionScriptUpdateAPI(AuthorizedQuerySetMixin, APIView):
 
-    """PATCH endpoint to set or clear the script override for a project version."""
+    """GET/PATCH endpoint for a project version's entrypoint script."""
 
     permission_classes = [IsAuthenticated]
     authorized_queryset = AuthorizedQuerysetSpec(
         getter=get_authorized_aist_projects,
         permission=Permissions.Product_View,
     )
+
+    @extend_schema(
+        methods=["get"],
+        responses={
+            200: OpenApiResponse(description="Script for the version (own or inherited)"),
+            404: OpenApiResponse(description="Project or version not found"),
+        },
+        tags=[AISTApiTag.PROJECTS.value],
+        summary="Get version script",
+        description=(
+            "Returns the script used for a specific project version. "
+            "If the version has no own script, falls back to the latest project-scoped "
+            "revision; if none exists, returns the shared default. The response "
+            "includes `inherited` and `source` flags so the UI can label the script."
+        ),
+    )
+    def get(self, request, project_id, version_id):
+        project = self.get_authorized_object(id=project_id)
+
+        try:
+            version = AISTProjectVersion.objects.select_related("script").get(
+                pk=version_id, project=project,
+            )
+        except AISTProjectVersion.DoesNotExist:
+            return Response({"detail": "Version not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        script, source = _resolve_version_script(version, project)
+        return Response(_serialize_version_script(script, source), status=status.HTTP_200_OK)
 
     @extend_schema(
         methods=["patch"],

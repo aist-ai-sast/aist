@@ -202,6 +202,44 @@ class AISTProjectActiveScriptAPITests(AISTApiBase):
         resp = anon.get(self._url(self.project.id))
         self.assertIn(resp.status_code, [401, 403])
 
+    def test_inherited_flag_when_shared_default(self):
+        """Shared-default fallback must be flagged as inherited with source=shared_default."""
+        resp = self.client.get(self._url(self.project.id))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["inherited"])
+        self.assertEqual(resp.data["source"], "shared_default")
+
+    def test_inherited_flag_when_project_revision(self):
+        """When project has a revision but no version-attached script, source=project_revision."""
+        AISTProjectScript.objects.create(
+            project=self.project,
+            is_shared=False,
+            content="#!/bin/bash\necho proj-rev",
+        )
+
+        resp = self.client.get(self._url(self.project.id))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["inherited"])
+        self.assertEqual(resp.data["source"], "project_revision")
+
+    def test_inherited_flag_false_when_version_has_script(self):
+        """When the latest version has its own script, inherited=False and source=version."""
+        script = AISTProjectScript.objects.create(
+            project=self.project,
+            is_shared=False,
+            content="#!/bin/bash\necho version-own",
+        )
+        self.pv.script = script
+        self.pv.save(update_fields=["script", "updated"])
+
+        resp = self.client.get(self._url(self.project.id))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["inherited"])
+        self.assertEqual(resp.data["source"], "version")
+
 
 class AISTProjectScriptScopeAPITests(AISTApiBase):
 

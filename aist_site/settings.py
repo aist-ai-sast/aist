@@ -74,6 +74,11 @@ LOGIN_URL = "/aist-admin/login/"
 LOGIN_REDIRECT_URL = "/aist-admin/"
 
 AIST_PROJECTS_BUILD_DIR = env("AIST_PROJECTS_BUILD_DIR", default="/tmp/aist/projects")  # noqa: F405,S108
+# Per-pipeline directory where the local triage skill writes its completion
+# marker file. Bridge ``_watch_result_file`` polls this path so a clean
+# triage run wakes the bridge up immediately instead of waiting for
+# ``AIST_LOCAL_TRIAGE_TIMEOUT`` (default 3h).
+AIST_TRIAGE_OUTPUT_DIR = env("AIST_TRIAGE_OUTPUT_DIR", default="/tmp/aist/triage-output")  # noqa: F405,S108
 AIST_VPN_SIDECAR_IMAGE = env("AIST_VPN_SIDECAR_IMAGE", default="aist-vpn-sidecar:latest")  # noqa: F405
 
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="https://aist.itsec-europe.com/")  # noqa: F405

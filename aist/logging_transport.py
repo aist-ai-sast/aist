@@ -16,6 +16,13 @@ PUBSUB_CHANNEL_TPL = "aist:pipeline:{pipeline_id}:logs"
 STREAM_KEY = "aist:logs"
 BACKLOG_COUNT = 200
 
+# Rotating-file-handler backup count for per-pipeline log files. Keep this
+# value in sync with the mirror constant in ``tools/aist-triage-bridge/main.py``
+# (separate container, no shared import path) — the log-merge reader in
+# ``aist/api/pipelines.py`` iterates exactly this many numbered backups.
+LOG_ROTATION_BACKUP_COUNT = 5
+LOG_ROTATION_MAX_BYTES = 10 * 1024 * 1024
+
 _logger = logging.getLogger(__name__)
 
 
@@ -91,8 +98,8 @@ def install_pipeline_logging(pipeline_id: str, level=logging.INFO) -> logging.Lo
     # Create rotating file handler
     file_handler = RotatingFileHandler(
         log_path,
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=5,
+        maxBytes=LOG_ROTATION_MAX_BYTES,
+        backupCount=LOG_ROTATION_BACKUP_COUNT,
         encoding="utf-8",
     )
     file_handler.pipeline_id = pipeline_id

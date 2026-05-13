@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -9,6 +10,7 @@ from django.db import transaction
 from dojo.models import Finding
 
 from aist.ai_filter import apply_ai_filter
+from aist.integrations.claude import claude_auth_env
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTAIResponse, AISTPipeline, AISTStatus
@@ -160,12 +162,12 @@ def push_request_to_local_triage(
 ) -> None:
     """Send a triage request to the local Claude bridge via Unix domain socket."""
     log = install_pipeline_logging(pipeline_id, log_level)
-    bridge_client = build_bridge_client_from_settings()
 
     # ── 1. Validate state and gather data ──
     status_ok = True
     source_path = ""
     callback_url = ""
+    claude_auth: dict[str, str] = {}
     try:
         with transaction.atomic():
             pipeline = (
@@ -186,6 +188,14 @@ def push_request_to_local_triage(
                 product_name = getattr(pipeline.project.product, "name", "") or ""
                 source_path = ld.resolve_source_root(product_name)
                 callback_url = build_local_triage_callback_url(pipeline_id)
+                # Resolve Claude credentials for the pipeline's project. The
+                # factory itself stays agent-agnostic (invariant I4) and the
+                # Claude-specific env-var mapping lives in
+                # aist/integrations/claude.py (invariant I1).
+                claude_auth = {
+                    var: secret.get_secret_value()
+                    for var, secret in claude_auth_env(pipeline.project).items()
+                }
     except AISTPipeline.DoesNotExist:
         log.error("Pipeline not found (pipeline_id=%s)", pipeline_id)
         return
@@ -193,6 +203,42 @@ def push_request_to_local_triage(
     if not status_ok:
         finish_pipeline(pipeline_id, degraded=True)
         return
+
+    if not claude_auth:
+        # Fail-fast — without a Claude credential the bridge can spawn the
+        # CLI but it will immediately exit with an auth error. Skip the
+        # round-trip and surface a clear pipeline message instead.
+        log.warning(
+            "No active Claude integration for pipeline %s; skipping local triage",
+            pipeline_id,
+        )
+        finish_pipeline(pipeline_id, degraded=True)
+        return
+
+    bridge_client = build_bridge_client_from_settings(auth_env=claude_auth)
+
+    # ── 1b. Prepare result-file directory so the bridge can detect skill
+    # completion without waiting for the (3 h) AIST_LOCAL_TRIAGE_TIMEOUT.
+    # The skill writes an empty marker file at this path as its last action
+    # (see .codex/skills/aist-finding-triage/SKILL.md). Bridge
+    # ``_watch_result_file`` polls for it and short-circuits the run.
+    # The bridge container runs as an unprivileged user (uid=1000) and
+    # celery runs as root, so the directory must be world-writable —
+    # same convention as agent_bridge_runner's ``_write_runtime_file``.
+    triage_output_dir = Path(
+        getattr(settings, "AIST_TRIAGE_OUTPUT_DIR", "/tmp/aist/triage-output"),  # noqa: S108
+    ) / str(pipeline_id)
+    result_filename = "triage_done.flag"
+    try:
+        triage_output_dir.mkdir(parents=True, exist_ok=True)
+        Path(triage_output_dir).chmod(0o777)
+    except OSError as exc:
+        log.warning(
+            "Could not prepare triage output dir %s: %s — bridge will fall "
+            "back to TRIAGE_TIMEOUT for completion detection",
+            triage_output_dir, exc,
+        )
+    extra_args = f"output_path={triage_output_dir} result_filename={result_filename}"
 
     # ── 2. Bridge call over Unix socket — outside the transaction ──
     log.info("Sending local triage request via bridge_client (UDS)")
@@ -202,6 +248,7 @@ def push_request_to_local_triage(
             project_id=str(pipeline_id),
             source_path=source_path,
             callback_url=callback_url,
+            extra_args=extra_args,
         )
     except Exception:
         log.exception("Local triage bridge request failed (pipeline_id=%s)", pipeline_id)

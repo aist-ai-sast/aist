@@ -410,6 +410,60 @@ class PayloadFromResultEventTests(unittest.TestCase):
         self.assertLess(len(payload.detail), 700)
 
 
+class _EofAfterLinesStream:
+
+    """
+    Async iterator that yields the given lines and then EOFs immediately.
+
+    Used to model the asyncio child-watcher race: claude has exited and
+    been reaped (by tini), the pipe is in EOF state, but the asyncio
+    transport's proc.wait() is wedged because the SIGCHLD never reached
+    asyncio. See ``_HangingFakeProcess``.
+    """
+
+    def __init__(self, lines):
+        self._lines = list(lines)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._lines:
+            return self._lines.pop(0)
+        raise StopAsyncIteration
+
+
+class _HangingFakeProcess:
+
+    """
+    Stdout/stderr pipes EOF, but ``proc.wait()`` never returns.
+
+    Mirrors the post-mortem of pipeline 4a1912d7: claude actually
+    exited, was reaped by tini, the pipes are closed, but asyncio's
+    ``ThreadedChildWatcher`` lost the SIGCHLD race and ``proc.wait()``
+    is wedged. Bridge must wake on stdout EOF and synthesise a result.
+    """
+
+    def __init__(self, stdout_lines, stderr_lines=()):
+        self.pid = 54321
+        self.returncode = None  # never set — that is the whole point
+        self.signals: list[int] = []
+        self.stdout = _EofAfterLinesStream(stdout_lines)
+        self.stderr = _EofAfterLinesStream(stderr_lines)
+
+    async def wait(self):
+        # Hang forever — simulates the asyncio child-watcher race.
+        # Cancellation is the only way out, which is exactly how the
+        # bridge's finally block recovers in production.
+        await asyncio.Future()
+
+    def send_signal(self, sig):
+        self.signals.append(sig)
+
+    def kill(self):
+        self.signals.append(signal.SIGKILL)
+
+
 class _KeepOpenStream:
 
     """Async iterator that yields lines and then blocks until ``exit_event`` fires."""
@@ -1137,6 +1191,519 @@ class OpenPipelineLogHandlerTests(unittest.TestCase):
         finally:
             main.AIST_LOG_DIR = self._tmpdir
 
+
+class AnalyzeRequestSubprocessEnvTests(unittest.TestCase):
+
+    """
+    Task 4: AnalyzeRequest carries a per-run subprocess_env dict whose
+    values are pydantic ``SecretStr`` — masked in repr/log by default.
+
+    The field is generic (any agent-bridge user can pass arbitrary env
+    vars), keeping the bridge agent-agnostic at the type level.
+    """
+
+    def test_default_is_empty_dict(self):
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="p1",
+            source_path="/tmp/x",  # noqa: S108 -- test path
+        )
+        self.assertEqual(dict(req.subprocess_env), {})
+
+    def test_accepts_string_values_and_wraps_in_secret_str(self):
+        from pydantic import SecretStr  # noqa: PLC0415
+
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="p1",
+            source_path="/tmp/x",  # noqa: S108
+            subprocess_env={"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret-value-xx"},
+        )
+        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", req.subprocess_env)
+        self.assertIsInstance(req.subprocess_env["CLAUDE_CODE_OAUTH_TOKEN"], SecretStr)
+        self.assertEqual(
+            req.subprocess_env["CLAUDE_CODE_OAUTH_TOKEN"].get_secret_value(),
+            "sk-ant-oat01-secret-value-xx",
+        )
+
+    def test_model_dump_masks_secret_values(self):
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="p1",
+            source_path="/tmp/x",  # noqa: S108
+            subprocess_env={"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-super-secret"},
+        )
+        dumped = req.model_dump()
+        # SecretStr default str() / model_dump masks. The literal secret
+        # MUST NOT appear in the dump output — defence-in-depth in case
+        # someone logs req.model_dump() during debugging.
+        self.assertNotIn("sk-ant-oat01-super-secret", str(dumped))
+
+
+class RedactingFilterTests(unittest.TestCase):
+
+    """
+    Task 4: a logging.Filter installed per-run masks any secret value
+    that leaks into a log line (e.g. claude CLI echoing the token in an
+    auth-error message). Agent-agnostic — works for any secret list
+    passed at construction time.
+    """
+
+    def _make_record(self, msg, args=()):
+        return logging.LogRecord(
+            name="t", level=logging.INFO, pathname="", lineno=0,
+            msg=msg, args=args, exc_info=None,
+        )
+
+    def test_filter_with_no_secrets_passes_records_through(self):
+        f = main._RedactingFilter([])
+        rec = self._make_record("hello world")
+        self.assertTrue(f.filter(rec))
+        self.assertEqual(rec.getMessage(), "hello world")
+
+    def test_filter_redacts_known_secret(self):
+        f = main._RedactingFilter(["sk-ant-oat01-super-secret"])
+        rec = self._make_record("auth fail: oat_super_secret invalid")
+        self.assertTrue(f.filter(rec))
+        rendered = rec.getMessage()
+        self.assertNotIn("sk-ant-oat01-super-secret", rendered)
+        self.assertIn("***REDACTED***", rendered)
+
+    def test_filter_handles_args_substitution(self):
+        # Log calls typically use format args: ``log.info("[%s] %s", label, text)``.
+        # Filter must see the fully-formatted message, not the unformatted
+        # template — otherwise secrets inside ``%s`` arguments slip through.
+        f = main._RedactingFilter(["sk-ant-oat01-secret"])
+        rec = self._make_record("[%s] stderr: %s", args=("label", "saw sk-ant-oat01-secret"))
+        self.assertTrue(f.filter(rec))
+        self.assertNotIn("sk-ant-oat01-secret", rec.getMessage())
+
+    def test_filter_ignores_empty_secrets(self):
+        # Empty-string in the secret list would otherwise make
+        # str.replace("", "X") insert REDACTED between every char.
+        f = main._RedactingFilter(["", "oat_real"])
+        rec = self._make_record("hello oat_real")
+        self.assertTrue(f.filter(rec))
+        self.assertEqual(rec.getMessage(), "hello ***REDACTED***")
+
+
+class ExecuteClaudeSkillInjectsSubprocessEnvTests(unittest.IsolatedAsyncioTestCase):
+
+    """
+    Task 4 e2e: ``_execute_claude_skill`` merges ``req.subprocess_env``
+    into the spawn env passed to ``asyncio.create_subprocess_exec``, and
+    installs the redacting filter on the per-run logger.
+
+    No interaction with ``os.environ`` beyond inheriting the existing
+    bridge container env (which by Task 9 must NOT contain Claude
+    credentials).
+    """
+
+    async def asyncSetUp(self):
+        self._orig_timeout = main.TRIAGE_TIMEOUT
+        self._orig_grace = main.POST_RESULT_GRACE
+        main.TRIAGE_TIMEOUT = 2
+        main.POST_RESULT_GRACE = 1
+
+    async def asyncTearDown(self):
+        main.TRIAGE_TIMEOUT = self._orig_timeout
+        main.POST_RESULT_GRACE = self._orig_grace
+
+    async def test_subprocess_env_token_passed_to_create_subprocess_exec(self):
+        fake = FakeProcess(
+            stdout_lines=[b'{"type":"result","subtype":"success","result":"ok"}\n'],
+        )
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="pipe-task4",
+            source_path="/tmp/p",  # noqa: S108
+            subprocess_env={"CLAUDE_CODE_OAUTH_TOKEN": "oat_token_value_abc"},
+        )
+
+        exec_mock = AsyncMock(return_value=fake)
+        with patch("main._build_skill_prompt", return_value="prompt"), \
+             patch("main.asyncio.create_subprocess_exec", exec_mock), \
+             patch("main._signal_pgroup", side_effect=_fake_signal_pgroup(fake)):
+            await asyncio.wait_for(main._execute_claude_skill(req), timeout=20)
+
+        # Inspect kwargs of the single create_subprocess_exec call —
+        # spawn env must contain the per-request token.
+        _, kwargs = exec_mock.call_args
+        env = kwargs.get("env") or {}
+        self.assertEqual(env.get("CLAUDE_CODE_OAUTH_TOKEN"), "oat_token_value_abc")
+
+    async def test_subprocess_env_secret_never_logged(self):
+        """
+        Even if claude echoes the token in stderr (common on auth-401),
+        the bridge log must not contain the raw secret.
+        """
+        secret = "oat_should_not_appear_in_log"  # noqa: S105
+        fake = FakeProcess(
+            stdout_lines=[b'{"type":"result","subtype":"success","result":"ok"}\n'],
+            stderr_lines=[f"401 invalid token: {secret}".encode()],
+        )
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="pipe-task4-redact",
+            source_path="/tmp/p",  # noqa: S108
+            subprocess_env={"CLAUDE_CODE_OAUTH_TOKEN": secret},
+        )
+
+        captured_logs: list[str] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, rec):
+                captured_logs.append(rec.getMessage())
+
+        cap = _Capture()
+        target_logger = logging.getLogger(f"aist-triage-bridge.task.{req.project_id}")
+        target_logger.addHandler(cap)
+        try:
+            with patch("main._build_skill_prompt", return_value="prompt"), \
+                 patch("main.asyncio.create_subprocess_exec", AsyncMock(return_value=fake)), \
+                 patch("main._signal_pgroup", side_effect=_fake_signal_pgroup(fake)):
+                await asyncio.wait_for(main._execute_claude_skill(req), timeout=20)
+        finally:
+            target_logger.removeHandler(cap)
+
+        # The stderr line containing the secret MUST have been captured
+        # (otherwise the test is no-op) — and the captured form must be
+        # redacted.
+        stderr_lines = [line for line in captured_logs if "stderr" in line]
+        self.assertTrue(stderr_lines, "expected at least one stderr log line")
+        for line in captured_logs:
+            self.assertNotIn(secret, line, f"Secret leaked into log line: {line!r}")
+
+
+class SecretRedactionFileHandlerE2ETests(unittest.IsolatedAsyncioTestCase):
+
+    """
+    Task 12 — confirm the redaction installed in Task 4 survives the
+    full pipeline log path (RotatingFileHandler attached during
+    ``_execute_claude_skill``). A regression here would mean operators
+    read a token off the on-disk pipeline log even though the in-memory
+    log capture is clean.
+    """
+
+    async def asyncSetUp(self):
+        self._orig_timeout = main.TRIAGE_TIMEOUT
+        self._orig_grace = main.POST_RESULT_GRACE
+        self._orig_log_dir = main.AIST_LOG_DIR
+        main.TRIAGE_TIMEOUT = 2
+        main.POST_RESULT_GRACE = 1
+        self._tmpdir = tempfile.mkdtemp(prefix="bridge-redact-e2e-")
+        main.AIST_LOG_DIR = self._tmpdir
+
+    async def asyncTearDown(self):
+        main.TRIAGE_TIMEOUT = self._orig_timeout
+        main.POST_RESULT_GRACE = self._orig_grace
+        main.AIST_LOG_DIR = self._orig_log_dir
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    async def test_pipeline_log_file_redacts_token_echoed_in_stderr(self):
+        secret = "oat_token_must_be_redacted_on_disk"  # noqa: S105
+        fake = FakeProcess(
+            stdout_lines=[b'{"type":"result","subtype":"success","result":"ok"}\n'],
+            # Stderr line that mimics claude's auth-failure echo (real
+            # CLI does this for some error paths; see plan Task 4 / 12).
+            stderr_lines=[f"401 auth failed; token={secret}".encode()],
+        )
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="pipe-redact-e2e",
+            source_path="/tmp/p",  # noqa: S108
+            subprocess_env={"CLAUDE_CODE_OAUTH_TOKEN": secret},
+        )
+
+        with patch("main._build_skill_prompt", return_value="prompt"), \
+             patch("main.asyncio.create_subprocess_exec", AsyncMock(return_value=fake)), \
+             patch("main._signal_pgroup", side_effect=_fake_signal_pgroup(fake)):
+            await asyncio.wait_for(main._execute_claude_skill(req), timeout=20)
+
+        log_file = Path(self._tmpdir) / "pipe-redact-e2e.bridge.log"
+        self.assertTrue(log_file.exists(), "bridge log file must be created")
+        content = log_file.read_text(encoding="utf-8")
+        self.assertNotIn(secret, content)
+        # The stderr line that originally contained the secret must be
+        # present in the on-disk log in its redacted form. Otherwise the
+        # filter is silently dropping the line which loses diagnostic
+        # value for operators.
+        self.assertIn("***REDACTED***", content)
+        self.assertIn("401 auth failed", content)
+
+
+class StdoutEofFallbackTests(unittest.IsolatedAsyncioTestCase):
+
+    """
+    Defence-in-depth completion path for the asyncio ThreadedChildWatcher
+    ↔ tini race (incident pipeline 4a1912d7).
+
+    In production: claude finished its work, exited, tini reaped it
+    before asyncio could observe the SIGCHLD. Pipe is in EOF, but
+    ``proc.wait()`` hangs forever. Bridge must wake on stdout EOF and
+    synthesise success/error based on whether claude ever produced any
+    assistant output.
+    """
+
+    async def asyncSetUp(self):
+        self._orig_timeout = main.TRIAGE_TIMEOUT
+        self._orig_grace = main.POST_RESULT_GRACE
+        # Short ceiling — the EOF fallback must fire well within this.
+        # If the test ever sits here for the full TRIAGE_TIMEOUT,
+        # something in the wait set is broken.
+        main.TRIAGE_TIMEOUT = 5
+        main.POST_RESULT_GRACE = 1
+
+    async def asyncTearDown(self):
+        main.TRIAGE_TIMEOUT = self._orig_timeout
+        main.POST_RESULT_GRACE = self._orig_grace
+
+    async def test_stdout_eof_with_assistant_turn_synthesizes_success(self):
+        fake = _HangingFakeProcess(stdout_lines=[
+            b'{"type":"system","subtype":"init","cwd":"/x","session_id":"abc","model":"opus"}\n',
+            b'{"type":"assistant","message":{"content":[{"type":"text","text":"All findings triaged."}]}}\n',
+        ])
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="pipe-eof-success",
+            source_path="/tmp/p",  # noqa: S108
+        )
+
+        with patch("main._build_skill_prompt", return_value="prompt"), \
+             patch("main.asyncio.create_subprocess_exec", AsyncMock(return_value=fake)), \
+             patch("main._signal_pgroup"):
+            payload = await asyncio.wait_for(main._execute_claude_skill(req), timeout=20)
+
+        self.assertEqual(payload.status, "success")
+
+    async def test_stdout_eof_without_assistant_turn_returns_error(self):
+        # Crash-in-init scenario: session/init line was emitted but no
+        # assistant turn ever produced. Bridge must NOT synthesise a
+        # false success — the pipeline should be marked degraded.
+        fake = _HangingFakeProcess(stdout_lines=[
+            b'{"type":"system","subtype":"init","cwd":"/x","session_id":"abc","model":"opus"}\n',
+        ])
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="pipe-eof-error",
+            source_path="/tmp/p",  # noqa: S108
+        )
+
+        with patch("main._build_skill_prompt", return_value="prompt"), \
+             patch("main.asyncio.create_subprocess_exec", AsyncMock(return_value=fake)), \
+             patch("main._signal_pgroup"):
+            payload = await asyncio.wait_for(main._execute_claude_skill(req), timeout=20)
+
+        self.assertEqual(payload.status, "error")
+        self.assertIn("without producing", payload.detail)
+
+    async def test_result_event_wins_over_stdout_eof(self):
+        # When claude DOES emit a clean result event, that takes priority
+        # over the EOF fallback even if both fire — the success/error
+        # subtype on the result event carries more information than the
+        # had_assistant_turn heuristic.
+        fake = _HangingFakeProcess(stdout_lines=[
+            b'{"type":"system","subtype":"init","cwd":"/x","session_id":"abc","model":"opus"}\n',
+            b'{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}\n',
+            b'{"type":"result","subtype":"success","result":"ok"}\n',
+        ])
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="pipe-eof-race",
+            source_path="/tmp/p",  # noqa: S108
+        )
+
+        with patch("main._build_skill_prompt", return_value="prompt"), \
+             patch("main.asyncio.create_subprocess_exec", AsyncMock(return_value=fake)), \
+             patch("main._signal_pgroup"):
+            payload = await asyncio.wait_for(main._execute_claude_skill(req), timeout=20)
+
+        # subtype=success → success, no fallback prefix in detail.
+        self.assertEqual(payload.status, "success")
+
+
+class AnalyzeRequestValidationTests(unittest.TestCase):
+
+    """
+    Pydantic-layer validation rejects malformed identifiers before they
+    reach the path-construction code (fix #2 from the bridge review:
+    path-traversal via ``project_id``).
+    """
+
+    def test_rejects_project_id_with_path_traversal(self):
+        from pydantic import ValidationError  # noqa: PLC0415
+
+        with self.assertRaises(ValidationError):
+            AnalyzeRequest(
+                skill_name="aist-finding-triage",
+                project_id="../../etc/passwd",
+                source_path="/tmp/x",  # noqa: S108
+            )
+
+    def test_rejects_project_id_with_slash(self):
+        from pydantic import ValidationError  # noqa: PLC0415
+
+        with self.assertRaises(ValidationError):
+            AnalyzeRequest(
+                skill_name="aist-finding-triage",
+                project_id="abc/def",
+                source_path="/tmp/x",  # noqa: S108
+            )
+
+    def test_accepts_uuid_style_pipeline_id(self):
+        # Real-world value: AISTPipeline.id is a 36-char UUID with hyphens.
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="4a1912d7-90ab-4cde-8fgh-123456789012",
+            source_path="/tmp/x",  # noqa: S108
+        )
+        self.assertEqual(req.project_id, "4a1912d7-90ab-4cde-8fgh-123456789012")
+
+    def test_accepts_integer_string_project_id(self):
+        # Real-world value from aist/tasks/claude.py (project.id as int).
+        AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="42",
+            source_path="/tmp/x",  # noqa: S108
+        )
+
+    def test_rejects_bad_skill_name(self):
+        from pydantic import ValidationError  # noqa: PLC0415
+
+        with self.assertRaises(ValidationError):
+            AnalyzeRequest(
+                skill_name="../etc/passwd",
+                project_id="42",
+                source_path="/tmp/x",  # noqa: S108
+            )
+
+
+class PayloadFromResultEventWhitelistTests(unittest.TestCase):
+
+    """
+    Unknown subtypes are surfaced in the detail so a drifted Claude CLI
+    is visible to operators (fix #7).
+    """
+
+    def test_known_success_subtype(self):
+        payload = main._payload_from_result_event({"subtype": "success", "result": "done"})
+        self.assertEqual(payload.status, "success")
+
+    def test_known_error_subtype_labelled(self):
+        payload = main._payload_from_result_event({
+            "subtype": "error_max_turns", "result": "exceeded limit",
+        })
+        self.assertEqual(payload.status, "error")
+        self.assertIn("error_max_turns", payload.detail)
+        self.assertNotIn("subtype=", payload.detail)  # known subtypes get clean label
+
+    def test_unknown_subtype_marked_unknown(self):
+        # Hypothetical future Anthropic subtype — must NOT be silently
+        # treated as success.
+        payload = main._payload_from_result_event({
+            "subtype": "completed_with_warnings", "result": "ok-ish",
+        })
+        self.assertEqual(payload.status, "error")
+        self.assertIn("subtype=completed_with_warnings", payload.detail)
+
+
+class ScanEnvForSecretsTests(unittest.TestCase):
+
+    """
+    Defence-in-depth env-secret scan picks up token-shaped values that
+    were not passed via ``req.subprocess_env`` (fix #5).
+    """
+
+    def test_finds_anthropic_token_shape(self):
+        leaked = "sk-ant-oat01-" + "A" * 30
+        with patch.dict(__import__("os").environ, {"OLD_TOKEN": leaked}, clear=False):
+            secrets = main._scan_env_for_anthropic_secrets()
+        self.assertIn(leaked, secrets)
+
+    def test_ignores_non_matching_values(self):
+        with patch.dict(__import__("os").environ, {"NOT_A_TOKEN": "plain-string"}, clear=False):
+            secrets = main._scan_env_for_anthropic_secrets()
+        self.assertNotIn("plain-string", secrets)
+
+    def test_ignores_short_anthropic_prefix(self):
+        # Too few trailing chars — not a real token, must not trigger
+        # the redactor (which would mask a 4-char value in every log
+        # line containing those 4 chars).
+        with patch.dict(__import__("os").environ, {"FAKE": "sk-ant-short"}, clear=False):
+            secrets = main._scan_env_for_anthropic_secrets()
+        self.assertNotIn("sk-ant-short", secrets)
+
+
+class OpenPipelineLogHandlerDedupTests(unittest.TestCase):
+
+    """
+    Concurrent runs sharing a ``pipeline_id`` must not double-attach
+    file handlers to the shared logger (fix #1, log-handler aspect).
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="bridge-dedup-test-")
+        self._orig_log_dir = main.AIST_LOG_DIR
+        main.AIST_LOG_DIR = self._tmpdir
+
+    def tearDown(self):
+        main.AIST_LOG_DIR = self._orig_log_dir
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_returns_none_when_handler_already_attached(self):
+        log = logging.getLogger("test-dedup-logger")
+        # Clear any leftover handlers from earlier test runs.
+        for h in list(log.handlers):
+            log.removeHandler(h)
+        try:
+            first = main._open_pipeline_log_handler("dup-pipeline", log=log)
+            self.assertIsNotNone(first)
+            log.addHandler(first)
+            second = main._open_pipeline_log_handler("dup-pipeline", log=log)
+            self.assertIsNone(second, "second call must dedup")
+        finally:
+            for h in list(log.handlers):
+                log.removeHandler(h)
+                h.close()
+
+
+class CleanupRunTasksSwallowsExceptionsTests(unittest.IsolatedAsyncioTestCase):
+
+    """
+    A drain coroutine that raises mid-loop must not block the callback
+    path (fix #3 — the failure mode where the pipeline hangs in
+    WAITING_RESULT_FROM_AI because cleanup propagated up).
+    """
+
+    async def test_drain_task_exception_is_swallowed(self):
+        async def _raises():  # noqa: RUF029
+            msg = "logging filter exploded"
+            raise RuntimeError(msg)
+
+        drain_task = asyncio.create_task(_raises())
+        # Let it finish before we call cleanup so it is in ``done`` with
+        # an exception attached.
+        with contextlib.suppress(RuntimeError):
+            await drain_task
+
+        # Cleanup must return normally — NO RuntimeError propagated up.
+        await main._cleanup_run_tasks(bg_tasks=(), drain_tasks=(drain_task,))
+
+    async def test_drain_task_in_progress_exception_is_swallowed(self):
+        # The harder path: drain_task raises while wait_for is awaiting it.
+        async def _raises_eventually():
+            await asyncio.sleep(0.01)
+            msg = "kaboom"
+            raise RuntimeError(msg)
+
+        drain_task = asyncio.create_task(_raises_eventually())
+        await main._cleanup_run_tasks(bg_tasks=(), drain_tasks=(drain_task,))
+
+
+# ``contextlib`` is used inside the test above — make the import explicit
+# so that running just this class via ``-k`` works without setup ordering
+# surprises.
+import contextlib  # noqa: E402  -- end of file
 
 if __name__ == "__main__":
     unittest.main()

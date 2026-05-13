@@ -265,3 +265,129 @@ class PipelineLogsProgressiveMergeTests(AISTApiBase):
         self.assertIn("[INFO] only-main", body)
         self.assertNotIn("[bridge]", body)
         self.assertEqual(int(resp["X-Bridge-Log-Size"]), 0)
+
+
+class PipelineLogsFullRotatedMergeTests(AISTApiBase):
+
+    """
+    Full/Download endpoints must read ``{pid}.log.N…log.1, .log`` and
+    ``{pid}.bridge.log.N…bridge.log.1, .bridge.log`` — RotatingFileHandler
+    pushes older content to numbered backups, and the merge must include
+    them, otherwise the UI shows a truncated tail after the first 10MB.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.pipeline = AISTPipeline.objects.create(
+            id="pipe-merge-rotated",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINISHED,
+        )
+        self.main_path = get_pipeline_log_path(self.pipeline.id)
+        self.bridge_path = get_pipeline_bridge_log_path(self.pipeline.id)
+        self.main_path.parent.mkdir(parents=True, exist_ok=True)
+        self._written: list[Path] = []
+
+    def tearDown(self):
+        for path in self._written:
+            path.unlink(missing_ok=True)
+        super().tearDown()
+
+    def _write(self, path: Path, content: str) -> None:
+        path.write_text(content, encoding="utf-8")
+        self._written.append(path)
+
+    def _full_url(self) -> str:
+        return reverse(
+            "aist_api:pipeline_logs_full",
+            kwargs={"pipeline_id": self.pipeline.id},
+        )
+
+    def _download_url(self) -> str:
+        return reverse(
+            "aist_api:pipeline_logs_download",
+            kwargs={"pipeline_id": self.pipeline.id},
+        )
+
+    def _seed_six_rotated_lines(self) -> None:
+        # RotatingFileHandler convention: newest rotation is .1, oldest is .N.
+        # Chronological order therefore is .2, .1, live for both streams.
+        self._write(
+            self.main_path.with_name(self.main_path.name + ".2"),
+            "2025-01-01 00:00:00 [INFO] old-main\n",
+        )
+        self._write(
+            self.main_path.with_name(self.main_path.name + ".1"),
+            "2025-01-01 00:00:02 [INFO] mid-main\n",
+        )
+        self._write(
+            self.main_path,
+            "2025-01-01 00:00:04 [INFO] new-main\n",
+        )
+        self._write(
+            self.bridge_path.with_name(self.bridge_path.name + ".2"),
+            "2025-01-01 00:00:01 [INFO] old-bridge\n",
+        )
+        self._write(
+            self.bridge_path.with_name(self.bridge_path.name + ".1"),
+            "2025-01-01 00:00:03 [INFO] mid-bridge\n",
+        )
+        self._write(
+            self.bridge_path,
+            "2025-01-01 00:00:05 [INFO] new-bridge\n",
+        )
+
+    def test_full_response_includes_all_rotated_lines_in_order(self):
+        self._seed_six_rotated_lines()
+        resp = self.client.get(self._full_url())
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode("utf-8")
+        for marker in ("old-main", "mid-main", "new-main",
+                       "old-bridge", "mid-bridge", "new-bridge"):
+            self.assertIn(marker, body, f"missing line: {marker}")
+        # Order is strict chronological by leading timestamp:
+        # 00 old-main → 01 old-bridge → 02 mid-main → 03 mid-bridge →
+        # 04 new-main → 05 new-bridge.
+        positions = [body.index(m) for m in (
+            "old-main", "old-bridge", "mid-main",
+            "mid-bridge", "new-main", "new-bridge",
+        )]
+        self.assertEqual(positions, sorted(positions))
+        # Bridge-origin lines MUST carry the [bridge] prefix; main lines MUST NOT.
+        self.assertIn("[bridge] 2025-01-01 00:00:01 [INFO] old-bridge", body)
+        self.assertIn("[bridge] 2025-01-01 00:00:03 [INFO] mid-bridge", body)
+        self.assertIn("[bridge] 2025-01-01 00:00:05 [INFO] new-bridge", body)
+        self.assertNotIn("[bridge] 2025-01-01 00:00:00 [INFO] old-main", body)
+        self.assertNotIn("[bridge] 2025-01-01 00:00:02 [INFO] mid-main", body)
+        self.assertNotIn("[bridge] 2025-01-01 00:00:04 [INFO] new-main", body)
+
+    def test_download_response_includes_all_rotated_lines(self):
+        self._seed_six_rotated_lines()
+        resp = self.client.get(self._download_url())
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(
+            f'attachment; filename="pipeline-{self.pipeline.id}.log"',
+            resp["Content-Disposition"],
+        )
+        body = resp.content.decode("utf-8")
+        for marker in ("old-main", "mid-main", "new-main",
+                       "old-bridge", "mid-bridge", "new-bridge"):
+            self.assertIn(marker, body, f"missing line in download: {marker}")
+
+    def test_no_rotated_files_matches_pre_rotation_behavior(self):
+        # Regression guard: when only the live file exists the body must be
+        # byte-identical to a direct read of that file (no extra newlines,
+        # no synthetic separators introduced by the rotated-aware reader).
+        main_text = "2025-01-01 00:00:00 [INFO] solo-main\n"
+        bridge_text = "2025-01-01 00:00:01 [INFO] solo-bridge\n"
+        self._write(self.main_path, main_text)
+        self._write(self.bridge_path, bridge_text)
+        resp = self.client.get(self._full_url())
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode("utf-8")
+        self.assertIn("[INFO] solo-main", body)
+        self.assertIn("[bridge] 2025-01-01 00:00:01 [INFO] solo-bridge", body)
+        # No leakage from prior pipelines or rotated siblings.
+        self.assertNotIn(".log.1", body)
+        self.assertNotIn(".log.2", body)

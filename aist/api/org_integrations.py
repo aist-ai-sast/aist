@@ -259,6 +259,63 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
     def get_has_secret(self, obj) -> bool:
         return bool(obj.secret)
 
+    def validate(self, attrs):
+        # Application-level guards specific to integration_type. Centralised
+        # here so the view stays a thin dispatcher and DB constraints are
+        # never exposed as 500s to API clients.
+        itype = attrs.get("integration_type") or (
+            self.instance.integration_type if self.instance is not None else None
+        )
+        if itype == OrgIntegrationType.CLAUDE_CODE:
+            self._validate_claude_attrs(attrs)
+        return super().validate(attrs)
+
+    def _validate_claude_attrs(self, attrs):
+        """
+        All CLAUDE_CODE-specific create/update guards in one place.
+
+        Delegates format validation to ``aist/integrations/claude.py`` so
+        the OAuth-token regex stays in its single source of truth (I1).
+        """
+        from aist.integrations.claude import validate_claude_secret_format  # noqa: PLC0415
+
+        secret = attrs.get("secret")
+        if secret is None and self.instance is not None:
+            # PATCH without secret → leave existing value alone.
+            secret = self.instance.secret
+        config = attrs.get("config")
+        if config is None and self.instance is not None:
+            config = self.instance.config or {}
+        config = config or {}
+        auth_mode = config.get("auth_mode", "oauth")
+
+        ok, detail = validate_claude_secret_format(secret or "", auth_mode=auth_mode)
+        if not ok:
+            raise serializers.ValidationError({"secret": detail})
+
+        is_active = attrs.get("is_active")
+        if is_active is None:
+            is_active = self.instance.is_active if self.instance is not None else True
+        if is_active:
+            organization_id = (
+                attrs.get("organization").pk if attrs.get("organization") is not None
+                else (self.instance.organization_id if self.instance is not None else None)
+            )
+            if organization_id is not None:
+                conflicting = OrgIntegration.objects.filter(
+                    organization_id=organization_id,
+                    integration_type=OrgIntegrationType.CLAUDE_CODE,
+                    is_active=True,
+                )
+                if self.instance is not None:
+                    conflicting = conflicting.exclude(pk=self.instance.pk)
+                if conflicting.exists():
+                    msg = (
+                        "Only one active Claude integration is allowed per organization. "
+                        "Deactivate the existing one before creating a new active integration."
+                    )
+                    raise serializers.ValidationError({"is_active": msg})
+
     def validate_vpn_integration(self, value):
         if value is None:
             return value
@@ -561,6 +618,12 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
 
     if itype == OrgIntegrationType.VPN:
         return _validate_vpn_integration(integration)
+
+    if itype == OrgIntegrationType.CLAUDE_CODE:
+        # All Claude-specific knowledge lives in aist/integrations/claude.py
+        # (architectural invariant I1). Dispatch is a one-liner.
+        from aist.integrations.claude import probe_claude_token  # noqa: PLC0415
+        return probe_claude_token(integration)
 
     return False, f"No validator for integration type {itype}"
 

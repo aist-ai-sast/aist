@@ -2,7 +2,43 @@ from __future__ import annotations
 
 from django.contrib import admin
 
-from aist.models import OrgIntegrationVPNSecret
+from aist.models import OrgIntegration, OrgIntegrationVPNSecret
+
+
+@admin.register(OrgIntegration)
+class OrgIntegrationAdmin(admin.ModelAdmin):
+
+    """
+    Superuser-only management surface for OrgIntegration rows.
+
+    The primary management surface is the REST API + client-ui page
+    (see ``aist/api/org_integrations.py`` and
+    ``client-ui/src/pages/OrgIntegrationsPage.tsx``). This admin is the
+    fallback used by AIST operators when REST-level access is broken
+    (DNS/auth misconfiguration) and direct DB-row editing is needed.
+
+    Per CLAUDE-integration architectural invariants, ``secret`` is an
+    ``EncryptedCharField`` that already shields the plaintext at rest;
+    the admin excludes it from list/detail render to prevent accidental
+    on-screen leaks and only exposes a boolean indicator.
+
+    To rotate a token via admin, use the standard "change" form — the
+    encrypted column is masked, but assignment works through the
+    underlying ORM as usual.
+    """
+
+    list_display = (
+        "organization", "integration_type", "name", "is_active",
+        "has_secret", "created", "updated",
+    )
+    list_filter = ("integration_type", "is_active", "organization")
+    search_fields = ("name", "organization__name")
+    readonly_fields = ("created", "updated", "has_secret")
+    exclude = ("secret",)
+
+    @admin.display(boolean=True, description="Secret stored")
+    def has_secret(self, obj):
+        return bool(obj.secret)
 
 
 @admin.register(OrgIntegrationVPNSecret)

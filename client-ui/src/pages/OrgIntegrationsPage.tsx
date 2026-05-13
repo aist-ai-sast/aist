@@ -39,9 +39,16 @@ import { PROVIDER_ICON_PATHS } from "../lib/providerIcons";
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-type IntegrationType = "GITLAB" | "GITHUB" | "SLACK" | "EMAIL" | "VPN";
+type IntegrationType = "GITLAB" | "GITHUB" | "SLACK" | "EMAIL" | "VPN" | "CLAUDE_CODE";
 
-const ORG_INTEGRATION_TYPES: IntegrationType[] = ["GITLAB", "GITHUB", "SLACK", "EMAIL", "VPN"];
+const ORG_INTEGRATION_TYPES: IntegrationType[] = [
+  "GITLAB",
+  "GITHUB",
+  "SLACK",
+  "EMAIL",
+  "VPN",
+  "CLAUDE_CODE",
+];
 
 const TYPE_LABELS: Record<string, string> = {
   GITLAB: "GitLab",
@@ -49,6 +56,7 @@ const TYPE_LABELS: Record<string, string> = {
   SLACK: "Slack",
   EMAIL: "Email",
   VPN: "VPN",
+  CLAUDE_CODE: "Claude Code",
   JIRA: "Jira",
   YOUTRACK: "YouTrack",
   LINEAR: "Linear",
@@ -67,6 +75,7 @@ const TYPE_BADGE_CLASSES: Record<string, string> = {
   AZURE_DEVOPS: "border-cyan-500/40 bg-cyan-500/10 text-cyan-300",
   GENERIC: "border-slate-400/30 bg-slate-400/10 text-slate-400",
   VPN: "border-slate-400/40 bg-slate-400/10 text-slate-300",
+  CLAUDE_CODE: "border-amber-500/40 bg-amber-500/10 text-amber-300",
 };
 
 
@@ -404,6 +413,24 @@ function OrgIntegrationConfigFields({
       </label>
     );
   }
+  if (type === "CLAUDE_CODE") {
+    // First-iteration UX: paste-token only. The token lives in the
+    // standard ``secret`` form field (handled by PasswordField further
+    // down), so this section only renders the hint. ``auth_mode`` is
+    // hard-coded to ``"oauth"`` at handleSave time — when/if the API-key
+    // mode lands later, a SelectField goes here without migration
+    // (``config`` is plain JSON). See plan Task 10.
+    return (
+      <div className="text-xs text-slate-400 sm:col-span-2">
+        Paste the OAuth token produced by{" "}
+        <code className="rounded bg-night-700/60 px-1 py-0.5 text-[11px] text-slate-300">
+          claude setup-token
+        </code>{" "}
+        into the access-token field below. Use the “Validate” button
+        after saving to confirm the token against the Anthropic API.
+      </div>
+    );
+  }
   return null;
 }
 
@@ -664,6 +691,11 @@ function OrgIntegrationForm({
     const config: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(form.config)) {
       if (v?.trim()) config[k] = v.trim();
+    }
+    if (form.integration_type === "CLAUDE_CODE" && !config.auth_mode) {
+      // First-iteration default — see plan Task 10 / Q5. When/if the
+      // UI exposes a mode selector, this line becomes unnecessary.
+      config.auth_mode = "oauth";
     }
     const payload: OrgIntegrationPayload = {
       integration_type: form.integration_type,

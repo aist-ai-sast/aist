@@ -3,9 +3,17 @@ from __future__ import annotations
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
+from dojo.models import Product_Type
+
 from aist.api.github_integration import GithubImportExecuteSerializer
 from aist.api.gitlab_integration import ImportGitlabRequestSerializer
-from aist.models import RepositoryInfo, ScmType
+from aist.models import (
+    Organization,
+    OrgIntegration,
+    OrgIntegrationType,
+    RepositoryInfo,
+    ScmType,
+)
 from aist.tasks.claude import _send_to_bridge, analyze_project_after_import
 from aist.test.test_api import AISTApiBase
 
@@ -28,7 +36,25 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
             base_url="https://github.com",
         )
         self.project.repository = self.repo_info
-        self.project.save(update_fields=["repository"])
+        # Project needs an Organization to be eligible for a Claude
+        # OrgIntegration. Task 8 makes the auto-analyze flow skip the
+        # whole pipeline if no integration is found, so tests that
+        # expect bridge calls must wire one up here.
+        self.org_prod_type = Product_Type.objects.create(name="Claude Analyze PT")
+        self.org = Organization.objects.create(
+            name="Claude Analyze Org",
+            product_type=self.org_prod_type,
+        )
+        self.project.organization = self.org
+        self.project.save(update_fields=["repository", "organization"])
+        self.claude_integration = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type=OrgIntegrationType.CLAUDE_CODE,
+            name="primary",
+            secret="sk-ant-oat01-post-import-test-token-abc1234",  # noqa: S106
+            is_active=True,
+            config={"auth_mode": "oauth"},
+        )
 
     @patch("aist.tasks.claude._send_to_bridge")
     @patch("aist.tasks.claude.subprocess")
@@ -48,6 +74,14 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
         calls = mock_bridge.call_args_list
         self.assertEqual(calls[0][1]["skill_name"], "aist-init-script-generator")
         self.assertEqual(calls[1][1]["skill_name"], "aist-project-profile-analyzer")
+        # Per Task 8 — the bridge payload must carry the Claude token via
+        # the generic subprocess_env channel introduced in Task 4. Both
+        # calls share the same env mapping for this project.
+        for call in calls:
+            self.assertEqual(
+                call[1]["subprocess_env"],
+                {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-post-import-test-token-abc1234"},
+            )
 
     @patch("aist.tasks.claude._send_to_bridge")
     @patch("aist.tasks.claude.subprocess")
@@ -58,6 +92,22 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
 
         analyze_project_after_import(self.project.id)
 
+        mock_bridge.assert_not_called()
+
+    @patch("aist.tasks.claude._send_to_bridge")
+    @patch("aist.tasks.claude.subprocess")
+    @patch("aist.tasks.claude.vpn_sidecar_context", _fake_vpn_ctx)
+    @patch("aist.tasks.claude.resolve_integration", return_value=None)
+    def test_skipped_when_no_active_claude_integration(self, mock_resolve, mock_subprocess, mock_bridge):
+        # Deactivate the integration set up by setUp() — auto-analyze
+        # must short-circuit BEFORE cloning so we don't waste git/disk
+        # for a run that has no chance of succeeding.
+        self.claude_integration.is_active = False
+        self.claude_integration.save(update_fields=["is_active"])
+
+        analyze_project_after_import(self.project.id)
+
+        mock_subprocess.run.assert_not_called()
         mock_bridge.assert_not_called()
 
     def test_nonexistent_project_is_noop(self):
@@ -88,12 +138,15 @@ class SendToBridgeTests(AISTApiBase):
             skill_name="test-skill",
             project_id=1,
             source_path="/tmp/test",  # noqa: S108
+            subprocess_env={"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test-value"},
         )
         self.assertTrue(result)
         mock_client.post.assert_called_once()
         payload = mock_client.post.call_args[1]["json"]
         self.assertEqual(payload["skill_name"], "test-skill")
         self.assertEqual(payload["project_id"], "1")
+        # Task 4 generic field — bridge merges into spawn env.
+        self.assertEqual(payload["subprocess_env"], {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test-value"})
 
     @patch("aist.tasks.claude.httpx")
     def test_failure_returns_false(self, mock_httpx):
@@ -103,6 +156,7 @@ class SendToBridgeTests(AISTApiBase):
             skill_name="test-skill",
             project_id=1,
             source_path="/tmp/test",  # noqa: S108
+            subprocess_env={},
         )
         self.assertFalse(result)
 

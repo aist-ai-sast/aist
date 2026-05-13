@@ -18,4 +18,7 @@ export const PROVIDER_ICON_PATHS: Record<string, string> = {
   GENERIC:
     "M10 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4m-4-8h6m0 0v6m0-6L10 14",
   VPN: "M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z",
+  // Anthropic brand mark (stylised "A"), CC0 — source: simpleicons.org/icons/anthropic.
+  // Same provenance as the other provider glyphs in this map (GitHub, GitLab, Slack, Jira).
+  CLAUDE_CODE: "M17.3041 3.541H13.3848L20.4944 20.459H24.4137L17.3041 3.541ZM6.6959 3.541L0 20.459H4.0019L5.0238 17.4612H12.4244L13.4463 20.459H17.4482L10.7523 3.541H6.6959ZM6.3082 14.0382L8.7241 6.97L11.1399 14.0382H6.3082Z",
 };

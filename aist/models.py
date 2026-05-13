@@ -353,6 +353,7 @@ class OrgIntegrationType(models.TextChoices):
     SLACK = "SLACK", "Slack"
     EMAIL = "EMAIL", "Email"
     VPN = "VPN", "VPN"
+    CLAUDE_CODE = "CLAUDE_CODE", "Claude Code"
 
 
 class OrgIntegration(models.Model):
@@ -396,6 +397,18 @@ class OrgIntegration(models.Model):
     class Meta:
         unique_together = [("organization", "integration_type", "name")]
         ordering = ["organization", "integration_type", "name"]
+        constraints = [
+            # Claude integrations are single-credential per org by design
+            # (OAuth-token model with one active subscription). Other
+            # integration types intentionally allow multiple active rows
+            # per org (e.g. several GitHub PATs bound to different repos),
+            # so the constraint is partial and scoped to CLAUDE_CODE only.
+            models.UniqueConstraint(
+                fields=["organization"],
+                condition=models.Q(integration_type="CLAUDE_CODE", is_active=True),
+                name="one_active_claude_integration_per_org",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.organization.name} / {self.integration_type} / {self.name}"

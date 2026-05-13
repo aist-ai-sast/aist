@@ -8,6 +8,13 @@ description: Analyze new AIST pipeline findings from docker-compose data sources
 - `pipeline_id` (required): AIST pipeline id (UUID-like string).
 - `source_path` (required): Absolute path to source code on host.
 - `severity` (optional): Defaults to `any`.
+- `output_path` (required): Absolute path to a directory the skill MUST write
+  the completion marker into. The bridge polls this directory; the marker
+  file appearing is the only reliable completion signal — without it the
+  bridge waits for `AIST_LOCAL_TRIAGE_TIMEOUT` (default 3 hours) before
+  treating the run as finished.
+- `result_filename` (required): Name of the completion marker file the
+  skill must create inside `output_path` as its **last** action.
 
 # Rules
 
@@ -31,7 +38,74 @@ description: Analyze new AIST pipeline findings from docker-compose data sources
 4. Assess exploitability, impact, and uncertainty from observed evidence.
 5. Persist one `AISTAIFindingResponse` per finding directly in the database.
 6. Apply the corresponding `Finding` status change, including the normal false-positive transition when verdict is `FP`.
-7. Return a concise human summary of what was written to the database.
+7. **Write the completion marker** as the very last action: create an empty
+   file at `{output_path}/{result_filename}` (e.g. via the `Write` tool with
+   empty content, or `bash`: `touch "$output_path/$result_filename"`). This
+   signal is what wakes the bridge up; skipping it leaves the pipeline
+   stuck for hours.
+8. Return a concise human summary of what was written to the database
+   (after step 7 — the marker MUST exist on disk before the summary).
+
+# Django ORM cheat sheet
+
+Use these queries verbatim inside `docker compose exec ... manage.py shell -c "..."`.
+They are the only supported way to navigate findings ↔ pipeline ↔ AI response.
+Do not invent shortcuts — `Finding` and `ProcessedFinding` have **no** `pipeline`
+field; querying `filter(pipeline=...)` on them raises `FieldError`.
+
+```python
+from aist.models import AISTPipeline, AISTAIFindingResponse, AISTAIResponse
+from dojo.models import Finding
+
+# 1. Resolve pipeline by full id (the bridge passes the full id in the prompt).
+pipeline = AISTPipeline.objects.get(id=pipeline_id)
+
+# 2. List findings for a pipeline — relation is Test.aist_pipelines (M2M).
+findings_qs = Finding.objects.filter(test__aist_pipelines=pipeline)
+# equivalent: Finding.objects.filter(test__aist_pipelines__id=pipeline_id)
+
+# 3. New (not yet triaged) findings for this pipeline.
+new_findings_qs = findings_qs.exclude(
+    aist_ai_responses__pipeline=pipeline,   # related_name on AISTAIFindingResponse.finding
+)
+
+# 4. Filter by severity (optional).
+if severity and severity.lower() != "any":
+    new_findings_qs = new_findings_qs.filter(severity__iexact=severity)
+
+# 5. Create or update one AISTAIFindingResponse per finding (idempotent).
+AISTAIFindingResponse.objects.update_or_create(
+    pipeline=pipeline,
+    finding=finding,
+    defaults={
+        "verdict": AISTAIFindingResponse.Verdict.TRUE_POSITIVE,  # or FALSE_POSITIVE
+        "title": title,
+        "summary": reasoning_markdown,
+        "references": references_list,
+        "epss_score": epss, "impact_score": impact,
+        "exploitability_score": exploit, "uncertainty_level": unc_level,
+        "uncertainty_spread": unc_spread, "exploit_code_maturity": maturity,
+        "fix": fix_payload_or_None,
+    },
+)
+
+# 6. Apply FP transition on the Finding itself (normal project path).
+if verdict == "false_positive":
+    finding.false_p = True
+    finding.active = False
+    finding.mitigated = timezone.now()
+    finding.save()
+```
+
+Field reference (read-only — do not guess):
+
+| Model | Has `pipeline` FK? | How to reach pipeline |
+|---|---|---|
+| `AISTPipeline` | self (`id`) | — |
+| `AISTAIFindingResponse` | yes (`pipeline`) | direct |
+| `AISTAIResponse` | yes (`pipeline`) | direct |
+| `Finding` | **no** | `test__aist_pipelines` |
+| `ProcessedFinding` | **no** | `test__aist_pipelines` (via `test`) |
 
 # Output Contract
 

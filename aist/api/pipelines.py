@@ -33,6 +33,7 @@ from aist.api.schema import AISTApiTag
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import (
     BACKLOG_COUNT,
+    LOG_ROTATION_BACKUP_COUNT,
     PUBSUB_CHANNEL_TPL,
     STREAM_KEY,
     get_pipeline_bridge_log_path,
@@ -429,13 +430,42 @@ def export_ai_results_response(*, pipeline: AISTPipeline, params: dict) -> HttpR
 _LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:[,.]\d+)?)")
 
 
+def _iter_rotated_log_paths(base: Path) -> list[Path]:
+    """
+    Return existing log files for ``base`` in chronological order: the oldest
+    surviving backup first, the live file last.
+
+    ``RotatingFileHandler`` writes the most recent rotation to ``base.1`` and
+    pushes older content towards ``base.N`` (the highest-numbered backup is
+    the oldest), so the chronological sequence is
+    ``base.N → base.N-1 → … → base.1 → base``. Missing numbered backups are
+    skipped (rotation may not have happened yet). Only numbered suffixes up
+    to ``LOG_ROTATION_BACKUP_COUNT`` are considered — a glob over ``*.log.*``
+    would pull in unrelated files that happen to share the prefix.
+    """
+    ordered: list[Path] = []
+    for index in range(LOG_ROTATION_BACKUP_COUNT, 0, -1):
+        candidate = base.with_name(f"{base.name}.{index}")
+        if candidate.exists():
+            ordered.append(candidate)
+    if base.exists():
+        ordered.append(base)
+    return ordered
+
+
 def _read_file_text(path: Path) -> str:
-    if not path.exists():
-        return ""
-    try:
-        return path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return ""
+    """
+    Return the concatenated text of ``path`` and any surviving rotated
+    backups in chronological order. Missing files → empty string. The
+    single-file fast path is byte-identical to the pre-rotation behavior.
+    """
+    parts: list[str] = []
+    for candidate in _iter_rotated_log_paths(path):
+        try:
+            parts.append(candidate.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+    return "".join(parts)
 
 
 def _merged_pipeline_log_text(pipeline_id: str) -> str:
