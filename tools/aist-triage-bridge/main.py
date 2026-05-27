@@ -71,6 +71,17 @@ _RESULT_POLL_INTERVAL = 5.0   # seconds between result-file existence checks
 _JSONL_POLL_INTERVAL = 5.0    # seconds between jsonl tail reads
 _JSONL_FIND_MAX_WAIT = 60     # seconds to wait for jsonl file to appear after session init
 
+# StreamReader line-buffer limit for the claude subprocess stdout/stderr.
+# ``claude --output-format stream-json`` emits one JSON object per line, and a
+# single event can be huge: tool_result echoes carry the full tool output (all
+# findings, large diffs), routinely exceeding asyncio's default 64 KiB line
+# limit. When a line overruns that default, ``StreamReader.readline`` raises
+# (LimitOverrunError → ValueError) and ``_stream_stdout`` aborts mid-stream —
+# which used to be misread as a clean EOF and a false ``success`` (incident
+# pipeline f4dbe4aa). Raise the ceiling so legitimate long lines stream
+# intact; 64 MiB comfortably covers the largest observed tool_result echoes.
+_STREAM_READER_LIMIT = 64 * 1024 * 1024
+
 # ── Claude stream-json / jsonl schema anchors ────────────────────────────────
 #
 # Every literal string the bridge looks up in a Claude event lives here.
@@ -245,6 +256,20 @@ class _RunContext:
     # "claude finished its work and exited" from "claude crashed before
     # producing any output".
     had_assistant_turn: bool = False
+    # Set when ``_stream_stdout``'s read loop dies with an UNEXPECTED exception.
+    # Oversized stream-json lines are recovered in-stream (see
+    # ``stdout_lines_dropped``); this flag covers everything else. ``stdout_done``
+    # is ALSO set on such a crash (its ``finally``), so without this flag the
+    # ``_execute_claude_skill`` EOF fallback cannot tell a genuine pipe EOF
+    # ("claude tree fully done") from a reader crash on a still-running claude
+    # — and used to report a false ``success`` (incident pipeline f4dbe4aa).
+    stdout_reader_failed: bool = False
+    # Count of stdout lines dropped because a single stream-json line overran
+    # the StreamReader buffer even at ``_STREAM_READER_LIMIT``. Dropping such a
+    # line is non-fatal: the reader keeps going so the small ``result`` event
+    # that follows a giant tool_result echo is still captured. Operator-facing
+    # observability only — does not change completion semantics.
+    stdout_lines_dropped: int = 0
 
 
 class _RedactingFilter(logging.Filter):
@@ -755,8 +780,46 @@ async def _stream_stdout(stream: asyncio.StreamReader, ctx: _RunContext) -> None
       strongest "claude tree is fully done" signal because subagents
       inherit fd1 and the pipe only EOFs once all of them are gone.
     """
+    # Read line-by-line via the iterator protocol (not ``async for``) so a
+    # single line that overruns the StreamReader buffer can be dropped without
+    # aborting the whole stream — ``readline`` discards the offending line and
+    # the next ``__anext__`` resumes on the following line.
+    stdout_iter = aiter(stream)
     try:
-        async for line in stream:
+        while True:
+            try:
+                line = await anext(stdout_iter)
+            except StopAsyncIteration:
+                break  # genuine pipe EOF — every fd1 holder is gone
+            except (ValueError, asyncio.LimitOverrunError):
+                # A single stream-json line overran the reader buffer even at
+                # ``_STREAM_READER_LIMIT`` (a giant tool_result echo). Drop it
+                # and keep reading: this line must not kill flow control or
+                # hide the small ``result`` event that follows it (incident
+                # pipeline f4dbe4aa). The authoritative triage output is the
+                # on-disk result file, not this log channel.
+                ctx.stdout_lines_dropped += 1
+                ctx.log.warning(
+                    "[%s] dropping stdout line #%d that overran the %d-byte "
+                    "reader limit; continuing to stream",
+                    ctx.task_label, ctx.stdout_lines_dropped, _STREAM_READER_LIMIT,
+                )
+                continue
+            except asyncio.CancelledError:
+                # Normal teardown — re-raise so the task is marked cancelled;
+                # the ``finally`` still fires ``stdout_done``.
+                raise
+            except Exception:
+                # Any OTHER reader error is unexpected. Record it so the EOF
+                # fallback in ``_execute_claude_skill`` does not mistake the
+                # ``stdout_done`` signal below for a clean EOF + false success.
+                # Log loudly — never swallow silently.
+                ctx.stdout_reader_failed = True
+                ctx.log.exception(
+                    "[%s] stdout reader crashed; treating as failure, not EOF",
+                    ctx.task_label,
+                )
+                break
             text = line.decode("utf-8", errors="replace").rstrip()
             if not text:
                 continue
@@ -799,6 +862,33 @@ async def _watch_result_file(ctx: _RunContext) -> None:
             )
             return
         await asyncio.sleep(_RESULT_POLL_INTERVAL)
+
+
+def _valid_result_file_payload(ctx: _RunContext) -> CallbackPayload | None:
+    """
+    Return a success payload iff a valid, non-empty JSON result file is on disk.
+
+    The result file is the authoritative triage artifact written by the skill;
+    stdout is only the live log channel. When stdout completion is ambiguous
+    (an unexpected reader crash), consult the file before declaring failure so
+    a run that genuinely produced output is not reported as error. The 5-second
+    ``_watch_result_file`` poll can lag a crash that fires ``stdout_done``
+    immediately, so this is a synchronous last look (incident pipeline f4dbe4aa).
+    """
+    path = ctx.result_file_path
+    if path is None or not path.exists():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not raw.strip():
+        return None
+    try:
+        json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return CallbackPayload(status="success")
 
 
 async def _tail_jsonl(ctx: _RunContext) -> None:
@@ -1078,6 +1168,10 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
             stderr=asyncio.subprocess.PIPE,
             cwd=AIST_WORKING_DIR,
             env=subprocess_env,
+            # Applies to both the stdout and stderr StreamReaders. stream-json
+            # lines (tool_result echoes, large diffs) routinely exceed the
+            # default 64 KiB limit; see ``_STREAM_READER_LIMIT``.
+            limit=_STREAM_READER_LIMIT,
             # New session/pgroup: lets _signal_pgroup take down the CLI
             # plus every Bash/Agent subprocess Claude spawns. Without
             # this, a SIGKILL on proc.pid orphans grandchildren that
@@ -1134,6 +1228,40 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
                 err = b"".join(ctx.stderr_lines).decode("utf-8", errors="replace")[:_LOG_TRUNC_LONG]
                 log.error("claude -p failed for %s exit=%s", task_label, rc)
                 result = CallbackPayload(status="error", detail=err or f"claude -p exit={rc}")
+
+        elif stdout_done_task in done and ctx.stdout_reader_failed:
+            # ``stdout_done`` fired because ``_stream_stdout`` CRASHED, not
+            # because the pipe reached a clean EOF. Its "claude tree is fully
+            # done" meaning does NOT hold here: claude may still be alive and
+            # mid-work (incident pipeline f4dbe4aa — a >64 KiB tool_result line
+            # overran the reader, the live process was killed, and the empty
+            # run was reported as success). No result event was seen, so this
+            # run failed — report error and tear the still-running CLI down
+            # normally (never the ECHILD fast-path, which assumes the child is
+            # already gone).
+            recovered = _valid_result_file_payload(ctx)
+            if recovered is not None:
+                # claude had already written its authoritative result file
+                # before the reader died — recover the real outcome instead
+                # of failing the run on a log-channel crash.
+                log.warning(
+                    "claude -p stdout reader failed for %s pid=%s, but a valid "
+                    "result file is present — recovering as success",
+                    task_label, proc.pid,
+                )
+                result = recovered
+            else:
+                log.error(
+                    "claude -p stdout reader failed for %s pid=%s without a result "
+                    "event or valid result file; reporting error",
+                    task_label, proc.pid,
+                )
+                result = CallbackPayload(
+                    status="error",
+                    detail="claude -p stdout reader crashed before producing a "
+                           "result event or valid result file; triage incomplete",
+                )
+            await _terminate_subprocess(proc, proc_wait_task, log, task_label)
 
         elif stdout_done_task in done:
             # Stdout EOF arrived but neither a result event nor proc exit

@@ -1522,6 +1522,276 @@ class StdoutEofFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.status, "success")
 
 
+def _make_run_ctx():
+    """Bare ``_RunContext`` for direct ``_stream_stdout`` unit tests."""
+    return main._RunContext(
+        log=logging.getLogger("aist-triage-bridge.test.stream"),
+        task_label="test",
+        claude_config_dir=Path("/tmp/bridge-test-ctx"),  # noqa: S108 — unused on this path
+        result_file_path=None,
+    )
+
+
+def _stream_json_line(size_bytes: int) -> bytes:
+    """
+    A single stream-json ``user`` event carrying a tool_result whose payload is
+    at least ``size_bytes`` long — models claude echoing a large tool_result
+    (all findings / a big diff) on one line. Returns the newline-terminated
+    bytes the StreamReader will see.
+    """
+    big = "x" * size_bytes
+    event = {
+        "type": "user",
+        "message": {"content": [{"type": "tool_result", "content": big}]},
+    }
+    line = (json.dumps(event) + "\n").encode("utf-8")
+    assert len(line) > size_bytes  # noqa: S101 — guards the >64 KiB premise
+    return line
+
+
+class StreamStdoutLargeLineTests(unittest.IsolatedAsyncioTestCase):
+
+    """
+    Regression for incident pipeline f4dbe4aa: a stream-json line larger than
+    asyncio's default 64 KiB ``StreamReader`` limit (a tool_result echo with
+    all findings) crashed ``_stream_stdout`` mid-stream, which was then misread
+    as a clean EOF + false ``success``.
+
+    These drive ``_stream_stdout`` against a REAL ``asyncio.StreamReader`` so
+    the buffer-limit behaviour is exercised, not mocked away.
+    """
+
+    # 200 KiB — comfortably over the old 64 KiB default, well under the new ceiling.
+    _BIG = 200 * 1024
+
+    async def test_large_line_streams_intact_and_result_event_parsed(self):
+        # With the raised limit, the oversized tool_result line is read whole,
+        # the following result event is parsed, and the reader does NOT fail.
+        reader = asyncio.StreamReader(limit=main._STREAM_READER_LIMIT)
+        reader.feed_data(_stream_json_line(self._BIG))
+        reader.feed_data(b'{"type":"result","subtype":"success","result":"done"}\n')
+        reader.feed_eof()
+
+        ctx = _make_run_ctx()
+        await main._stream_stdout(reader, ctx)
+
+        self.assertFalse(ctx.stdout_reader_failed)
+        self.assertTrue(ctx.stdout_done.is_set())
+        self.assertIsNotNone(ctx.payload)
+        self.assertEqual(ctx.payload.status, "success")
+
+    async def test_oversized_line_is_dropped_and_stream_continues(self):
+        # Per-line resilience: at a limit the big line overruns (old 64 KiB
+        # default), ``_stream_stdout`` must DROP that one line and keep reading
+        # so the small ``result`` event that follows is still parsed. This is
+        # the real incident shape: a giant tool_result echo followed by the
+        # genuine result event. The run is NOT a reader failure.
+        reader = asyncio.StreamReader(limit=64 * 1024)
+        reader.feed_data(_stream_json_line(self._BIG))
+        reader.feed_data(b'{"type":"result","subtype":"success","result":"done"}\n')
+        reader.feed_eof()
+
+        ctx = _make_run_ctx()
+        await main._stream_stdout(reader, ctx)
+
+        self.assertFalse(ctx.stdout_reader_failed)
+        self.assertGreaterEqual(ctx.stdout_lines_dropped, 1)
+        self.assertTrue(ctx.stdout_done.is_set())
+        self.assertIsNotNone(ctx.payload)
+        self.assertEqual(ctx.payload.status, "success")
+
+    async def test_unexpected_reader_error_flags_failure(self):
+        # An UNEXPECTED reader error (not a line overrun) must NOT be laundered
+        # into a clean EOF: it sets ``stdout_reader_failed`` so the caller can
+        # report error rather than synthesise success.
+        ctx = _make_run_ctx()
+        await main._stream_stdout(_RaisingStream(RuntimeError("boom")), ctx)
+
+        self.assertTrue(ctx.stdout_reader_failed)
+        self.assertTrue(ctx.stdout_done.is_set())
+        self.assertIsNone(ctx.payload)
+
+    async def test_subprocess_is_launched_with_raised_limit(self):
+        # The fix only helps if the limit actually reaches the real subprocess.
+        fake = FakeProcess(
+            stdout_lines=[b'{"type":"result","subtype":"success","result":"ok"}\n'],
+        )
+        req = AnalyzeRequest(
+            skill_name="aist-diff-security-review",
+            project_id="pipe-limit",
+            source_path="/tmp/proj",  # noqa: S108
+        )
+        spy = AsyncMock(return_value=fake)
+        with patch("main._build_skill_prompt", return_value="prompt"), \
+             patch("main.asyncio.create_subprocess_exec", spy), \
+             patch("main._signal_pgroup", side_effect=_fake_signal_pgroup(fake)):
+            await main._execute_claude_skill(req)
+
+        self.assertEqual(spy.call_args.kwargs["limit"], main._STREAM_READER_LIMIT)
+
+
+class ValidResultFilePayloadTests(unittest.TestCase):
+
+    """
+    ``_valid_result_file_payload`` is the authoritative-artifact check used to
+    recover a run whose stdout reader crashed. Only a present, non-empty, valid
+    JSON file counts as success; everything else is ``None`` (→ caller errors).
+    """
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="bridge-valid-result-"))
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+
+    def _ctx(self, path):
+        ctx = _make_run_ctx()
+        ctx.result_file_path = path
+        return ctx
+
+    def test_none_path_returns_none(self):
+        self.assertIsNone(main._valid_result_file_payload(self._ctx(None)))
+
+    def test_missing_file_returns_none(self):
+        self.assertIsNone(
+            main._valid_result_file_payload(self._ctx(self.tmpdir / "absent.json")),
+        )
+
+    def test_empty_file_returns_none(self):
+        path = self.tmpdir / "empty.json"
+        path.write_text("   \n", encoding="utf-8")
+        self.assertIsNone(main._valid_result_file_payload(self._ctx(path)))
+
+    def test_malformed_json_returns_none(self):
+        path = self.tmpdir / "bad.json"
+        path.write_text("{not json", encoding="utf-8")
+        self.assertIsNone(main._valid_result_file_payload(self._ctx(path)))
+
+    def test_valid_nonempty_json_returns_success(self):
+        path = self.tmpdir / "ok.json"
+        path.write_text(json.dumps({"findings": []}), encoding="utf-8")
+        payload = main._valid_result_file_payload(self._ctx(path))
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload.status, "success")
+
+
+class _RaisingStream:
+
+    """
+    Stdout iterator that yields its lines, then raises ``exc`` on the next read.
+
+    Models an UNEXPECTED reader failure (not a recoverable line overrun) at the
+    ``__anext__`` boundary — the residual ``stdout_reader_failed`` path the
+    bridge must still treat as an error rather than a clean EOF.
+    """
+
+    def __init__(self, exc, lines=()):
+        self._exc = exc
+        self._lines = list(lines)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._lines:
+            return self._lines.pop(0)
+        raise self._exc
+
+
+class _ReaderCrashProcess:
+
+    """
+    ``proc.wait()`` hangs (claude still alive) while the stdout reader crashes
+    with an unexpected error.
+
+    This is the dangerous shape: ``stdout_done`` fires from the reader's
+    ``finally`` even though the process never exited. The bridge must report
+    error (or recover from a valid result file), never synthesise a bare
+    success.
+    """
+
+    def __init__(self, stdout_lines, stderr_lines=()):
+        self.pid = 67890
+        self.returncode = None
+        self.signals: list[int] = []
+        self.stdout = _RaisingStream(RuntimeError("stdout reader boom"), stdout_lines)
+        self.stderr = _EofAfterLinesStream(stderr_lines)
+
+    async def wait(self):
+        await asyncio.Future()  # hang until cancelled
+
+    def send_signal(self, sig):
+        self.signals.append(sig)
+
+    def kill(self):
+        self.signals.append(signal.SIGKILL)
+
+
+class StdoutReaderCrashTests(unittest.IsolatedAsyncioTestCase):
+
+    """
+    The reader crash must NOT be laundered into ``success`` by the stdout-EOF
+    fallback (incident pipeline f4dbe4aa). With no result event and a crashed
+    reader, ``_execute_claude_skill`` must return ``error``.
+    """
+
+    async def asyncSetUp(self):
+        self._orig_timeout = main.TRIAGE_TIMEOUT
+        self._orig_grace = main.POST_RESULT_GRACE
+        main.TRIAGE_TIMEOUT = 5
+        main.POST_RESULT_GRACE = 1
+
+    async def asyncTearDown(self):
+        main.TRIAGE_TIMEOUT = self._orig_timeout
+        main.POST_RESULT_GRACE = self._orig_grace
+
+    async def test_reader_crash_without_result_event_returns_error(self):
+        # An assistant turn was emitted before the crash, so the old EOF
+        # fallback (had_assistant_turn=True → success) would have lied.
+        fake = _ReaderCrashProcess(stdout_lines=[
+            b'{"type":"system","subtype":"init","cwd":"/x","session_id":"abc","model":"opus"}\n',
+            b'{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}\n',
+        ])
+        req = AnalyzeRequest(
+            skill_name="aist-diff-security-review",
+            project_id="pipe-reader-crash",
+            source_path="/tmp/p",  # noqa: S108
+        )
+
+        with patch("main._build_skill_prompt", return_value="prompt"), \
+             patch("main.asyncio.create_subprocess_exec", AsyncMock(return_value=fake)), \
+             patch("main._signal_pgroup", side_effect=_fake_signal_pgroup(fake)):
+            payload = await asyncio.wait_for(main._execute_claude_skill(req), timeout=20)
+
+        self.assertEqual(payload.status, "error")
+        self.assertIn("reader crashed", payload.detail)
+
+    async def test_reader_crash_recovers_from_valid_result_file(self):
+        # The reader dies, but claude had already written its authoritative
+        # result file. The bridge must consult that file (it is the real triage
+        # artifact) and recover the run as success rather than failing on a
+        # log-channel crash — closing the 5s _watch_result_file poll gap.
+        tmpdir = Path(tempfile.mkdtemp(prefix="bridge-reader-crash-recover-"))
+        self.addCleanup(shutil.rmtree, tmpdir, ignore_errors=True)
+        result_file = tmpdir / "result.json"
+        result_file.write_text(json.dumps({"findings": []}), encoding="utf-8")
+
+        fake = _ReaderCrashProcess(stdout_lines=[
+            b'{"type":"system","subtype":"init","cwd":"/x","session_id":"abc","model":"opus"}\n',
+        ])
+        req = AnalyzeRequest(
+            skill_name="aist-diff-security-review",
+            project_id="pipe-reader-crash-recover",
+            source_path="/tmp/p",  # noqa: S108
+            extra_args=f"output_path={tmpdir} result_filename=result.json",
+        )
+
+        with patch("main._build_skill_prompt", return_value="prompt"), \
+             patch("main.asyncio.create_subprocess_exec", AsyncMock(return_value=fake)), \
+             patch("main._signal_pgroup", side_effect=_fake_signal_pgroup(fake)):
+            payload = await asyncio.wait_for(main._execute_claude_skill(req), timeout=20)
+
+        self.assertEqual(payload.status, "success")
+
+
 class AnalyzeRequestValidationTests(unittest.TestCase):
 
     """
