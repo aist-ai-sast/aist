@@ -10,7 +10,11 @@
       "Skill(update-config)",
       "WebFetch(domain:developers.openai.com)",
       "WebFetch(domain:platform.openai.com)",
-      "Bash(docker compose *)"
+      "Bash(docker compose *)",
+      "mcp__claude_ai_Atlassian__getAccessibleAtlassianResources",
+      "mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql",
+      "mcp__claude_ai_Atlassian__getJiraIssue",
+      "mcp__claude_ai_Atlassian__getConfluencePage"
     ]
   }
 }

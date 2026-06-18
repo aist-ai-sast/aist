@@ -32,6 +32,8 @@ BEARER_SCAN_TYPE = "Bearer CLI"
 # sast-pipeline's analyzers.yaml uses these as ``output_type``.
 CLAUDE_DIFF_SECURITY_SCAN_TYPE = "Claude Diff Security"
 CLAUDE_FULL_SECURITY_SCAN_TYPE = "Claude Full Security"
+CLAUDE_INTAKE_REVIEW_SCAN_TYPE = "Claude Intake Review"
+CLAUDE_INTAKE_DIFF_SCAN_TYPE = "Claude Intake Diff"
 CLAUDE_LINE_BUCKET_SIZE = 5
 SNYK_RULE_TITLE_OVERRIDES = {
     "OR": "Open Redirect Vulnerability",
@@ -343,10 +345,20 @@ class ClaudeFullSecurityParser(_ClaudeGenericParserBase):
     ID = CLAUDE_FULL_SECURITY_SCAN_TYPE
 
 
+class ClaudeIntakeReviewParser(_ClaudeGenericParserBase):
+    ID = CLAUDE_INTAKE_REVIEW_SCAN_TYPE
+
+
+class ClaudeIntakeDiffParser(_ClaudeGenericParserBase):
+    ID = CLAUDE_INTAKE_DIFF_SCAN_TYPE
+
+
 def install_claude_parsers() -> None:
     for scan_type, parser_cls in (
         (CLAUDE_DIFF_SECURITY_SCAN_TYPE, ClaudeDiffSecurityParser),
         (CLAUDE_FULL_SECURITY_SCAN_TYPE, ClaudeFullSecurityParser),
+        (CLAUDE_INTAKE_REVIEW_SCAN_TYPE, ClaudeIntakeReviewParser),
+        (CLAUDE_INTAKE_DIFF_SCAN_TYPE, ClaudeIntakeDiffParser),
     ):
         if isinstance(factory.PARSERS.get(scan_type), parser_cls):
             continue

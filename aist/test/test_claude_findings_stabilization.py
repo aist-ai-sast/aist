@@ -21,9 +21,13 @@ from dojo.tools import factory
 from aist.parser_overrides import (
     CLAUDE_DIFF_SECURITY_SCAN_TYPE,
     CLAUDE_FULL_SECURITY_SCAN_TYPE,
+    CLAUDE_INTAKE_DIFF_SCAN_TYPE,
+    CLAUDE_INTAKE_REVIEW_SCAN_TYPE,
     CLAUDE_LINE_BUCKET_SIZE,
     ClaudeDiffSecurityParser,
     ClaudeFullSecurityParser,
+    ClaudeIntakeDiffParser,
+    ClaudeIntakeReviewParser,
     build_claude_vuln_id_from_tool,
     install_claude_parsers,
 )
@@ -155,6 +159,27 @@ class ClaudeParserRegistrationTests(SimpleTestCase):
         self.assertEqual(
             ClaudeFullSecurityParser().get_scan_types(),
             [CLAUDE_FULL_SECURITY_SCAN_TYPE],
+        )
+
+    def test_install_registers_intake_parsers(self):
+        install_claude_parsers()
+        self.assertIsInstance(
+            factory.PARSERS.get(CLAUDE_INTAKE_REVIEW_SCAN_TYPE),
+            ClaudeIntakeReviewParser,
+        )
+        self.assertIsInstance(
+            factory.PARSERS.get(CLAUDE_INTAKE_DIFF_SCAN_TYPE),
+            ClaudeIntakeDiffParser,
+        )
+
+    def test_intake_parsers_advertise_unique_test_types(self):
+        self.assertEqual(
+            ClaudeIntakeReviewParser().get_scan_types(),
+            [CLAUDE_INTAKE_REVIEW_SCAN_TYPE],
+        )
+        self.assertEqual(
+            ClaudeIntakeDiffParser().get_scan_types(),
+            [CLAUDE_INTAKE_DIFF_SCAN_TYPE],
         )
 
 

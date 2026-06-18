@@ -218,6 +218,8 @@ AIST_CANONICAL_DEDUPE_SCAN_TYPES = (
     # so canonical dedupe handles them as a first-class scan type.
     "Claude Diff Security",
     "Claude Full Security",
+    "Claude Intake Review",
+    "Claude Intake Diff",
 )
 AIST_CANONICAL_HASH_FIELDS = ["vuln_id_from_tool", "file_path", "line", "cwe"]
 
@@ -236,6 +238,8 @@ HASHCODE_ALLOWS_NULL_CWE["Horusec Scan"] = True
 # (vuln_id_from_tool, file_path, line) without filtering them out for null CWE.
 HASHCODE_ALLOWS_NULL_CWE["Claude Diff Security"] = True
 HASHCODE_ALLOWS_NULL_CWE["Claude Full Security"] = True
+HASHCODE_ALLOWS_NULL_CWE["Claude Intake Review"] = True
+HASHCODE_ALLOWS_NULL_CWE["Claude Intake Diff"] = True
 
 AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD = env.int("DD_AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD", default=2)  # noqa: F405
 AIST_CANONICAL_CANDIDATE_MIN_SCORE = env.int("DD_AIST_CANONICAL_CANDIDATE_MIN_SCORE", default=1)  # noqa: F405
