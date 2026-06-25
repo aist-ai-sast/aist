@@ -51,6 +51,11 @@ logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
 AIST_WORKING_DIR = os.environ.get("AIST_WORKING_DIR", "/app/aist")
 AIST_SERVICE_TOKEN = os.environ.get("AIST_SERVICE_TOKEN", "")
 CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "claude")
+# Optional bridge-wide default model passed to ``claude -p --model``. Empty
+# means "let the CLI pick its own default". A per-request ``AnalyzeRequest.model``
+# overrides this. Useful to pin a model for the whole bridge container without a
+# per-skill change (e.g. CLAUDE_BRIDGE_MODEL=opus).
+CLAUDE_BRIDGE_MODEL = os.environ.get("CLAUDE_BRIDGE_MODEL", "")
 TRIAGE_TIMEOUT = int(os.environ.get("AIST_LOCAL_TRIAGE_TIMEOUT", "10800"))  # 3 hours
 # Grace period after a result event before SIGTERM → SIGKILL of the claude CLI.
 POST_RESULT_GRACE = int(os.environ.get("AIST_LOCAL_TRIAGE_POST_RESULT_GRACE", "10"))
@@ -195,6 +200,16 @@ class AnalyzeRequest(BaseModel):
     source_path: str
     callback_url: str = ""
     extra_args: str = ""
+    # Optional Claude model to run this skill with, passed straight through to
+    # ``claude -p --model <model>``. Accepts a CLI alias (``opus``/``sonnet``/
+    # ``haiku``/``fable``), an extended-context variant (``opus[1m]``), or a
+    # full model id (``claude-opus-4-8``, ``claude-opus-4-8[1m]``). Empty string
+    # means "no ``--model`` flag" → the CLI default (or ``CLAUDE_BRIDGE_MODEL``)
+    # wins. The pattern forbids a leading ``-`` so the value can never be
+    # mistaken for another CLI flag when spliced into the argv list; ``[``/``]``
+    # are allowed for the documented 1M-context aliases and are safe because the
+    # CLI is spawned via ``create_subprocess_exec`` (argv list, no shell).
+    model: str = Field(default="", pattern=r"^$|^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}$")
     # Generic per-run environment overlay injected into the claude
     # subprocess. Values are ``SecretStr`` so they mask in repr/dump/log
     # by default. The bridge is agent-agnostic at this layer: the caller
@@ -709,6 +724,34 @@ def _parse_extra_args(extra_args: str) -> dict[str, str]:
     return parsed
 
 
+def _resolve_model(req_model: str) -> str:
+    """
+    Pick the effective ``--model`` value for a request.
+
+    Per-request ``req.model`` wins; otherwise fall back to the bridge-wide
+    ``CLAUDE_BRIDGE_MODEL`` default. Empty result means "no ``--model`` flag".
+    """
+    return req_model or CLAUDE_BRIDGE_MODEL
+
+
+def _build_claude_cmd(prompt: str, model: str) -> list[str]:
+    """
+    Assemble the ``claude -p`` argv. Adds ``--model`` only when set.
+
+    ``model`` is already validated by ``AnalyzeRequest`` (no leading ``-``),
+    so it cannot inject an extra CLI flag.
+    """
+    cmd = [CLAUDE_PATH, "-p", prompt]
+    if model:
+        cmd += ["--model", model]
+    cmd += [
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "--output-format", "stream-json",
+    ]
+    return cmd
+
+
 _SKILL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
@@ -1123,13 +1166,7 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
         if raw_value:
             secret_values.append(raw_value)
 
-    cmd = [
-        CLAUDE_PATH,
-        "-p", prompt,
-        "--dangerously-skip-permissions",
-        "--verbose",
-        "--output-format", "stream-json",
-    ]
+    cmd = _build_claude_cmd(prompt, _resolve_model(req.model))
     task_label = _task_label(req)
 
     log = logging.getLogger(f"aist-triage-bridge.task.{req.project_id}")
@@ -1146,8 +1183,9 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
         log.addHandler(file_handler)
 
     log.info(
-        "Starting claude -p for %s cwd=%s result_file=%s",
+        "Starting claude -p for %s cwd=%s result_file=%s model=%s",
         task_label, AIST_WORKING_DIR, result_file_path or "<none>",
+        _resolve_model(req.model) or "<cli-default>",
     )
 
     ctx = _RunContext(

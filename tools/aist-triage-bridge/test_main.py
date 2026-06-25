@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -562,6 +563,73 @@ def _fake_signal_pgroup(fake_proc):
         else:
             fake_proc.send_signal(sig)
     return _impl
+
+
+class BuildClaudeCmdTests(unittest.TestCase):
+
+    """``--model`` plumbing: per-request model, env default, and validation."""
+
+    def test_no_model_omits_model_flag(self):
+        cmd = main._build_claude_cmd("PROMPT", "")
+        self.assertNotIn("--model", cmd)
+        # Sanity: the core flags are still present and prompt is positional.
+        self.assertEqual(cmd[:3], [main.CLAUDE_PATH, "-p", "PROMPT"])
+        self.assertIn("--output-format", cmd)
+
+    def test_model_is_inserted_after_prompt(self):
+        cmd = main._build_claude_cmd("PROMPT", "opus")
+        self.assertEqual(cmd[:5], [main.CLAUDE_PATH, "-p", "PROMPT", "--model", "opus"])
+        # Model value never leaks into another flag position.
+        self.assertEqual(cmd.count("--model"), 1)
+
+    def test_full_model_id_is_passed_through(self):
+        cmd = main._build_claude_cmd("PROMPT", "claude-opus-4-8")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-opus-4-8")
+
+    def test_request_model_overrides_bridge_default(self):
+        with patch.object(main, "CLAUDE_BRIDGE_MODEL", "sonnet"):
+            self.assertEqual(main._resolve_model("opus"), "opus")
+
+    def test_bridge_default_used_when_request_model_empty(self):
+        with patch.object(main, "CLAUDE_BRIDGE_MODEL", "sonnet"):
+            self.assertEqual(main._resolve_model(""), "sonnet")
+
+    def test_empty_when_neither_set(self):
+        with patch.object(main, "CLAUDE_BRIDGE_MODEL", ""):
+            self.assertEqual(main._resolve_model(""), "")
+
+    def test_analyze_request_accepts_valid_model(self):
+        # Aliases, full ids, and the documented 1M-context bracket variants.
+        for good in ("opus", "sonnet", "haiku", "fable", "opus[1m]",
+                     "claude-opus-4-8", "claude-opus-4-8[1m]",
+                     "claude-haiku-4-5-20251001"):
+            req = AnalyzeRequest(
+                skill_name="aist-finding-triage",
+                project_id="p",
+                source_path="/tmp/proj",  # noqa: S108 — test-only path
+                model=good,
+            )
+            self.assertEqual(req.model, good)
+
+    def test_analyze_request_model_defaults_to_empty(self):
+        req = AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="p",
+            source_path="/tmp/proj",  # noqa: S108 — test-only path
+        )
+        self.assertEqual(req.model, "")
+
+    def test_analyze_request_rejects_flag_shaped_model(self):
+        # A leading dash must be rejected so the value can never be parsed as
+        # an extra CLI flag when spliced into the claude argv.
+        for bad in ("--dangerously-skip-permissions", "-p", "a b", "x/y", "a;b"):
+            with self.assertRaises(ValidationError):
+                AnalyzeRequest(
+                    skill_name="aist-finding-triage",
+                    project_id="p",
+                    source_path="/tmp/proj",  # noqa: S108 — test-only path
+                    model=bad,
+                )
 
 
 class RunClaudeSkillTests(unittest.IsolatedAsyncioTestCase):
