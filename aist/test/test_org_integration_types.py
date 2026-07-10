@@ -9,7 +9,7 @@ from django.db import IntegrityError, transaction
 from django.test import TestCase
 from dojo.models import Product_Type
 
-from aist.models import Organization, OrgIntegration, OrgIntegrationType
+from aist.models import Organization, OrgIntegration, OrgIntegrationType, ScmType
 
 
 class OrgIntegrationTypeEnumTests(TestCase):
@@ -19,6 +19,12 @@ class OrgIntegrationTypeEnumTests(TestCase):
         labels = dict(OrgIntegrationType.choices)
         self.assertIn("CLAUDE_CODE", labels)
         self.assertEqual(labels["CLAUDE_CODE"], "Claude Code")
+
+    def test_gerrit_choices_present(self):
+        self.assertEqual(OrgIntegrationType.GERRIT.value, "GERRIT")
+        self.assertIn("GERRIT", dict(OrgIntegrationType.choices))
+        self.assertEqual(ScmType.GERRIT.value, "GERRIT")
+        self.assertIn("GERRIT", dict(ScmType.choices))
 
 
 class OrgIntegrationSingleActiveClaudeConstraintTests(TestCase):

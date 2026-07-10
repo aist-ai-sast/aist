@@ -54,6 +54,30 @@ class OrgIntegrationListCreateAPITests(AISTApiBase):
         self.assertNotIn("secret", resp.data)  # write-only
         self.assertEqual(OrgIntegration.objects.count(), 1)
 
+    def test_create_gerrit_integration(self):
+        resp = self.client.post(self.url, {
+            "integration_type": "GERRIT",
+            "name": "Production Gerrit",
+            "config": {"base_url": "https://gerrit.example.com", "username": "svc-user"},
+            "secret": "http-password",
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["integration_type"], "GERRIT")
+        self.assertTrue(resp.data["has_secret"])
+        self.assertNotIn("secret", resp.data)  # write-only
+
+    def test_create_gerrit_integration_requires_username(self):
+        resp = self.client.post(self.url, {
+            "integration_type": "GERRIT",
+            "name": "Bad Gerrit",
+            "config": {"base_url": "https://gerrit.example.com"},
+            "secret": "http-password",
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("config", resp.data)
+
     def test_create_slack_integration(self):
         resp = self.client.post(self.url, {
             "integration_type": "SLACK",

@@ -132,6 +132,17 @@ def analyze_project_after_import(self, project_id: int, async_user=None) -> None
                 capture_output=True,
                 timeout=300,
             )
+    except subprocess.TimeoutExpired:
+        # Do NOT log the exception object: its str() includes the git argv,
+        # and clone_url embeds credentials (PAT / Gerrit HTTP password).
+        logger.error("Clone timed out for project %s", project_id)
+        shutil.rmtree(clone_dir, ignore_errors=True)
+        return
+    except subprocess.CalledProcessError as exc:
+        # Same reason as above — never log exc/argv (credential-bearing URL).
+        logger.error("Clone failed for project %s (git exited %s)", project_id, exc.returncode)
+        shutil.rmtree(clone_dir, ignore_errors=True)
+        return
     except Exception:
         logger.exception("Clone failed for project %s", project_id)
         shutil.rmtree(clone_dir, ignore_errors=True)

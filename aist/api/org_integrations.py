@@ -268,7 +268,20 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         )
         if itype == OrgIntegrationType.CLAUDE_CODE:
             self._validate_claude_attrs(attrs)
+        if itype == OrgIntegrationType.GERRIT:
+            self._validate_gerrit_attrs(attrs)
         return super().validate(attrs)
+
+    def _validate_gerrit_attrs(self, attrs):
+        """Gerrit needs an HTTP username (in config) alongside the HTTP password (secret)."""
+        config = attrs.get("config")
+        if config is None and self.instance is not None:
+            config = self.instance.config or {}
+        config = config or {}
+        if not (config.get("username") or "").strip():
+            raise serializers.ValidationError(
+                {"config": "Gerrit integration requires a 'username' in config."},
+            )
 
     def _validate_claude_attrs(self, attrs):
         """

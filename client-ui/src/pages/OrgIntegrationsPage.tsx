@@ -39,11 +39,12 @@ import { PROVIDER_ICON_PATHS } from "../lib/providerIcons";
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-type IntegrationType = "GITLAB" | "GITHUB" | "SLACK" | "EMAIL" | "VPN" | "CLAUDE_CODE";
+type IntegrationType = "GITLAB" | "GITHUB" | "GERRIT" | "SLACK" | "EMAIL" | "VPN" | "CLAUDE_CODE";
 
 const ORG_INTEGRATION_TYPES: IntegrationType[] = [
   "GITLAB",
   "GITHUB",
+  "GERRIT",
   "SLACK",
   "EMAIL",
   "VPN",
@@ -53,6 +54,7 @@ const ORG_INTEGRATION_TYPES: IntegrationType[] = [
 const TYPE_LABELS: Record<string, string> = {
   GITLAB: "GitLab",
   GITHUB: "GitHub",
+  GERRIT: "Gerrit",
   SLACK: "Slack",
   EMAIL: "Email",
   VPN: "VPN",
@@ -67,6 +69,7 @@ const TYPE_LABELS: Record<string, string> = {
 const TYPE_BADGE_CLASSES: Record<string, string> = {
   GITLAB: "border-orange-500/40 bg-orange-500/10 text-orange-300",
   GITHUB: "border-slate-400/40 bg-slate-400/10 text-slate-300",
+  GERRIT: "border-red-500/40 bg-red-500/10 text-red-300",
   SLACK: "border-green-500/40 bg-green-500/10 text-green-300",
   EMAIL: "border-brand-500/40 bg-brand-500/10 text-brand-300",
   JIRA: "border-blue-500/40 bg-blue-500/10 text-blue-300",
@@ -385,6 +388,30 @@ function OrgIntegrationConfigFields({
           onChange={(e) => onChange("base_api_url", e.target.value)}
         />
       </label>
+    );
+  }
+  if (type === "GERRIT") {
+    return (
+      <>
+        <label className="text-xs text-slate-400 sm:col-span-2">
+          Gerrit URL
+          <TextInput
+            className="mt-1"
+            placeholder="https://gerrit.example.com"
+            value={config.base_url ?? ""}
+            onChange={(e) => onChange("base_url", e.target.value)}
+          />
+        </label>
+        <label className="text-xs text-slate-400 sm:col-span-2">
+          HTTP username
+          <TextInput
+            className="mt-1"
+            placeholder="Gerrit HTTP account username"
+            value={config.username ?? ""}
+            onChange={(e) => onChange("username", e.target.value)}
+          />
+        </label>
+      </>
     );
   }
   if (type === "SLACK") {

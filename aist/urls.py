@@ -65,6 +65,11 @@ urlpatterns = [
         integrations.gitlab_projects_list,
         name="gitlab_projects_list",
     ),
+    path(
+        "projects/gerrit/list/",
+        integrations.gerrit_projects_list,
+        name="gerrit_projects_list",
+    ),
 
     path("ai/filter/reference/", ai.ai_filter_reference, name="ai_filter_reference"),
     path("ai/filter/help/", ai.ai_filter_help, name="ai_filter_help"),

@@ -10,6 +10,7 @@ class AISTApiTag(StrEnum):
     FINDINGS = "findings"
     GITHUB = "gitHub"
     GITLAB = "gitLab"
+    GERRIT = "gerrit"
     INTEGRATIONS = "integrations"
     LAUNCH_CONFIGS = "launch configs"
     LAUNCH_QUEUE = "launch queue"

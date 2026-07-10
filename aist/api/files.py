@@ -77,6 +77,15 @@ class ProjectVersionFileBlobAPI(AuthorizedQuerySetMixin, generics.GenericAPIView
             404: OpenApiResponse(description="Project version or file not found"),
         },
     )
+    @staticmethod
+    def _bytes_response(data: bytes, filename: str):
+        """Wrap raw bytes in an inline HttpResponse with a guessed content type."""
+        content_type, _ = guess_type(filename)
+        content_type = content_type or "application/octet-stream"
+        resp = HttpResponse(data, content_type=content_type)
+        resp["Content-Disposition"] = f'inline; filename="{iri_to_uri(filename)}"'
+        return resp
+
     def _return_remote_bytes(self, url: str, filename: str, extra_headers: dict | None = None):
         """Download the file from a remote URL and return as HttpResponse."""
         headers = dict(extra_headers or {})
@@ -86,12 +95,7 @@ class ProjectVersionFileBlobAPI(AuthorizedQuerySetMixin, generics.GenericAPIView
             raise Http404(ERR_FILE_NOT_FOUND_IN_REPOSITORY)
         response.raise_for_status()
 
-        content_type, _ = guess_type(filename)
-        content_type = content_type or "application/octet-stream"
-
-        resp = HttpResponse(response.content, content_type=content_type)
-        resp["Content-Disposition"] = f'inline; filename="{iri_to_uri(filename)}"'
-        return resp
+        return self._bytes_response(response.content, filename)
 
     @staticmethod
     def _return_local_file(project_version, subpath):
@@ -131,9 +135,17 @@ class ProjectVersionFileBlobAPI(AuthorizedQuerySetMixin, generics.GenericAPIView
 
         link_builder = LinkBuilder({"id": project_version.id})
         if repo_obj:
-            # Try using existing SCM binding (GitHub/GitLab)
+            # Try using existing SCM binding (GitHub/GitLab/Gerrit)
             binding = repo_obj.get_binding()
             if binding:
+                # Some providers (Gerrit) return base64 content that must be
+                # decoded by the binding rather than streamed verbatim.
+                fetch_raw = getattr(binding, "fetch_raw_bytes", None)
+                if callable(fetch_raw):
+                    data = fetch_raw(repo_obj, ref, subpath)
+                    if data is None:
+                        raise Http404(ERR_FILE_NOT_FOUND_IN_REPOSITORY)
+                    return self._bytes_response(data, Path(subpath).name)
                 raw_url = binding.build_raw_url(repo_obj, ref, subpath)
                 headers = binding.get_auth_headers() or {}
                 return self._return_remote_bytes(raw_url, Path(subpath).name, headers)

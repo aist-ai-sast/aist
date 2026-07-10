@@ -38,6 +38,12 @@
                             </button>
                             <button type="button"
                                     class="btn btn-default"
+                                    id="gerrit-import-open">
+                                <i class="fa fa-code-fork" aria-hidden="true"></i>
+                                Import from Gerrit
+                            </button>
+                            <button type="button"
+                                    class="btn btn-default"
                                     id="empty-project-open"
                                     {% if not organizations_for_create %}disabled title="No organizations available for project creation"{% endif %}>
                                 <i class="fa fa-plus" aria-hidden="true"></i>
@@ -402,6 +408,110 @@
                     <div class="form-check mt-3">
                         <input type="checkbox" class="form-check-input" id="gitlab-auto-analyze">
                         <label class="form-check-label" for="gitlab-auto-analyze">
+                            Auto-analyze project (generate init script &amp; exclusions via Claude)
+                        </label>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    {# Modal for importing projects from Gerrit #}
+    <div class="modal fade" id="gerritImportModal" tabindex="-1" role="dialog"
+         aria-labelledby="gerritImportModalLabel">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <form id="gerrit-import-form">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <button type="button" class="close" data-dismiss="modal"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                        <h4 class="modal-title" id="gerritImportModalLabel">
+                            Import projects from Gerrit
+                        </h4>
+                    </div>
+                    <div class="modal-body">
+                        <div id="gerrit-import-error"
+                             class="alert alert-danger"
+                             style="display:none;"></div>
+
+                        <div class="form-group">
+                            <label for="gerrit-org-select" class="control-label" style="display:block;">
+                                Organization
+                            </label>
+                            <select class="form-control"
+                                    id="gerrit-org-select"
+                                    name="organization_id">
+                                <option value="">— select organization —</option>
+                                {% for org in organizations_for_create %}
+                                    <option value="{{ org.id }}">{{ org.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <p class="help-block">
+                                The organization's default Gerrit integration will be used for authentication.
+                                <a href="/integrations" target="_blank">Manage integrations.</a>
+                            </p>
+                        </div>
+                        <div id="gerrit-integration-info" class="alert alert-info" style="display:none;"></div>
+
+
+                        <hr>
+
+                        <div id="gerrit-projects-container" style="display:none;">
+                            <p class="text-muted small">
+                                Select one or more projects to import as AIST projects.
+                            </p>
+                            <div class="form-group">
+                                <input type="text"
+                                       class="form-control input-sm"
+                                       id="gerrit-projects-search"
+                                       placeholder="Filter projects by path or description...">
+                            </div>
+                            <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+                                <table class="table table-condensed table-hover" id="gerrit-projects-table">
+                                    <thead>
+                                    <tr>
+                                        <th style="width: 30px;">
+                                            <input type="checkbox" id="gerrit-select-all">
+                                        </th>
+                                        <th>Project</th>
+                                        <th>Description</th>
+                                        <th style="width: 120px;">Default branch</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody id="gerrit-projects-tbody">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button"
+                                class="btn btn-default"
+                                data-dismiss="modal">
+                            Close
+                        </button>
+                        <button type="button"
+                                class="btn btn-primary"
+                                id="gerrit-list-btn">
+                            List projects
+                        </button>
+
+                        <span id="gerrit-projects-loading"
+                              class="text-muted"
+                              style="display: none; margin-left: 8px;">
+                            <i class="fa fa-spinner fa-spin"></i> Loading projects...
+                        </span>
+                        <button type="button"
+                                class="btn btn-success"
+                                id="gerrit-import-btn"
+                                disabled>
+                            Import selected
+                        </button>
+                    </div>
+                    <div class="form-check mt-3">
+                        <input type="checkbox" class="form-check-input" id="gerrit-auto-analyze">
+                        <label class="form-check-label" for="gerrit-auto-analyze">
                             Auto-analyze project (generate init script &amp; exclusions via Claude)
                         </label>
                     </div>
@@ -2054,6 +2164,280 @@
                 searchInput.addEventListener("keyup", function () {
                     var needle = (searchInput.value || "").toLowerCase();
                     var rows = imported_gitlab_projects_table.querySelectorAll("tbody tr");
+
+                    Array.prototype.forEach.call(rows, function (row) {
+                        var text = (row.textContent || "").toLowerCase();
+                        row.style.display = (!needle || text.indexOf(needle) !== -1) ? "" : "none";
+                    });
+                });
+            }
+
+
+            // ── Gerrit import modal ─────────────────────────────────────────
+            var gerritOpenBtn = document.getElementById("gerrit-import-open");
+            var gerritModal = document.getElementById("gerritImportModal");
+            var gerritForm = document.getElementById("gerrit-import-form");
+            var gerritErrorBox = document.getElementById("gerrit-import-error");
+            var gerritListBtn = document.getElementById("gerrit-list-btn");
+            var gerritLoadingIndicator = document.getElementById("gerrit-projects-loading");
+            var gerritImportBtn = document.getElementById("gerrit-import-btn");
+            var gerritProjectsContainer = document.getElementById("gerrit-projects-container");
+            var gerritProjectsTbody = document.getElementById("gerrit-projects-tbody");
+            var gerritSelectAll = document.getElementById("gerrit-select-all");
+            var gerritOrgSelect = document.getElementById("gerrit-org-select");
+            var gerritIntegrationInfo = document.getElementById("gerrit-integration-info");
+
+            var gerritListUrl = "{% url 'aist:gerrit_projects_list' %}";
+            var gerritImportUrl = "{% url 'aist_api:import_project_from_gerrit' %}";
+
+            function clearGerritState() {
+                if (gerritErrorBox) {
+                    gerritErrorBox.style.display = "none";
+                    gerritErrorBox.textContent = "";
+                }
+                if (gerritProjectsTbody) {
+                    gerritProjectsTbody.innerHTML = "";
+                }
+                if (gerritProjectsContainer) {
+                    gerritProjectsContainer.style.display = "none";
+                }
+                if (gerritImportBtn) {
+                    gerritImportBtn.disabled = true;
+                }
+                if (gerritSelectAll) {
+                    gerritSelectAll.checked = false;
+                }
+            }
+
+            function updateGerritImportButtonState() {
+                if (!gerritProjectsTbody || !gerritImportBtn) return;
+                var anyChecked = !!gerritProjectsTbody.querySelector(
+                    "input.gerrit-project-checkbox:checked"
+                );
+                gerritImportBtn.disabled = !anyChecked;
+            }
+
+            function updateGerritListBtnState() {
+                if (gerritListBtn) {
+                    gerritListBtn.disabled = !(gerritOrgSelect && gerritOrgSelect.value);
+                }
+            }
+
+            if (gerritOpenBtn && gerritModal) {
+                gerritOpenBtn.addEventListener("click", function () {
+                    clearGerritState();
+
+                    if (window.jQuery && window.jQuery.fn.modal) {
+                        window.jQuery(gerritModal).modal("show");
+                    } else {
+                        gerritModal.classList.add("in");
+                        gerritModal.style.display = "block";
+                    }
+                });
+            }
+
+            if (gerritOrgSelect) {
+                gerritOrgSelect.addEventListener("change", function () {
+                    updateGerritListBtnState();
+                    clearGerritState();
+                    if (gerritIntegrationInfo) {
+                        gerritIntegrationInfo.style.display = "none";
+                        gerritIntegrationInfo.textContent = "";
+                    }
+                });
+            }
+            updateGerritListBtnState();
+
+            // Load projects list from Gerrit
+            if (gerritListBtn && gerritForm && gerritProjectsTbody) {
+                gerritListBtn.addEventListener("click", function () {
+
+                    gerritListBtn.disabled = true;
+                    if (gerritLoadingIndicator) {
+                        gerritLoadingIndicator.style.display = "inline-block";
+                    }
+                    var csrf = getCsrfToken();
+                    var headers = {
+                        "X-Requested-With": "XMLHttpRequest"
+                    };
+                    if (csrf) {
+                        headers["X-CSRFToken"] = csrf;
+                    }
+
+                    var formData = new FormData(gerritForm);
+
+                    clearGerritState();
+
+                    fetch(gerritListUrl, {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: headers,
+                        body: formData
+                    }).then(function (resp) {
+                        return resp.json().then(function (data) {
+                            return {ok: resp.ok, data: data};
+                        });
+                    }).then(function (result) {
+                        if (!result.ok || !result.data.ok) {
+                            var msg = (result.data && result.data.error) ||
+                                "Failed to load projects from Gerrit.";
+                            if (gerritErrorBox) {
+                                gerritErrorBox.textContent = msg;
+                                gerritErrorBox.style.display = "block";
+                            }
+                            return;
+                        }
+
+                        var projects = result.data.projects || [];
+                        if (!projects.length) {
+                            if (gerritErrorBox) {
+                                gerritErrorBox.textContent = "No projects returned from Gerrit.";
+                                gerritErrorBox.style.display = "block";
+                            }
+                            return;
+                        }
+
+                        var rowsHtml = "";
+                        projects.forEach(function (p) {
+                            var path = p.project_path || p.name || "";
+                            rowsHtml +=
+                                '<tr>' +
+                                '<td><input type="checkbox" class="gerrit-project-checkbox" value="' + path + '"></td>' +
+                                '<td class="text-monospace">' + path + '</td>' +
+                                '<td>' + (p.description || "") + '</td>' +
+                                '<td>' + (p.default_branch || "") + '</td>' +
+                                '</tr>';
+                        });
+
+                        gerritProjectsTbody.innerHTML = rowsHtml;
+                        if (gerritProjectsContainer) {
+                            gerritProjectsContainer.style.display = "block";
+                        }
+                        updateGerritImportButtonState();
+                    }).catch(function () {
+                        if (gerritErrorBox) {
+                            gerritErrorBox.textContent = "Unexpected error while loading Gerrit projects.";
+                            gerritErrorBox.style.display = "block";
+                        }
+                    }).finally(function () {
+                        gerritListBtn.disabled = false;
+                        if (gerritLoadingIndicator) {
+                            gerritLoadingIndicator.style.display = "none";
+                        }
+                    });
+                });
+            }
+
+            // Select all / selection change
+            if (gerritSelectAll && gerritProjectsTbody) {
+                gerritSelectAll.addEventListener("change", function () {
+                    var checked = gerritSelectAll.checked;
+                    var checkboxes = gerritProjectsTbody.querySelectorAll("input.gerrit-project-checkbox");
+                    Array.prototype.forEach.call(checkboxes, function (cb) {
+                        cb.checked = checked;
+                    });
+                    updateGerritImportButtonState();
+                });
+
+                gerritProjectsTbody.addEventListener("change", function (ev) {
+                    var target = ev.target;
+                    if (!target || !target.classList.contains("gerrit-project-checkbox")) {
+                        return;
+                    }
+                    if (!target.checked && gerritSelectAll) {
+                        gerritSelectAll.checked = false;
+                    }
+                    updateGerritImportButtonState();
+                });
+            }
+
+            // Import selected Gerrit projects via existing API
+            if (gerritImportBtn && gerritProjectsTbody) {
+                gerritImportBtn.addEventListener("click", function () {
+                    var checkboxes = gerritProjectsTbody.querySelectorAll(
+                        "input.gerrit-project-checkbox:checked"
+                    );
+                    if (!checkboxes.length) {
+                        return;
+                    }
+
+                    var org = gerritOrgSelect ? (gerritOrgSelect.value || "") : "";
+
+                    if (!org) {
+                        if (gerritErrorBox) {
+                            gerritErrorBox.textContent = "Please select an organization.";
+                            gerritErrorBox.style.display = "block";
+                        }
+                        return;
+                    }
+
+                    var csrf = getCsrfToken();
+                    var headers = {
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Content-Type": "application/json"
+                    };
+                    if (csrf) {
+                        headers["X-CSRFToken"] = csrf;
+                    }
+
+                    var paths = Array.prototype.map.call(checkboxes, function (cb) {
+                        return cb.value;
+                    });
+
+                    // Send one request per selected project.
+                    var autoAnalyze = document.getElementById("gerrit-auto-analyze").checked;
+                    var promises = paths.map(function (path) {
+                        var payload = {
+                            project_path: path,
+                            organization_id: org,
+                            auto_analyze: autoAnalyze
+                        };
+                        return fetch(gerritImportUrl, {
+                            method: "POST",
+                            credentials: "same-origin",
+                            headers: headers,
+                            body: JSON.stringify(payload)
+                        }).then(function (resp) {
+                            return resp.json().then(function (data) {
+                                return {ok: resp.ok, data: data};
+                            });
+                        }).catch(function () {
+                            return {ok: false, data: {error: "Network error"}};
+                        });
+                    });
+
+                    Promise.all(promises).then(function (results) {
+                        var failed = results.filter(function (r) {
+                            return !r.ok;
+                        });
+                        if (failed.length && gerritErrorBox) {
+                            gerritErrorBox.textContent =
+                                "Some projects failed to import. Please check server logs.";
+                            gerritErrorBox.style.display = "block";
+                            return;
+                        }
+
+                        // Close modal and reload page to show new projects.
+                        if (window.jQuery && window.jQuery.fn.modal) {
+                            window.jQuery(gerritModal).modal("hide");
+                        } else if (gerritModal && gerritModal.classList) {
+                            gerritModal.classList.remove("in");
+                            gerritModal.style.display = "none";
+                        }
+
+                        showGlobalAlert("Selected Gerrit projects have been imported.", "success");
+                        window.location.reload();
+                    });
+                });
+            }
+
+            var gerritSearchInput = document.getElementById("gerrit-projects-search");
+            var imported_gerrit_projects_table = document.getElementById("gerrit-projects-table");
+
+            if (gerritSearchInput && imported_gerrit_projects_table) {
+                gerritSearchInput.addEventListener("keyup", function () {
+                    var needle = (gerritSearchInput.value || "").toLowerCase();
+                    var rows = imported_gerrit_projects_table.querySelectorAll("tbody tr");
 
                     Array.prototype.forEach.call(rows, function (row) {
                         var text = (row.textContent || "").toLowerCase();

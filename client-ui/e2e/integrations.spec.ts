@@ -72,6 +72,38 @@ test("integrations page lets a maintainer manage org integrations, providers, an
   await expect(page.getByText("Integration deleted.")).toBeVisible();
 });
 
+test("maintainer can create a Gerrit integration with base URL and username", async ({ page }) => {
+  const suffix = Date.now();
+  const gerritName = `E2E Gerrit ${suffix}`;
+
+  await page.goto("/integrations");
+  await expect(page.getByRole("heading", { name: "Integrations" })).toBeVisible({ timeout: 30_000 });
+
+  const orgSection = page.locator("section").filter({ hasText: "Org Integrations" }).first();
+
+  await orgSection.getByRole("button", { name: "Add" }).click();
+  await expect(orgSection.getByText("New Integration")).toBeVisible();
+
+  // Select Gerrit type
+  await openSelectOption(orgSection.locator("[role='combobox']").first(), "Gerrit");
+
+  await orgSection.getByPlaceholder("e.g. Production").fill(gerritName);
+  await orgSection.getByPlaceholder("https://gerrit.example.com").fill(`https://gerrit-${suffix}.example.com`);
+  await orgSection.getByPlaceholder("Gerrit HTTP account username").fill("svc-user");
+
+  await orgSection.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByText("Integration created.")).toBeVisible();
+
+  await expect(orgSection).toContainText(gerritName);
+  // Gerrit badge must be rendered
+  await expect(orgSection.getByText("Gerrit", { exact: true }).first()).toBeVisible();
+
+  // Cleanup
+  acceptNextDialog(page);
+  await orgSection.getByRole("button", { name: "Delete" }).first().click();
+  await expect(page.getByText("Integration deleted.")).toBeVisible();
+});
+
 test("maintainer can create a VPN integration and link it to a work item provider", async ({ page }) => {
   const suffix = Date.now();
   const vpnName = `E2E VPN ${suffix}`;

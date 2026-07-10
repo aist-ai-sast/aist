@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import logging
@@ -43,6 +44,7 @@ ERR_RESOLVED_FROM_BRANCH_ONLY_FOR_GITHASH = "resolved_from_branch is allowed onl
 class ScmType(models.TextChoices):
     GITHUB = "GITHUB", "Github"
     GITLAB = "GITLAB", "Gitlab"
+    GERRIT = "GERRIT", "Gerrit"
 
 
 class RepositoryInfo(models.Model):
@@ -60,6 +62,7 @@ class RepositoryInfo(models.Model):
         mapping = {
             ScmType.GITHUB: "github_binding",
             ScmType.GITLAB: "gitlab_binding",
+            ScmType.GERRIT: "gerrit_binding",
         }
         attr = mapping.get(self.type)
         return getattr(self, attr, None) if attr else None
@@ -260,6 +263,127 @@ class ScmGitlabBinding(models.Model):
         return project.attributes
 
 
+class ScmGerritBinding(models.Model):
+
+    """
+    Gerrit-specific binding for RepositoryInfo.
+
+    Gerrit has no owner/repo split: a project is a slash-path
+    (e.g. ``platform/build/soong``). The import splits it by the last ``/`` so
+    that ``scm.repo_full`` (``repo_owner`` + ``/`` + ``repo_name``)
+    reconstructs the full project path loss-lessly. Authenticated REST and
+    clone use the ``/a/`` path prefix with an HTTP password (Gerrit "HTTP
+    credentials"); the HTTP user lives in ``org_integration.config["username"]``
+    and the password in ``org_integration.secret``.
+    """
+
+    scm = models.OneToOneField(RepositoryInfo, on_delete=models.CASCADE, related_name="gerrit_binding")
+    org_integration = models.ForeignKey(
+        "OrgIntegration",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        limit_choices_to={"integration_type": "GERRIT"},
+        related_name="+",
+    )
+
+    def _username(self) -> str:
+        if self.org_integration:
+            return ((self.org_integration.config or {}).get("username") or "").strip()
+        return ""
+
+    def _password(self) -> str:
+        if self.org_integration:
+            return (self.org_integration.secret or "").strip()
+        return ""
+
+    @staticmethod
+    def _project_path(scm: RepositoryInfo) -> str:
+        """
+        Full Gerrit project path.
+
+        Import splits the path by the last ``/`` into ``repo_owner``/``repo_name``;
+        single-segment projects (e.g. ``All-Projects``) have an empty owner, so
+        fall back to ``repo_name`` to avoid a leading slash in ``repo_full``.
+        """
+        return scm.repo_full if scm.repo_owner else scm.repo_name
+
+    def host(self, scm: RepositoryInfo) -> str:
+        return scm.host()
+
+    def build_clone_url(self, scm: RepositoryInfo) -> str | None:
+        user = self._username()
+        pw = self._password()
+        if not user or not pw:
+            return None
+        creds = f"{quote(user, safe='')}:{quote(pw, safe='')}"
+        # Authenticated Gerrit HTTP clone: https://user:pass@host/a/<full/project/path>
+        return f"{self.host(scm).replace('https://', 'https://' + creds + '@')}/a/{self._project_path(scm)}"
+
+    def build_blob_url(self, scm: RepositoryInfo, ref: str, path: str) -> str:
+        # Gitiles browse URL: https://host/plugins/gitiles/<project>/+/<ref>/<path>
+        fp = path.lstrip("/").replace("\\", "/")
+        return f"{self.host(scm).rstrip('/')}/plugins/gitiles/{self._project_path(scm)}/+/{ref}/{fp}"
+
+    def build_raw_url(self, scm: RepositoryInfo, ref: str, path: str) -> str:
+        """
+        Return the Gerrit REST content endpoint URL.
+
+        The body is base64-encoded — use :meth:`fetch_raw_bytes` to obtain the
+        decoded file. A plain GET on this URL yields base64 text, not raw bytes.
+        """
+        proj = quote(self._project_path(scm), safe="")
+        ref_q = quote(ref or "master", safe="")
+        fp = quote(path.lstrip("/").replace("\\", "/"), safe="")
+        base = self.host(scm).rstrip("/")
+        return f"{base}/a/projects/{proj}/branches/{ref_q}/files/{fp}/content"
+
+    def get_auth_headers(self) -> dict[str, str]:
+        user = self._username()
+        pw = self._password()
+        if not user or not pw:
+            return {}
+        token = base64.b64encode(f"{user}:{pw}".encode()).decode()
+        return {"Authorization": f"Basic {token}"}
+
+    def fetch_raw_bytes(self, scm: RepositoryInfo, ref: str, path: str) -> bytes | None:
+        """Fetch a file's decoded bytes from Gerrit (content endpoint is base64)."""
+        import requests as _requests  # noqa: PLC0415
+
+        logger = logging.getLogger("aist")
+        url = self.build_raw_url(scm, ref, path)
+        try:
+            resp = _requests.get(url, headers=self.get_auth_headers(), timeout=10)
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return base64.b64decode(resp.text)
+        except Exception:
+            logger.exception("Failed to fetch raw file from Gerrit for %s", scm.repo_full)
+            return None
+
+    def get_project_info(self, scm: RepositoryInfo, *, proxy_url: str | None = None):
+        import pygerrit2  # noqa: PLC0415
+
+        logger = logging.getLogger("aist")
+        base = self.host(scm).rstrip("/")
+        user = self._username()
+        pw = self._password()
+        proj = quote(self._project_path(scm), safe="")
+        try:
+            auth = pygerrit2.HTTPBasicAuth(user, pw) if user and pw else None
+            rest = pygerrit2.GerritRestAPI(url=base, auth=auth)
+            if proxy_url:
+                rest.session.proxies = {"http": proxy_url, "https": proxy_url}
+            head = rest.get(f"/projects/{proj}/HEAD")
+        except Exception:
+            logger.exception("Failed to query Gerrit API for default branch of %s", scm.repo_full)
+            return None
+
+        default_branch = str(head or "").removeprefix("refs/heads/").strip() or "master"
+        return {"default_branch": default_branch}
+
+
 class PullRequest(models.Model):
     project_version = models.ForeignKey(
         "AISTProjectVersion",
@@ -354,6 +478,7 @@ class OrgIntegrationType(models.TextChoices):
     EMAIL = "EMAIL", "Email"
     VPN = "VPN", "VPN"
     CLAUDE_CODE = "CLAUDE_CODE", "Claude Code"
+    GERRIT = "GERRIT", "Gerrit"
 
 
 class OrgIntegration(models.Model):
