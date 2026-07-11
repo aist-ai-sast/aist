@@ -816,7 +816,7 @@ function OrgIntegrationForm({
                 />
               </label>
             )}
-            {form.integration_type === "GITLAB" && (
+            {(form.integration_type === "GITLAB" || form.integration_type === "GERRIT") && (
               <div className="sm:col-span-2">
                 <SelectField
                   label="VPN Integration"

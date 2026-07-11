@@ -91,6 +91,10 @@ test("maintainer can create a Gerrit integration with base URL and username", as
   await orgSection.getByPlaceholder("https://gerrit.example.com").fill(`https://gerrit-${suffix}.example.com`);
   await orgSection.getByPlaceholder("Gerrit HTTP account username").fill("svc-user");
 
+  // Gerrit must offer VPN routing, same as GitLab — servers reachable only
+  // over VPN would otherwise time out with no way to route through it.
+  await expect(orgSection.getByText("VPN Integration")).toBeVisible();
+
   await orgSection.getByRole("button", { name: "Create" }).click();
   await expect(page.getByText("Integration created.")).toBeVisible();
 

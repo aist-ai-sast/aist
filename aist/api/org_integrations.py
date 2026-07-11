@@ -625,6 +625,21 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
         # GitHub App auth is validated at installation time; no stored secret to test.
         return True, "GitHub uses App-level auth; no credential stored."
 
+    if itype == OrgIntegrationType.GERRIT:
+        from aist.tasks.integrations import _gerrit_rest  # noqa: PLC0415
+
+        if not (config.get("base_url") or "").strip():
+            return False, "Gerrit integration requires a base_url in config."
+        try:
+            with integration.scoped_session(execution_id=f"validate-{integration.pk}") as session:
+                rest, _base_url = _gerrit_rest(integration, session)
+                rest.get("/accounts/self")
+        except Exception as exc:
+            logger.exception("Integration[%s] GERRIT validation error", integration.pk)
+            return False, f"Validation failed ({type(exc).__name__}) — see server logs."
+        else:
+            return True, ""
+
     if itype == OrgIntegrationType.EMAIL:
         # Basic SMTP connectivity check would require opening a socket; skip for now.
         return True, "Email configuration is not automatically validated."

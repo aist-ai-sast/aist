@@ -243,3 +243,57 @@ class GerritProjectsListViewTests(TestCase):
         other_org = Organization.objects.create(name="No Integration Org")
         resp = self.client.post(self._url(), data={"organization_id": other_org.id})
         self.assertEqual(resp.status_code, 404)
+
+
+class GerritIntegrationValidateTests(TestCase):
+
+    """Unit-level coverage of the GERRIT branch in ``_validate_integration``."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(name="Validate Org")
+        self.integration = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type=OrgIntegrationType.GERRIT,
+            name="Gerrit",
+            config={"base_url": "https://gerrit.example.com", "username": "svc-user"},
+            secret=TEST_GERRIT_PASSWORD,
+            is_active=True,
+        )
+
+    @patch("pygerrit2.GerritRestAPI")
+    def test_validate_success_calls_accounts_self(self, mock_rest_cls):
+        from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
+
+        mock_rest = mock_rest_cls.return_value
+        mock_rest.get.return_value = {"_account_id": 1}
+
+        valid, detail = _validate_integration(self.integration)
+
+        self.assertTrue(valid)
+        self.assertEqual(detail, "")
+        mock_rest.get.assert_called_once_with("/accounts/self")
+
+    @patch("pygerrit2.GerritRestAPI")
+    def test_validate_auth_failure_returns_invalid(self, mock_rest_cls):
+        import requests
+
+        from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
+
+        mock_rest = mock_rest_cls.return_value
+        mock_rest.get.side_effect = requests.HTTPError("401 Unauthorized")
+
+        valid, detail = _validate_integration(self.integration)
+
+        self.assertFalse(valid)
+        self.assertIn("HTTPError", detail)
+
+    def test_validate_missing_base_url_returns_invalid_without_network_call(self):
+        from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
+
+        self.integration.config = {"username": "svc-user"}
+        self.integration.save(update_fields=["config"])
+
+        valid, detail = _validate_integration(self.integration)
+
+        self.assertFalse(valid)
+        self.assertIn("base_url", detail)
