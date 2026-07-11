@@ -22,6 +22,7 @@ from aist.api.project_versions import (
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
+from aist.integrations.claude import claude_auth_env
 from aist.integrations.resolver import resolve_integration
 from aist.models import AISTProject, AISTProjectScript, Organization, OrgIntegrationType
 from aist.profile import ProjectProfile
@@ -350,6 +351,70 @@ class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIV
         if errors:
             return Response({"ok": False, "errors": errors}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"ok": True, "project": payload})
+
+
+class AISTProjectRegenerateAnalysisAPI(AuthorizedQuerySetMixin, APIView):
+
+    """
+    Manually re-trigger the Claude-based init-script + exclusion-profile
+    generation for an existing project.
+
+    Reuses the exact same Celery task (``analyze_project_after_import``) that
+    otherwise only runs once, automatically, at SCM import time when
+    ``auto_analyze=True`` — so a project can be regenerated on demand at any
+    later point (e.g. after fixing a broken SCM credential, or after the repo
+    has changed significantly).
+    """
+
+    permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_aist_projects,
+        permission=Permissions.Product_View,
+    )
+
+    @extend_schema(
+        request=None,
+        responses={
+            202: {"type": "object", "properties": {"queued": {"type": "boolean"}}},
+            400: OpenApiResponse(description="Project has no repository or no active Claude Code integration"),
+        },
+        tags=[AISTApiTag.PROJECTS.value],
+        summary="Regenerate init script and exclusions",
+        description=(
+            "Re-runs the Claude-based init-script-generator and project-profile-analyzer "
+            "skills against a fresh clone of the project's repository — the same analysis "
+            "that runs once automatically at SCM import time when auto_analyze is enabled. "
+            "Requires the project to have a repository and the organization to have an "
+            "active Claude Code integration."
+        ),
+    )
+    def post(self, request, project_id: int, *args, **kwargs) -> Response:
+        project = self.get_authorized_object(
+            permission=Permissions.Product_Edit,
+            id=project_id,
+        )
+        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+
+        if not project.repository:
+            return Response(
+                {"detail": "This project has no repository configured; there is nothing to clone."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not claude_auth_env(project):
+            return Response(
+                {
+                    "detail": (
+                        "This project's organization has no active Claude Code integration "
+                        "configured. Configure one under Org Integrations before regenerating."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415
+
+        analyze_project_after_import.delay(project.id)
+        return Response({"queued": True}, status=status.HTTP_202_ACCEPTED)
 
 
 class AISTProjectScriptListCreateAPI(AuthorizedQuerySetMixin, APIView):

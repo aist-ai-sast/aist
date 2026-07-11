@@ -29,6 +29,24 @@ class GitlabBindingTests(TestCase):
         )
         self.binding = ScmGitlabBinding.objects.create(scm=self.repo, org_integration=self.integration)
 
+    def test_build_clone_url_embeds_token_as_oauth2_password(self):
+        url = self.binding.build_clone_url(self.repo)
+        self.assertEqual(url, "https://oauth2:token@gitlab.example.com/group/repo.git")
+        self.assertEqual(self.repo.clone_url, url)
+
+    def test_build_clone_url_none_without_token(self):
+        self.binding.org_integration.secret = ""
+        self.assertIsNone(self.binding.build_clone_url(self.repo))
+
+    def test_build_clone_url_embeds_token_on_plain_http_host(self):
+        # Self-hosted GitLab is sometimes reachable only over http:// on an
+        # internal network — the token must still be embedded, not silently
+        # dropped (regression: a hardcoded "https://" replace was a no-op here).
+        self.repo.base_url = "http://gitlab.internal:8929"
+        self.repo.save(update_fields=["base_url"])
+        url = self.binding.build_clone_url(self.repo)
+        self.assertEqual(url, "http://oauth2:token@gitlab.internal:8929/group/repo.git")
+
     @patch("aist.models.gitlab.Gitlab")
     def test_get_project_info_returns_attributes(self, mock_gitlab):
         mock_project = Mock()

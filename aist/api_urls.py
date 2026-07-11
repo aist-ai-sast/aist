@@ -18,6 +18,7 @@ from aist.api import (
     AISTMeChangePasswordAPI,
     AISTProjectDetailAPI,
     AISTProjectListAPI,
+    AISTProjectRegenerateAnalysisAPI,
     FindingWorkItemDetailAPI,
     FindingWorkItemListCreateAPI,
     GithubConnectCallbackAPI,
@@ -107,6 +108,11 @@ urlpatterns = [
     path("projects/", AISTProjectListAPI.as_view(), name="project_list"),
     path("projects/<int:project_id>/", AISTProjectDetailAPI.as_view(), name="project_detail"),
     path("projects/<int:project_id>/meta/", AISTProjectMetaAPI.as_view(), name="project_meta"),
+    path(
+        "projects/<int:project_id>/regenerate-analysis/",
+        AISTProjectRegenerateAnalysisAPI.as_view(),
+        name="project_regenerate_analysis",
+    ),
     path(
         "projects/<int:project_id>/scripts/",
         AISTProjectScriptListCreateAPI.as_view(),

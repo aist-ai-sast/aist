@@ -88,6 +88,22 @@ class RepositoryInfo(models.Model):
         return "https://github.com" if self.type == ScmType.GITHUB else "https://gitlab.com"
 
 
+def _inject_creds(host: str, creds: str) -> str:
+    """
+    Insert ``creds@`` right after the scheme of an http(s) URL.
+
+    Self-hosted SCM instances (Gerrit, Gitea, GitHub/GitLab Enterprise) are
+    frequently reachable only over plain ``http://`` on an internal network.
+    A hardcoded ``.replace('https://', ...)`` silently no-ops on those hosts,
+    returning a credential-less URL that fails non-interactive ``git clone``
+    with "could not read Username" instead of authenticating.
+    """
+    for scheme in ("https://", "http://"):
+        if host.startswith(scheme):
+            return f"{scheme}{creds}@{host[len(scheme):]}"
+    return host
+
+
 class ScmGithubBinding(models.Model):
 
     """GitHub-specific binding for ScmInfo."""
@@ -126,7 +142,7 @@ class ScmGithubBinding(models.Model):
         if not token:
             logger.warning("No access token for GitHub binding installation_id=%s", self.installation_id)
             return None
-        return f"{self.host(scm).replace('https://', 'https://x-access-token:' + token + '@')}/{scm.repo_full}.git"
+        return f"{_inject_creds(self.host(scm), 'x-access-token:' + token)}/{scm.repo_full}.git"
 
     def build_blob_url(self, scm: RepositoryInfo, ref: str, path: str) -> str:
         # https://github.com/owner/repo/blob/<ref>/<path>
@@ -215,7 +231,7 @@ class ScmGitlabBinding(models.Model):
         if not token:
             return None
         # GitLab HTTPS clone with PAT: https://oauth2:<PAT>@gitlab.com/owner/repo.git
-        return f"{self.host(scm).replace('https://', 'https://oauth2:' + token + '@')}/{scm.repo_full}.git"
+        return f"{_inject_creds(self.host(scm), 'oauth2:' + token)}/{scm.repo_full}.git"
 
     def build_blob_url(self, scm: RepositoryInfo, ref: str, path: str) -> str:
         # https://gitlab.com/group/repo/-/blob/<ref>/<path>
@@ -320,7 +336,7 @@ class ScmGerritBinding(models.Model):
             return None
         creds = f"{quote(user, safe='')}:{quote(pw, safe='')}"
         # Authenticated Gerrit HTTP clone: https://user:pass@host/a/<full/project/path>
-        return f"{self.host(scm).replace('https://', 'https://' + creds + '@')}/a/{self._project_path(scm)}"
+        return f"{_inject_creds(self.host(scm), creds)}/a/{self._project_path(scm)}"
 
     def build_blob_url(self, scm: RepositoryInfo, ref: str, path: str) -> str:
         # Gitiles browse URL: https://host/plugins/gitiles/<project>/+/<ref>/<path>
@@ -425,7 +441,7 @@ class ScmGiteaBinding(models.Model):
             return None
         # Gitea documented HTTPS clone with a personal access token as the
         # username: https://<token>@gitea.example.com/owner/repo.git
-        return f"{self.host(scm).replace('https://', 'https://' + quote(token, safe='') + '@')}/{scm.repo_full}.git"
+        return f"{_inject_creds(self.host(scm), quote(token, safe=''))}/{scm.repo_full}.git"
 
     def build_blob_url(self, scm: RepositoryInfo, ref: str, path: str) -> str:
         # Gitea web UI browse URL: https://host/owner/repo/src/branch/<ref>/<path>

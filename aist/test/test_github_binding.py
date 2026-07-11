@@ -48,6 +48,20 @@ class GithubBindingTests(TestCase):
         self.assertIn("/owner/repo.git", clone_url)
 
     @patch("aist.models.async_to_sync")
+    def test_build_clone_url_embeds_token_on_plain_http_host(self, mock_async_to_sync):
+        # GitHub Enterprise Server is sometimes reachable only over http:// on
+        # an internal network — the token must still be embedded, not silently
+        # dropped (regression: a hardcoded "https://" replace was a no-op here).
+        Installation.objects.create(installation_id=12345, data={"app_slug": "aist-app"})
+        mock_async_to_sync.return_value = Mock(return_value="token-123")
+        self.repo.base_url = "http://ghe.internal"
+        self.repo.save(update_fields=["base_url"])
+
+        clone_url = self.binding.build_clone_url(self.repo)
+
+        self.assertEqual(clone_url, "http://x-access-token:token-123@ghe.internal/owner/repo.git")
+
+    @patch("aist.models.async_to_sync")
     def test_get_auth_headers_uses_installation_token(self, mock_async_to_sync):
         Installation.objects.create(installation_id=12345, data={"app_slug": "aist-app"})
         runner = Mock(return_value="token-abc")

@@ -42,6 +42,15 @@ class GiteaBindingTests(TestCase):
         self.binding.org_integration.secret = ""
         self.assertIsNone(self.binding.build_clone_url(self.repo))
 
+    def test_build_clone_url_embeds_token_on_plain_http_host(self):
+        # Self-hosted Gitea is frequently reachable only over http:// on an
+        # internal network — the token must still be embedded, not silently
+        # dropped (regression: a hardcoded "https://" replace was a no-op here).
+        self.repo.base_url = "http://10.2.40.158:3000"
+        self.repo.save(update_fields=["base_url"])
+        url = self.binding.build_clone_url(self.repo)
+        self.assertEqual(url, "http://pat-token-123@10.2.40.158:3000/myorg/myrepo.git")
+
     def test_build_blob_url_uses_src_branch(self):
         url = self.binding.build_blob_url(self.repo, "main", "src/a.py")
         self.assertEqual(url, "https://gitea.example.com/myorg/myrepo/src/branch/main/src/a.py")

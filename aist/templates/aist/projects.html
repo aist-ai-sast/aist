@@ -99,7 +99,8 @@
                         data-project-repo-base-url="{{ p.repository.base_url|default_if_none:'' }}"
                         data-project-versions="{{ p.versions.all|versions_json }}"
                         data-update-url="{% url 'aist:aist_project_update' p.id %}"
-                        data-delete-url="{% url 'aist_api:project_detail' project_id=p.id %}">
+                        data-delete-url="{% url 'aist_api:project_detail' project_id=p.id %}"
+                        data-regenerate-url="{% url 'aist_api:project_regenerate_analysis' project_id=p.id %}">
                         <td>{{ p.id }}</td>
                         <td>
                             <a href="{% url 'product_open_findings' product_id=p.product.id %}">
@@ -177,7 +178,8 @@
                                 data-project-repo-base-url="{{ p.repository.base_url|default_if_none:'' }}"
                                 data-project-versions="{{ p.versions.all|versions_json }}"
                                 data-update-url="{% url 'aist:aist_project_update' p.id %}"
-                                data-delete-url="{% url 'aist_api:project_detail' project_id=p.id %}">
+                                data-delete-url="{% url 'aist_api:project_detail' project_id=p.id %}"
+                        data-regenerate-url="{% url 'aist_api:project_regenerate_analysis' project_id=p.id %}">
                                 <td>{{ p.id }}</td>
                                 <td>
                                     <a href="{% url 'product_open_findings' product_id=p.product.id %}">
@@ -255,7 +257,8 @@
                                 data-project-repo-base-url="{{ p.repository.base_url|default_if_none:'' }}"
                                 data-project-versions="{{ p.versions.all|versions_json }}"
                                 data-update-url="{% url 'aist:aist_project_update' p.id %}"
-                                data-delete-url="{% url 'aist_api:project_detail' project_id=p.id %}">
+                                data-delete-url="{% url 'aist_api:project_detail' project_id=p.id %}"
+                        data-regenerate-url="{% url 'aist_api:project_regenerate_analysis' project_id=p.id %}">
                                 <td>{{ p.id }}</td>
                                 <td>
                                     <a href="{% url 'product_open_findings' product_id=p.product.id %}">
@@ -870,6 +873,21 @@
                         <hr class="my-3"/>
                         <div class="d-flex align-items-center justify-content-between">
                             <div>
+                                <div class="fw-semibold">Claude auto-analysis</div>
+                                <div class="text-muted small">
+                                    Re-run Claude against a fresh clone of the repository to
+                                    regenerate the entrypoint script and profile exclusions above.
+                                    Requires a repository and an active Claude Code org integration.
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-outline-primary" id="aist-project-regenerate-btn">
+                                Regenerate init script &amp; exclusions
+                            </button>
+                        </div>
+
+                        <hr class="my-3"/>
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div>
                                 <div class="fw-semibold">Launch presets</div>
                                 <div class="text-muted small">Create reusable pipeline launch configuration for this
                                     project.
@@ -1109,6 +1127,7 @@
             var fieldCompilable = document.getElementById("ap-compilable");
             var fieldProfile = document.getElementById("ap-profile");
             var deleteBtn = document.getElementById("aist-project-delete-btn");
+            var regenerateBtn = document.getElementById("aist-project-regenerate-btn");
             var fieldScriptContent = document.getElementById("ap-script-content");
             var scriptMeta = document.getElementById("ap-script-meta");
             var scriptLoading = document.getElementById("ap-script-loading");
@@ -2896,6 +2915,71 @@
                     }).catch(function () {
                         if (errorBox) {
                             errorBox.textContent = "Unexpected error while deleting project.";
+                            errorBox.style.display = "block";
+                        }
+                    });
+                });
+            }
+
+            // Regenerate init script & exclusions handler
+            if (regenerateBtn) {
+                regenerateBtn.addEventListener("click", function () {
+                    if (!currentRow) return;
+
+                    var regenerateUrl = currentRow.getAttribute("data-regenerate-url");
+                    if (!regenerateUrl) return;
+
+                    var confirmed = window.confirm(
+                        "Regenerate the init script and profile exclusions via Claude? " +
+                        "This clones the repository fresh and, once analysis completes, " +
+                        "overwrites the current script and profile."
+                    );
+                    if (!confirmed) {
+                        return;
+                    }
+
+                    var csrf = getCsrfToken();
+                    var headers = {
+                        "X-Requested-With": "XMLHttpRequest"
+                    };
+                    if (csrf) {
+                        headers["X-CSRFToken"] = csrf;
+                    }
+
+                    var originalLabel = regenerateBtn.textContent;
+                    regenerateBtn.disabled = true;
+                    regenerateBtn.textContent = "Queuing…";
+
+                    function resetRegenerateBtn() {
+                        regenerateBtn.disabled = false;
+                        regenerateBtn.textContent = originalLabel;
+                    }
+
+                    fetch(regenerateUrl, {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: headers
+                    }).then(function (resp) {
+                        resp.json().catch(function () {
+                            return {};
+                        }).then(function (body) {
+                            resetRegenerateBtn();
+                            if (resp.status === 202) {
+                                showGlobalAlert(
+                                    "Regeneration queued — Claude is analyzing the repository " +
+                                    "in the background. Check back in a few minutes for the " +
+                                    "updated script and profile.",
+                                    "success"
+                                );
+                            } else if (errorBox) {
+                                errorBox.textContent = (body && body.detail) || "Failed to queue regeneration.";
+                                errorBox.style.display = "block";
+                            }
+                        });
+                    }).catch(function () {
+                        resetRegenerateBtn();
+                        if (errorBox) {
+                            errorBox.textContent = "Unexpected error while queuing regeneration.";
                             errorBox.style.display = "block";
                         }
                     });

@@ -58,6 +58,18 @@ class GerritBindingTests(TestCase):
         )
         self.assertIn("/a/projects/All-Projects/", binding.build_raw_url(repo, "main", "f.c"))
 
+    def test_build_clone_url_embeds_credentials_on_plain_http_host(self):
+        # Self-hosted Gerrit is frequently reachable only over http:// on an
+        # internal network — credentials must still be embedded, not silently
+        # dropped (regression: a hardcoded "https://" replace was a no-op here).
+        self.repo.base_url = "http://gerrit.internal:8080"
+        self.repo.save(update_fields=["base_url"])
+        url = self.binding.build_clone_url(self.repo)
+        self.assertEqual(
+            url,
+            "http://svc-user:httppass@gerrit.internal:8080/a/platform/build/soong",
+        )
+
     def test_build_clone_url_none_without_credentials(self):
         self.binding.org_integration.secret = ""
         self.assertIsNone(self.binding.build_clone_url(self.repo))
