@@ -108,6 +108,40 @@ test("maintainer can create a Gerrit integration with base URL and username", as
   await expect(page.getByText("Integration deleted.")).toBeVisible();
 });
 
+test("maintainer can create a Gitea integration with base URL", async ({ page }) => {
+  const suffix = Date.now();
+  const giteaName = `E2E Gitea ${suffix}`;
+
+  await page.goto("/integrations");
+  await expect(page.getByRole("heading", { name: "Integrations" })).toBeVisible({ timeout: 30_000 });
+
+  const orgSection = page.locator("section").filter({ hasText: "Org Integrations" }).first();
+
+  await orgSection.getByRole("button", { name: "Add" }).click();
+  await expect(orgSection.getByText("New Integration")).toBeVisible();
+
+  // Select Gitea type
+  await openSelectOption(orgSection.locator("[role='combobox']").first(), "Gitea");
+
+  await orgSection.getByPlaceholder("e.g. Production").fill(giteaName);
+  await orgSection.getByPlaceholder("https://gitea.example.com").fill(`https://gitea-${suffix}.example.com`);
+
+  // Gitea must offer VPN routing too — same self-hosted-behind-VPN case as GitLab/Gerrit.
+  await expect(orgSection.getByText("VPN Integration")).toBeVisible();
+
+  await orgSection.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByText("Integration created.")).toBeVisible();
+
+  await expect(orgSection).toContainText(giteaName);
+  // Gitea badge must be rendered
+  await expect(orgSection.getByText("Gitea", { exact: true }).first()).toBeVisible();
+
+  // Cleanup
+  acceptNextDialog(page);
+  await orgSection.getByRole("button", { name: "Delete" }).first().click();
+  await expect(page.getByText("Integration deleted.")).toBeVisible();
+});
+
 test("maintainer can create a VPN integration and link it to a work item provider", async ({ page }) => {
   const suffix = Date.now();
   const vpnName = `E2E VPN ${suffix}`;

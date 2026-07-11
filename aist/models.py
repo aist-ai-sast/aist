@@ -45,6 +45,7 @@ class ScmType(models.TextChoices):
     GITHUB = "GITHUB", "Github"
     GITLAB = "GITLAB", "Gitlab"
     GERRIT = "GERRIT", "Gerrit"
+    GITEA = "GITEA", "Gitea"
 
 
 class RepositoryInfo(models.Model):
@@ -63,6 +64,7 @@ class RepositoryInfo(models.Model):
             ScmType.GITHUB: "github_binding",
             ScmType.GITLAB: "gitlab_binding",
             ScmType.GERRIT: "gerrit_binding",
+            ScmType.GITEA: "gitea_binding",
         }
         attr = mapping.get(self.type)
         return getattr(self, attr, None) if attr else None
@@ -384,6 +386,83 @@ class ScmGerritBinding(models.Model):
         return {"default_branch": default_branch}
 
 
+class ScmGiteaBinding(models.Model):
+
+    """
+    Gitea-specific binding for RepositoryInfo.
+
+    Gitea projects are ``owner/repo`` like GitHub/GitLab (no arbitrary nested
+    subgroups), so the import splits on the last ``/`` the same way GitLab
+    paths do. Auth is a personal access token stored in
+    ``org_integration.secret``, sent as ``Authorization: token <PAT>`` (Gitea's
+    documented header format — not Bearer, not Basic). No dedicated Gitea
+    Python client is vendored in this project, so REST calls use ``requests``
+    directly against Gitea's stable ``/api/v1`` surface, same as the ad-hoc
+    Gerrit raw-content fetch already does.
+    """
+
+    scm = models.OneToOneField(RepositoryInfo, on_delete=models.CASCADE, related_name="gitea_binding")
+    org_integration = models.ForeignKey(
+        "OrgIntegration",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        limit_choices_to={"integration_type": "GITEA"},
+        related_name="+",
+    )
+
+    def _token(self) -> str:
+        if self.org_integration:
+            return (self.org_integration.secret or "").strip()
+        return ""
+
+    def host(self, scm: RepositoryInfo) -> str:
+        return scm.host()
+
+    def build_clone_url(self, scm: RepositoryInfo) -> str | None:
+        token = self._token()
+        if not token:
+            return None
+        # Gitea documented HTTPS clone with a personal access token as the
+        # username: https://<token>@gitea.example.com/owner/repo.git
+        return f"{self.host(scm).replace('https://', 'https://' + quote(token, safe='') + '@')}/{scm.repo_full}.git"
+
+    def build_blob_url(self, scm: RepositoryInfo, ref: str, path: str) -> str:
+        # Gitea web UI browse URL: https://host/owner/repo/src/branch/<ref>/<path>
+        fp = path.lstrip("/").replace("\\", "/")
+        return f"{self.host(scm).rstrip('/')}/{scm.repo_full}/src/branch/{ref}/{fp}"
+
+    def build_raw_url(self, scm: RepositoryInfo, ref: str, path: str) -> str:
+        # Gitea REST raw-content endpoint — returns raw bytes directly (no
+        # base64 wrapping, unlike Gerrit), so no fetch_raw_bytes hook is needed.
+        fp = quote(path.lstrip("/").replace("\\", "/"), safe="")
+        ref_q = quote(ref or "master", safe="")
+        base = self.host(scm).rstrip("/")
+        return f"{base}/api/v1/repos/{scm.repo_full}/raw/{fp}?ref={ref_q}"
+
+    def get_auth_headers(self) -> dict[str, str]:
+        token = self._token()
+        return {"Authorization": f"token {token}"} if token else {}
+
+    def get_project_info(self, scm: RepositoryInfo, *, proxy_url: str | None = None):
+        import requests as _requests  # noqa: PLC0415
+
+        logger = logging.getLogger("aist")
+        base = self.host(scm).rstrip("/")
+        try:
+            kwargs: dict = {"headers": self.get_auth_headers(), "timeout": 15}
+            if proxy_url:
+                kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
+            resp = _requests.get(f"{base}/api/v1/repos/{scm.repo_full}", **kwargs)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            logger.exception("Failed to query Gitea API for default branch of %s", scm.repo_full)
+            return None
+
+        return {"default_branch": data.get("default_branch") or "master"}
+
+
 class PullRequest(models.Model):
     project_version = models.ForeignKey(
         "AISTProjectVersion",
@@ -479,6 +558,7 @@ class OrgIntegrationType(models.TextChoices):
     VPN = "VPN", "VPN"
     CLAUDE_CODE = "CLAUDE_CODE", "Claude Code"
     GERRIT = "GERRIT", "Gerrit"
+    GITEA = "GITEA", "Gitea"
 
 
 class OrgIntegration(models.Model):

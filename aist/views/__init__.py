@@ -7,7 +7,7 @@ from aist.views.ai import (
 )
 from aist.views.dashboards import launching_dashboard
 from aist.views.export import export_ai_results
-from aist.views.integrations import gerrit_projects_list, gitlab_projects_list
+from aist.views.integrations import gerrit_projects_list, gitea_projects_list, gitlab_projects_list
 from aist.views.launch_configs import project_launch_config_create_ui
 from aist.views.pipeline_logs import (
     pipeline_logs_download,
@@ -49,6 +49,7 @@ __all__ = [
     "delete_pipeline_view",
     "export_ai_results",
     "gerrit_projects_list",
+    "gitea_projects_list",
     "gitlab_projects_list",
     "launching_dashboard",
     "pipeline_detail",

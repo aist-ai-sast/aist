@@ -39,12 +39,13 @@ import { PROVIDER_ICON_PATHS } from "../lib/providerIcons";
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-type IntegrationType = "GITLAB" | "GITHUB" | "GERRIT" | "SLACK" | "EMAIL" | "VPN" | "CLAUDE_CODE";
+type IntegrationType = "GITLAB" | "GITHUB" | "GERRIT" | "GITEA" | "SLACK" | "EMAIL" | "VPN" | "CLAUDE_CODE";
 
 const ORG_INTEGRATION_TYPES: IntegrationType[] = [
   "GITLAB",
   "GITHUB",
   "GERRIT",
+  "GITEA",
   "SLACK",
   "EMAIL",
   "VPN",
@@ -55,6 +56,7 @@ const TYPE_LABELS: Record<string, string> = {
   GITLAB: "GitLab",
   GITHUB: "GitHub",
   GERRIT: "Gerrit",
+  GITEA: "Gitea",
   SLACK: "Slack",
   EMAIL: "Email",
   VPN: "VPN",
@@ -66,10 +68,15 @@ const TYPE_LABELS: Record<string, string> = {
   GENERIC: "Generic",
 };
 
+// Self-hosted SCM providers commonly sit behind a VPN — GitHub is always
+// hosted, so it's excluded here.
+const SELF_HOSTED_SCM_TYPES: IntegrationType[] = ["GITLAB", "GERRIT", "GITEA"];
+
 const TYPE_BADGE_CLASSES: Record<string, string> = {
   GITLAB: "border-orange-500/40 bg-orange-500/10 text-orange-300",
   GITHUB: "border-slate-400/40 bg-slate-400/10 text-slate-300",
   GERRIT: "border-red-500/40 bg-red-500/10 text-red-300",
+  GITEA: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
   SLACK: "border-green-500/40 bg-green-500/10 text-green-300",
   EMAIL: "border-brand-500/40 bg-brand-500/10 text-brand-300",
   JIRA: "border-blue-500/40 bg-blue-500/10 text-blue-300",
@@ -412,6 +419,19 @@ function OrgIntegrationConfigFields({
           />
         </label>
       </>
+    );
+  }
+  if (type === "GITEA") {
+    return (
+      <label className="text-xs text-slate-400 sm:col-span-2">
+        Gitea URL
+        <TextInput
+          className="mt-1"
+          placeholder="https://gitea.example.com"
+          value={config.base_url ?? ""}
+          onChange={(e) => onChange("base_url", e.target.value)}
+        />
+      </label>
     );
   }
   if (type === "SLACK") {
@@ -816,7 +836,7 @@ function OrgIntegrationForm({
                 />
               </label>
             )}
-            {(form.integration_type === "GITLAB" || form.integration_type === "GERRIT") && (
+            {SELF_HOSTED_SCM_TYPES.includes(form.integration_type) && (
               <div className="sm:col-span-2">
                 <SelectField
                   label="VPN Integration"
@@ -939,7 +959,7 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
   return (
     <SectionCard
       title="Org Integrations"
-      description="GitLab, GitHub, Slack, and Email accounts and credentials shared across all projects. The first active integration per type is used by default."
+      description="GitLab, GitHub, Gerrit, Gitea, Slack, and Email accounts and credentials shared across all projects. The first active integration per type is used by default."
     >
       {integrationsQuery.isLoading && <div className="text-sm text-slate-400">Loading...</div>}
       {integrationsQuery.isError && (

@@ -270,6 +270,8 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             self._validate_claude_attrs(attrs)
         if itype == OrgIntegrationType.GERRIT:
             self._validate_gerrit_attrs(attrs)
+        if itype == OrgIntegrationType.GITEA:
+            self._validate_gitea_attrs(attrs)
         return super().validate(attrs)
 
     def _validate_gerrit_attrs(self, attrs):
@@ -281,6 +283,17 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         if not (config.get("username") or "").strip():
             raise serializers.ValidationError(
                 {"config": "Gerrit integration requires a 'username' in config."},
+            )
+
+    def _validate_gitea_attrs(self, attrs):
+        """Gitea is always self-hosted — there is no public default like gitlab.com."""
+        config = attrs.get("config")
+        if config is None and self.instance is not None:
+            config = self.instance.config or {}
+        config = config or {}
+        if not (config.get("base_url") or "").strip():
+            raise serializers.ValidationError(
+                {"config": "Gitea integration requires a 'base_url' in config."},
             )
 
     def _validate_claude_attrs(self, attrs):
@@ -636,6 +649,22 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
                 rest.get("/accounts/self")
         except Exception as exc:
             logger.exception("Integration[%s] GERRIT validation error", integration.pk)
+            return False, f"Validation failed ({type(exc).__name__}) — see server logs."
+        else:
+            return True, ""
+
+    if itype == OrgIntegrationType.GITEA:
+        from aist.tasks.integrations import _gitea_headers  # noqa: PLC0415
+
+        base_url = (config.get("base_url") or "").rstrip("/")
+        if not base_url:
+            return False, "Gitea integration requires a base_url in config."
+        try:
+            with integration.scoped_session(execution_id=f"validate-{integration.pk}") as session:
+                resp = session.get(f"{base_url}/api/v1/user", headers=_gitea_headers(integration), timeout=15)
+                resp.raise_for_status()
+        except Exception as exc:
+            logger.exception("Integration[%s] GITEA validation error", integration.pk)
             return False, f"Validation failed ({type(exc).__name__}) — see server logs."
         else:
             return True, ""

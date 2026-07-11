@@ -71,6 +71,7 @@ from aist.api.ai import (
     LocalTriageCompleteAPI,
 )
 from aist.api.gerrit_integration import ImportProjectFromGerritAPI
+from aist.api.gitea_integration import ImportProjectFromGiteaAPI
 from aist.api.gitlab_integration import ImportProjectFromGitlabAPI
 from aist.api.pipelines import (
     ExportAIResultsAPI,
@@ -210,6 +211,7 @@ urlpatterns = [
     ),
     path("import_project_from_gitlab/", ImportProjectFromGitlabAPI.as_view(), name="import_project_from_gitlab"),
     path("import_project_from_gerrit/", ImportProjectFromGerritAPI.as_view(), name="import_project_from_gerrit"),
+    path("import_project_from_gitea/", ImportProjectFromGiteaAPI.as_view(), name="import_project_from_gitea"),
     path("github/import/options/", GithubImportOptionsAPI.as_view(), name="github_import_options"),
     path("github/import/connect/start/", GithubImportConnectStartAPI.as_view(), name="github_import_connect_start"),
     path("github/import/connect/callback/", GithubConnectCallbackAPI.as_view(), name="github_connect_callback"),

@@ -26,6 +26,12 @@ class OrgIntegrationTypeEnumTests(TestCase):
         self.assertEqual(ScmType.GERRIT.value, "GERRIT")
         self.assertIn("GERRIT", dict(ScmType.choices))
 
+    def test_gitea_choices_present(self):
+        self.assertEqual(OrgIntegrationType.GITEA.value, "GITEA")
+        self.assertIn("GITEA", dict(OrgIntegrationType.choices))
+        self.assertEqual(ScmType.GITEA.value, "GITEA")
+        self.assertIn("GITEA", dict(ScmType.choices))
+
 
 class OrgIntegrationSingleActiveClaudeConstraintTests(TestCase):
 

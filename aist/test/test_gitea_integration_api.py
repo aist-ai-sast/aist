@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -14,14 +14,14 @@ from aist.models import (
     OrgIntegration,
     OrgIntegrationType,
     RepositoryInfo,
-    ScmGerritBinding,
+    ScmGiteaBinding,
     ScmType,
 )
 
-TEST_GERRIT_PASSWORD = "xhttp-pass-123".removeprefix("x")
+TEST_GITEA_TOKEN = "xpat-token-abc123".removeprefix("x")
 
 
-class GerritIntegrationAPITests(TestCase):
+class GiteaIntegrationAPITests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.user = get_user_model().objects.create_user(
@@ -38,169 +38,152 @@ class GerritIntegrationAPITests(TestCase):
         )
 
     def _url(self):
-        return reverse("aist_api:import_project_from_gerrit")
+        return reverse("aist_api:import_project_from_gitea")
 
-    def _create_gerrit_integration(self, org: Organization, *, base_url: str = "https://gerrit.example.com"):
+    def _create_gitea_integration(self, org: Organization, *, base_url: str = "https://gitea.example.com"):
         return OrgIntegration.objects.create(
             organization=org,
-            integration_type=OrgIntegrationType.GERRIT,
-            name=f"{org.name} Gerrit",
-            config={"base_url": base_url, "username": "svc-user"},
-            secret=TEST_GERRIT_PASSWORD,
+            integration_type=OrgIntegrationType.GITEA,
+            name=f"{org.name} Gitea",
+            config={"base_url": base_url},
+            secret=TEST_GITEA_TOKEN,
             is_active=True,
             created_by=self.user,
         )
 
-    @patch("aist.api.gerrit_integration.fetch_gerrit_project_info.delay")
-    def test_import_gerrit_project_happy_path(self, mock_delay):
+    @patch("aist.api.gitea_integration.fetch_gitea_project_info.delay")
+    def test_import_gitea_project_happy_path(self, mock_delay):
         org = Organization.objects.create(name="Org")
-        integration = self._create_gerrit_integration(org)
+        integration = self._create_gitea_integration(org)
         mock_delay.return_value.get.return_value = {
             "ok": True,
-            "project_path": "platform/build/soong",
+            "path_with_namespace": "myorg/myrepo",
             "description": "desc",
-            "web_url": "https://gerrit.example.com/admin/repos/platform/build/soong",
-            "inferred_base": "https://gerrit.example.com",
+            "web_url": "https://gitea.example.com/myorg/myrepo",
+            "inferred_base": "https://gitea.example.com",
             "default_branch": "main",
+            "langs_raw": {"Python": 1234},
         }
 
         resp = self.client.post(
             self._url(),
-            data={"project_path": "platform/build/soong", "organization_id": org.id},
+            data={"repo_full_name": "myorg/myrepo", "organization_id": org.id},
             format="json",
         )
 
-        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.status_code, 201, resp.data)
         aist_project = AISTProject.objects.get(id=resp.data["aist_project_id"])
         self.assertEqual(aist_project.organization_id, org.id)
-        self.assertEqual(aist_project.repository.type, ScmType.GERRIT)
-        self.assertEqual(aist_project.supported_languages, [])
+        self.assertEqual(aist_project.repository.type, ScmType.GITEA)
+        self.assertEqual(aist_project.supported_languages, ["python"])
 
         repo = RepositoryInfo.objects.get(id=resp.data["repository_id"])
-        self.assertEqual(repo.repo_owner, "platform/build")
-        self.assertEqual(repo.repo_name, "soong")
-        self.assertEqual(repo.repo_full, "platform/build/soong")
-        binding = ScmGerritBinding.objects.get(scm=repo)
+        self.assertEqual(repo.repo_owner, "myorg")
+        self.assertEqual(repo.repo_name, "myrepo")
+        self.assertEqual(repo.repo_full, "myorg/myrepo")
+        binding = ScmGiteaBinding.objects.get(scm=repo)
         self.assertEqual(binding.org_integration_id, integration.id)
 
-    @patch("aist.api.gerrit_integration.fetch_gerrit_project_info.delay")
-    def test_import_gerrit_single_segment_project(self, mock_delay):
-        org = Organization.objects.create(name="Org SS")
-        self._create_gerrit_integration(org)
-        mock_delay.return_value.get.return_value = {
-            "ok": True,
-            "project_path": "All-Projects",
-            "description": "",
-            "web_url": "https://gerrit.example.com/admin/repos/All-Projects",
-            "inferred_base": "https://gerrit.example.com",
-            "default_branch": "master",
-        }
-
-        resp = self.client.post(
-            self._url(),
-            data={"project_path": "All-Projects", "organization_id": org.id},
-            format="json",
-        )
-
-        self.assertEqual(resp.status_code, 201)
-        repo = RepositoryInfo.objects.get(id=resp.data["repository_id"])
-        self.assertEqual(repo.repo_owner, "")
-        self.assertEqual(repo.repo_name, "All-Projects")
-        # Clone URL must not contain a leading slash after /a/.
-        binding = ScmGerritBinding.objects.get(scm=repo)
-        self.assertEqual(
-            binding.build_clone_url(repo),
-            f"https://svc-user:{TEST_GERRIT_PASSWORD}@gerrit.example.com/a/All-Projects",
-        )
-
-    @patch("aist.api.gerrit_integration.fetch_gerrit_project_info.delay")
+    @patch("aist.api.gitea_integration.fetch_gitea_project_info.delay")
     def test_import_produces_runnable_clone_url(self, mock_delay):
         """End-to-end: import ties integration → binding → repository.clone_url."""
         org = Organization.objects.create(name="Org Smoke")
-        self._create_gerrit_integration(org)
+        self._create_gitea_integration(org)
         mock_delay.return_value.get.return_value = {
             "ok": True,
-            "project_path": "platform/build/soong",
+            "path_with_namespace": "myorg/myrepo",
             "description": "desc",
-            "web_url": "https://gerrit.example.com/admin/repos/platform/build/soong",
-            "inferred_base": "https://gerrit.example.com",
+            "web_url": "https://gitea.example.com/myorg/myrepo",
+            "inferred_base": "https://gitea.example.com",
             "default_branch": "main",
+            "langs_raw": {},
         }
 
         resp = self.client.post(
             self._url(),
-            data={"project_path": "platform/build/soong", "organization_id": org.id},
+            data={"repo_full_name": "myorg/myrepo", "organization_id": org.id},
             format="json",
         )
-        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.status_code, 201, resp.data)
 
         aist_project = AISTProject.objects.get(id=resp.data["aist_project_id"])
         self.assertEqual(
             aist_project.repository.clone_url,
-            f"https://svc-user:{TEST_GERRIT_PASSWORD}@gerrit.example.com/a/platform/build/soong",
+            f"https://{TEST_GITEA_TOKEN}@gitea.example.com/myorg/myrepo.git",
         )
 
-    @patch("aist.api.gerrit_integration.fetch_gerrit_project_info.delay")
-    def test_import_gerrit_project_returns_404(self, mock_delay):
+    @patch("aist.api.gitea_integration.fetch_gitea_project_info.delay")
+    def test_import_gitea_project_returns_404(self, mock_delay):
         org = Organization.objects.create(name="Org 404")
-        self._create_gerrit_integration(org)
+        self._create_gitea_integration(org)
         mock_delay.return_value.get.return_value = {"ok": False, "response_code": 404, "error": "Not Found"}
 
         resp = self.client.post(
             self._url(),
-            data={"project_path": "missing/repo", "organization_id": org.id},
+            data={"repo_full_name": "missing/repo", "organization_id": org.id},
             format="json",
         )
         self.assertEqual(resp.status_code, 404)
 
-    def test_import_gerrit_project_requires_organization(self):
+    def test_import_gitea_project_requires_organization(self):
         resp = self.client.post(
             self._url(),
-            data={"project_path": "a/b"},
+            data={"repo_full_name": "a/b"},
             format="json",
         )
         self.assertEqual(resp.status_code, 400)
         self.assertIn("organization_id", resp.data)
 
-    def test_import_gerrit_project_requires_active_integration(self):
+    def test_import_gitea_project_rejects_name_without_slash(self):
+        org = Organization.objects.create(name="Org Bad Name")
+        self._create_gitea_integration(org)
+        resp = self.client.post(
+            self._url(),
+            data={"repo_full_name": "no-slash-here", "organization_id": org.id},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_import_gitea_project_requires_active_integration(self):
         org = Organization.objects.create(name="Org No Integration")
         resp = self.client.post(
             self._url(),
-            data={"project_path": "a/b", "organization_id": org.id},
+            data={"repo_full_name": "a/b", "organization_id": org.id},
             format="json",
         )
         self.assertEqual(resp.status_code, 404)
-        self.assertEqual(resp.data["detail"], "No active Gerrit integration found for this organization.")
+        self.assertEqual(resp.data["detail"], "No active Gitea integration found for this organization.")
 
-    @patch("aist.api.gerrit_integration.fetch_gerrit_project_info.delay")
-    def test_import_gerrit_project_conflicts_on_product_type_mismatch(self, mock_delay):
+    @patch("aist.api.gitea_integration.fetch_gitea_project_info.delay")
+    def test_import_gitea_project_conflicts_on_product_type_mismatch(self, mock_delay):
         org = Organization.objects.create(name="Org A")
-        self._create_gerrit_integration(org)
+        self._create_gitea_integration(org)
         other_pt = Product_Type.objects.create(name="Other PT")
         Product.objects.create(
-            name="group/my-repo",
+            name="myorg/myrepo",
             description="desc",
             prod_type=other_pt,
             sla_configuration_id=1,
         )
         mock_delay.return_value.get.return_value = {
             "ok": True,
-            "project_path": "group/my-repo",
+            "path_with_namespace": "myorg/myrepo",
             "description": "desc",
-            "web_url": "https://gerrit.example.com/admin/repos/group/my-repo",
-            "inferred_base": "https://gerrit.example.com",
+            "web_url": "https://gitea.example.com/myorg/myrepo",
+            "inferred_base": "https://gitea.example.com",
             "default_branch": "main",
+            "langs_raw": {},
         }
 
         resp = self.client.post(
             self._url(),
-            data={"project_path": "group/my-repo", "organization_id": org.id},
+            data={"repo_full_name": "myorg/myrepo", "organization_id": org.id},
             format="json",
         )
         self.assertEqual(resp.status_code, 409)
 
 
-class GerritProjectsListViewTests(TestCase):
+class GiteaProjectsListViewTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.user = get_user_model().objects.create_user(
@@ -214,26 +197,26 @@ class GerritProjectsListViewTests(TestCase):
         self.org = Organization.objects.create(name="List Org")
         OrgIntegration.objects.create(
             organization=self.org,
-            integration_type=OrgIntegrationType.GERRIT,
-            name="Gerrit",
-            config={"base_url": "https://gerrit.example.com", "username": "svc-user"},
-            secret=TEST_GERRIT_PASSWORD,
+            integration_type=OrgIntegrationType.GITEA,
+            name="Gitea",
+            config={"base_url": "https://gitea.example.com"},
+            secret=TEST_GITEA_TOKEN,
             is_active=True,
         )
 
     def _url(self):
-        return reverse("aist:gerrit_projects_list")
+        return reverse("aist:gitea_projects_list")
 
-    @patch("aist.views.integrations.fetch_gerrit_projects.delay")
+    @patch("aist.views.integrations.fetch_gitea_projects.delay")
     def test_list_returns_projects(self, mock_delay):
         mock_delay.return_value.get.return_value = {
             "ok": True,
-            "projects": [{"name": "platform/build/soong", "project_path": "platform/build/soong"}],
+            "projects": [{"name": "myrepo", "full_name": "myorg/myrepo"}],
         }
         resp = self.client.post(self._url(), data={"organization_id": self.org.id})
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.json()["ok"])
-        self.assertEqual(resp.json()["projects"][0]["project_path"], "platform/build/soong")
+        self.assertEqual(resp.json()["projects"][0]["full_name"], "myorg/myrepo")
 
     def test_list_requires_organization(self):
         resp = self.client.post(self._url(), data={})
@@ -244,58 +227,63 @@ class GerritProjectsListViewTests(TestCase):
         resp = self.client.post(self._url(), data={"organization_id": other_org.id})
         self.assertEqual(resp.status_code, 404)
 
-    @patch("aist.views.integrations.fetch_gerrit_projects.delay")
+    @patch("aist.views.integrations.fetch_gitea_projects.delay")
     def test_list_task_error_is_logged_not_swallowed(self, mock_delay):
         """
         The real exception (auth failure, DNS error, VPN sidecar failure, ...) must
         reach the server logs — the client only ever sees a generic message, but
         silently dropping the cause makes production failures undiagnosable.
         """
-        mock_delay.return_value.get.side_effect = RuntimeError("connection refused to gerrit.example.com")
+        mock_delay.return_value.get.side_effect = RuntimeError("connection refused to gitea.example.com")
 
         with self.assertLogs("aist.views.integrations", level="ERROR") as logs:
             resp = self.client.post(self._url(), data={"organization_id": self.org.id})
 
         self.assertEqual(resp.status_code, 502)
-        self.assertIn("Gerrit project listing failed", "\n".join(logs.output))
+        self.assertIn("Gitea project listing failed", "\n".join(logs.output))
 
 
-class GerritIntegrationValidateTests(TestCase):
+class GiteaIntegrationValidateTests(TestCase):
 
-    """Unit-level coverage of the GERRIT branch in ``_validate_integration``."""
+    """Unit-level coverage of the GITEA branch in ``_validate_integration``."""
 
     def setUp(self):
         self.org = Organization.objects.create(name="Validate Org")
         self.integration = OrgIntegration.objects.create(
             organization=self.org,
-            integration_type=OrgIntegrationType.GERRIT,
-            name="Gerrit",
-            config={"base_url": "https://gerrit.example.com", "username": "svc-user"},
-            secret=TEST_GERRIT_PASSWORD,
+            integration_type=OrgIntegrationType.GITEA,
+            name="Gitea",
+            config={"base_url": "https://gitea.example.com"},
+            secret=TEST_GITEA_TOKEN,
             is_active=True,
         )
 
-    @patch("pygerrit2.GerritRestAPI")
-    def test_validate_success_calls_accounts_self(self, mock_rest_cls):
+    @patch("requests.Session.get")
+    def test_validate_success_calls_user_endpoint(self, mock_get):
         from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
 
-        mock_rest = mock_rest_cls.return_value
-        mock_rest.get.return_value = {"_account_id": 1}
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
 
         valid, detail = _validate_integration(self.integration)
 
         self.assertTrue(valid)
         self.assertEqual(detail, "")
-        mock_rest.get.assert_called_once_with("/accounts/self")
+        called_url = mock_get.call_args[0][0]
+        self.assertEqual(called_url, "https://gitea.example.com/api/v1/user")
+        called_headers = mock_get.call_args.kwargs["headers"]
+        self.assertEqual(called_headers, {"Authorization": f"token {TEST_GITEA_TOKEN}"})
 
-    @patch("pygerrit2.GerritRestAPI")
-    def test_validate_auth_failure_returns_invalid(self, mock_rest_cls):
+    @patch("requests.Session.get")
+    def test_validate_auth_failure_returns_invalid(self, mock_get):
         import requests
 
         from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
 
-        mock_rest = mock_rest_cls.return_value
-        mock_rest.get.side_effect = requests.HTTPError("401 Unauthorized")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = requests.HTTPError("401 Unauthorized")
+        mock_get.return_value = mock_resp
 
         valid, detail = _validate_integration(self.integration)
 
@@ -305,7 +293,7 @@ class GerritIntegrationValidateTests(TestCase):
     def test_validate_missing_base_url_returns_invalid_without_network_call(self):
         from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
 
-        self.integration.config = {"username": "svc-user"}
+        self.integration.config = {}
         self.integration.save(update_fields=["config"])
 
         valid, detail = _validate_integration(self.integration)

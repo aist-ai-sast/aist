@@ -11,6 +11,7 @@ class AISTApiTag(StrEnum):
     GITHUB = "gitHub"
     GITLAB = "gitLab"
     GERRIT = "gerrit"
+    GITEA = "gitea"
     INTEGRATIONS = "integrations"
     LAUNCH_CONFIGS = "launch configs"
     LAUNCH_QUEUE = "launch queue"

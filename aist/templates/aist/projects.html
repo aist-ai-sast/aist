@@ -44,6 +44,12 @@
                             </button>
                             <button type="button"
                                     class="btn btn-default"
+                                    id="gitea-import-open">
+                                <i class="fa fa-coffee" aria-hidden="true"></i>
+                                Import from Gitea
+                            </button>
+                            <button type="button"
+                                    class="btn btn-default"
                                     id="empty-project-open"
                                     {% if not organizations_for_create %}disabled title="No organizations available for project creation"{% endif %}>
                                 <i class="fa fa-plus" aria-hidden="true"></i>
@@ -512,6 +518,110 @@
                     <div class="form-check mt-3">
                         <input type="checkbox" class="form-check-input" id="gerrit-auto-analyze">
                         <label class="form-check-label" for="gerrit-auto-analyze">
+                            Auto-analyze project (generate init script &amp; exclusions via Claude)
+                        </label>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    {# Modal for importing projects from Gitea #}
+    <div class="modal fade" id="giteaImportModal" tabindex="-1" role="dialog"
+         aria-labelledby="giteaImportModalLabel">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <form id="gitea-import-form">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <button type="button" class="close" data-dismiss="modal"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                        <h4 class="modal-title" id="giteaImportModalLabel">
+                            Import projects from Gitea
+                        </h4>
+                    </div>
+                    <div class="modal-body">
+                        <div id="gitea-import-error"
+                             class="alert alert-danger"
+                             style="display:none;"></div>
+
+                        <div class="form-group">
+                            <label for="gitea-org-select" class="control-label" style="display:block;">
+                                Organization
+                            </label>
+                            <select class="form-control"
+                                    id="gitea-org-select"
+                                    name="organization_id">
+                                <option value="">— select organization —</option>
+                                {% for org in organizations_for_create %}
+                                    <option value="{{ org.id }}">{{ org.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <p class="help-block">
+                                The organization's default Gitea integration will be used for authentication.
+                                <a href="/integrations" target="_blank">Manage integrations.</a>
+                            </p>
+                        </div>
+                        <div id="gitea-integration-info" class="alert alert-info" style="display:none;"></div>
+
+
+                        <hr>
+
+                        <div id="gitea-projects-container" style="display:none;">
+                            <p class="text-muted small">
+                                Select one or more repos to import as AIST projects.
+                            </p>
+                            <div class="form-group">
+                                <input type="text"
+                                       class="form-control input-sm"
+                                       id="gitea-projects-search"
+                                       placeholder="Filter repos by name or description...">
+                            </div>
+                            <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+                                <table class="table table-condensed table-hover" id="gitea-projects-table">
+                                    <thead>
+                                    <tr>
+                                        <th style="width: 30px;">
+                                            <input type="checkbox" id="gitea-select-all">
+                                        </th>
+                                        <th>Repo</th>
+                                        <th>Description</th>
+                                        <th style="width: 120px;">Default branch</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody id="gitea-projects-tbody">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button"
+                                class="btn btn-default"
+                                data-dismiss="modal">
+                            Close
+                        </button>
+                        <button type="button"
+                                class="btn btn-primary"
+                                id="gitea-list-btn">
+                            List projects
+                        </button>
+
+                        <span id="gitea-projects-loading"
+                              class="text-muted"
+                              style="display: none; margin-left: 8px;">
+                            <i class="fa fa-spinner fa-spin"></i> Loading projects...
+                        </span>
+                        <button type="button"
+                                class="btn btn-success"
+                                id="gitea-import-btn"
+                                disabled>
+                            Import selected
+                        </button>
+                    </div>
+                    <div class="form-check mt-3">
+                        <input type="checkbox" class="form-check-input" id="gitea-auto-analyze">
+                        <label class="form-check-label" for="gitea-auto-analyze">
                             Auto-analyze project (generate init script &amp; exclusions via Claude)
                         </label>
                     </div>
@@ -1166,6 +1276,18 @@
                 if (m) return decodeURIComponent(m[1]);
 
                 return "";
+            }
+
+            function escapeHtml(value) {
+                // Repo names/descriptions/branches come from the remote SCM API and
+                // are attacker-influenced (anyone who can name a repo controls this
+                // text) — escape before interpolating into innerHTML.
+                return String(value == null ? "" : value)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
             }
 
             function showGlobalAlert(message, kind) {
@@ -2026,12 +2148,12 @@
                         projects.forEach(function (p) {
                             rowsHtml +=
                                 '<tr>' +
-                                '<td><input type="checkbox" class="gitlab-project-checkbox" value="' + (p.id || "") + '"></td>' +
-                                '<td class="text-monospace">' + (p.id || "") + '</td>' +
-                                '<td>' + (p.path_with_namespace || p.name || "") + '</td>' +
-                                '<td>' + (p.language || "–") + '</td>' +
-                                '<td>' + (p.description || "") + '</td>' +
-                                '<td>' + (p.default_branch || "") + '</td>' +
+                                '<td><input type="checkbox" class="gitlab-project-checkbox" value="' + escapeHtml(p.id || "") + '"></td>' +
+                                '<td class="text-monospace">' + escapeHtml(p.id || "") + '</td>' +
+                                '<td>' + escapeHtml(p.path_with_namespace || p.name || "") + '</td>' +
+                                '<td>' + escapeHtml(p.language || "–") + '</td>' +
+                                '<td>' + escapeHtml(p.description || "") + '</td>' +
+                                '<td>' + escapeHtml(p.default_branch || "") + '</td>' +
                                 '</tr>';
                         });
 
@@ -2302,10 +2424,10 @@
                             var path = p.project_path || p.name || "";
                             rowsHtml +=
                                 '<tr>' +
-                                '<td><input type="checkbox" class="gerrit-project-checkbox" value="' + path + '"></td>' +
-                                '<td class="text-monospace">' + path + '</td>' +
-                                '<td>' + (p.description || "") + '</td>' +
-                                '<td>' + (p.default_branch || "") + '</td>' +
+                                '<td><input type="checkbox" class="gerrit-project-checkbox" value="' + escapeHtml(path) + '"></td>' +
+                                '<td class="text-monospace">' + escapeHtml(path) + '</td>' +
+                                '<td>' + escapeHtml(p.description || "") + '</td>' +
+                                '<td>' + escapeHtml(p.default_branch || "") + '</td>' +
                                 '</tr>';
                         });
 
@@ -2438,6 +2560,280 @@
                 gerritSearchInput.addEventListener("keyup", function () {
                     var needle = (gerritSearchInput.value || "").toLowerCase();
                     var rows = imported_gerrit_projects_table.querySelectorAll("tbody tr");
+
+                    Array.prototype.forEach.call(rows, function (row) {
+                        var text = (row.textContent || "").toLowerCase();
+                        row.style.display = (!needle || text.indexOf(needle) !== -1) ? "" : "none";
+                    });
+                });
+            }
+
+
+            // ── Gitea import modal ──────────────────────────────────────────
+            var giteaOpenBtn = document.getElementById("gitea-import-open");
+            var giteaModal = document.getElementById("giteaImportModal");
+            var giteaForm = document.getElementById("gitea-import-form");
+            var giteaErrorBox = document.getElementById("gitea-import-error");
+            var giteaListBtn = document.getElementById("gitea-list-btn");
+            var giteaLoadingIndicator = document.getElementById("gitea-projects-loading");
+            var giteaImportBtn = document.getElementById("gitea-import-btn");
+            var giteaProjectsContainer = document.getElementById("gitea-projects-container");
+            var giteaProjectsTbody = document.getElementById("gitea-projects-tbody");
+            var giteaSelectAll = document.getElementById("gitea-select-all");
+            var giteaOrgSelect = document.getElementById("gitea-org-select");
+            var giteaIntegrationInfo = document.getElementById("gitea-integration-info");
+
+            var giteaListUrl = "{% url 'aist:gitea_projects_list' %}";
+            var giteaImportUrl = "{% url 'aist_api:import_project_from_gitea' %}";
+
+            function clearGiteaState() {
+                if (giteaErrorBox) {
+                    giteaErrorBox.style.display = "none";
+                    giteaErrorBox.textContent = "";
+                }
+                if (giteaProjectsTbody) {
+                    giteaProjectsTbody.innerHTML = "";
+                }
+                if (giteaProjectsContainer) {
+                    giteaProjectsContainer.style.display = "none";
+                }
+                if (giteaImportBtn) {
+                    giteaImportBtn.disabled = true;
+                }
+                if (giteaSelectAll) {
+                    giteaSelectAll.checked = false;
+                }
+            }
+
+            function updateGiteaImportButtonState() {
+                if (!giteaProjectsTbody || !giteaImportBtn) return;
+                var anyChecked = !!giteaProjectsTbody.querySelector(
+                    "input.gitea-project-checkbox:checked"
+                );
+                giteaImportBtn.disabled = !anyChecked;
+            }
+
+            function updateGiteaListBtnState() {
+                if (giteaListBtn) {
+                    giteaListBtn.disabled = !(giteaOrgSelect && giteaOrgSelect.value);
+                }
+            }
+
+            if (giteaOpenBtn && giteaModal) {
+                giteaOpenBtn.addEventListener("click", function () {
+                    clearGiteaState();
+
+                    if (window.jQuery && window.jQuery.fn.modal) {
+                        window.jQuery(giteaModal).modal("show");
+                    } else {
+                        giteaModal.classList.add("in");
+                        giteaModal.style.display = "block";
+                    }
+                });
+            }
+
+            if (giteaOrgSelect) {
+                giteaOrgSelect.addEventListener("change", function () {
+                    updateGiteaListBtnState();
+                    clearGiteaState();
+                    if (giteaIntegrationInfo) {
+                        giteaIntegrationInfo.style.display = "none";
+                        giteaIntegrationInfo.textContent = "";
+                    }
+                });
+            }
+            updateGiteaListBtnState();
+
+            // Load projects list from Gitea
+            if (giteaListBtn && giteaForm && giteaProjectsTbody) {
+                giteaListBtn.addEventListener("click", function () {
+
+                    giteaListBtn.disabled = true;
+                    if (giteaLoadingIndicator) {
+                        giteaLoadingIndicator.style.display = "inline-block";
+                    }
+                    var csrf = getCsrfToken();
+                    var headers = {
+                        "X-Requested-With": "XMLHttpRequest"
+                    };
+                    if (csrf) {
+                        headers["X-CSRFToken"] = csrf;
+                    }
+
+                    var formData = new FormData(giteaForm);
+
+                    clearGiteaState();
+
+                    fetch(giteaListUrl, {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: headers,
+                        body: formData
+                    }).then(function (resp) {
+                        return resp.json().then(function (data) {
+                            return {ok: resp.ok, data: data};
+                        });
+                    }).then(function (result) {
+                        if (!result.ok || !result.data.ok) {
+                            var msg = (result.data && result.data.error) ||
+                                "Failed to load projects from Gitea.";
+                            if (giteaErrorBox) {
+                                giteaErrorBox.textContent = msg;
+                                giteaErrorBox.style.display = "block";
+                            }
+                            return;
+                        }
+
+                        var projects = result.data.projects || [];
+                        if (!projects.length) {
+                            if (giteaErrorBox) {
+                                giteaErrorBox.textContent = "No projects returned from Gitea.";
+                                giteaErrorBox.style.display = "block";
+                            }
+                            return;
+                        }
+
+                        var rowsHtml = "";
+                        projects.forEach(function (p) {
+                            var fullName = p.full_name || p.name || "";
+                            rowsHtml +=
+                                '<tr>' +
+                                '<td><input type="checkbox" class="gitea-project-checkbox" value="' + escapeHtml(fullName) + '"></td>' +
+                                '<td class="text-monospace">' + escapeHtml(fullName) + '</td>' +
+                                '<td>' + escapeHtml(p.description || "") + '</td>' +
+                                '<td>' + escapeHtml(p.default_branch || "") + '</td>' +
+                                '</tr>';
+                        });
+
+                        giteaProjectsTbody.innerHTML = rowsHtml;
+                        if (giteaProjectsContainer) {
+                            giteaProjectsContainer.style.display = "block";
+                        }
+                        updateGiteaImportButtonState();
+                    }).catch(function () {
+                        if (giteaErrorBox) {
+                            giteaErrorBox.textContent = "Unexpected error while loading Gitea projects.";
+                            giteaErrorBox.style.display = "block";
+                        }
+                    }).finally(function () {
+                        giteaListBtn.disabled = false;
+                        if (giteaLoadingIndicator) {
+                            giteaLoadingIndicator.style.display = "none";
+                        }
+                    });
+                });
+            }
+
+            // Select all / selection change
+            if (giteaSelectAll && giteaProjectsTbody) {
+                giteaSelectAll.addEventListener("change", function () {
+                    var checked = giteaSelectAll.checked;
+                    var checkboxes = giteaProjectsTbody.querySelectorAll("input.gitea-project-checkbox");
+                    Array.prototype.forEach.call(checkboxes, function (cb) {
+                        cb.checked = checked;
+                    });
+                    updateGiteaImportButtonState();
+                });
+
+                giteaProjectsTbody.addEventListener("change", function (ev) {
+                    var target = ev.target;
+                    if (!target || !target.classList.contains("gitea-project-checkbox")) {
+                        return;
+                    }
+                    if (!target.checked && giteaSelectAll) {
+                        giteaSelectAll.checked = false;
+                    }
+                    updateGiteaImportButtonState();
+                });
+            }
+
+            // Import selected Gitea projects via existing API
+            if (giteaImportBtn && giteaProjectsTbody) {
+                giteaImportBtn.addEventListener("click", function () {
+                    var checkboxes = giteaProjectsTbody.querySelectorAll(
+                        "input.gitea-project-checkbox:checked"
+                    );
+                    if (!checkboxes.length) {
+                        return;
+                    }
+
+                    var org = giteaOrgSelect ? (giteaOrgSelect.value || "") : "";
+
+                    if (!org) {
+                        if (giteaErrorBox) {
+                            giteaErrorBox.textContent = "Please select an organization.";
+                            giteaErrorBox.style.display = "block";
+                        }
+                        return;
+                    }
+
+                    var csrf = getCsrfToken();
+                    var headers = {
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Content-Type": "application/json"
+                    };
+                    if (csrf) {
+                        headers["X-CSRFToken"] = csrf;
+                    }
+
+                    var fullNames = Array.prototype.map.call(checkboxes, function (cb) {
+                        return cb.value;
+                    });
+
+                    // Send one request per selected repo.
+                    var autoAnalyze = document.getElementById("gitea-auto-analyze").checked;
+                    var promises = fullNames.map(function (fullName) {
+                        var payload = {
+                            repo_full_name: fullName,
+                            organization_id: org,
+                            auto_analyze: autoAnalyze
+                        };
+                        return fetch(giteaImportUrl, {
+                            method: "POST",
+                            credentials: "same-origin",
+                            headers: headers,
+                            body: JSON.stringify(payload)
+                        }).then(function (resp) {
+                            return resp.json().then(function (data) {
+                                return {ok: resp.ok, data: data};
+                            });
+                        }).catch(function () {
+                            return {ok: false, data: {error: "Network error"}};
+                        });
+                    });
+
+                    Promise.all(promises).then(function (results) {
+                        var failed = results.filter(function (r) {
+                            return !r.ok;
+                        });
+                        if (failed.length && giteaErrorBox) {
+                            giteaErrorBox.textContent =
+                                "Some projects failed to import. Please check server logs.";
+                            giteaErrorBox.style.display = "block";
+                            return;
+                        }
+
+                        // Close modal and reload page to show new projects.
+                        if (window.jQuery && window.jQuery.fn.modal) {
+                            window.jQuery(giteaModal).modal("hide");
+                        } else if (giteaModal && giteaModal.classList) {
+                            giteaModal.classList.remove("in");
+                            giteaModal.style.display = "none";
+                        }
+
+                        showGlobalAlert("Selected Gitea projects have been imported.", "success");
+                        window.location.reload();
+                    });
+                });
+            }
+
+            var giteaSearchInput = document.getElementById("gitea-projects-search");
+            var imported_gitea_projects_table = document.getElementById("gitea-projects-table");
+
+            if (giteaSearchInput && imported_gitea_projects_table) {
+                giteaSearchInput.addEventListener("keyup", function () {
+                    var needle = (giteaSearchInput.value || "").toLowerCase();
+                    var rows = imported_gitea_projects_table.querySelectorAll("tbody tr");
 
                     Array.prototype.forEach.call(rows, function (row) {
                         var text = (row.textContent || "").toLowerCase();

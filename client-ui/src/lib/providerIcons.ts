@@ -21,6 +21,9 @@ export const PROVIDER_ICON_PATHS: Record<string, string> = {
   // Stylised code-review checkmark, representing Gerrit's review workflow.
   GERRIT:
     "M12 2 3 5.5v6C3 17 6.8 21.7 12 23c5.2-1.3 9-6 9-11.5v-6L12 2Zm-1.1 14.2-4-4L8.3 10.8l2.6 2.6 5.8-5.8L18 9.2l-7.1 7Z",
+  // Stylised teacup, nodding to Gitea's "Git with a cup of tea" branding.
+  GITEA:
+    "M4 3h13v2H4V3Zm0 4h11a4 4 0 0 1 4 4v1a4 4 0 0 1-4 4h-1.05A6.002 6.002 0 0 1 12 20H8a6 6 0 0 1-6-6V7Zm13 2v6h1a2 2 0 0 0 2-2v-1a2 2 0 0 0-2-2h-1Z",
   // Anthropic brand mark (stylised "A"), CC0 — source: simpleicons.org/icons/anthropic.
   // Same provenance as the other provider glyphs in this map (GitHub, GitLab, Slack, Jira).
   CLAUDE_CODE: "M17.3041 3.541H13.3848L20.4944 20.459H24.4137L17.3041 3.541ZM6.6959 3.541L0 20.459H4.0019L5.0238 17.4612H12.4244L13.4463 20.459H17.4482L10.7523 3.541H6.6959ZM6.3082 14.0382L8.7241 6.97L11.1399 14.0382H6.3082Z",

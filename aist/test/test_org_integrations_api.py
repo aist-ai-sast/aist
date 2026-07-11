@@ -78,6 +78,30 @@ class OrgIntegrationListCreateAPITests(AISTApiBase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("config", resp.data)
 
+    def test_create_gitea_integration(self):
+        resp = self.client.post(self.url, {
+            "integration_type": "GITEA",
+            "name": "Production Gitea",
+            "config": {"base_url": "https://gitea.example.com"},
+            "secret": "pat-token",
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["integration_type"], "GITEA")
+        self.assertTrue(resp.data["has_secret"])
+        self.assertNotIn("secret", resp.data)  # write-only
+
+    def test_create_gitea_integration_requires_base_url(self):
+        resp = self.client.post(self.url, {
+            "integration_type": "GITEA",
+            "name": "Bad Gitea",
+            "config": {},
+            "secret": "pat-token",
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("config", resp.data)
+
     def test_create_slack_integration(self):
         resp = self.client.post(self.url, {
             "integration_type": "SLACK",

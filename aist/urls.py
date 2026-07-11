@@ -70,6 +70,11 @@ urlpatterns = [
         integrations.gerrit_projects_list,
         name="gerrit_projects_list",
     ),
+    path(
+        "projects/gitea/list/",
+        integrations.gitea_projects_list,
+        name="gitea_projects_list",
+    ),
 
     path("ai/filter/reference/", ai.ai_filter_reference, name="ai_filter_reference"),
     path("ai/filter/help/", ai.ai_filter_help, name="ai_filter_help"),
