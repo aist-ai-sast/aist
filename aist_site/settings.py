@@ -173,6 +173,10 @@ CELERY_BEAT_SCHEDULE.update(  # noqa: F405
             "schedule": timedelta(hours=1),
             "kwargs": {"max_age_minutes": 240},
         },
+        "aist-reap-warm-egress": {
+            "task": "aist.tasks.egress.reap_egress",
+            "schedule": timedelta(minutes=5),
+        },
     },
 )
 

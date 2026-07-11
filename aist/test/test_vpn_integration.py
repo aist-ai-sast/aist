@@ -19,7 +19,11 @@ from dojo.models import Product_Type, Product_Type_Member
 from aist.api.org_integrations import _split_ovpn_pem_blocks
 from aist.models import Organization, OrgIntegration, OrgIntegrationType
 from aist.test.test_api import AISTApiBase
-from aist.utils.vpn import _assemble_env, _extract_key_direction, cleanup_orphaned_vpn_containers
+from aist.utils.vpn import (
+    _assemble_env,
+    _extract_key_direction,
+    cleanup_orphaned_vpn_containers,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -854,3 +858,55 @@ class FetchGitlabProjectsTaskTests(AISTApiBase):
         self.assertEqual(result["path_with_namespace"], "group/repo")
         self.assertIn("Python", result["langs_raw"])
         self.assertEqual(result["inferred_base"], "https://gitlab.example.com")
+
+
+class EgressNamingTests(AISTApiBase):
+
+    """Deterministic warm-egress container name/URL helpers (per VPN integration)."""
+
+    def test_container_name(self):
+        from aist.integrations import egress
+
+        self.assertEqual(egress.container_name(42), "aist-vpn-egress-42")
+
+    def test_proxy_url(self):
+        from aist.integrations import egress
+
+        self.assertEqual(egress.proxy_url(42), "http://aist-vpn-egress-42:1080")
+
+    def test_name_and_url_agree(self):
+        from aist.integrations import egress
+
+        # web and worker must derive the same name; URL wraps the name verbatim.
+        self.assertIn(egress.container_name(7), egress.proxy_url(7))
+
+
+class EgressAllowedIpsTests(AISTApiBase):
+
+    """`_allowed_ips` resolves the web service + own IP, or an explicit override."""
+
+    def test_explicit_override_wins(self):
+        from aist.integrations import egress
+
+        with self.settings(AIST_EGRESS_ALLOWED_IPS="10.0.0.1, 10.0.0.2"):
+            self.assertEqual(egress._allowed_ips(), ["10.0.0.1", "10.0.0.2"])
+
+    def test_resolves_web_service_and_own_ip(self):
+        from aist.integrations import egress
+
+        with (
+            patch("aist.integrations.egress.socket.gethostbyname_ex", return_value=("uwsgi", [], ["172.20.0.5"])),
+            patch("aist.integrations.egress.vpn.own_eth0_ip", return_value="172.20.0.9"),
+            self.settings(AIST_EGRESS_ALLOWED_IPS=""),
+        ):
+            self.assertEqual(egress._allowed_ips(), ["172.20.0.5", "172.20.0.9"])
+
+    def test_dns_failure_falls_back_to_own_ip(self):
+        from aist.integrations import egress
+
+        with (
+            patch("aist.integrations.egress.socket.gethostbyname_ex", side_effect=OSError("no dns")),
+            patch("aist.integrations.egress.vpn.own_eth0_ip", return_value="172.20.0.9"),
+            self.settings(AIST_EGRESS_ALLOWED_IPS=""),
+        ):
+            self.assertEqual(egress._allowed_ips(), ["172.20.0.9"])

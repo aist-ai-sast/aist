@@ -353,7 +353,7 @@ def _wait_for_sidecar_ready(container_name: str, timeout: float = _TUN_WAIT_SECS
     raise RuntimeError(msg)
 
 
-def _stop_sidecar(container_name: str) -> None:
+def stop_sidecar(container_name: str) -> None:
     docker_bin = _find_executable("docker")
     if docker_bin is None:
         logger.warning("vpn: docker CLI unavailable while stopping sidecar=%s", container_name)
@@ -370,6 +370,104 @@ def _stop_sidecar(container_name: str) -> None:
             logger.warning("vpn: docker rm failed rc=%d name=%s", r.returncode, container_name)
     except Exception:
         logger.warning("vpn: docker rm raised for name=%s", container_name, exc_info=True)
+
+
+def sidecar_credential_argv(vpn_secret) -> list[str]:
+    """
+    Build the ``-e`` argv (non-secret TLS metadata + base64 credential env vars)
+    shared by every sidecar ``docker run``, ephemeral or warm.
+
+    Kept here so there is a single source of truth for how this image receives
+    its credentials; callers only decide name/network/allow policy.
+    """
+    argv = ["-e", f"AIST_VPN_TLS_KEY_TYPE={getattr(vpn_secret, 'tls_key_type', 'tls-auth') or 'tls-auth'}"]
+    argv += ["-e", f"AIST_VPN_TLS_KEY_DIRECTION={_extract_key_direction(vpn_secret.ovpn_content or '')}"]
+    for k, v in _assemble_env(vpn_secret).items():
+        argv += ["-e", f"{k}={v}"]
+    return argv
+
+
+def run_sidecar_detached(cmd: list[str], *, log_ctx: str) -> None:
+    """
+    Run a sidecar ``docker run`` command, redacting credentials on failure.
+
+    ``cmd`` contains ``-e KEY=VALUE`` credential args, so on error we log only
+    the return code and stderr (which carries no credential values) and drop the
+    ``CalledProcessError`` chain (it repeats ``cmd``).
+    """
+    docker_bin = _find_executable("docker")
+    if docker_bin is None:
+        msg = "Docker CLI is not available; cannot start VPN sidecar."
+        raise RuntimeError(msg)
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        logger.error("%s vpn=docker_run_failed rc=%d stderr=%s", log_ctx, exc.returncode, (exc.stderr or "")[:300])
+        msg = f"VPN sidecar failed to start ({log_ctx}, docker rc={exc.returncode})"
+        raise RuntimeError(msg) from None
+
+
+def own_eth0_ip() -> str | None:
+    """Public accessor for this container's primary IP (used to build allow lists)."""
+    return _get_own_eth0_ip()
+
+
+def start_named_sidecar(
+    container_name: str,
+    vpn_secret,
+    *,
+    allowed_ips: list[str],
+    log_ctx: str,
+) -> str:
+    """
+    Start a long-lived sidecar under a FIXED name on this container's Docker
+    network and return its HTTP CONNECT proxy URL (``http://<name>:1080``).
+
+    Unlike :func:`vpn_sidecar_context` this does NOT stop the container — the
+    caller owns its lifecycle (see ``aist/integrations/egress.py``).  It is the
+    single place that knows how to launch the sidecar image with credentials, so
+    warm-egress code never rebuilds the ``docker run`` line itself.
+
+    Requires running inside a container on a named Docker network (so the proxy
+    is reachable by container name from the web process).  Raises ``RuntimeError``
+    if that precondition is not met or the container fails to start.
+
+    Idempotency is the caller's concern; note that a second ``docker run`` with an
+    already-used ``--name`` fails — callers treat that as "already running".
+    """
+    docker_bin = _find_executable("docker")
+    if docker_bin is None:
+        msg = "Docker CLI is not available; cannot start VPN sidecar."
+        raise RuntimeError(msg)
+
+    network = _get_own_docker_network()
+    if not network:
+        # No named network → the proxy would not be reachable by container name
+        # from the web process, which is the whole point of the warm egress.
+        msg = f"warm egress requires a named Docker network ({log_ctx}); none detected"
+        raise RuntimeError(msg)
+
+    image = _get_vpn_sidecar_image()
+    _build_vpn_sidecar_if_needed(image)
+
+    cmd = [
+        docker_bin, "run", "-d",
+        "--name", container_name,
+        "--cap-add", "NET_ADMIN",
+        "--device", "/dev/net/tun",
+        "--network", network,
+    ]
+    # Single env var with a comma-separated list; the entrypoint emits one
+    # tinyproxy ``Allow`` line per IP.  (Repeated ``-e SAME_KEY`` would collapse
+    # to the last value, so a list must go in one variable.)
+    if allowed_ips:
+        cmd += ["-e", f"AIST_ALLOWED_IP={','.join(allowed_ips)}"]
+    cmd += sidecar_credential_argv(vpn_secret)
+    cmd.append(image)
+
+    run_sidecar_detached(cmd, log_ctx=log_ctx)
+    _wait_for_sidecar_ready(container_name)
+    return f"http://{container_name}:1080"
 
 
 @contextmanager
@@ -403,7 +501,6 @@ def vpn_sidecar_context(
         return
 
     container_name = f"aist-vpn-{execution_id}"
-    env_dict = _assemble_env(vpn_secret)
 
     image = _get_vpn_sidecar_image()
     _build_vpn_sidecar_if_needed(image)
@@ -466,15 +563,8 @@ def vpn_sidecar_context(
         cmd += ["-p", f"127.0.0.1:{host_port}:1080"]
         proxy_url = f"http://127.0.0.1:{host_port}"
 
-    # Non-secret metadata — single-line values, safe as env vars.
-    tls_key_type = getattr(vpn_secret, "tls_key_type", "tls-auth") or "tls-auth"
-    tls_key_dir = _extract_key_direction(vpn_secret.ovpn_content or "")
-    cmd += ["-e", f"AIST_VPN_TLS_KEY_TYPE={tls_key_type}"]
-    cmd += ["-e", f"AIST_VPN_TLS_KEY_DIRECTION={tls_key_dir}"]
-
-    # Credential env vars (base64-encoded multi-line, single-line strings).
-    for k, v in env_dict.items():
-        cmd += ["-e", f"{k}={v}"]
+    # TLS metadata + base64 credential env vars (single source of truth).
+    cmd += sidecar_credential_argv(vpn_secret)
     cmd.append(image)
 
     logger.info(
@@ -484,26 +574,13 @@ def vpn_sidecar_context(
         proxy_url,
     )
     try:
-        try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
-        except subprocess.CalledProcessError as exc:
-            # IMPORTANT: do NOT log exc or str(exc) — cmd contains -e KEY=VALUE
-            # credentials.  Log only rc and stderr (which has no credential values).
-            logger.error(
-                "execution=%s vpn=docker_run_failed rc=%d stderr=%s",
-                execution_id,
-                exc.returncode,
-                (exc.stderr or "")[:300],
-            )
-            msg = f"VPN sidecar failed to start for execution {execution_id!r} (docker rc={exc.returncode})"
-            raise RuntimeError(msg) from None  # drop CalledProcessError chain — it carries cmd with creds
-
+        run_sidecar_detached(cmd, log_ctx=f"execution={execution_id}")
         _wait_for_sidecar_ready(container_name)
         logger.info("execution=%s vpn=up sidecar=%s proxy=%s", execution_id, container_name, proxy_url)
         yield container_name, proxy_url
     finally:
         logger.info("execution=%s vpn=stopping sidecar=%s", execution_id, container_name)
-        _stop_sidecar(container_name)
+        stop_sidecar(container_name)
 
 
 def cleanup_orphaned_vpn_containers(max_age_minutes: int = 240) -> int:

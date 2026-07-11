@@ -1,6 +1,7 @@
 from aist.tasks.ai import push_request_to_ai, push_request_to_local_triage
 from aist.tasks.claude import analyze_project_after_import
 from aist.tasks.dedup import reconcile_deduplication, watch_deduplication
+from aist.tasks.egress import prewarm_egress, reap_egress
 from aist.tasks.enrich import (
     after_upload_enrich_and_watch,
     enrich_finding_batch,
@@ -22,9 +23,11 @@ __all__ = [
     "enrich_finding_batch",
     "enrich_finding_task",
     "flush_logs_once",
+    "prewarm_egress",
     "process_launch_schedules",
     "push_request_to_ai",
     "push_request_to_local_triage",
+    "reap_egress",
     "reconcile_deduplication",
     "reconcile_pipeline_orphans_task",
     "reconcile_recent_orphans_task",

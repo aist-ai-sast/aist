@@ -18,7 +18,7 @@ import PageErrorState from "../components/PageErrorState";
 import SelectField from "../components/SelectField";
 import SkeletonBlock from "../components/SkeletonBlock";
 import TextInput from "../components/TextInput";
-import { ApiError, toUserMessage } from "../lib/api";
+import { ApiError, prewarmFileEgress, toUserMessage } from "../lib/api";
 import { type FindingCloseReason, useBulkFindingStatus } from "../lib/mutations";
 import {
   buildFindingsFilterSearch,
@@ -134,6 +134,22 @@ export default function FindingsPage() {
     () => (findingsQuery.data?.items ?? []).map((finding) => finding.id),
     [findingsQuery.data],
   );
+
+  // Warm the VPN egress tunnel for each distinct project version on the page,
+  // before the user clicks a snippet.  Best-effort and deduped so a VPN tunnel
+  // is warmed once per project version (public repos answer no_vpn / are cheap).
+  const prewarmedRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    for (const finding of findingsQuery.data?.items ?? []) {
+      const pvId = finding.projectVersionId;
+      if (typeof pvId !== "number" || prewarmedRef.current.has(pvId)) continue;
+      prewarmedRef.current.add(pvId);
+      void prewarmFileEgress(pvId).catch(() => {
+        // best-effort: ignore (no VPN, transient, or permission) — the blob
+        // request will still 202-retry if the tunnel is genuinely cold.
+      });
+    }
+  }, [findingsQuery.data]);
   const aiResponsesQuery = useAiFindingResponses(
     aistProjectForFilters?.id,
     selectedPipelineId,

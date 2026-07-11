@@ -4,7 +4,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiError, fetchFileContent } from "./api";
+import { ApiError, fetchFileContent, SourceWarmingError } from "./api";
 import { useFileSnippet } from "./snippetCache";
 
 vi.mock("./api", async (importOriginal) => {
@@ -67,5 +67,31 @@ describe("useFileSnippet", () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 3000 });
     expect(result.current.isSourceUnavailable).toBe(true);
+  });
+
+  it("reports isWarming while the VPN egress tunnel warms up (202)", async () => {
+    // retryAfter is tiny so the bounded retries elapse quickly in the test.
+    mockedFetchFileContent.mockRejectedValue(new SourceWarmingError(0.001));
+    const { result } = renderHook(
+      () => useFileSnippet({ sourceFileLink: "/warming.txt", line: 5 }),
+      { wrapper: ({ children }) => withQueryClient(children) },
+    );
+
+    await waitFor(() => expect(result.current.isWarming).toBe(true), { timeout: 3000 });
+    expect(result.current.isSourceUnavailable).toBe(false);
+  });
+
+  it("recovers once the tunnel is warm (202 then content)", async () => {
+    mockedFetchFileContent
+      .mockRejectedValueOnce(new SourceWarmingError(0.001))
+      .mockResolvedValueOnce("a\nb\nc\nd\ne");
+    const { result } = renderHook(
+      () => useFileSnippet({ sourceFileLink: "/recover.txt", line: 3 }),
+      { wrapper: ({ children }) => withQueryClient(children) },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true), { timeout: 3000 });
+    expect(result.current.snippet).not.toBeNull();
+    expect(result.current.isWarming).toBe(false);
   });
 });

@@ -203,16 +203,56 @@ export async function fetchBlob(url: string, init?: RequestInit): Promise<AxiosR
   return request<Blob>(url, init, "blob");
 }
 
-export async function fetchFileContent(projectVersionIdOrUrl: number | string, filePath?: string) {
-  if (typeof projectVersionIdOrUrl === "string") {
-    return fetchText(projectVersionIdOrUrl);
+/**
+ * Raised when the blob endpoint answers 202 because the VPN egress tunnel is
+ * still warming up.  Callers (useFileSnippet) treat it as "retry shortly".
+ */
+export class SourceWarmingError extends Error {
+  retryAfter: number;
+
+  constructor(retryAfter: number) {
+    super("Source is warming up");
+    this.name = "SourceWarmingError";
+    this.retryAfter = retryAfter;
   }
-  const encodedPath = (filePath ?? "").split("/").map(encodeURIComponent).join("/");
-  return fetchText(
-    getRoute("project_version_file_url", {
+}
+
+export function isSourceWarmingError(error: unknown): error is SourceWarmingError {
+  return error instanceof SourceWarmingError;
+}
+
+export async function fetchFileContent(projectVersionIdOrUrl: number | string, filePath?: string) {
+  let url: string;
+  if (typeof projectVersionIdOrUrl === "string") {
+    url = projectVersionIdOrUrl;
+  } else {
+    const encodedPath = (filePath ?? "").split("/").map(encodeURIComponent).join("/");
+    url = getRoute("project_version_file_url", {
       project_version_id: projectVersionIdOrUrl,
       subpath: encodedPath,
-    }),
+    });
+  }
+  // Use request() (not fetchText) so we can distinguish a 202 "warming" body
+  // from real file content — both are 2xx and would otherwise look identical.
+  const resp = await request<string>(url, undefined, "text");
+  if (resp.status === 202) {
+    let retryAfter = 3;
+    try {
+      const parsed = JSON.parse(resp.data);
+      if (parsed && Number(parsed.retry_after) > 0) retryAfter = Number(parsed.retry_after);
+    } catch {
+      // non-JSON body — fall back to default retry interval
+    }
+    throw new SourceWarmingError(retryAfter);
+  }
+  return resp.data;
+}
+
+/** Ask the backend to warm this version's VPN egress tunnel ahead of blob fetches. */
+export async function prewarmFileEgress(projectVersionId: number) {
+  return fetchJson<{ status: string }>(
+    getRoute("project_version_file_prewarm_url", { project_version_id: projectVersionId }),
+    { method: "POST" },
   );
 }
 

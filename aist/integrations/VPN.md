@@ -49,7 +49,8 @@ aist/utils/vpn.py
 | AI triage, MCP server | No | Do not call client systems |
 | Deduplication | No | Operates on data already in the DB |
 | n8n webhooks | No | n8n initiates requests to the platform, not the other way around |
-| Django admin, UI, REST API | No | Incoming traffic; VPN does not apply |
+| UI file blob / findings-list snippet | Yes | Via a **warm per-VPN egress** proxy (see below), not the ephemeral sidecar |
+| Django admin, REST API (other) | No | Incoming traffic; VPN does not apply |
 
 **Rule of thumb:** VPN is used only when AIST makes an outbound HTTPS request to
 a client-controlled system. If that system is on the public internet, VPN is not
@@ -86,6 +87,56 @@ If `resolve_integration` returns `None`, or `ovpn_content` is empty,
 container. The calling code does not need to change.
 
 ---
+
+## Warm per-VPN egress (UI file blobs)
+
+The blob endpoint (`aist/api/files.py`) runs in the **web** process, which has no
+Docker socket and cannot absorb the ~30 s OpenVPN cold start on the request path.
+So instead of the ephemeral one-container-per-execution model, interactive file
+fetches use a **long-lived egress sidecar, one per VPN integration**, started
+ahead of time from a Celery worker and reused across requests.
+
+Concern owner: `aist/integrations/egress.py` (naming, VPN resolution, lifecycle).
+Low-level container mechanics stay in `aist/utils/vpn.py`; the blob endpoint only
+resolves a proxy URL and connects.
+
+- **Name / discovery:** deterministic `aist-vpn-egress-<vpn_integration_id>`;
+  proxy is `http://aist-vpn-egress-<vpn_integration_id>:1080`. The web process
+  derives this from the *authorized* project version — never from user input —
+  so no external registry is needed and one org can never reach another org's
+  tunnel. Docker is the source of truth (liveness = does the connect succeed).
+- **Keyed by `vpn_integration_id`, not org:** one org may own several VPN
+  integrations for distinct internal networks. A VPN integration belongs to
+  exactly one org, so per-VPN keying still guarantees org isolation. A
+  defense-in-depth cross-org guard in `vpn_integration_for_project_version`
+  ignores any SCM binding that points at another org's VPN.
+- **Separate pool from the pipeline sidecar:** the analyzer keeps its own
+  ephemeral `aist-vpn-<execution_id>`; UI fetches never share a container or lock
+  with it, so browsing blobs can never block an analysis.
+- **Cold path:** if the tunnel is not up, the blob endpoint answers
+  `202 {"status":"warming"}` and enqueues `prewarm_egress`; the UI retries. First
+  view of an idle VPN pays the ~30 s once, server-wide (shared by all users);
+  subsequent fetches are fast until it idles out.
+- **Pre-warm:** `POST /projects_version/<id>/files/prewarm` (idempotent,
+  org-scoped) lets the UI warm the tunnel when opening the findings list / code
+  view, before clicking a file.
+- **Reaping:** `aist.tasks.egress.reap_egress` (celery-beat, every 5 min) stops
+  containers idle longer than `AIST_EGRESS_IDLE_TTL` (default 900 s) and evicts
+  the least-recently-used above `AIST_EGRESS_MAX_WARM` (default 10). Idle is
+  measured worker-side with no shared state, from the mtime of the sidecar's
+  tinyproxy connect log.
+- **tinyproxy connect log:** the warm sidecar logs one CONNECT line per fetch to
+  `/tmp/tinyproxy-access.log` (used only for the mtime idle signal — content is
+  never read). This file holds **one org's** internal SCM hostnames, is readable
+  only via `docker exec`/inspect (already a high-privilege boundary, same as VPN
+  credentials), and is destroyed when the container is reaped (`docker rm`). It is
+  not written to `docker logs`.
+- **Settings:** `AIST_EGRESS_IDLE_TTL`, `AIST_EGRESS_MAX_WARM`,
+  `AIST_EGRESS_WEB_SERVICE` (default `uwsgi`, resolved for the tinyproxy Allow
+  list), `AIST_EGRESS_ALLOWED_IPS` (optional explicit Allow override).
+- **GitHub limitation:** the GitHub App client (`ScmGithubBinding`) does not
+  thread a proxy, so a GitHub-Enterprise instance reachable only through a VPN is
+  not yet covered by the blob path. GitHub Cloud needs no VPN and works.
 
 ## Configuration
 

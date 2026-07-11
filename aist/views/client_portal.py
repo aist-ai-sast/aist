@@ -85,6 +85,10 @@ def _build_routes() -> dict[str, Any]:
             "SUBPATH",
             "subpath",
         ),
+        "project_version_file_prewarm_url": _replace_int_placeholder(
+            reverse("aist_api:project_version_file_prewarm", kwargs={"project_version_id": 0}),
+            "project_version_id",
+        ),
         "dashboard_summary_url": reverse("client_dashboard_summary"),
         "manageable_orgs_url": reverse("aist_api:organization_create") + "?manage=true",
         "org_integrations_url": _replace_int_placeholder(

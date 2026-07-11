@@ -364,18 +364,32 @@ class ScmGerritBinding(models.Model):
         token = base64.b64encode(f"{user}:{pw}".encode()).decode()
         return {"Authorization": f"Basic {token}"}
 
-    def fetch_raw_bytes(self, scm: RepositoryInfo, ref: str, path: str) -> bytes | None:
-        """Fetch a file's decoded bytes from Gerrit (content endpoint is base64)."""
+    def fetch_raw_bytes(
+        self, scm: RepositoryInfo, ref: str, path: str, *, proxy_url: str | None = None,
+    ) -> bytes | None:
+        """
+        Fetch a file's decoded bytes from Gerrit (content endpoint is base64).
+
+        When ``proxy_url`` is set the request routes through the warm per-VPN
+        egress proxy; connection/timeout errors are then re-raised so the caller
+        can detect a cold tunnel and answer ``202 warming`` instead of ``404``.
+        """
         import requests as _requests  # noqa: PLC0415
 
         logger = logging.getLogger("aist")
         url = self.build_raw_url(scm, ref, path)
+        proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
         try:
-            resp = _requests.get(url, headers=self.get_auth_headers(), timeout=10)
+            resp = _requests.get(url, headers=self.get_auth_headers(), timeout=10, proxies=proxies)
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
             return base64.b64decode(resp.text)
+        except (_requests.ConnectionError, _requests.Timeout):
+            if proxy_url:
+                raise  # cold egress → let the endpoint return 202 warming
+            logger.exception("Failed to fetch raw file from Gerrit for %s", scm.repo_full)
+            return None
         except Exception:
             logger.exception("Failed to fetch raw file from Gerrit for %s", scm.repo_full)
             return None

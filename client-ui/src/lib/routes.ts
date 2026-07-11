@@ -38,6 +38,7 @@ type RouteMap = {
   calendar_event_detail_url: string;
   ai_finding_responses_url: string;
   project_version_file_url: string;
+  project_version_file_prewarm_url: string;
   ui_findings_path: string;
   ui_finding_detail_path: string;
   ui_products_path: string;
