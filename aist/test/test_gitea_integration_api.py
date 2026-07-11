@@ -10,12 +10,14 @@ from rest_framework.test import APIClient
 
 from aist.models import (
     AISTProject,
+    AISTProjectVersion,
     Organization,
     OrgIntegration,
     OrgIntegrationType,
     RepositoryInfo,
     ScmGiteaBinding,
     ScmType,
+    VersionType,
 )
 
 TEST_GITEA_TOKEN = "xpat-token-abc123".removeprefix("x")
@@ -83,6 +85,40 @@ class GiteaIntegrationAPITests(TestCase):
         self.assertEqual(repo.repo_full, "myorg/myrepo")
         binding = ScmGiteaBinding.objects.get(scm=repo)
         self.assertEqual(binding.org_integration_id, integration.id)
+
+    @patch("aist.api.gitea_integration.fetch_gitea_project_info.delay")
+    def test_import_seeds_real_default_branch_not_hardcoded_master(self, mock_delay):
+        """
+        Regression: the initial AISTProjectVersion must use the repo's actual
+        default branch fetched via the VPN-aware Celery task, not the
+        hardcoded "master" fallback in create_default_master_version (which
+        has no VPN/proxy awareness and silently falls back when the Gitea
+        host is only reachable through a VPN sidecar).
+        """
+        org = Organization.objects.create(name="Org DefaultBranch")
+        self._create_gitea_integration(org)
+        mock_delay.return_value.get.return_value = {
+            "ok": True,
+            "path_with_namespace": "myorg/myrepo",
+            "description": "desc",
+            "web_url": "https://gitea.example.com/myorg/myrepo",
+            "inferred_base": "https://gitea.example.com",
+            "default_branch": "main",
+            "langs_raw": {},
+        }
+
+        resp = self.client.post(
+            self._url(),
+            data={"repo_full_name": "myorg/myrepo", "organization_id": org.id},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        aist_project = AISTProject.objects.get(id=resp.data["aist_project_id"])
+        versions = list(AISTProjectVersion.objects.filter(project=aist_project))
+        self.assertEqual(len(versions), 1)
+        self.assertEqual(versions[0].version, "main")
+        self.assertEqual(versions[0].version_type, VersionType.GIT_BRANCH)
 
     @patch("aist.api.gitea_integration.fetch_gitea_project_info.delay")
     def test_import_produces_runnable_clone_url(self, mock_delay):

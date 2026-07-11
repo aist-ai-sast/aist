@@ -140,6 +140,7 @@ def fetch_gitlab_project_info(self, integration_id: int, project_id: int, async_
             "description": getattr(proj, "description", "") or "",
             "web_url": web_url,
             "inferred_base": inferred_base,
+            "default_branch": getattr(proj, "default_branch", "") or "",
             "langs_raw": langs_raw,
         }
 

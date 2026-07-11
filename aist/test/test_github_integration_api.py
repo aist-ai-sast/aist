@@ -10,7 +10,15 @@ from dojo.models import Product, Product_Type, SLA_Configuration
 from rest_framework.test import APIClient
 
 from aist.api.github_integration import _fetch_repository_details
-from aist.models import AISTProject, Organization, RepositoryInfo, ScmGithubBinding, ScmType
+from aist.models import (
+    AISTProject,
+    AISTProjectVersion,
+    Organization,
+    RepositoryInfo,
+    ScmGithubBinding,
+    ScmType,
+    VersionType,
+)
 
 
 class _AnalyzerConfigStub:
@@ -145,6 +153,41 @@ class GithubIntegrationAPITests(TestCase):
 
         project = AISTProject.objects.get(repository=repo)
         self.assertEqual(project.organization_id, org.id)
+
+    @patch("aist.api.github_integration._fetch_repository_details")
+    @patch("aist.api.github_integration._list_installation_repositories")
+    @patch("aist.api.github_integration._load_analyzers_config")
+    def test_import_seeds_real_default_branch_not_hardcoded_master(self, mock_cfg, mock_list_repos, mock_fetch_details):
+        """Regression: initial version must use the real default branch, not a hardcoded "master"."""
+        org = Organization.objects.create(name="Org DefaultBranch")
+        mock_cfg.return_value = _AnalyzerConfigStub()
+        mock_list_repos.return_value = [
+            {"id": 1, "full_name": "owner/repo-db", "private": True, "default_branch": "main"},
+        ]
+        mock_fetch_details.return_value = (
+            {
+                "html_url": "https://github.com/owner/repo-db",
+                "description": "repo desc",
+                "default_branch": "main",
+            },
+            {"Python": 100},
+        )
+
+        resp = self.client.post(
+            reverse("aist_api:github_import_execute"),
+            data={"organization_id": org.id, "installation_id": 77, "repositories": ["owner/repo-db"]},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data["imported"]), 1)
+
+        repo = RepositoryInfo.objects.get(type=ScmType.GITHUB, repo_owner="owner", repo_name="repo-db")
+        project = AISTProject.objects.get(repository=repo)
+        versions = list(AISTProjectVersion.objects.filter(project=project))
+        self.assertEqual(len(versions), 1)
+        self.assertEqual(versions[0].version, "main")
+        self.assertEqual(versions[0].version_type, VersionType.GIT_BRANCH)
 
     @patch("aist.api.github_integration._import_github_repository")
     @patch("aist.api.github_integration._list_installation_repositories")

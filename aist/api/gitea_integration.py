@@ -121,6 +121,7 @@ class ImportProjectFromGiteaAPI(APIView):
             inferred_base=proj_data["inferred_base"],
             supported_languages=langs,
             auto_analyze=serializer.validated_data.get("auto_analyze", False),
+            default_branch=proj_data.get("default_branch") or "",
         )
         try:
             aist_project, repo_full = import_scm_project(import_request)

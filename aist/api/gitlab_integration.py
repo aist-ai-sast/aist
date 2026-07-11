@@ -16,7 +16,16 @@ from rest_framework.views import APIView
 from aist.api.projects import _create_initial_script
 from aist.api.schema import AISTApiTag
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
-from aist.models import AISTProject, OrgIntegration, OrgIntegrationType, RepositoryInfo, ScmGitlabBinding, ScmType
+from aist.models import (
+    AISTProject,
+    AISTProjectVersion,
+    OrgIntegration,
+    OrgIntegrationType,
+    RepositoryInfo,
+    ScmGitlabBinding,
+    ScmType,
+    VersionType,
+)
 from aist.queries import get_authorized_aist_organizations
 from aist.tasks.integrations import fetch_gitlab_project_info
 from aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GH flow uses
@@ -158,6 +167,20 @@ class ImportProjectFromGitlabAPI(APIView):
             )
             if project_created:
                 _create_initial_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
+                default_branch = proj_data.get("default_branch") or ""
+                if default_branch:
+                    # Seed the initial version with the real default branch now,
+                    # while it's still committed inside this transaction — this
+                    # pre-empts create_default_master_version's own "master"
+                    # fallback lookup (which has no VPN/proxy awareness and
+                    # would silently fall back when GitLab is only reachable
+                    # via VPN). fetch_gitlab_project_info already resolved this
+                    # correctly through the VPN-aware scoped_session above.
+                    AISTProjectVersion.objects.get_or_create(
+                        project=aist_project,
+                        version=default_branch,
+                        defaults={"version_type": VersionType.GIT_BRANCH},
+                    )
             else:
                 if aist_project.organization_id and aist_project.organization_id != organization.id:
                     msg = "Project is already linked to another organization."

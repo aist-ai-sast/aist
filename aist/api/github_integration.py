@@ -32,7 +32,15 @@ from aist.api.projects import _create_initial_script
 from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
-from aist.models import AISTProject, Organization, RepositoryInfo, ScmGithubBinding, ScmType
+from aist.models import (
+    AISTProject,
+    AISTProjectVersion,
+    Organization,
+    RepositoryInfo,
+    ScmGithubBinding,
+    ScmType,
+    VersionType,
+)
 from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
 from aist.utils.pipeline_imports import _load_analyzers_config
 
@@ -675,6 +683,20 @@ def _import_github_repository(
 
         if created_project:
             _create_initial_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
+            default_branch = details.get("default_branch") or ""
+            if default_branch:
+                # Seed the initial version with the real default branch now,
+                # while it's still committed inside this transaction — this
+                # pre-empts create_default_master_version's own "master"
+                # fallback lookup (which has no VPN/proxy awareness and would
+                # silently fall back for GitHub Enterprise hosts only
+                # reachable via VPN). `details` already carries this from the
+                # GitHub API fetch above.
+                AISTProjectVersion.objects.get_or_create(
+                    project=aist_project,
+                    version=default_branch,
+                    defaults={"version_type": VersionType.GIT_BRANCH},
+                )
             if auto_analyze:
                 from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415
                 pid = aist_project.id

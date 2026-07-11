@@ -10,12 +10,14 @@ from rest_framework.test import APIClient
 
 from aist.models import (
     AISTProject,
+    AISTProjectVersion,
     Organization,
     OrgIntegration,
     OrgIntegrationType,
     RepositoryInfo,
     ScmGerritBinding,
     ScmType,
+    VersionType,
 )
 
 TEST_GERRIT_PASSWORD = "xhttp-pass-123".removeprefix("x")
@@ -82,6 +84,33 @@ class GerritIntegrationAPITests(TestCase):
         self.assertEqual(repo.repo_full, "platform/build/soong")
         binding = ScmGerritBinding.objects.get(scm=repo)
         self.assertEqual(binding.org_integration_id, integration.id)
+
+    @patch("aist.api.gerrit_integration.fetch_gerrit_project_info.delay")
+    def test_import_seeds_real_default_branch_not_hardcoded_master(self, mock_delay):
+        """Regression: initial version must use the real default branch, not a hardcoded "master"."""
+        org = Organization.objects.create(name="Org DefaultBranch")
+        self._create_gerrit_integration(org)
+        mock_delay.return_value.get.return_value = {
+            "ok": True,
+            "project_path": "platform/build/soong",
+            "description": "desc",
+            "web_url": "https://gerrit.example.com/admin/repos/platform/build/soong",
+            "inferred_base": "https://gerrit.example.com",
+            "default_branch": "main",
+        }
+
+        resp = self.client.post(
+            self._url(),
+            data={"project_path": "platform/build/soong", "organization_id": org.id},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        aist_project = AISTProject.objects.get(id=resp.data["aist_project_id"])
+        versions = list(AISTProjectVersion.objects.filter(project=aist_project))
+        self.assertEqual(len(versions), 1)
+        self.assertEqual(versions[0].version, "main")
+        self.assertEqual(versions[0].version_type, VersionType.GIT_BRANCH)
 
     @patch("aist.api.gerrit_integration.fetch_gerrit_project_info.delay")
     def test_import_gerrit_single_segment_project(self, mock_delay):

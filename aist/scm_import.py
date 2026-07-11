@@ -10,7 +10,15 @@ from dojo.models import DojoMeta, Product
 
 from aist.api.projects import _create_initial_script
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
-from aist.models import AISTProject, OrgIntegration, Organization, RepositoryInfo, ScmType
+from aist.models import (
+    AISTProject,
+    AISTProjectVersion,
+    Organization,
+    OrgIntegration,
+    RepositoryInfo,
+    ScmType,
+    VersionType,
+)
 
 if TYPE_CHECKING:
     from django.contrib.auth.base_user import AbstractBaseUser
@@ -41,6 +49,13 @@ class ScmImportRequest:
     inferred_base: str
     supported_languages: list[str]
     auto_analyze: bool
+    # Default branch resolved by the caller's own VPN-aware fetch (e.g.
+    # fetch_gitea_project_info), if any. Threading it through here lets us
+    # seed the initial AISTProjectVersion directly — the post_save signal
+    # (aist.celery_signals.create_default_master_version) that would
+    # otherwise derive it has no VPN/proxy awareness and silently falls back
+    # to "master" when the org's SCM integration is only reachable via VPN.
+    default_branch: str = ""
 
     @property
     def repo_full(self) -> str:
@@ -120,6 +135,16 @@ def import_scm_project(req: ScmImportRequest) -> tuple[AISTProject, str]:
 
         if project_created:
             _create_initial_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
+            if req.default_branch:
+                # Seed the initial version with the real default branch now,
+                # while it's still committed inside this transaction — this
+                # pre-empts create_default_master_version's own "master"
+                # fallback lookup (it only runs if no version exists yet).
+                AISTProjectVersion.objects.get_or_create(
+                    project=aist_project,
+                    version=req.default_branch,
+                    defaults={"version_type": VersionType.GIT_BRANCH},
+                )
 
     if req.auto_analyze and aist_project.repository:
         from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415
