@@ -259,7 +259,12 @@ class GiteaIntegrationValidateTests(TestCase):
         )
 
     @patch("requests.Session.get")
-    def test_validate_success_calls_user_endpoint(self, mock_get):
+    def test_validate_success_calls_repos_search_endpoint(self, mock_get):
+        """
+        Uses /api/v1/repos/search (needs only "read:repository"), not /api/v1/user
+        (needs "read:user") — a token scoped only for repo access, which is all this
+        integration actually uses, would otherwise fail validation with a 403.
+        """
         from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
 
         mock_resp = MagicMock()
@@ -271,7 +276,7 @@ class GiteaIntegrationValidateTests(TestCase):
         self.assertTrue(valid)
         self.assertEqual(detail, "")
         called_url = mock_get.call_args[0][0]
-        self.assertEqual(called_url, "https://gitea.example.com/api/v1/user")
+        self.assertEqual(called_url, "https://gitea.example.com/api/v1/repos/search")
         called_headers = mock_get.call_args.kwargs["headers"]
         self.assertEqual(called_headers, {"Authorization": f"token {TEST_GITEA_TOKEN}"})
 
@@ -300,3 +305,62 @@ class GiteaIntegrationValidateTests(TestCase):
 
         self.assertFalse(valid)
         self.assertIn("base_url", detail)
+
+
+class FetchGiteaProjectsTaskTests(TestCase):
+
+    """
+    Direct unit coverage of the ``fetch_gitea_projects`` Celery task's HTTP calls —
+    guards against regressing to an endpoint that needs a scope ("read:user") a
+    repo-scoped token won't have, and against assuming the wrong response shape
+    (/api/v1/repos/search wraps results in {"ok": ..., "data": [...]}, unlike
+    /api/v1/user/repos which returns a bare array).
+    """
+
+    def setUp(self):
+        self.org = Organization.objects.create(name="Fetch Projects Org")
+        self.integration = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type=OrgIntegrationType.GITEA,
+            name="Gitea",
+            config={"base_url": "https://gitea.example.com"},
+            secret=TEST_GITEA_TOKEN,
+            is_active=True,
+        )
+
+    @patch("requests.Session.get")
+    def test_calls_repos_search_and_parses_data_wrapper(self, mock_get):
+        from aist.tasks.integrations import fetch_gitea_projects  # noqa: PLC0415
+
+        search_resp = MagicMock()
+        search_resp.raise_for_status = MagicMock()
+        search_resp.json.return_value = {
+            "ok": True,
+            "data": [{
+                "id": 5,
+                "name": "myrepo",
+                "full_name": "myorg/myrepo",
+                "description": "desc",
+                "html_url": "https://gitea.example.com/myorg/myrepo",
+                "default_branch": "main",
+                "private": False,
+            }],
+        }
+        langs_resp = MagicMock()
+        langs_resp.raise_for_status = MagicMock()
+        langs_resp.json.return_value = {"Python": 100}
+
+        # First call: repo search page (5 results < limit=50, no second page needed).
+        # Second call: per-repo languages lookup.
+        mock_get.side_effect = [search_resp, langs_resp]
+
+        result = fetch_gitea_projects.run(self.integration.pk)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["projects"]), 1)
+        self.assertEqual(result["projects"][0]["full_name"], "myorg/myrepo")
+        self.assertEqual(result["projects"][0]["language"], "Python")
+
+        first_call_url = mock_get.call_args_list[0][0][0]
+        self.assertEqual(first_call_url, "https://gitea.example.com/api/v1/repos/search")
+        self.assertNotIn("/api/v1/user/repos", first_call_url)

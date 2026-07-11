@@ -661,7 +661,16 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
             return False, "Gitea integration requires a base_url in config."
         try:
             with integration.scoped_session(execution_id=f"validate-{integration.pk}") as session:
-                resp = session.get(f"{base_url}/api/v1/user", headers=_gitea_headers(integration), timeout=15)
+                # /api/v1/user requires the "read:user" scope, which a token scoped only
+                # for repository access (the actual use of this integration) won't have.
+                # /api/v1/repos/search only needs "read:repository", matching what
+                # fetch_gitea_projects actually calls.
+                resp = session.get(
+                    f"{base_url}/api/v1/repos/search",
+                    headers=_gitea_headers(integration),
+                    params={"limit": 1},
+                    timeout=15,
+                )
                 resp.raise_for_status()
         except Exception as exc:
             logger.exception("Integration[%s] GITEA validation error", integration.pk)

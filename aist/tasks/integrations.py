@@ -265,14 +265,17 @@ def fetch_gitea_projects(self, integration_id: int, async_user=None) -> dict:
         max_pages = 200  # safety bound (10k repos) — a real hit is logged below, never silent
         page = 1
         while page <= max_pages:
+            # /api/v1/user/repos requires the "read:user" scope; /api/v1/repos/search
+            # only needs "read:repository" — matching what a repo-scoped PAT actually
+            # grants and what fetch_gitea_project_info/get_project_info already use.
             resp = session.get(
-                f"{base_url}/api/v1/user/repos",
+                f"{base_url}/api/v1/repos/search",
                 headers=headers,
                 params={"limit": limit, "page": page},
                 timeout=30,
             )
             resp.raise_for_status()
-            batch = resp.json() or []
+            batch = (resp.json() or {}).get("data") or []
             for repo in batch:
                 summary = GiteaRepoSummary.from_api(repo)
                 language = ""
