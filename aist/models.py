@@ -479,11 +479,14 @@ class ScmGiteaBinding(models.Model):
 
         logger = logging.getLogger("aist")
         base = self.host(scm).rstrip("/")
+        proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
         try:
-            kwargs: dict = {"headers": self.get_auth_headers(), "timeout": 15}
-            if proxy_url:
-                kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
-            resp = _requests.get(f"{base}/api/v1/repos/{scm.repo_full}", **kwargs)
+            resp = _requests.get(
+                f"{base}/api/v1/repos/{scm.repo_full}",
+                headers=self.get_auth_headers(),
+                timeout=15,
+                proxies=proxies,
+            )
             resp.raise_for_status()
             data = resp.json()
         except Exception:

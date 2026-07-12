@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from aist.api.schema import AISTApiTag
 from aist.models import OrgIntegration, OrgIntegrationType, ScmGiteaBinding, ScmType
 from aist.queries import get_authorized_aist_organizations
-from aist.scm_import import ScmImportConflict, ScmImportRequest, import_scm_project
+from aist.scm_import import ScmImportConflictError, ScmImportRequest, import_scm_project
 from aist.tasks.integrations import fetch_gitea_project_info
 from aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GitLab/GH flows use
 
@@ -125,7 +125,7 @@ class ImportProjectFromGiteaAPI(APIView):
         )
         try:
             aist_project, repo_full = import_scm_project(import_request)
-        except ScmImportConflict as exc:
+        except ScmImportConflictError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         out = ImportGiteaResponseSerializer(

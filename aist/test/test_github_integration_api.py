@@ -36,7 +36,11 @@ class GithubIntegrationAPITests(TestCase):
             password="pass",  # noqa: S106
         )
         self.client.force_authenticate(user=self.user)
-        self.sla, _ = SLA_Configuration.objects.get_or_create(id=1, defaults={"name": "SLA default"})
+        SLA_Configuration.objects.bulk_create(
+            [SLA_Configuration(id=1, name="SLA default")],
+            ignore_conflicts=True,
+        )
+        self.sla = SLA_Configuration.objects.get(id=1)
 
     def test_github_import_options_returns_organizations(self):
         Organization.objects.create(name="Org One")

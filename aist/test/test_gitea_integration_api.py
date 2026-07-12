@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import requests
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -229,7 +230,7 @@ class GiteaProjectsListViewTests(TestCase):
         )
         self.user.is_superuser = True
         self.user.save(update_fields=["is_superuser"])
-        self.client.force_authenticate(user=self.user)
+        self.client.force_login(self.user)
         self.org = Organization.objects.create(name="List Org")
         OrgIntegration.objects.create(
             organization=self.org,
@@ -318,8 +319,6 @@ class GiteaIntegrationValidateTests(TestCase):
 
     @patch("requests.Session.get")
     def test_validate_auth_failure_returns_invalid(self, mock_get):
-        import requests
-
         from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
 
         mock_resp = MagicMock()

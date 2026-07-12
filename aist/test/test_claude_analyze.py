@@ -84,12 +84,10 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
             )
 
     @patch("aist.tasks.claude._send_to_bridge")
-    @patch("aist.tasks.claude.subprocess")
+    @patch("aist.tasks.claude.subprocess.run", side_effect=Exception("clone failed"))
     @patch("aist.tasks.claude.vpn_sidecar_context", _fake_vpn_ctx)
     @patch("aist.tasks.claude.resolve_integration", return_value=None)
-    def test_clone_failure_does_not_call_bridge(self, mock_resolve, mock_subprocess, mock_bridge):
-        mock_subprocess.run.side_effect = Exception("clone failed")
-
+    def test_clone_failure_does_not_call_bridge(self, mock_resolve, mock_run, mock_bridge):
         analyze_project_after_import(self.project.id)
 
         mock_bridge.assert_not_called()

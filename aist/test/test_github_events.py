@@ -26,7 +26,11 @@ class GithubEventsTests(TestCase):
             email="events@example.com",
             password="pass",  # noqa: S106
         )
-        self.sla, _ = SLA_Configuration.objects.get_or_create(id=1, defaults={"name": "SLA"})
+        SLA_Configuration.objects.bulk_create(
+            [SLA_Configuration(id=1, name="SLA")],
+            ignore_conflicts=True,
+        )
+        self.sla = SLA_Configuration.objects.get(id=1)
         self.product_type = Product_Type.objects.create(name="PT")
         self.product = Product.objects.create(
             name="owner/repo",

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from django.contrib.auth.base_user import AbstractBaseUser
 
 
-class ScmImportConflict(Exception):
+class ScmImportConflictError(Exception):
 
     """Raised for 409-worthy states (product/project already linked elsewhere)."""
 
@@ -74,7 +74,7 @@ def import_scm_project(req: ScmImportRequest) -> tuple[AISTProject, str]:
     AISTProject / DojoMeta creation, org-conflict checks) is identical across
     providers, so it lives here once.
 
-    Returns ``(aist_project, repo_full)``. Raises ``ScmImportConflict`` for
+    Returns ``(aist_project, repo_full)``. Raises ``ScmImportConflictError`` for
     409-worthy states — callers map that to a Response.
     """
     repo_full = req.repo_full
@@ -88,7 +88,7 @@ def import_scm_project(req: ScmImportRequest) -> tuple[AISTProject, str]:
         user_has_permission_or_403(req.request_user, product, Permissions.Product_Edit)
         if product.prod_type_id != product_type.id:
             msg = "Product already exists under another product type. Move it first or choose another organization."
-            raise ScmImportConflict(msg)
+            raise ScmImportConflictError(msg)
 
     DojoMeta.objects.update_or_create(
         product=product,
@@ -117,7 +117,7 @@ def import_scm_project(req: ScmImportRequest) -> tuple[AISTProject, str]:
         if not project_created:
             if aist_project.organization_id and aist_project.organization_id != req.organization.id:
                 msg = "Project is already linked to another organization."
-                raise ScmImportConflict(msg)
+                raise ScmImportConflictError(msg)
             if aist_project.organization_id is None:
                 aist_project.organization = req.organization
                 aist_project.save(update_fields=["organization"])

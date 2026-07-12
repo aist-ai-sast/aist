@@ -28,6 +28,7 @@ the source of truth.
 from __future__ import annotations
 
 import logging
+import operator
 import socket
 import subprocess
 from datetime import UTC, datetime
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _NAME_PREFIX = "aist-vpn-egress-"
-_ACCESS_LOG = "/tmp/tinyproxy-access.log"
+_ACCESS_LOG = "/tmp/tinyproxy-access.log"  # noqa: S108 -- path inside the sidecar container, not this host
 
 
 # --- Naming (deterministic; derivable without any registry) ------------------
@@ -233,7 +234,7 @@ def _last_used(name: str) -> datetime | None:
     raw = started.stdout.strip()
     if started.returncode == 0 and raw:
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
+            return datetime.fromisoformat(raw).astimezone(UTC)
         except ValueError:
             logger.debug("egress: cannot parse StartedAt=%r for %s", raw, name)
     return None
@@ -261,7 +262,7 @@ def reap_idle() -> int:
 
     max_warm = _max_warm()
     if len(survivors) > max_warm:
-        survivors.sort(key=lambda pair: pair[1])  # oldest last-use first
+        survivors.sort(key=operator.itemgetter(1))  # oldest last-use first
         for name, _ in survivors[: len(survivors) - max_warm]:
             logger.info("egress: evicting LRU sidecar=%s (pool cap=%d)", name, max_warm)
             vpn.stop_sidecar(name)

@@ -14,7 +14,9 @@ from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase
 
+from aist.api.files import ProjectVersionFileBlobAPI
 from aist.integrations import egress
+from aist.tasks.egress import prewarm_egress, reap_egress
 
 
 class EnsureWarmTests(SimpleTestCase):
@@ -46,9 +48,11 @@ class EnsureWarmTests(SimpleTestCase):
         self.assertEqual(kwargs["allowed_ips"], ["172.20.0.9"])
 
     def test_raises_without_ovpn_content(self):
-        with patch("aist.integrations.egress._is_running", return_value=False):
-            with self.assertRaises(RuntimeError):
-                egress.ensure_warm(self._vpn(ovpn=""))
+        with (
+            patch("aist.integrations.egress._is_running", return_value=False),
+            self.assertRaises(RuntimeError),
+        ):
+            egress.ensure_warm(self._vpn(ovpn=""))
 
     def test_name_collision_race_reuses(self):
         # start fails (name already taken by a concurrent prewarm) but it is now
@@ -141,16 +145,12 @@ class TaskContractTests(SimpleTestCase):
     """DefectDojo's DojoAsyncTask injects `async_user` into every task call."""
 
     def test_prewarm_accepts_async_user(self):
-        from aist.tasks.egress import prewarm_egress
-
         with patch("aist.models.AISTProjectVersion") as pv_model:
             pv_model.objects.select_related.return_value.filter.return_value.first.return_value = None
             # Call the task body directly with the kwarg the wrapper injects.
             self.assertIsNone(prewarm_egress.run(1, async_user="someone"))
 
     def test_reap_accepts_async_user(self):
-        from aist.tasks.egress import reap_egress
-
         with patch("aist.integrations.egress.reap_idle", return_value=0):
             self.assertEqual(reap_egress.run(async_user="someone"), 0)
 
@@ -160,8 +160,6 @@ class RemoteBytesProxyTests(SimpleTestCase):
     """`_return_remote_bytes` routes through the proxy only when given one."""
 
     def _view(self):
-        from aist.api.files import ProjectVersionFileBlobAPI
-
         return ProjectVersionFileBlobAPI()
 
     def _ok_response(self):

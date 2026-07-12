@@ -10,7 +10,11 @@ from aist.models import AISTProject, AISTProjectVersion, RepositoryInfo, ScmGith
 
 class ProjectDefaultVersionSignalTests(TestCase):
     def setUp(self):
-        self.sla, _ = SLA_Configuration.objects.get_or_create(id=1, defaults={"name": "SLA default"})
+        SLA_Configuration.objects.bulk_create(
+            [SLA_Configuration(id=1, name="SLA default")],
+            ignore_conflicts=True,
+        )
+        self.sla = SLA_Configuration.objects.get(id=1)
 
     def test_project_create_falls_back_to_master_when_binding_info_unavailable(self):
         product_type = Product_Type.objects.create(name="PT-signal")

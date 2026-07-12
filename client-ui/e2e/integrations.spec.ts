@@ -93,7 +93,7 @@ test("maintainer can create a Gerrit integration with base URL and username", as
 
   // Gerrit must offer VPN routing, same as GitLab — servers reachable only
   // over VPN would otherwise time out with no way to route through it.
-  await expect(orgSection.getByText("VPN Integration")).toBeVisible();
+  await expect(orgSection.getByText("VPN Integration", { exact: true })).toBeVisible();
 
   await orgSection.getByRole("button", { name: "Create" }).click();
   await expect(page.getByText("Integration created.")).toBeVisible();
@@ -127,7 +127,7 @@ test("maintainer can create a Gitea integration with base URL", async ({ page })
   await orgSection.getByPlaceholder("https://gitea.example.com").fill(`https://gitea-${suffix}.example.com`);
 
   // Gitea must offer VPN routing too — same self-hosted-behind-VPN case as GitLab/Gerrit.
-  await expect(orgSection.getByText("VPN Integration")).toBeVisible();
+  await expect(orgSection.getByText("VPN Integration", { exact: true })).toBeVisible();
 
   await orgSection.getByRole("button", { name: "Create" }).click();
   await expect(page.getByText("Integration created.")).toBeVisible();

@@ -17,6 +17,7 @@ from django.urls import reverse
 from dojo.models import Product_Type, Product_Type_Member
 
 from aist.api.org_integrations import _split_ovpn_pem_blocks
+from aist.integrations import egress
 from aist.models import Organization, OrgIntegration, OrgIntegrationType
 from aist.test.test_api import AISTApiBase
 from aist.utils.vpn import (
@@ -303,7 +304,7 @@ class VpnSidecarContextSecurityTests(AISTApiBase):
 
     @patch("aist.utils.vpn._build_vpn_sidecar_if_needed")
     @patch("aist.utils.vpn._wait_for_sidecar_ready")
-    @patch("aist.utils.vpn._stop_sidecar")
+    @patch("aist.utils.vpn.stop_sidecar")
     @patch("subprocess.run")
     def test_stop_sidecar_called_on_wait_failure(
         self,
@@ -325,7 +326,7 @@ class VpnSidecarContextSecurityTests(AISTApiBase):
 
     @patch("aist.utils.vpn._build_vpn_sidecar_if_needed")
     @patch("aist.utils.vpn._wait_for_sidecar_ready")
-    @patch("aist.utils.vpn._stop_sidecar")
+    @patch("aist.utils.vpn.stop_sidecar")
     @patch("subprocess.run")
     def test_tls_key_type_and_direction_passed_as_env_not_credentials(
         self,
@@ -357,7 +358,7 @@ class VpnSidecarContextSecurityTests(AISTApiBase):
 
     @patch("aist.utils.vpn._build_vpn_sidecar_if_needed")
     @patch("aist.utils.vpn._wait_for_sidecar_ready")
-    @patch("aist.utils.vpn._stop_sidecar")
+    @patch("aist.utils.vpn.stop_sidecar")
     @patch("aist.utils.vpn._get_own_eth0_ip", return_value="172.19.0.8")
     @patch("subprocess.run")
     def test_allowed_ip_passed_to_sidecar_when_eth0_detected(
@@ -387,7 +388,7 @@ class VpnSidecarContextSecurityTests(AISTApiBase):
 
     @patch("aist.utils.vpn._build_vpn_sidecar_if_needed")
     @patch("aist.utils.vpn._wait_for_sidecar_ready")
-    @patch("aist.utils.vpn._stop_sidecar")
+    @patch("aist.utils.vpn.stop_sidecar")
     @patch("aist.utils.vpn._get_own_eth0_ip", return_value=None)
     @patch("subprocess.run")
     def test_no_allowed_ip_when_eth0_not_detected(
@@ -865,18 +866,12 @@ class EgressNamingTests(AISTApiBase):
     """Deterministic warm-egress container name/URL helpers (per VPN integration)."""
 
     def test_container_name(self):
-        from aist.integrations import egress
-
         self.assertEqual(egress.container_name(42), "aist-vpn-egress-42")
 
     def test_proxy_url(self):
-        from aist.integrations import egress
-
         self.assertEqual(egress.proxy_url(42), "http://aist-vpn-egress-42:1080")
 
     def test_name_and_url_agree(self):
-        from aist.integrations import egress
-
         # web and worker must derive the same name; URL wraps the name verbatim.
         self.assertIn(egress.container_name(7), egress.proxy_url(7))
 
@@ -886,14 +881,10 @@ class EgressAllowedIpsTests(AISTApiBase):
     """`_allowed_ips` resolves the web service + own IP, or an explicit override."""
 
     def test_explicit_override_wins(self):
-        from aist.integrations import egress
-
         with self.settings(AIST_EGRESS_ALLOWED_IPS="10.0.0.1, 10.0.0.2"):
             self.assertEqual(egress._allowed_ips(), ["10.0.0.1", "10.0.0.2"])
 
     def test_resolves_web_service_and_own_ip(self):
-        from aist.integrations import egress
-
         with (
             patch("aist.integrations.egress.socket.gethostbyname_ex", return_value=("uwsgi", [], ["172.20.0.5"])),
             patch("aist.integrations.egress.vpn.own_eth0_ip", return_value="172.20.0.9"),
@@ -902,8 +893,6 @@ class EgressAllowedIpsTests(AISTApiBase):
             self.assertEqual(egress._allowed_ips(), ["172.20.0.5", "172.20.0.9"])
 
     def test_dns_failure_falls_back_to_own_ip(self):
-        from aist.integrations import egress
-
         with (
             patch("aist.integrations.egress.socket.gethostbyname_ex", side_effect=OSError("no dns")),
             patch("aist.integrations.egress.vpn.own_eth0_ip", return_value="172.20.0.9"),
