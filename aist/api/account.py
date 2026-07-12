@@ -3,11 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from django.contrib.auth import authenticate, get_user_model, login, logout, update_session_auth_hash
-from django.contrib.auth.forms import PasswordChangeForm
+from django.contrib.auth.forms import PasswordChangeForm, SetPasswordForm
+from django.contrib.auth.tokens import default_token_generator
 from django.utils.decorators import method_decorator
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode
 from django.views.decorators.csrf import csrf_protect
-from dojo.authorization.roles_permissions import Permissions, Roles
-from dojo.models import Product_Type_Group, Product_Type_Member
+from dojo.authorization.roles_permissions import Roles
+from dojo.models import Product_Type_Group, Product_Type_Member, UserContactInfo
 from dojo.utils import get_system_setting
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
@@ -18,7 +21,8 @@ from rest_framework.views import APIView
 from single_session.signals import remove_all_sessions
 
 from aist.api.schema import AISTApiTag
-from aist.queries import get_authorized_aist_organizations
+from aist.queries import get_visible_aist_organizations
+from aist.roles import role_rank
 
 User = get_user_model()
 
@@ -35,20 +39,68 @@ class OrganizationMembership:
     role_name: str
 
 
-def _role_rank(role_id: int | None) -> int:
-    ranks = {
-        Roles.Reader.value: 0,
-        Roles.API_Importer.value: 1,
-        Roles.Writer.value: 2,
-        Roles.Maintainer.value: 3,
-        Roles.Owner.value: 4,
-    }
-    return ranks.get(role_id, -1)
+class _MembershipAccumulator:
+
+    """
+    Resolves the single best (highest-role) membership per organization.
+
+    A user may reach an organization through several grant sources
+    (org-wide role, group role, per-project role). This object owns the
+    "keep the highest-ranked grant per org" rule so the resolution logic
+    lives in one place instead of being repeated per source.
+    """
+
+    def __init__(self, organizations: list) -> None:
+        self._org_by_id = {org.id: org for org in organizations}
+        self._best: dict[int, OrganizationMembership] = {}
+
+    @property
+    def organization_ids(self):
+        return self._org_by_id.keys()
+
+    def add_grant_rows(self, rows, organization_id_field: str) -> None:
+        """Merge ``.values(...)`` rows carrying ``role_id`` and ``role__name``."""
+        for row in rows:
+            org = self._org_by_id.get(row[organization_id_field])
+            if org is None:
+                continue
+            self._offer(
+                OrganizationMembership(
+                    organization_id=org.id,
+                    organization_name=org.name,
+                    role_id=row["role_id"],
+                    role_name=row["role__name"] or "Reader",
+                ),
+            )
+
+    def fill_missing_with_reader(self) -> None:
+        """
+        Default any still-unresolved visible org to Reader.
+
+        This covers visibility granted through a channel that carries no explicit
+        membership row (e.g. a global Product_View permission).
+        """
+        for org in self._org_by_id.values():
+            if org.id not in self._best:
+                self._best[org.id] = OrganizationMembership(
+                    organization_id=org.id,
+                    organization_name=org.name,
+                    role_id=Roles.Reader.value,
+                    role_name="Reader",
+                )
+
+    def result(self) -> list[OrganizationMembership]:
+        return sorted(self._best.values(), key=lambda item: item.organization_name.lower())
+
+    def _offer(self, candidate: OrganizationMembership) -> None:
+        current = self._best.get(candidate.organization_id)
+        if current is None or role_rank(candidate.role_id) > role_rank(current.role_id):
+            self._best[candidate.organization_id] = candidate
 
 
 def _get_organization_memberships(user: User) -> list[OrganizationMembership]:
     authorized_orgs = list(
-        get_authorized_aist_organizations(Permissions.Product_View, user=user)
+        get_visible_aist_organizations(user=user)
         .order_by("name")
         .only("id", "name", "product_type_id"),
     )
@@ -62,80 +114,26 @@ def _get_organization_memberships(user: User) -> list[OrganizationMembership]:
             )
             for org in authorized_orgs
         ]
-
-    org_by_id = {org.id: org for org in authorized_orgs}
-    if not org_by_id:
+    if not authorized_orgs:
         return []
 
-    by_org: dict[int, OrganizationMembership] = {}
-    member_rows = (
-        Product_Type_Member.objects.filter(
-            user=user,
-            product_type__aist_organization__in=org_by_id.keys(),
-        )
-        .values(
-            "product_type__aist_organization",
-            "role_id",
-            "role__name",
-        )
-        .distinct()
+    accumulator = _MembershipAccumulator(authorized_orgs)
+    org_ids = accumulator.organization_ids
+
+    accumulator.add_grant_rows(
+        Product_Type_Member.objects.filter(user=user, product_type__aist_organization__in=org_ids)
+        .values("product_type__aist_organization", "role_id", "role__name")
+        .distinct(),
+        "product_type__aist_organization",
     )
-    for row in member_rows:
-        organization_id = row["product_type__aist_organization"]
-        if not organization_id:
-            continue
-        org = org_by_id.get(organization_id)
-        if org is None:
-            continue
-        candidate = OrganizationMembership(
-            organization_id=organization_id,
-            organization_name=org.name,
-            role_id=row["role_id"],
-            role_name=row["role__name"] or "Reader",
-        )
-        current = by_org.get(organization_id)
-        if current is None or _role_rank(candidate.role_id) > _role_rank(current.role_id):
-            by_org[organization_id] = candidate
-
-    group_rows = (
-        Product_Type_Group.objects.filter(
-            group__users=user,
-            product_type__aist_organization__in=org_by_id.keys(),
-        )
-        .values(
-            "product_type__aist_organization",
-            "role_id",
-            "role__name",
-        )
-        .distinct()
+    accumulator.add_grant_rows(
+        Product_Type_Group.objects.filter(group__users=user, product_type__aist_organization__in=org_ids)
+        .values("product_type__aist_organization", "role_id", "role__name")
+        .distinct(),
+        "product_type__aist_organization",
     )
-    for row in group_rows:
-        organization_id = row["product_type__aist_organization"]
-        if not organization_id:
-            continue
-        org = org_by_id.get(organization_id)
-        if org is None:
-            continue
-        candidate = OrganizationMembership(
-            organization_id=organization_id,
-            organization_name=org.name,
-            role_id=row["role_id"],
-            role_name=row["role__name"] or "Reader",
-        )
-        current = by_org.get(organization_id)
-        if current is None or _role_rank(candidate.role_id) > _role_rank(current.role_id):
-            by_org[organization_id] = candidate
-
-    for org in authorized_orgs:
-        if org.id not in by_org:
-            by_org[org.id] = OrganizationMembership(
-                organization_id=org.id,
-                organization_name=org.name,
-                role_id=Roles.Reader.value,
-                role_name="Reader",
-            )
-
-    return sorted(by_org.values(), key=lambda item: item.organization_name.lower())
+    accumulator.fill_missing_with_reader()
+    return accumulator.result()
 
 
 class AISTOrganizationMembershipSerializer(serializers.Serializer):
@@ -226,6 +224,52 @@ class AISTAuthLoginSerializer(serializers.Serializer):
     password = serializers.CharField(trim_whitespace=False, write_only=True)
 
 
+class AISTSetPasswordSerializer(serializers.Serializer):
+
+    """Validate a reset/invite token and set the user's chosen password."""
+
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True, trim_whitespace=False)
+    new_password_confirm = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["new_password_confirm"]:
+            msg = "New passwords do not match."
+            raise serializers.ValidationError({"new_password_confirm": msg})
+        user = self._user_from_uid(attrs["uid"])
+        if user is None or not default_token_generator.check_token(user, attrs["token"]):
+            msg = "This link is invalid or has expired."
+            raise serializers.ValidationError({"token": msg})
+        form = SetPasswordForm(
+            user=user,
+            data={"new_password1": attrs["new_password"], "new_password2": attrs["new_password_confirm"]},
+        )
+        if not form.is_valid():
+            raise serializers.ValidationError(form.errors)
+        self.context["set_password_form"] = form
+        self.context["target_user"] = user
+        return attrs
+
+    @staticmethod
+    def _user_from_uid(uid: str):
+        try:
+            pk = force_str(urlsafe_base64_decode(uid))
+            return User.objects.get(pk=pk)
+        except (User.DoesNotExist, ValueError, TypeError, OverflowError):
+            return None
+
+    def save(self, **kwargs):
+        user = self.context["target_user"]
+        self.context["set_password_form"].save()
+        # The user has now set their own password; clear any forced-reset flag.
+        contact_info, _ = UserContactInfo.objects.get_or_create(user=user)
+        if contact_info.force_password_reset:
+            contact_info.force_password_reset = False
+            contact_info.save(update_fields=["force_password_reset"])
+        return user
+
+
 class AISTMeAPI(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -297,6 +341,28 @@ class AISTAuthLoginAPI(APIView):
         if not user.is_active:
             return Response({"detail": "User account is disabled."}, status=status.HTTP_401_UNAUTHORIZED)
         login(request, user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+class AISTSetPasswordAPI(APIView):
+
+    """Anonymous endpoint: set a password from an emailed invite/reset link."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "aist_auth_login"
+
+    @extend_schema(
+        tags=[AISTApiTag.AUTH.value],
+        summary="Set password from an invite/reset link",
+        request=AISTSetPasswordSerializer,
+        responses={204: OpenApiResponse(description="Password set")},
+    )
+    def post(self, request):
+        serializer = AISTSetPasswordSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

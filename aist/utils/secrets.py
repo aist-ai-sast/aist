@@ -114,6 +114,7 @@ _NON_SENSITIVE_KEYS: frozenset[str] = frozenset(
         "external_id",
         "external_url",
         "has_token",
+        "token_count",
         "has_secret",
         "vpn_secret",
         "tls_key_type",

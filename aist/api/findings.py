@@ -424,6 +424,8 @@ class AISTFindingExportRequestSerializer(serializers.Serializer):
 class AISTFindingExportAPI(AuthorizedQuerySetMixin, APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = AISTFindingExportRequestSerializer
+    # A POST that only reads (produces an export file) — a read-only token may call it.
+    token_read_only = True
     authorized_queryset = AuthorizedQuerysetSpec(
         getter=get_authorized_findings,
         permission=Permissions.Finding_View,

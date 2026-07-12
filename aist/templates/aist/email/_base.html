@@ -1,0 +1,41 @@
+{% autoescape on %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}AIST{% endblock %}</title>
+</head>
+<body style="margin:0; padding:0; background-color:#0f172a; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:#0f172a;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#0f172a; padding:32px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px; width:100%; background-color:#ffffff; border-radius:16px; overflow:hidden; box-shadow:0 8px 30px rgba(2,6,23,0.4);">
+          <!-- Brand header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#0ea5e9,#2563eb); padding:28px 32px;">
+              <div style="font-size:13px; letter-spacing:4px; text-transform:uppercase; color:rgba(255,255,255,0.85);">AIST</div>
+              <div style="font-size:12px; color:rgba(255,255,255,0.7); margin-top:2px;">Security Intelligence Platform</div>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding:32px;">
+              {% block content %}{% endblock %}
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding:20px 32px; background-color:#f1f5f9; color:#64748b; font-size:12px; line-height:18px;">
+              {% block footer %}
+              You are receiving this email because an action was taken on your AIST account.
+              If you did not expect it, you can safely ignore this message.
+              {% endblock %}
+            </td>
+          </tr>
+        </table>
+        <div style="color:#475569; font-size:11px; margin-top:16px;">© AIST</div>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>{% endautoescape %}

@@ -504,6 +504,8 @@ class LaunchSchedulePreviewAPI(AuthorizedQuerySetMixin, APIView):
     """
 
     permission_classes = [IsAuthenticated]
+    # A POST that only computes a preview (no state change) — read-only tokens may call it.
+    token_read_only = True
 
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_SCHEDULES.value],

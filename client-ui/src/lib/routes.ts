@@ -1,6 +1,8 @@
 type RouteMap = {
   login_url: string;
   login_api_url: string;
+  set_password_api_url: string;
+  ui_set_password_path: string;
   dashboard_summary_url: string;
   work_item_providers_url: string;
   finding_work_items_url: string;
@@ -47,6 +49,15 @@ type RouteMap = {
   ui_search_path: string;
   ui_settings_path: string;
   ui_org_integrations_path: string;
+  ui_users_path: string;
+  org_members_url: string;
+  org_member_detail_url: string;
+  org_member_reset_password_url: string;
+  org_member_project_grants_url: string;
+  org_member_project_grant_detail_url: string;
+  me_tokens_url: string;
+  me_token_detail_url: string;
+  admin_api_tokens_url: string;
   manageable_orgs_url: string;
   org_integrations_url: string;
   org_integration_detail_url: string;

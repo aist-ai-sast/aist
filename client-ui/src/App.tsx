@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Suspense, lazy, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,6 +19,8 @@ const PipelinesPage = lazy(() => import("./pages/PipelinesPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const OrgIntegrationsPage = lazy(() => import("./pages/OrgIntegrationsPage"));
+const UsersPage = lazy(() => import("./pages/UsersPage"));
+const SetPasswordPage = lazy(() => import("./pages/SetPasswordPage"));
 const PlaceholderPage = lazy(() => import("./pages/PlaceholderPage"));
 
 let routeBootstrapError: Error | null = null;
@@ -31,6 +33,7 @@ try {
   getRoute("ui_calendar_path");
   getRoute("ui_settings_path");
   getRoute("ui_org_integrations_path");
+  getRoute("ui_users_path");
 } catch (error) {
   routeBootstrapError = error as Error;
 }
@@ -87,6 +90,7 @@ function RequireAuth({
 
 export default function App() {
   const queryClient = useQueryClient();
+  const location = useLocation();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [forceLogin, setForceLogin] = useState(false);
 
@@ -115,6 +119,17 @@ export default function App() {
     setForceLogin(false);
     void queryClient.invalidateQueries({ queryKey: ["auth-status"] });
   };
+
+  // Anonymous set-password page (emailed invite/reset link) — outside RequireAuth.
+  if (location.pathname.startsWith("/auth/set-password/")) {
+    return (
+      <div className="min-h-screen bg-night-800 text-slate-100">
+        <Suspense fallback={<div className="p-6 text-sm text-slate-300">Loading...</div>}>
+          <SetPasswordPage />
+        </Suspense>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-night-800 text-slate-100">
@@ -174,6 +189,10 @@ export default function App() {
                   <Route
                     path={getRoute("ui_org_integrations_path")}
                     element={<OrgIntegrationsPage />}
+                  />
+                  <Route
+                    path={getRoute("ui_users_path")}
+                    element={<UsersPage />}
                   />
                   <Route path="*" element={<Navigate to={getRoute("ui_dashboard_path")} replace />} />
                 </Routes>

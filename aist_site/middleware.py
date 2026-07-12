@@ -7,12 +7,15 @@ from typing import TYPE_CHECKING
 from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import render
+from django.urls import Resolver404, resolve
 from rest_framework import exceptions
 from rest_framework.authentication import get_authorization_header
 from rest_framework.request import Request
 from rest_framework.settings import api_settings
 
+from aist.authentication import header_carries_scoped_token, resolve_scoped_token
 from aist.findings_bulk_lock import get_locked_finding_ids
+from aist.models import ApiTokenScope
 from aist.utils.secrets import mask_sensitive_data
 
 if TYPE_CHECKING:
@@ -20,6 +23,17 @@ if TYPE_CHECKING:
 
 
 class AistResponseMaskingMiddleware:
+
+    """
+    Masks secret-looking values in AIST JSON responses (defense-in-depth).
+
+    A view that INTENTIONALLY returns a secret exactly once (e.g. the one-time
+    reveal of a freshly created API token) opts out by declaring
+    ``disable_response_masking = True`` on the view class — otherwise the secret
+    would be turned into ``********`` and be useless to the caller. This mirrors
+    the endpoint-declared pattern used for token scope (no hardcoded paths).
+    """
+
     aist_prefixes = ("/aist/", "/aist-admin/aist/")
 
     def __init__(self, get_response):
@@ -29,7 +43,19 @@ class AistResponseMaskingMiddleware:
         response = self.get_response(request)
         if not any(request.path_info.startswith(prefix) for prefix in self.aist_prefixes):
             return response
+        if self._view_disables_masking(request):
+            return response
         return self._mask_json_response(response)
+
+    @staticmethod
+    def _view_disables_masking(request) -> bool:
+        """True if the target view declares ``disable_response_masking`` (intentional secret reveal)."""
+        try:
+            match = resolve(request.path_info)
+        except Resolver404:
+            return False
+        view_class = getattr(match.func, "view_class", None)
+        return bool(getattr(view_class, "disable_response_masking", False))
 
     def _mask_json_response(self, response: HttpResponse) -> HttpResponse:
         if getattr(response, "streaming", False):
@@ -147,6 +173,12 @@ class AistAdminGuardMiddleware:
         )
 
     def _handle_admin_api(self, request):
+        # AIST scoped tokens (aistpat_...) are NEVER valid on the DefectDojo API,
+        # even if their owner is a superuser — a scoped token must not be an
+        # escalation path into /aist-admin/. Deny before any other check.
+        if header_carries_scoped_token(request):
+            return self._deny_forbidden(request)
+
         if request.path_info.startswith(self.admin_swagger_prefixes):
             return self._handle_admin_swagger(request)
 
@@ -220,6 +252,62 @@ class AistAdminGuardMiddleware:
             user, _ = auth_result
             return user
         return None
+
+
+class AistTokenScopeMiddleware:
+
+    """
+    Enforces read-only vs read-write scope for AIST personal access tokens.
+
+    Generic and endpoint-declared, with NO hardcoded paths:
+
+    - Default: safe methods (GET/HEAD/OPTIONS) are reads; everything else is a
+      write. New endpoints are covered automatically.
+    - An endpoint that performs a READ through a write method (e.g. an export or
+      preview implemented as POST) opts in by setting the class attribute
+      ``token_read_only = True`` on its view — one declaration on the endpoint,
+      no logic duplication and no path matching here.
+
+    So a ``read_only`` token can call every read (GET, plus endpoint-declared
+    read-POSTs) and is denied only on genuine writes. (Finer per-endpoint
+    permission checks belong in the endpoints as the role model evolves; this
+    middleware only enforces the token's own scope.)
+
+    It lives in middleware, not a DRF permission, because AIST views set their own
+    ``permission_classes`` (which would replace a process-wide default permission).
+    Session and stock-token requests carry no ``aistpat_`` token and are unaffected.
+    """
+
+    aist_api_marker = "/api/v2/aist/"
+    safe_methods = frozenset({"GET", "HEAD", "OPTIONS"})
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if self._is_read_only_token_write(request):
+            return JsonResponse({"detail": "This token is read-only."}, status=403)
+        return self.get_response(request)
+
+    def _is_read_only_token_write(self, request) -> bool:
+        if request.method in self.safe_methods:
+            return False
+        if self.aist_api_marker not in request.path_info:
+            return False
+        if self._endpoint_declares_read_only(request):
+            return False
+        token = resolve_scoped_token(request)
+        return token is not None and token.scope != ApiTokenScope.READ_WRITE
+
+    @staticmethod
+    def _endpoint_declares_read_only(request) -> bool:
+        """True if the target view marks itself a read operation (``token_read_only``)."""
+        try:
+            match = resolve(request.path_info)
+        except Resolver404:
+            return False
+        view_class = getattr(match.func, "view_class", None)
+        return bool(getattr(view_class, "token_read_only", False))
 
 
 class AistFindingBulkLockMiddleware:

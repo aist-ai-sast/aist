@@ -1,6 +1,7 @@
 from django.urls import path
 
 from aist.api import (
+    AISTAdminApiTokenListAPI,
     AISTAuthLoginAPI,
     AISTAuthLogoutAllAPI,
     AISTAuthLogoutAPI,
@@ -16,9 +17,17 @@ from aist.api import (
     AISTFindingTimelineAPI,
     AISTMeAPI,
     AISTMeChangePasswordAPI,
+    AISTMeTokenDetailAPI,
+    AISTMeTokenListCreateAPI,
+    AISTOrgMemberDetailAPI,
+    AISTOrgMemberListCreateAPI,
+    AISTOrgMemberProjectGrantDetailAPI,
+    AISTOrgMemberProjectGrantListCreateAPI,
+    AISTOrgMemberResetPasswordAPI,
     AISTProjectDetailAPI,
     AISTProjectListAPI,
     AISTProjectRegenerateAnalysisAPI,
+    AISTSetPasswordAPI,
     FindingWorkItemDetailAPI,
     FindingWorkItemListCreateAPI,
     GithubConnectCallbackAPI,
@@ -100,8 +109,12 @@ from aist.api.tags import AvailableFindingTagsAPI
 app_name = "aist_api"
 urlpatterns = [
     path("auth/login/", AISTAuthLoginAPI.as_view(), name="auth_login"),
+    path("auth/set-password/", AISTSetPasswordAPI.as_view(), name="auth_set_password"),
     path("me/", AISTMeAPI.as_view(), name="me"),
     path("me/change-password/", AISTMeChangePasswordAPI.as_view(), name="me_change_password"),
+    path("me/tokens/", AISTMeTokenListCreateAPI.as_view(), name="me_token_list_create"),
+    path("me/tokens/<int:token_id>/", AISTMeTokenDetailAPI.as_view(), name="me_token_detail"),
+    path("admin/api-tokens/", AISTAdminApiTokenListAPI.as_view(), name="admin_api_token_list"),
     path("auth/logout/", AISTAuthLogoutAPI.as_view(), name="auth_logout"),
     path("auth/logout-all/", AISTAuthLogoutAllAPI.as_view(), name="auth_logout_all"),
     path("calendar/events/", AISTCalendarEventsAPI.as_view(), name="calendar_events"),
@@ -193,6 +206,31 @@ urlpatterns = [
         "organizations/",
         OrganizationCreateAPI.as_view(),
         name="organization_create",
+    ),
+    path(
+        "organizations/<int:org_id>/members/",
+        AISTOrgMemberListCreateAPI.as_view(),
+        name="org_member_list_create",
+    ),
+    path(
+        "organizations/<int:org_id>/members/<int:user_id>/",
+        AISTOrgMemberDetailAPI.as_view(),
+        name="org_member_detail",
+    ),
+    path(
+        "organizations/<int:org_id>/members/<int:user_id>/reset-password/",
+        AISTOrgMemberResetPasswordAPI.as_view(),
+        name="org_member_reset_password",
+    ),
+    path(
+        "organizations/<int:org_id>/members/<int:user_id>/project-grants/",
+        AISTOrgMemberProjectGrantListCreateAPI.as_view(),
+        name="org_member_project_grant_list_create",
+    ),
+    path(
+        "organizations/<int:org_id>/members/<int:user_id>/project-grants/<int:project_id>/",
+        AISTOrgMemberProjectGrantDetailAPI.as_view(),
+        name="org_member_project_grant_detail",
     ),
     path("findings/", AISTFindingListAPI.as_view(), name="finding_list"),
     path("findings/timeline/", AISTFindingTimelineAPI.as_view(), name="finding_timeline"),

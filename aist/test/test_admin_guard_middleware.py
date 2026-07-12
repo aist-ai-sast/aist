@@ -12,6 +12,7 @@ from rest_framework.authentication import BaseAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.exceptions import AuthenticationFailed
 
+from aist.models import AISTApiToken, ApiTokenScope
 from aist_site.middleware import AistAdminGuardMiddleware
 
 
@@ -229,6 +230,46 @@ class AistAdminGuardMiddlewareTests(TestCase):
         self.assertIsNotNone(captured["cached_user"])
         self.assertTrue(captured["cached_user"].is_superuser)
         self.assertEqual(captured["cached_user"].pk, user.pk)
+
+    def test_blocks_scoped_token_on_admin_api_for_non_superuser(self):
+        user = get_user_model().objects.create_user(username="scoped_client", password=_make_password())
+        _token, raw = AISTApiToken.issue(user=user, name="t", scope=ApiTokenScope.READ_WRITE)
+        request = self.factory.get(
+            "/aist-admin/api/v2/findings/",
+            HTTP_AUTHORIZATION=f"Bearer {raw}",
+        )
+        request.user = AnonymousUser()
+        response = self.middleware(request)
+        self.assertEqual(response.status_code, 403)
+
+    def test_blocks_scoped_token_on_admin_api_even_for_superuser_owner(self):
+        # Escalation guard: a scoped token owned by a superuser must NOT unlock the
+        # DefectDojo API — otherwise a read-only token would grant full admin access.
+        superuser = get_user_model().objects.create_superuser(
+            username="scoped_root", password=_make_password(), email="scoped_root@example.com",
+        )
+        _token, raw = AISTApiToken.issue(user=superuser, name="t", scope=ApiTokenScope.READ_ONLY)
+        request = self.factory.get(
+            "/aist-admin/api/v2/findings/",
+            HTTP_AUTHORIZATION=f"Bearer {raw}",
+        )
+        request.user = AnonymousUser()
+        request.session = {}
+        response = self.middleware(request)
+        self.assertEqual(response.status_code, 403)
+
+    def test_blocks_scoped_token_on_admin_swagger(self):
+        superuser = get_user_model().objects.create_superuser(
+            username="scoped_swagger", password=_make_password(), email="scoped_swagger@example.com",
+        )
+        _token, raw = AISTApiToken.issue(user=superuser, name="t", scope=ApiTokenScope.READ_ONLY)
+        request = self.factory.get(
+            "/aist-admin/api/v2/oa3/swagger-ui/",
+            HTTP_AUTHORIZATION=f"Bearer {raw}",
+        )
+        request.user = AnonymousUser()
+        response = self.middleware(request)
+        self.assertEqual(response.status_code, 403)
 
     def test_allows_admin_static_for_anonymous(self):
         request = self.factory.get("/aist-admin/static/admin.css")

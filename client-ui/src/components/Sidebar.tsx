@@ -102,6 +102,19 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         ))}
         <PermissionGate action="manage_access">
           <NavItem
+            to={getRoute("ui_users_path")}
+            label="Users"
+            icon={(
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="9" cy="8" r="3.2" />
+                <path d="M3.5 19a5.5 5.5 0 0 1 11 0" />
+                <path d="M16 5.2a3.2 3.2 0 0 1 0 5.6" />
+                <path d="M17 14.2A5.5 5.5 0 0 1 20.5 19" />
+              </svg>
+            )}
+            collapsed={collapsed}
+          />
+          <NavItem
             to={getRoute("ui_org_integrations_path")}
             label="Integrations"
             icon={ObjectIcons.integrations}

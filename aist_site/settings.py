@@ -22,6 +22,7 @@ ASGI_APPLICATION = "aist_site.asgi.application"
 
 for _middleware in reversed(
     (
+        "aist_site.middleware.AistTokenScopeMiddleware",
         "aist_site.middleware.AistFindingBulkLockMiddleware",
         "aist_site.middleware.AistNoStoreHtmlMiddleware",
         "aist_site.middleware.AistResponseMaskingMiddleware",
@@ -117,6 +118,11 @@ AGENT_FULL_MAX_FILE_BYTES = int(env("AGENT_FULL_MAX_FILE_BYTES", default="200000
 AGENT_FULL_MAX_FINDINGS = int(env("AGENT_FULL_MAX_FINDINGS", default="50"))  # noqa: F405
 
 REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] += ("rest_framework.permissions.IsAuthenticated",)  # noqa: F405
+# AIST scoped personal access tokens. Added LAST so it only runs after the stock
+# Session/Basic/Token authenticators decline — the internal superuser service
+# token (stock DRF Token) is never shadowed. Read/write scope is enforced by
+# AistTokenScopeMiddleware (not a DRF permission, which AIST views override).
+REST_FRAMEWORK["DEFAULT_AUTHENTICATION_CLASSES"] += ("aist.authentication.ScopedTokenAuthentication",)  # noqa: F405
 AIST_AUTH_LOGIN_THROTTLE_RATE = env("DD_AIST_AUTH_LOGIN_THROTTLE_RATE", default="10/min")  # noqa: F405
 REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {})["aist_auth_login"] = AIST_AUTH_LOGIN_THROTTLE_RATE  # noqa: F405
 

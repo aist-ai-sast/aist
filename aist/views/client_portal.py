@@ -21,6 +21,8 @@ def _build_routes() -> dict[str, Any]:
     return {
         "login_url": reverse("client_login"),
         "login_api_url": reverse("aist_api:auth_login"),
+        "set_password_api_url": reverse("aist_api:auth_set_password"),
+        "ui_set_password_path": "/auth/set-password/:uid/:token",
         "logout_url": reverse("aist_api:auth_logout"),
         "logout_all_devices_url": reverse("aist_api:auth_logout_all"),
         "user_profile_url": reverse("user_profile"),
@@ -130,6 +132,51 @@ def _build_routes() -> dict[str, Any]:
             "integration_type",
         ),
         "ui_org_integrations_path": "/integrations",
+        "org_members_url": _replace_int_placeholder(
+            reverse("aist_api:org_member_list_create", kwargs={"org_id": 0}),
+            "org_id",
+        ),
+        "org_member_detail_url": _replace_int_placeholder(
+            _replace_int_placeholder(
+                reverse("aist_api:org_member_detail", kwargs={"org_id": 0, "user_id": 0}),
+                "org_id",
+            ),
+            "user_id",
+        ),
+        "org_member_reset_password_url": _replace_int_placeholder(
+            _replace_int_placeholder(
+                reverse("aist_api:org_member_reset_password", kwargs={"org_id": 0, "user_id": 0}),
+                "org_id",
+            ),
+            "user_id",
+        ),
+        "org_member_project_grants_url": _replace_int_placeholder(
+            _replace_int_placeholder(
+                reverse("aist_api:org_member_project_grant_list_create", kwargs={"org_id": 0, "user_id": 0}),
+                "org_id",
+            ),
+            "user_id",
+        ),
+        "org_member_project_grant_detail_url": _replace_int_placeholder(
+            _replace_int_placeholder(
+                _replace_int_placeholder(
+                    reverse(
+                        "aist_api:org_member_project_grant_detail",
+                        kwargs={"org_id": 0, "user_id": 0, "project_id": 0},
+                    ),
+                    "org_id",
+                ),
+                "user_id",
+            ),
+            "project_id",
+        ),
+        "me_tokens_url": reverse("aist_api:me_token_list_create"),
+        "me_token_detail_url": _replace_int_placeholder(
+            reverse("aist_api:me_token_detail", kwargs={"token_id": 0}),
+            "token_id",
+        ),
+        "admin_api_tokens_url": reverse("aist_api:admin_api_token_list"),
+        "ui_users_path": "/users",
         "work_item_providers_url": _replace_int_placeholder(
             reverse("aist_api:work_item_provider_list_create", kwargs={"org_id": 0}),
             "org_id",

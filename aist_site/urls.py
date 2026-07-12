@@ -40,6 +40,8 @@ urlpatterns = [
         name="aist_api",
     ),
     path("auth/login/", client_portal_index, name="client_login"),
+    # Anonymous set-password page (emailed invite/reset link) — served by the SPA.
+    re_path(r"^auth/set-password/[^/]+/[^/]+/?$", client_portal_index, name="client_set_password"),
     path("auth/logout/", logout_view, name="client_logout"),
     path("auth/logout-all/", logout_all_devices_view, name="client_logout_all_devices"),
     path(

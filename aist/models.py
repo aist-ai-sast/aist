@@ -16,11 +16,13 @@ import gitlab
 from asgiref.sync import async_to_sync
 from croniter import croniter
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.utils import timezone
+from django.utils.crypto import get_random_string
 from django_github_app.models import Installation
 from dojo.models import Finding, Product, Product_Type, Test
 from encrypted_model_fields.fields import EncryptedCharField
@@ -1750,3 +1752,107 @@ class AISTFindingAnnotation(models.Model):
 
     def __str__(self) -> str:
         return f"Annotation(finding={self.finding_id}, regression={self.is_regression})"
+
+
+class ApiTokenScope(models.TextChoices):
+    READ_ONLY = "read_only", "Read only"
+    READ_WRITE = "read_write", "Read and write"
+
+
+# Public, non-secret prefix identifying an AIST personal access token.
+AIST_TOKEN_PREFIX = "aistpat_"  # noqa: S105  (not a secret — a scheme marker)
+
+
+class AISTApiToken(models.Model):
+
+    """
+    A user-scoped personal access token for the AIST client API.
+
+    The model OWNS its secret lifecycle (RAII): ``issue()`` generates the token
+    and stores only a Django-hashed digest of the secret (via
+    ``django.contrib.auth.hashers``); ``verify_secret()`` checks a presented
+    secret. The plaintext secret exists only in the return value of ``issue()``
+    and is never stored or recoverable.
+
+    ``scope`` narrows the token to a subset of the owner's permissions
+    (read-only vs read-write) — a token can never grant more than its owner has.
+    Scoped tokens are valid ONLY on the AIST API; the admin guard rejects them on
+    the vendor admin API, so a rank-and-file token can never reach ``/aist-admin/``.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="aist_api_tokens",
+    )
+    name = models.CharField(max_length=100)
+    scope = models.CharField(
+        max_length=32,
+        choices=ApiTokenScope.choices,
+        default=ApiTokenScope.READ_ONLY,
+    )
+    # Non-secret, indexed lookup key parsed from the token; safe to store plainly.
+    public_id = models.CharField(max_length=32, unique=True)
+    # Django password-hasher encoded digest of the secret. Never the secret itself.
+    secret_hash = models.CharField(max_length=128)
+    # Last 4 chars of the secret, for disambiguating tokens in the UI.
+    last4 = models.CharField(max_length=4)
+    created = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "AIST API token"
+        unique_together = (("user", "name"),)
+        indexes = [
+            models.Index(fields=["user"], name="aist_api_token_user_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"AISTApiToken(user={self.user_id}, name={self.name!r}, scope={self.scope})"
+
+    @classmethod
+    def issue(cls, *, user, name: str, scope: str, expires_at=None) -> tuple[AISTApiToken, str]:
+        """Create a token and return (instance, raw_secret_token). Raw is available only here."""
+        public_id = get_random_string(16)
+        secret = get_random_string(40)
+        token = cls.objects.create(
+            user=user,
+            name=name,
+            scope=scope,
+            public_id=public_id,
+            secret_hash=make_password(secret),
+            last4=secret[-4:],
+            expires_at=expires_at,
+        )
+        return token, f"{AIST_TOKEN_PREFIX}{public_id}{cls._SECRET_SEP}{secret}"
+
+    # Separator between public id and secret in the wire token. Distinct from the
+    # get_random_string alphabet ([a-zA-Z0-9]) so the split is unambiguous.
+    _SECRET_SEP = "_"  # noqa: S105  (delimiter, not a secret)
+
+    @classmethod
+    def parse_raw(cls, raw: str) -> tuple[str, str] | None:
+        """Split a wire token ``aistpat_<public_id>_<secret>`` into (public_id, secret)."""
+        if not raw.startswith(AIST_TOKEN_PREFIX):
+            return None
+        public_id, separator, secret = raw[len(AIST_TOKEN_PREFIX):].partition(cls._SECRET_SEP)
+        if not (separator and public_id and secret):
+            return None
+        return public_id, secret
+
+    def verify_secret(self, secret: str) -> bool:
+        return check_password(secret, self.secret_hash)
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at is not None and self.expires_at <= timezone.now()
+
+    @property
+    def is_revoked(self) -> bool:
+        return self.revoked_at is not None
+
+    @property
+    def is_usable(self) -> bool:
+        return not self.is_revoked and not self.is_expired

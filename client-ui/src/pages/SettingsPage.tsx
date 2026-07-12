@@ -8,6 +8,7 @@ import { getRoleBadgeClass, getRoleIcon } from "../lib/roleBadge";
 import { getDisplayName, getRoleLabel, getUsername } from "../lib/userProfile";
 import { usePermissions } from "../lib/permissions";
 import TextInput from "../components/TextInput";
+import MyTokensSection from "../components/MyTokensSection";
 import { useToast } from "../components/ToastProvider";
 
 function Card({ title, icon, children }: { title: string; icon?: ReactNode; children: React.ReactNode }) {
@@ -95,7 +96,7 @@ export default function SettingsPage() {
         <div className="mt-1 text-xs text-slate-400">@{username} · {role}</div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
+      <div className="grid items-start gap-4 xl:grid-cols-2">
         <section id="account">
           <Card
             title="Account"
@@ -193,8 +194,7 @@ export default function SettingsPage() {
           </Card>
         </section>
 
-        <div className="space-y-4">
-          <section id="security">
+        <section id="security">
             <Card
               title="Session & Security"
               icon={(
@@ -379,7 +379,8 @@ export default function SettingsPage() {
               <p className="text-xs text-slate-400">Access is governed by your organization administrators.</p>
             </div>
           </Card>
-        </div>
+
+          <MyTokensSection />
       </div>
     </div>
   );
