@@ -2,18 +2,38 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.core.cache import cache
+from django.db import IntegrityError, transaction
 from django.test import Client
 from django.urls import reverse
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Dojo_Group, Dojo_Group_Member, Product_Type_Group, Role
+from dojo.models import (
+    Dojo_Group,
+    Dojo_Group_Member,
+    Product,
+    Product_Type,
+    Product_Type_Group,
+    Product_Type_Member,
+    Role,
+)
 from rest_framework.test import APIClient
 
-from aist.models import Organization
+from aist.models import AISTProject, Organization
 from aist.test.test_api import AISTApiBase
 
 
 class AISTAccountAPITests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        # This class alone makes a dozen+ real POSTs to auth_login, which is
+        # rate-limited by ScopedRateThrottle (aist_auth_login, 10/min default).
+        # The throttle cache persists across test methods within the same
+        # run, so without clearing it here, later tests intermittently see a
+        # spurious 429 instead of the status they're actually asserting on.
+        cache.clear()
+
     def test_auth_login_rejects_invalid_credentials(self):
         client = Client(enforce_csrf_checks=True)
         client.get(reverse("client_login"))
@@ -48,6 +68,61 @@ class AISTAccountAPITests(AISTApiBase):
         )
         self.assertEqual(with_csrf.status_code, 204)
 
+    def test_login_by_email_succeeds(self):
+        # Invited accounts store username = email local-part and email = the
+        # full address (aist/members/service.py's _unique_username), and every
+        # UI surface displays the email — so login must accept it too, not
+        # just the (never-shown) username. Regression test for
+        # aist.auth_backends.EmailBackend.
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_token = client.cookies["csrftoken"].value
+        response = client.post(
+            reverse("aist_api:auth_login"),
+            data={"username": self.user.email, "password": "pass"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(response.status_code, 204)
+
+    def test_login_by_email_wrong_password_rejected(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_token = client.cookies["csrftoken"].value
+        response = client.post(
+            reverse("aist_api:auth_login"),
+            data={"username": self.user.email, "password": "wrong"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_login_by_unknown_email_rejected(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_token = client.cookies["csrftoken"].value
+        response = client.post(
+            reverse("aist_api:auth_login"),
+            data={"username": "nobody@example.com", "password": "pass"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_login_by_username_still_works(self):
+        # EmailBackend must only ADD email resolution, never regress the
+        # existing username path (still handled by ModelBackend).
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_token = client.cookies["csrftoken"].value
+        response = client.post(
+            reverse("aist_api:auth_login"),
+            data={"username": self.user.username, "password": "pass"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(response.status_code, 204)
+
     def test_me_get_returns_profile(self):
         organization = Organization.objects.create(name="Access Org")
         organization.product_type = self.prod_type
@@ -65,6 +140,35 @@ class AISTAccountAPITests(AISTApiBase):
         self.assertEqual(len(memberships), 1)
         self.assertEqual(memberships[0]["organization_name"], "Access Org")
         self.assertEqual(memberships[0]["role_name"], "Maintainer")
+
+    def test_me_get_returns_distinct_roles_for_two_orgs(self):
+        # self.user is already a Maintainer of self.prod_type (AISTApiBase).
+        # Add a SECOND, independent org with a DIFFERENT role for the SAME
+        # user — organization_memberships must report both, each with its own
+        # correct role, not just the first one found or a merged/blended role.
+        organization = Organization.objects.create(name="Org One")
+        organization.product_type = self.prod_type
+        organization.save(update_fields=["product_type"])
+        self.project.organization = organization
+        self.project.save(update_fields=["organization"])
+
+        pt_two = Product_Type.objects.create(name="PT Two")
+        org_two = Organization.objects.create(name="Org Two", product_type=pt_two)
+        product_two = Product.objects.create(
+            name="Product Two", description="desc", prod_type=pt_two, sla_configuration_id=self.sla.id,
+        )
+        AISTProject.objects.create(
+            product=product_two, supported_languages=["python"], compilable=False, profile={}, organization=org_two,
+        )
+        role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        Product_Type_Member.objects.create(product_type=pt_two, user=self.user, role=role_reader)
+
+        with patch("aist.api.account.get_system_setting", return_value=True):
+            response = self.client.get(reverse("aist_api:me"))
+
+        self.assertEqual(response.status_code, 200)
+        memberships = {m["organization_name"]: m["role_name"] for m in response.data["organization_memberships"]}
+        self.assertEqual(memberships, {"Org One": "Maintainer", "Org Two": "Reader"})
 
     def test_me_get_returns_group_based_membership(self):
         user = self.user.__class__.objects.create_user(
@@ -116,6 +220,28 @@ class AISTAccountAPITests(AISTApiBase):
         self.assertEqual(self.user.email, "test-user@example.com")
         self.assertEqual(self.user.username, "tester-updated")
 
+    def test_me_patch_email_collision_rejected(self):
+        # auth_user.email has no DB-level unique constraint, and this
+        # serializer is the only guard against a user claiming another
+        # account's email (which would then make EmailBackend login
+        # ambiguous for both accounts). Case-insensitive on purpose.
+        other = self.user.__class__.objects.create_user(
+            username="taken-email-owner",
+            email="Taken@example.com",
+            password="pass",  # noqa: S106
+        )
+        with patch("aist.api.account.get_system_setting", return_value=True):
+            response = self.client.patch(
+                reverse("aist_api:me"),
+                data={"email": "taken@example.com"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.json())
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "tester@example.com", "email must not have been changed")
+        self.assertEqual(other.email, "Taken@example.com")
+
     def test_me_patch_rejected_when_profile_edit_disabled(self):
         with patch("aist.api.account.get_system_setting", return_value=False):
             response = self.client.patch(
@@ -150,6 +276,91 @@ class AISTAccountAPITests(AISTApiBase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_change_password_weak_new_password_has_readable_message(self):
+        response = self.client.post(
+            reverse("aist_api:me_change_password"),
+            data={
+                "current_password": "pass",
+                "new_password": "123",
+                "new_password_confirm": "123",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        body = response.json()
+        # PasswordChangeForm (like SetPasswordForm) validates password strength
+        # in clean_new_password2, so errors land on new_password2 -> remapped
+        # to new_password_confirm.
+        self.assertNotIn("new_password1", body)
+        self.assertNotIn("new_password2", body)
+        self.assertNotIn("old_password", body)
+        self.assertIn("new_password_confirm", body)
+        self.assertTrue(body["new_password_confirm"])
+
+    def test_change_password_endpoint_is_throttled(self):
+        # AISTMeChangePasswordAPI now carries its own ScopedRateThrottle
+        # ("aist_change_password", 10/min default) so a hijacked session
+        # cannot brute-force current_password without limit.
+        statuses = [
+            self.client.post(
+                reverse("aist_api:me_change_password"),
+                data={
+                    "current_password": "wrong",
+                    "new_password": "N3wPass!123",
+                    "new_password_confirm": "N3wPass!123",
+                },
+                format="json",
+            ).status_code
+            for _ in range(15)
+        ]
+        self.assertIn(429, statuses)
+        self.assertTrue(all(code in {400, 429} for code in statuses))
+
+    def test_login_and_set_password_have_independent_throttle_scopes(self):
+        # AISTAuthLoginAPI uses "aist_auth_login"; AISTSetPasswordAPI now uses
+        # its own "aist_auth_set_password" scope — exhausting one must not
+        # 429 the other, even from the same IP.
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_token = client.cookies["csrftoken"].value
+        login_url = reverse("aist_api:auth_login")
+        for _ in range(10):
+            client.post(
+                login_url,
+                data={"username": "nobody", "password": "wrong"},
+                content_type="application/json",
+                HTTP_X_CSRFTOKEN=csrf_token,
+            )
+        exhausted = client.post(
+            login_url,
+            data={"username": "nobody", "password": "wrong"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(exhausted.status_code, 429)
+
+        set_password_resp = client.post(
+            reverse("aist_api:auth_set_password"),
+            data={"uid": "x", "token": "y", "new_password": "a", "new_password_confirm": "a"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertNotEqual(
+            set_password_resp.status_code, 429,
+            "login's throttle budget must not bleed into the independent set-password scope",
+        )
+
+    def test_set_password_scope_has_its_own_budget(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_token = client.cookies["csrftoken"].value
+        set_password_url = reverse("aist_api:auth_set_password")
+        payload = {"uid": "x", "token": "y", "new_password": "a", "new_password_confirm": "a"}
+        for _ in range(10):
+            client.post(set_password_url, data=payload, content_type="application/json", HTTP_X_CSRFTOKEN=csrf_token)
+        exhausted = client.post(set_password_url, data=payload, content_type="application/json", HTTP_X_CSRFTOKEN=csrf_token)
+        self.assertEqual(exhausted.status_code, 429)
 
     def test_auth_logout_returns_204(self):
         response = self.client.post(reverse("aist_api:auth_logout"), format="json")
@@ -227,3 +438,26 @@ class AISTAccountAPITests(AISTApiBase):
             HTTP_X_CSRFTOKEN=csrf_fresh,
         )
         self.assertEqual(response.status_code, 204)
+
+
+class EmailDbUniqueConstraintTests(AISTApiBase):
+
+    """
+    aist_auth_user_email_ci_unique (migration 0037) backs the app-level
+    uniqueness checks with a real DB constraint, so a collision can never slip
+    through even if some future code path bypasses AISTMeSerializer entirely.
+    """
+
+    def test_case_variant_duplicate_email_rejected_at_db_layer(self):
+        User = get_user_model()
+        User.objects.create_user("first", "shared@example.com", "pass")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            User.objects.create_user("second", "SHARED@Example.com", "pass")
+
+    def test_blank_email_does_not_collide_with_itself(self):
+        # The unique index is partial (WHERE email <> '') specifically because
+        # multiple users legitimately have no email at all.
+        User = get_user_model()
+        User.objects.create_user("noemail1", "", "pass")
+        User.objects.create_user("noemail2", "", "pass")
+        self.assertEqual(User.objects.filter(email="").count(), 2)

@@ -14,7 +14,6 @@ type RouteMap = {
   ui_dashboard_path: string;
   logout_url: string;
   logout_all_devices_url: string;
-  user_profile_url: string;
   me_url: string;
   me_change_password_url: string;
   findings_list_url: string;
@@ -53,6 +52,7 @@ type RouteMap = {
   org_members_url: string;
   org_member_detail_url: string;
   org_member_reset_password_url: string;
+  org_member_reset_access_url: string;
   org_member_project_grants_url: string;
   org_member_project_grant_detail_url: string;
   me_tokens_url: string;
@@ -77,9 +77,15 @@ declare global {
   }
 }
 
-const routes = window.__AIST_ROUTES__;
+function getRoutes(): RouteMap | undefined {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+  return window.__AIST_ROUTES__;
+}
 
 export function getRoute(name: RouteUrlKey, params?: Record<string, string | number>) {
+  const routes = getRoutes();
   if (!routes) {
     throw new Error("Routes are not available.");
   }

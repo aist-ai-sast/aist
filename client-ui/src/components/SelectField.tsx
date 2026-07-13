@@ -68,7 +68,9 @@ export default function SelectField({
           <Select.Content
             position="popper"
             side={side}
-            className="z-50 overflow-hidden rounded-xl border border-night-500 bg-night-900 shadow-panel"
+            // Above the highest overlay z-index in the app (the Manage-access
+            // drawer at z-[80]) so the dropdown never renders behind it.
+            className="z-[100] overflow-hidden rounded-xl border border-night-500 bg-night-900 shadow-panel"
             style={{ minWidth: "var(--radix-select-trigger-width)" }}
           >
             <Select.Viewport className="p-1">

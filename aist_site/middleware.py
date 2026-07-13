@@ -4,7 +4,6 @@ import json
 import re
 from typing import TYPE_CHECKING
 
-from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.urls import Resolver404, resolve
@@ -16,7 +15,7 @@ from rest_framework.settings import api_settings
 from aist.authentication import header_carries_scoped_token, resolve_scoped_token
 from aist.findings_bulk_lock import get_locked_finding_ids
 from aist.models import ApiTokenScope
-from aist.utils.secrets import mask_sensitive_data
+from aist.utils.secrets import is_openapi_payload, mask_sensitive_data, view_disables_masking
 
 if TYPE_CHECKING:
     from django.http import HttpResponse
@@ -25,13 +24,20 @@ if TYPE_CHECKING:
 class AistResponseMaskingMiddleware:
 
     """
-    Masks secret-looking values in AIST JSON responses (defense-in-depth).
+    Masks secret-looking values in JSON responses from plain (non-DRF) AIST views
+    under ``/aist/`` and ``/aist-admin/aist/`` (defense-in-depth). DRF API views
+    under ``/api/v2/aist/`` are masked separately by
+    ``aist.api.response.install_masked_api_response`` (patched onto
+    ``APIView.finalize_response``, since it needs access to the DRF response data
+    before rendering) — the two layers cover disjoint URL domains by design, not
+    duplicate coverage of the same requests.
 
     A view that INTENTIONALLY returns a secret exactly once (e.g. the one-time
     reveal of a freshly created API token) opts out by declaring
     ``disable_response_masking = True`` on the view class — otherwise the secret
-    would be turned into ``********`` and be useless to the caller. This mirrors
-    the endpoint-declared pattern used for token scope (no hardcoded paths).
+    would be turned into ``********`` and be useless to the caller. Both masking
+    layers consult the same ``aist.utils.secrets.view_disables_masking`` check so
+    they can never disagree about which views opted out.
     """
 
     aist_prefixes = ("/aist/", "/aist-admin/aist/")
@@ -43,19 +49,9 @@ class AistResponseMaskingMiddleware:
         response = self.get_response(request)
         if not any(request.path_info.startswith(prefix) for prefix in self.aist_prefixes):
             return response
-        if self._view_disables_masking(request):
+        if view_disables_masking(request):
             return response
         return self._mask_json_response(response)
-
-    @staticmethod
-    def _view_disables_masking(request) -> bool:
-        """True if the target view declares ``disable_response_masking`` (intentional secret reveal)."""
-        try:
-            match = resolve(request.path_info)
-        except Resolver404:
-            return False
-        view_class = getattr(match.func, "view_class", None)
-        return bool(getattr(view_class, "disable_response_masking", False))
 
     def _mask_json_response(self, response: HttpResponse) -> HttpResponse:
         if getattr(response, "streaming", False):
@@ -72,7 +68,7 @@ class AistResponseMaskingMiddleware:
         except Exception:
             return response
 
-        if isinstance(payload, dict) and "openapi" in payload and "paths" in payload and "info" in payload:
+        if is_openapi_payload(payload):
             return response
 
         masked = mask_sensitive_data(payload)
@@ -119,9 +115,15 @@ class AistAdminGuardMiddleware:
     Enforced restrictions:
     - `/aist-admin/static/*` is always allowed.
     - `/aist-admin/api/*`:
-      - superuser: always allowed.
+      - superuser: always allowed, on any route (no path restriction).
       - superuser authenticated via API auth header (Token/Bearer/etc): allowed.
-      - non-superuser: allowed only for authenticated UI-session requests.
+      - non-superuser: always denied, regardless of session or route. This
+        vendor API surface (`dojo.urls`, mounted here) was never designed
+        with AIST's own business rules (org isolation, role caps, etc.) in
+        mind. client-ui now has its own AIST-native endpoints for every call
+        it used to make here (`aist/views/client_portal.py`'s route map
+        points at `aist_api:` names exclusively), so no session-based
+        non-superuser path onto the vendor API is legitimate any more.
       - non-superuser token-style requests (`Authorization` header) are denied.
     - Other `/aist-admin/*` UI pages:
       - authenticated superuser: allowed.
@@ -194,13 +196,7 @@ class AistAdminGuardMiddleware:
                 return self.get_response(request)
             return self._deny_forbidden(request)
 
-        if self._has_explicit_api_auth_header(request):
-            return self._deny_forbidden(request)
-
-        if not self._is_ui_session_user(request):
-            return self._deny_forbidden(request)
-
-        return self.get_response(request)
+        return self._deny_forbidden(request)
 
     def _handle_admin_swagger(self, request):
         user = request.user
@@ -226,12 +222,6 @@ class AistAdminGuardMiddleware:
             return self.get_response(request)
 
         return self._deny_not_found(request)
-
-    def _is_ui_session_user(self, request) -> bool:
-        user = request.user
-        if not user.is_authenticated:
-            return False
-        return bool(request.COOKIES.get(settings.SESSION_COOKIE_NAME))
 
     def _has_explicit_api_auth_header(self, request) -> bool:
         return bool(get_authorization_header(request))

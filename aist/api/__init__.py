@@ -15,6 +15,8 @@ from aist.api.cwe import AISTCweDetailAPI
 from aist.api.files import ProjectVersionFileBlobAPI, ProjectVersionPrewarmAPI
 from aist.api.findings import (
     AISTFindingBulkStatusAPI,
+    AISTFindingCloseAPI,
+    AISTFindingDetailAPI,
     AISTFindingExportAPI,
     AISTFindingListAPI,
     AISTFindingMarkDuplicateAPI,
@@ -66,6 +68,7 @@ from aist.api.members import (
     AISTOrgMemberListCreateAPI,
     AISTOrgMemberProjectGrantDetailAPI,
     AISTOrgMemberProjectGrantListCreateAPI,
+    AISTOrgMemberResetAccessAPI,
     AISTOrgMemberResetPasswordAPI,
 )
 from aist.api.org_integrations import (
@@ -106,6 +109,10 @@ from aist.api.queue import (
     PipelineLaunchQueueDetailAPI,
     PipelineLaunchQueueListAPI,
 )
+from aist.api.tests_engagements import (
+    AISTEngagementDetailAPI,
+    AISTTestDetailAPI,
+)
 from aist.api.timeline_events import AISTFindingTimelineAPI
 from aist.api.tokens import (
     AISTAdminApiTokenListAPI,
@@ -131,7 +138,10 @@ __all__ = [
     "AISTCalendarEventDetailAPI",
     "AISTCalendarEventsAPI",
     "AISTCweDetailAPI",
+    "AISTEngagementDetailAPI",
     "AISTFindingBulkStatusAPI",
+    "AISTFindingCloseAPI",
+    "AISTFindingDetailAPI",
     "AISTFindingExportAPI",
     "AISTFindingListAPI",
     "AISTFindingMarkDuplicateAPI",
@@ -146,6 +156,7 @@ __all__ = [
     "AISTOrgMemberListCreateAPI",
     "AISTOrgMemberProjectGrantDetailAPI",
     "AISTOrgMemberProjectGrantListCreateAPI",
+    "AISTOrgMemberResetAccessAPI",
     "AISTOrgMemberResetPasswordAPI",
     "AISTOrganizationSerializer",
     "AISTProjectActiveScriptAPI",
@@ -157,6 +168,7 @@ __all__ = [
     "AISTProjectSerializer",
     "AISTProjectVersionCreateSerializer",
     "AISTSetPasswordAPI",
+    "AISTTestDetailAPI",
     "EmailActionCreateSerializer",
     "FindingWorkItemDetailAPI",
     "FindingWorkItemListCreateAPI",

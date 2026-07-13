@@ -58,7 +58,7 @@ class ClientPortalAuthFlowTests(TestCase):
         logout_response = second_client.get("/auth/logout/")
         self.assertIn(logout_response.status_code, (200, 302))
 
-        first_profile = first_client.get("/aist-admin/api/v2/user_profile/")
+        first_profile = first_client.get("/api/v2/aist/me/")
         self.assertEqual(first_profile.status_code, 200)
 
     def test_logout_all_devices_invalidates_current_session(self):
@@ -72,7 +72,7 @@ class ClientPortalAuthFlowTests(TestCase):
         response = client.post("/auth/logout-all/")
         self.assertIn(response.status_code, (200, 302))
 
-        profile = client.get("/aist-admin/api/v2/user_profile/")
+        profile = client.get("/api/v2/aist/me/")
         self.assertIn(profile.status_code, (401, 403))
 
     def test_logout_all_devices_invalidates_other_user_sessions(self):
@@ -88,7 +88,7 @@ class ClientPortalAuthFlowTests(TestCase):
         response = second_client.post("/auth/logout-all/")
         self.assertIn(response.status_code, (200, 302))
 
-        first_profile = first_client.get("/aist-admin/api/v2/user_profile/")
-        second_profile = second_client.get("/aist-admin/api/v2/user_profile/")
+        first_profile = first_client.get("/api/v2/aist/me/")
+        second_profile = second_client.get("/api/v2/aist/me/")
         self.assertIn(first_profile.status_code, (401, 403))
         self.assertIn(second_profile.status_code, (401, 403))

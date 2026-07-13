@@ -155,10 +155,12 @@ class AISTMeSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "email",
+            "is_superuser",
             "can_edit_profile",
             "can_edit_username",
             "organization_memberships",
         )
+        read_only_fields = ("is_superuser",)
         extra_kwargs = {
             "username": {"required": False},
             "first_name": {"required": False, "allow_blank": True},
@@ -184,7 +186,30 @@ class AISTMeSerializer(serializers.ModelSerializer):
         if "username" in attrs and not self.get_can_edit_username(user):
             msg = "Username editing is disabled by policy."
             raise serializers.ValidationError({"username": msg})
+        new_email = attrs.get("email")
+        if new_email and User.objects.filter(email__iexact=new_email).exclude(pk=user.pk).exists():
+            msg = "Another account already uses this email."
+            raise serializers.ValidationError({"email": msg})
         return attrs
+
+
+# Django's PasswordChangeForm/SetPasswordForm key their errors by FORM field
+# names, which never match either serializer's own field names below — passing
+# form.errors straight through produced a 400 body the frontend's error
+# extractor couldn't read at all (falling back to a generic "Request failed").
+_FORM_FIELD_TO_SERIALIZER_FIELD = {
+    "old_password": "current_password",
+    "new_password1": "new_password",
+    "new_password2": "new_password_confirm",
+}
+
+
+def _password_form_errors(form) -> dict[str, list[str]]:
+    remapped: dict[str, list[str]] = {}
+    for field, messages in form.errors.items():
+        key = _FORM_FIELD_TO_SERIALIZER_FIELD.get(field, field)
+        remapped.setdefault(key, []).extend(messages)
+    return remapped
 
 
 class AISTChangePasswordSerializer(serializers.Serializer):
@@ -207,7 +232,7 @@ class AISTChangePasswordSerializer(serializers.Serializer):
             },
         )
         if not form.is_valid():
-            raise serializers.ValidationError(form.errors)
+            raise serializers.ValidationError(_password_form_errors(form))
         self.context["password_form"] = form
         return attrs
 
@@ -246,7 +271,7 @@ class AISTSetPasswordSerializer(serializers.Serializer):
             data={"new_password1": attrs["new_password"], "new_password2": attrs["new_password_confirm"]},
         )
         if not form.is_valid():
-            raise serializers.ValidationError(form.errors)
+            raise serializers.ValidationError(_password_form_errors(form))
         self.context["set_password_form"] = form
         self.context["target_user"] = user
         return attrs
@@ -302,6 +327,8 @@ class AISTMeAPI(APIView):
 
 class AISTMeChangePasswordAPI(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "aist_change_password"
 
     @extend_schema(
         tags=[AISTApiTag.PROFILE.value],
@@ -351,7 +378,7 @@ class AISTSetPasswordAPI(APIView):
 
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "aist_auth_login"
+    throttle_scope = "aist_auth_set_password"
 
     @extend_schema(
         tags=[AISTApiTag.AUTH.value],

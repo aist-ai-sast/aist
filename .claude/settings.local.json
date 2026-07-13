@@ -16,7 +16,9 @@
       "mcp__claude_ai_Atlassian__getJiraIssue",
       "mcp__claude_ai_Atlassian__getConfluencePage",
       "WebFetch(domain:support.claude.com)",
-      "WebFetch(domain:simpleicons.org)"
+      "WebFetch(domain:simpleicons.org)",
+      "Skill(artifact-design)",
+      "Artifact"
     ]
   }
 }

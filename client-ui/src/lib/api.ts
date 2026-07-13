@@ -40,6 +40,9 @@ declare global {
 }
 
 export function getCsrfToken() {
+  if (typeof window === "undefined") {
+    return getCookie("csrftoken");
+  }
   return getCookie("csrftoken") ?? window.__AIST_CSRF__ ?? null;
 }
 
@@ -80,6 +83,21 @@ function extractErrorDetail(payload: unknown): string {
       const first = payload[0];
       return typeof first === "string" ? first : "";
     }
+    // DRF field-level validation errors: a plain object whose values are
+    // either message strings or arrays of message strings, e.g.
+    // {"new_password": ["This password is too short..."]} or
+    // {"role_id": "Cannot grant a project role higher than..."} (DRF only
+    // wraps a ValidationError's message in a list when the raiser already
+    // passed one — a bare string stays a bare string on the wire). Join
+    // every field's messages into one readable string instead of falling
+    // through to a generic "Request failed" message.
+    const entries = Object.values(payload as Record<string, unknown>);
+    if (entries.length && entries.every((value) => typeof value === "string" || Array.isArray(value))) {
+      const messages = entries
+        .flatMap((value) => (Array.isArray(value) ? value : [value]))
+        .filter((m): m is string => typeof m === "string");
+      if (messages.length) return messages.join(" ");
+    }
   }
   return "";
 }
@@ -93,8 +111,7 @@ function isAuthExpiredStatus(status: number, payload: unknown, url: string): boo
   if (status === 401) return true;
   if (status !== 403) return false;
   try {
-    const authStatusUrls = [getRoute("user_profile_url"), getRoute("me_url")];
-    if (authStatusUrls.some((endpoint) => url.includes(endpoint))) {
+    if (url.includes(getRoute("me_url"))) {
       return true;
     }
   } catch {

@@ -17,7 +17,7 @@ from dojo.api_v2 import serializers as dojo_serializers
 from dojo.authorization.roles_permissions import Permissions
 from dojo.filters import ApiFindingFilter
 from dojo.finding import helper as finding_helper
-from dojo.models import Notes, Risk_Acceptance
+from dojo.models import Finding, Notes, Risk_Acceptance
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_field
 from openpyxl import Workbook
@@ -348,6 +348,93 @@ class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
         page = paginator.paginate_queryset(queryset, request)
         serializer = AISTFindingListItemSerializer(page, many=True, context={"request": request})
         return paginator.get_paginated_response(serializer.data)
+
+
+class AISTFindingUpdateSerializer(serializers.ModelSerializer):
+
+    """
+    Deliberately NOT vendor's broad ``FindingSerializer`` — this narrow
+    allowlist is the actual security win over the old vendor-API path (today
+    a compromised/curious client can already send *any* Finding field via the
+    vendor endpoint; this wrapper structurally can't). Any field client-ui
+    sends outside this list is silently dropped by DRF, matching how a
+    ModelSerializer normally ignores keys it doesn't declare.
+    """
+
+    class Meta:
+        model = Finding
+        fields = ("active", "is_mitigated", "false_p", "out_of_scope", "duplicate", "severity")
+
+
+class AISTFindingCloseRequestSerializer(serializers.Serializer):
+    is_mitigated = serializers.BooleanField()
+    false_p = serializers.BooleanField()
+    out_of_scope = serializers.BooleanField()
+    duplicate = serializers.BooleanField()
+
+
+class AISTFindingDetailAPI(AuthorizedQuerySetMixin, APIView):
+    permission_classes = [IsAuthenticated]
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_findings,
+        permission=Permissions.Finding_View,
+    )
+
+    @extend_schema(
+        tags=[AISTApiTag.FINDINGS.value],
+        summary="Get a single AIST finding",
+        responses={200: AISTFindingListItemSerializer},
+    )
+    def get(self, request, finding_id: int):
+        finding = get_object_or_404(
+            self.get_authorized_queryset()
+            .select_related("test__engagement")
+            .prefetch_related("tags", "aist_project_versions", "aist_annotation"),
+            id=finding_id,
+        )
+        return Response(AISTFindingListItemSerializer(finding, context={"request": request}).data)
+
+    @extend_schema(
+        tags=[AISTApiTag.FINDINGS.value],
+        summary="Update a narrow allowlist of finding fields",
+        request=AISTFindingUpdateSerializer,
+        responses={200: AISTFindingListItemSerializer},
+    )
+    def patch(self, request, finding_id: int):
+        finding = self.get_authorized_object(permission=Permissions.Finding_Edit, id=finding_id)
+        serializer = AISTFindingUpdateSerializer(finding, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(AISTFindingListItemSerializer(finding, context={"request": request}).data)
+
+
+class AISTFindingCloseAPI(AuthorizedQuerySetMixin, APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = AISTFindingCloseRequestSerializer
+    authorized_queryset = AuthorizedQuerysetSpec(
+        getter=get_authorized_findings,
+        permission=Permissions.Finding_Edit,
+    )
+
+    @extend_schema(
+        tags=[AISTApiTag.FINDINGS.value],
+        summary="Close a finding",
+        request=AISTFindingCloseRequestSerializer,
+        responses={200: AISTFindingListItemSerializer},
+    )
+    def post(self, request, finding_id: int):
+        finding = self.get_authorized_object(id=finding_id)
+        input_serializer = self.serializer_class(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        _close_finding_with_reason(
+            finding=finding,
+            user=request.user,
+            is_mitigated=input_serializer.validated_data["is_mitigated"],
+            false_p=input_serializer.validated_data["false_p"],
+            out_of_scope=input_serializer.validated_data["out_of_scope"],
+            duplicate=input_serializer.validated_data["duplicate"],
+        )
+        return Response(AISTFindingListItemSerializer(finding, context={"request": request}).data)
 
 
 class AISTFindingNoteSerializer(serializers.ModelSerializer):
@@ -840,19 +927,40 @@ def _bulk_reopen_finding(*, finding, user, note_entry: str) -> None:
     _add_bulk_note(finding=finding, user=user, note_entry=note_entry)
 
 
-def _bulk_close_finding(*, finding, user, close_reason: str, note_entry: str) -> None:
+def _close_finding_with_reason(
+    *,
+    finding,
+    user,
+    is_mitigated: bool,
+    false_p: bool,
+    out_of_scope: bool,
+    duplicate: bool,
+    note_entry: str | None = None,
+) -> None:
     finding_helper.close_finding(
         finding=finding,
         user=user,
-        is_mitigated=close_reason == "mitigated",
+        is_mitigated=is_mitigated,
         mitigated=timezone.now(),
         mitigated_by=user,
+        false_p=false_p,
+        out_of_scope=out_of_scope,
+        duplicate=duplicate,
+        note_entry=note_entry,
+    )
+    finding.save()
+
+
+def _bulk_close_finding(*, finding, user, close_reason: str, note_entry: str) -> None:
+    _close_finding_with_reason(
+        finding=finding,
+        user=user,
+        is_mitigated=close_reason == "mitigated",
         false_p=close_reason == "false_positive",
         out_of_scope=close_reason == "out_of_scope",
         duplicate=close_reason == "duplicate",
         note_entry=note_entry,
     )
-    finding.save()
 
 
 def _bulk_accept_risk_finding(*, finding, user, justification: str, request, note_entry: str) -> None:

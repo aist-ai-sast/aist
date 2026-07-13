@@ -5,6 +5,7 @@ import re
 from collections.abc import Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from django.urls import Resolver404, resolve
 from django.views.debug import get_exception_reporter_filter
 
 _FILTER = get_exception_reporter_filter(None)
@@ -143,7 +144,12 @@ def mask_sensitive_data(value: dict | list | tuple | str | None) -> dict | list 
     if isinstance(value, Mapping):
         masked: dict = {}
         for key, item in value.items():
-            if _is_sensitive_key(str(key)) and str(key).lower() not in _NON_SENSITIVE_KEYS:
+            # A container (list/dict) is always recursed into, regardless of whether its
+            # key name looks sensitive — a key like "tokens" must not collapse the whole
+            # list just because "tokens" matches the sensitive-substring heuristic.
+            if isinstance(item, (Mapping, list, tuple)):
+                masked[key] = mask_sensitive_data(item)
+            elif _is_sensitive_key(str(key)) and str(key).lower() not in _NON_SENSITIVE_KEYS:
                 masked[key] = MASKED_VALUE
             else:
                 masked[key] = mask_sensitive_data(item)
@@ -153,6 +159,29 @@ def mask_sensitive_data(value: dict | list | tuple | str | None) -> dict | list 
     if isinstance(value, list):
         return [mask_sensitive_data(item) for item in value]
     return value
+
+
+def is_openapi_payload(data: object) -> bool:
+    """True if ``data`` is an OpenAPI schema document (never masked)."""
+    return isinstance(data, Mapping) and "openapi" in data and "paths" in data and "info" in data
+
+
+def view_disables_masking(request) -> bool:
+    """
+    True if the view resolved for ``request`` declares ``disable_response_masking = True``.
+
+    Single source of truth for the response-masking opt-out (e.g. the one-time
+    reveal of a freshly created API token secret) — shared by every layer that
+    masks responses (``aist.api.response.install_masked_api_response`` and
+    ``aist_site.middleware.AistResponseMaskingMiddleware``) so they can never
+    disagree about which views opted out.
+    """
+    try:
+        match = resolve(request.path_info)
+    except Resolver404:
+        return False
+    view_class = getattr(match.func, "view_class", None)
+    return bool(getattr(view_class, "disable_response_masking", False))
 
 
 class SensitiveLogFilter(logging.Filter):

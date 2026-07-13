@@ -1856,3 +1856,153 @@ class AISTApiToken(models.Model):
     @property
     def is_usable(self) -> bool:
         return not self.is_revoked and not self.is_expired
+
+
+class OrgMembershipAction(models.TextChoices):
+    INVITED = "invited", "Invited"
+    ROLE_CHANGED = "role_changed", "Role changed"
+    REMOVED = "removed", "Removed"
+
+
+class OrgMembershipHistory(models.Model):
+
+    """
+    Append-only audit log of org-membership mutations (invite / role change / removal).
+
+    Written inside the same transaction as the mutation it records (see
+    ``aist.members.service.OrganizationMembershipService``), so a membership
+    change and its audit row are always created together or not at all. There is
+    deliberately no update/delete path — history rows are never revised.
+    """
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="membership_history",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="org_membership_actions_performed",
+    )
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="org_membership_history_entries",
+    )
+    action = models.CharField(max_length=32, choices=OrgMembershipAction.choices)
+    # Role ids, matching Product_Type_Member.role_id — null when not applicable
+    # (no previous_role for "invited", no new_role for "removed").
+    previous_role = models.IntegerField(null=True, blank=True)
+    new_role = models.IntegerField(null=True, blank=True)
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Org membership history"
+        verbose_name_plural = "Org membership history"
+        ordering = ["-created"]
+        indexes = [
+            models.Index(fields=["organization", "-created"], name="org_membership_hist_org_idx"),
+            models.Index(fields=["target_user", "-created"], name="org_membership_hist_user_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"OrgMembershipHistory(org={self.organization_id}, target={self.target_user_id}, action={self.action})"
+
+
+class OrgMemberAccessScope(models.Model):
+
+    """
+    Explicit, persisted access-scope flag for one (organization, user) pair.
+
+    ``Product_Type_Member``/``Product_Member`` (vendor, read-only) only record
+    WHICH projects a user was granted — they cannot represent "this member was
+    deliberately narrowed to zero projects" as distinct from "never narrowed."
+    That distinction lives here instead: ``restricted=True`` means the
+    member's effective access is exactly their ``Product_Member`` grants
+    (including none of them); ``restricted=False`` (or no row) means they see
+    every project in the organization at their org-wide role.
+
+    This is now a PURELY explicit, org-wide mode switch — it is set ONLY by
+    ``invite_member``'s restricted branch and cleared ONLY by
+    ``reset_to_full_access``. Touching a single project's access
+    (``grant_project``/``revoke_project``) never flips it: a "full" member
+    who gets one project explicitly granted or denied stays "full" for every
+    other project — see ``ProjectAccessDenial`` for how a full member's
+    single-project "No access" is represented instead.
+
+    Written and read exclusively through
+    ``aist.members.service.OrganizationMembershipService`` and
+    ``aist.queries.get_restricted_organization_ids`` (used by
+    ``get_authorized_aist_products``) — never re-derive "is this member
+    restricted" from ``Product_Member`` row counts; a full member CAN
+    legitimately have ``Product_Member`` rows now (per-project downgrades),
+    so their existence no longer implies restricted.
+    """
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="member_access_scopes",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="org_access_scopes",
+    )
+    restricted = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = [("organization", "user")]
+        verbose_name = "Org member access scope"
+        verbose_name_plural = "Org member access scopes"
+
+    def __str__(self) -> str:
+        return f"OrgMemberAccessScope(org={self.organization_id}, user={self.user_id}, restricted={self.restricted})"
+
+
+class ProjectAccessDenial(models.Model):
+
+    """
+    Explicit "No access" override for one (project, user) pair — independent
+    of the user's org-wide role and of every other project.
+
+    Only meaningful for a "full" member (``OrgMemberAccessScope.restricted``
+    is False): it subtracts exactly ONE project from their otherwise-full
+    org access, without touching any other project or their org-wide role.
+    For a restricted (allow-list) member it's redundant — absence of a
+    ``Product_Member`` grant already means no access — but harmless, since
+    ``get_authorized_aist_products`` excludes denied projects unconditionally.
+
+    Deliberately a separate model from ``Product_Member`` rather than a
+    sentinel "no access" ``Role`` row: vendor's own
+    ``dojo.authorization.authorization.user_has_permission`` calls
+    ``role_has_permission()`` on any ``Product_Member.role`` it finds once
+    the org-wide role doesn't already satisfy the permission being checked —
+    and that raises ``RoleDoesNotExistError`` for any role id outside
+    vendor's own ``Roles`` enum. A sentinel role would crash every existing
+    ``user_has_permission_or_403(user, product, ...)`` call site the moment
+    the org role doesn't cover the permission — exactly the common case for
+    a denied project. This model is never read by vendor code, so it can't.
+    """
+
+    project = models.ForeignKey(
+        AISTProject,
+        on_delete=models.CASCADE,
+        related_name="access_denials",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="project_access_denials",
+    )
+
+    class Meta:
+        unique_together = [("project", "user")]
+        verbose_name = "Project access denial"
+        verbose_name_plural = "Project access denials"
+
+    def __str__(self) -> str:
+        return f"ProjectAccessDenial(project={self.project_id}, user={self.user_id})"

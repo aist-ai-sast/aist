@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
 
 vi.mock("../lib/permissions", () => ({
   usePermissions: vi.fn(),
@@ -8,6 +8,10 @@ vi.mock("../lib/permissions", () => ({
 
 import { usePermissions } from "../lib/permissions";
 import PermissionGate from "./PermissionGate";
+
+afterEach(() => {
+  cleanup();
+});
 
 const mockPerms = (over: Partial<ReturnType<typeof usePermissions>>) => {
   (usePermissions as ReturnType<typeof vi.fn>).mockReturnValue({

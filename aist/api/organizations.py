@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dojo.authorization.authorization import user_has_global_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
-from dojo.models import Product_Type
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, serializers
 from rest_framework.permissions import IsAuthenticated
@@ -25,8 +24,12 @@ class AISTOrganizationSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context.get("request")
-        organization_name = validated_data["name"]
-        if request and not Product_Type.objects.filter(name=organization_name).exists():
+        # Product_Type_Add is required unconditionally, even when an existing
+        # Product_Type is being reused by name — skipping it in that branch let
+        # any authenticated user create an Organization (and permanently claim
+        # its unique name) with zero permission check, just by naming it after
+        # any pre-existing Product_Type.
+        if request:
             user_has_global_permission_or_403(request.user, Permissions.Product_Type_Add)
         organization = super().create(validated_data)
         organization.ensure_product_type()

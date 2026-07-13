@@ -8,19 +8,20 @@ import { getRoleBadgeClass, getRoleIcon } from "../lib/roleBadge";
 import { getDisplayName, getRoleLabel, getUsername } from "../lib/userProfile";
 import { usePermissions } from "../lib/permissions";
 import TextInput from "../components/TextInput";
+import PasswordField from "../components/PasswordField";
 import MyTokensSection from "../components/MyTokensSection";
 import { useToast } from "../components/ToastProvider";
 
 function Card({ title, icon, children }: { title: string; icon?: ReactNode; children: React.ReactNode }) {
   return (
-    <section className="aist-card border-night-500/80 p-0">
+    <section className="aist-card flex h-full flex-col border-night-500/80 p-0">
       <div className="border-b border-night-500/70 px-5 py-4">
         <div className="inline-flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-slate-300">
           {icon ? <span className="text-brand-200">{icon}</span> : null}
           <span>{title}</span>
         </div>
       </div>
-      <div className="px-5 py-4">{children}</div>
+      <div className="flex-1 px-5 py-4">{children}</div>
     </section>
   );
 }
@@ -44,9 +45,6 @@ export default function SettingsPage() {
     new_password: "",
     new_password_confirm: "",
   });
-  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
-  const [showNewPassword, setShowNewPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
     if (!accountQuery.data) return;
@@ -96,7 +94,7 @@ export default function SettingsPage() {
         <div className="mt-1 text-xs text-slate-400">@{username} · {role}</div>
       </div>
 
-      <div className="grid items-start gap-4 xl:grid-cols-2">
+      <div className="grid items-stretch gap-4 xl:grid-cols-2">
         <section id="account">
           <Card
             title="Account"
@@ -207,63 +205,30 @@ export default function SettingsPage() {
                 <div className="grid gap-3">
                 <label className="text-xs text-slate-400">
                   Current password
-                  <div className="relative">
-                    <TextInput
-                      variant="password"
-                      type={showCurrentPassword ? "text" : "password"}
-                      autoComplete="current-password"
-                      className="mt-1 pr-12"
-                      value={passwordForm.current_password}
-                      onChange={(event) => setPasswordForm((prev) => ({ ...prev, current_password: event.target.value }))}
-                    />
-                    <button
-                      type="button"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[11px] text-slate-400 transition hover:bg-night-700 hover:text-slate-200"
-                      onClick={() => setShowCurrentPassword((value) => !value)}
-                    >
-                      {showCurrentPassword ? "Hide" : "Show"}
-                    </button>
-                  </div>
+                  <PasswordField
+                    autoComplete="current-password"
+                    className="mt-1"
+                    value={passwordForm.current_password}
+                    onChange={(event) => setPasswordForm((prev) => ({ ...prev, current_password: event.target.value }))}
+                  />
                 </label>
                 <label className="text-xs text-slate-400">
                   New password
-                  <div className="relative">
-                    <TextInput
-                      variant="password"
-                      type={showNewPassword ? "text" : "password"}
-                      autoComplete="new-password"
-                      className="mt-1 pr-12"
-                      value={passwordForm.new_password}
-                      onChange={(event) => setPasswordForm((prev) => ({ ...prev, new_password: event.target.value }))}
-                    />
-                    <button
-                      type="button"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[11px] text-slate-400 transition hover:bg-night-700 hover:text-slate-200"
-                      onClick={() => setShowNewPassword((value) => !value)}
-                    >
-                      {showNewPassword ? "Hide" : "Show"}
-                    </button>
-                  </div>
+                  <PasswordField
+                    autoComplete="new-password"
+                    className="mt-1"
+                    value={passwordForm.new_password}
+                    onChange={(event) => setPasswordForm((prev) => ({ ...prev, new_password: event.target.value }))}
+                  />
                 </label>
                 <label className="text-xs text-slate-400">
                   Confirm new password
-                  <div className="relative">
-                    <TextInput
-                      variant="password"
-                      type={showConfirmPassword ? "text" : "password"}
-                      autoComplete="new-password"
-                      className="mt-1 pr-12"
-                      value={passwordForm.new_password_confirm}
-                      onChange={(event) => setPasswordForm((prev) => ({ ...prev, new_password_confirm: event.target.value }))}
-                    />
-                    <button
-                      type="button"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[11px] text-slate-400 transition hover:bg-night-700 hover:text-slate-200"
-                      onClick={() => setShowConfirmPassword((value) => !value)}
-                    >
-                      {showConfirmPassword ? "Hide" : "Show"}
-                    </button>
-                  </div>
+                  <PasswordField
+                    autoComplete="new-password"
+                    className="mt-1"
+                    value={passwordForm.new_password_confirm}
+                    onChange={(event) => setPasswordForm((prev) => ({ ...prev, new_password_confirm: event.target.value }))}
+                  />
                 </label>
                 <div className="self-start">
                   <button
@@ -331,6 +296,7 @@ export default function SettingsPage() {
             </Card>
           </section>
 
+        <section id="access">
           <Card
             title="Access"
             icon={(
@@ -379,8 +345,11 @@ export default function SettingsPage() {
               <p className="text-xs text-slate-400">Access is governed by your organization administrators.</p>
             </div>
           </Card>
+        </section>
 
+        <section id="tokens">
           <MyTokensSection />
+        </section>
       </div>
     </div>
   );

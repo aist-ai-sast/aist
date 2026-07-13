@@ -38,6 +38,9 @@ Review the diff if it changes any of:
 - outbound HTTP, proxies, VPN, integrations, SCM, webhooks
 - ports, listeners, capabilities, mounts, runtime/container networking
 - background tasks, async validation, result polling, cleanup
+- authentication backends or any new lookup-by-identifier path (email, username, token)
+- any new endpoint that sends email, resets/changes a password, or issues a credential
+- a "check X then act" sequence guarding a uniqueness/ownership/last-of-kind invariant
 
 ## Checks
 
@@ -86,6 +89,44 @@ Flag `CRITICAL` if user-controlled input reaches SQL or shell unsafely.
 - tasks using objects without re-checking validity or ownership
 - polling/cleanup leaking state
 - retries/timeouts/cleanup leaving sensitive resources exposed
+
+### 8. Race conditions / TOCTOU on security invariants
+- a check ("does this already exist", "is this the last owner/admin", "is this name/email
+  taken") followed by a mutation, with no `select_for_update()` (or equivalent lock) held
+  across both inside the same `@transaction.atomic`
+- a uniqueness invariant enforced only in Python (a `.filter(...).exists()` /
+  `.filter(...).first()` guard) with no matching DB-level unique constraint backing it
+
+Flag `CRITICAL` if two concurrent requests could both pass the check and together violate
+the invariant (e.g. leave zero owners, create two rows that should be unique). If Bash/the
+dev DB is available, write and run a minimal two-thread/two-request probe against it to
+confirm before flagging — don't rely on read-only reasoning alone for a concurrency claim.
+
+### 9. Conditional / bypassable permission checks
+- a permission check (`user_has_permission_or_403`, `user_has_global_permission_or_403`,
+  or equivalent) that only executes inside an `if` branch gated on state an unprivileged
+  caller can influence (e.g. "skip the check if a row with this name already exists")
+
+Flag `CRITICAL` if any path reaches a privileged create/update/delete without the
+permission check running unconditionally on that path.
+
+### 10. Auth timing / enumeration
+- a new authentication backend or identifier lookup (email, username, token) that returns
+  early on "not found" without doing comparable work to the "found" path — compare against
+  `django.contrib.auth.backends.ModelBackend`, which hashes a dummy password on a miss
+  specifically to avoid this
+
+Flag `HIGH` if a new lookup-by-identifier path has a timing gap between hit and miss that
+could let an attacker enumerate valid identifiers (emails, usernames, tokens).
+
+### 11. Rate limiting on abusable actions
+- a new endpoint that sends email (invite, password reset, notifications), checks a
+  password (login, change-password), or performs another naturally abusable action, with
+  no `throttle_classes`/`throttle_scope` and no comment explaining why it's intentionally
+  unthrottled
+
+Flag `WARNING` (absence alone isn't exploitation, but it's a real abuse/DoS vector worth
+surfacing) if such an endpoint has no throttle configured.
 
 ## Output
 

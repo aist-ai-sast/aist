@@ -8,17 +8,34 @@ token can only narrow capability, never widen it.
 """
 from __future__ import annotations
 
+import threading
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.http import JsonResponse
-from django.test import TestCase
+from django.test import Client, TestCase, TransactionTestCase
 from django.test.client import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
+from dojo.authorization.roles_permissions import Roles
+from dojo.models import (
+    Engagement,
+    Finding,
+    Product,
+    Product_Member,
+    Product_Type,
+    Product_Type_Member,
+    Role,
+    SLA_Configuration,
+    Test,
+    Test_Type,
+)
 from rest_framework.test import APIClient
 
-from aist.models import AISTApiToken, ApiTokenScope
+from aist import api_urls
+from aist.models import AISTApiToken, AISTProject, ApiTokenScope, LaunchSchedule, Organization
+from aist.utils.secrets import view_disables_masking
 from aist_site.middleware import AistResponseMaskingMiddleware, AistTokenScopeMiddleware
 
 User = get_user_model()
@@ -26,6 +43,11 @@ User = get_user_model()
 
 class TokenTestBase(TestCase):
     def setUp(self):
+        # A test earlier in the same run may have exhausted the aist_auth_login
+        # ScopedRateThrottle (10/min default) — its cache persists across test
+        # classes/modules within one run, so a real session-login test here
+        # (TokenCreateRealSessionTests) could otherwise see a spurious 429.
+        cache.clear()
         self.user = User.objects.create_user("alice", "alice@example.com", "pass")
         self.other = User.objects.create_user("bob", "bob@example.com", "pass")
         self.superuser = User.objects.create_superuser("root", "root@example.com", "pass")
@@ -202,6 +224,41 @@ class TokenSelfServiceTests(TokenTestBase):
         self.assertEqual(resp.status_code, 403)
 
 
+class TokenCreateRealSessionTests(TokenTestBase):
+
+    """
+    Every test above authenticates via APIClient.force_authenticate(), which
+    bypasses Django's session/CSRF pipeline entirely. This is the only test that
+    goes through a real browser-equivalent session-login + CSRF flow — the
+    coverage gap that let a reported 500 on POST /api/v2/aist/me/tokens/ ship
+    untested against real sessions.
+    """
+
+    def test_create_token_via_real_session_and_csrf(self):
+        client = Client(enforce_csrf_checks=True)
+        client.get(reverse("client_login"))
+        csrf_token = client.cookies["csrftoken"].value
+        login_response = client.post(
+            reverse("aist_api:auth_login"),
+            data={"username": self.user.username, "password": "pass"},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(login_response.status_code, 204)
+
+        csrf_after_login = client.cookies["csrftoken"].value
+        response = client.post(
+            reverse("aist_api:me_token_list_create"),
+            data={"name": "ci-real-session", "scope": ApiTokenScope.READ_WRITE},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_after_login,
+        )
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertTrue(body["token"].startswith("aistpat_"))
+        self.assertEqual(body["scope"], ApiTokenScope.READ_WRITE)
+
+
 class TokenMaskingTests(TestCase):
 
     """The one-time secret reveal must survive the response-masking middleware."""
@@ -216,14 +273,18 @@ class TokenMaskingTests(TestCase):
         response = AistResponseMaskingMiddleware(view)(request)
         self.assertNotIn("aistpat_abc_secret", response.content.decode())
 
-    def test_create_opts_out_so_secret_survives(self):
-        def view(_request):
-            response = JsonResponse({"token": "aistpat_abc_secret"})
-            response.aist_disable_masking = True
-            return response
-        request = self.factory.get("/aist/api/v2/aist/me/tokens/")
-        response = AistResponseMaskingMiddleware(view)(request)
-        self.assertIn("aistpat_abc_secret", response.content.decode())
+    def test_view_disables_masking_reflects_real_view_declaration(self):
+        # AISTMeTokenListCreateAPI declares disable_response_masking = True (the
+        # one-time secret reveal); AISTAdminApiTokenListAPI does not. Both masking
+        # layers (AistResponseMaskingMiddleware and aist.api.response's
+        # finalize_response patch) consult this same shared function, so a
+        # regression here breaks masking opt-out everywhere at once. (The actual
+        # end-to-end reveal is covered by TokenSelfServiceTests.test_create_returns_secret_once.)
+        create_request = self.factory.post(reverse("aist_api:me_token_list_create"))
+        self.assertTrue(view_disables_masking(create_request))
+
+        admin_request = self.factory.get(reverse("aist_api:admin_api_token_list"))
+        self.assertFalse(view_disables_masking(admin_request))
 
 
 class TokenStorageTests(TokenTestBase):
@@ -265,3 +326,324 @@ class AdminTokenOverviewTests(TokenTestBase):
         _t, raw = AISTApiToken.issue(user=self.superuser, name="t", scope=ApiTokenScope.READ_WRITE)
         resp = self._bearer(raw).get(self._url())
         self.assertIn(resp.status_code, (401, 403))
+
+
+class MultiOrgTokenTests(TokenTestBase):
+
+    """
+    A token authenticates a USER, not a single organization (confirmed: no
+    "organization" concept anywhere in aist/authentication.py). If self.user
+    belongs to two orgs with different roles, one token must correctly reach
+    org-scoped endpoints in BOTH — this is the one angle test_api_tokens.py's
+    own docstring says is out of scope for it and covered elsewhere, except
+    nothing actually exercised it with a real multi-org user before.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.sla = SLA_Configuration.objects.create(name="SLA")
+        self.role_owner, _ = Role.objects.get_or_create(id=Roles.Owner, defaults={"name": "Owner"})
+        self.role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+
+        self.pt_a = Product_Type.objects.create(name="Org A")
+        self.org_a = Organization.objects.create(name="Org A", product_type=self.pt_a)
+        Product.objects.create(name="A1", description="d", prod_type=self.pt_a, sla_configuration_id=self.sla.id)
+
+        self.pt_b = Product_Type.objects.create(name="Org B")
+        self.org_b = Organization.objects.create(name="Org B", product_type=self.pt_b)
+        Product.objects.create(name="B1", description="d", prod_type=self.pt_b, sla_configuration_id=self.sla.id)
+
+        # self.user (from TokenTestBase): Owner of org_a, Reader of org_b.
+        Product_Type_Member.objects.create(product_type=self.pt_a, user=self.user, role=self.role_owner)
+        Product_Type_Member.objects.create(product_type=self.pt_b, user=self.user, role=self.role_reader)
+
+    def test_single_token_manages_org_a_but_not_org_b(self):
+        _t, raw = AISTApiToken.issue(user=self.user, name="ci", scope=ApiTokenScope.READ_WRITE)
+        client = self._bearer(raw)
+        manage_a = client.get(reverse("aist_api:org_member_list_create", kwargs={"org_id": self.org_a.id}))
+        manage_b = client.get(reverse("aist_api:org_member_list_create", kwargs={"org_id": self.org_b.id}))
+        # Owner of org_a -> can manage members there.
+        self.assertEqual(manage_a.status_code, 200)
+        # Reader of org_b -> management gate correctly denies, same token.
+        self.assertEqual(manage_b.status_code, 404)
+
+    def test_single_token_sees_visible_orgs_from_both(self):
+        _t, raw = AISTApiToken.issue(user=self.user, name="ci", scope=ApiTokenScope.READ_ONLY)
+        resp = self._bearer(raw).get(reverse("aist_api:me"))
+        self.assertEqual(resp.status_code, 200)
+        org_names = {m["organization_name"] for m in resp.json()["organization_memberships"]}
+        self.assertEqual(org_names, {"Org A", "Org B"})
+
+
+class TokenReadOnlyDeclarationHonestyTests(TokenTestBase):
+
+    """
+    An attacker holding only a read-only token must not be able to use an
+    endpoint declared token_read_only=True as a side channel for a real
+    mutation. Verifies the two current declared-read-only POST endpoints are
+    genuinely side-effect-free, not merely permitted by the scope middleware
+    on trust.
+    """
+
+    def test_finding_export_with_read_only_token_produces_no_side_effect(self):
+        sla = SLA_Configuration.objects.create(name="SLA RO")
+        pt = Product_Type.objects.create(name="RO PT")
+        role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        Product_Type_Member.objects.create(product_type=pt, user=self.user, role=role_reader)
+        product = Product.objects.create(
+            name="RO Product", description="d", prod_type=pt, sla_configuration_id=sla.id,
+        )
+        engagement = Engagement.objects.create(
+            name="RO Engagement", target_start=timezone.now(), target_end=timezone.now(), product=product,
+        )
+        test_type = Test_Type.objects.create(name="RO Test Type")
+        test = Test.objects.create(
+            engagement=engagement, target_start=timezone.now(), target_end=timezone.now(), test_type=test_type,
+        )
+        finding = Finding.objects.create(
+            test=test, title="RO Finding", severity="High", date=timezone.now(), reporter=self.user,
+        )
+        before_count = Finding.objects.count()
+        before_reviewed = finding.last_reviewed
+
+        _t, raw = AISTApiToken.issue(user=self.user, name="ro", scope=ApiTokenScope.READ_ONLY)
+        resp = self._bearer(raw).post(reverse("aist_api:finding_export", kwargs={"finding_id": finding.id}), data={})
+
+        self.assertEqual(resp.status_code, 200)
+        finding.refresh_from_db()
+        self.assertEqual(Finding.objects.count(), before_count, "export must not create records")
+        self.assertEqual(finding.last_reviewed, before_reviewed, "export must not mutate the finding it reads")
+
+    def test_launch_schedule_preview_with_read_only_token_persists_nothing(self):
+        _t, raw = AISTApiToken.issue(user=self.user, name="ro2", scope=ApiTokenScope.READ_ONLY)
+        resp = self._bearer(raw).post(
+            reverse("aist_api:launch_schedule_preview"),
+            {"cron_expression": "*/5 * * * *", "count": 3}, format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(LaunchSchedule.objects.count(), 0, "preview must not persist a LaunchSchedule")
+
+
+class TokenCreationLimitTests(TokenTestBase):
+    def test_no_limit_on_tokens_per_user(self):
+        # Known gap, not fixed in this pass: there is no cap on how many
+        # tokens a single user may hold, only the per-(user, name) unique
+        # constraint. A compromised session (or the token-creation UI itself,
+        # see ProjectAccessEditor's unrelated fan-out bug found in the
+        # frontend pass) could mint an unbounded number of live credentials.
+        # Documents current behavior.
+        statuses = [
+            self._session(self.user).post(
+                reverse("aist_api:me_token_list_create"),
+                {"name": f"tok-{i}", "scope": ApiTokenScope.READ_ONLY}, format="json",
+            ).status_code
+            for i in range(30)
+        ]
+        self.assertTrue(all(code == 201 for code in statuses), "documents: no per-user token cap exists yet")
+        self.assertEqual(AISTApiToken.objects.filter(user=self.user).count(), 30)
+
+
+class TokenNameRaceTests(TransactionTestCase):
+
+    """Real-thread concurrency regression for the duplicate-name create race."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user("race_token_user", "race_token_user@example.com", "pass")
+
+    def test_concurrent_create_with_same_name_never_500s(self):
+        barrier = threading.Barrier(2)
+        results = {}
+
+        def create(key):
+            barrier.wait(timeout=5)
+            client = APIClient()
+            client.force_authenticate(user=self.user)
+            resp = client.post(
+                reverse("aist_api:me_token_list_create"),
+                {"name": "race-token", "scope": ApiTokenScope.READ_ONLY}, format="json",
+            )
+            results[key] = resp.status_code
+
+        t1 = threading.Thread(target=create, args=("a",))
+        t2 = threading.Thread(target=create, args=("b",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        statuses = sorted([results.get("a"), results.get("b")])
+        self.assertEqual(statuses, [201, 400], "one create must win, the loser must get 400, never a 500")
+        self.assertEqual(AISTApiToken.objects.filter(user=self.user, name="race-token").count(), 1)
+
+
+def _dummy_kwargs_for(url_pattern) -> dict:
+    """Synthesize plausible path kwargs from a path()'s converters (int -> 1, else 'x')."""
+    kwargs = {}
+    for name, converter in url_pattern.pattern.converters.items():
+        kwargs[name] = 1 if type(converter).__name__ == "IntConverter" else "x"
+    return kwargs
+
+
+class TokenSystemicScopeInvariantTests(TokenTestBase):
+
+    """
+    Enumerates EVERY path registered in aist.api_urls and, for each view that
+    handles a mutating HTTP method (post/put/patch/delete) without declaring
+    ``token_read_only = True``, asserts a read-only token is rejected by
+    AistTokenScopeMiddleware. This fails loudly the moment a future endpoint is
+    added without considering token scope, instead of relying on someone
+    remembering to add a per-endpoint spot-check.
+
+    A 403 here is a middleware-level guarantee (the view never even runs) — it
+    does not by itself prove the view would have been destructive if reached;
+    TokenDestructiveActionTests below adds real end-to-end checks for the
+    highest-value destructive actions as defense-in-depth on top of this.
+    """
+
+    MUTATING_METHODS = ("post", "put", "patch", "delete")
+
+    def _run_scope_middleware(self, method: str, url: str, raw: str):
+        factory = RequestFactory()
+        request = getattr(factory, method.lower())(url, HTTP_AUTHORIZATION=f"Bearer {raw}")
+        middleware = AistTokenScopeMiddleware(lambda _r: JsonResponse({"ok": True}))
+        return middleware(request)
+
+    def test_every_undeclared_mutating_endpoint_blocks_read_only_token(self):
+        _t, raw = AISTApiToken.issue(user=self.user, name="sweep-ro", scope=ApiTokenScope.READ_ONLY)
+
+        checked = []
+        for url_pattern in api_urls.urlpatterns:
+            view_class = url_pattern.callback.view_class
+            if getattr(view_class, "token_read_only", False):
+                continue
+            url = reverse(f"aist_api:{url_pattern.name}", kwargs=_dummy_kwargs_for(url_pattern))
+            for method in self.MUTATING_METHODS:
+                # APIView's own base class defines no get/post/etc — hasattr is a
+                # reliable "does this view (or a mixin it uses) handle this method" check.
+                if not hasattr(view_class, method):
+                    continue
+                response = self._run_scope_middleware(method, url, raw)
+                checked.append((url_pattern.name, method))
+                self.assertEqual(
+                    response.status_code, 403,
+                    f"{url_pattern.name}.{method} accepts a read-only token without declaring "
+                    "token_read_only=True — either mark it read-only or this is a real scope gap",
+                )
+        # Sanity: the sweep must have actually exercised a meaningful number of
+        # endpoints, or a bug in the enumeration itself would silently pass empty.
+        self.assertGreater(len(checked), 20, "the sweep found suspiciously few mutating endpoints — check enumeration logic")
+
+
+class TokenDestructiveActionTests(TokenTestBase):
+
+    """
+    Real end-to-end (APIClient + real fixtures) checks that a read-only token
+    cannot perform high-value destructive actions, on top of the structural
+    middleware-level guarantee in TokenSystemicScopeInvariantTests.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.sla = SLA_Configuration.objects.create(name="Destructive SLA")
+        self.role_owner, _ = Role.objects.get_or_create(id=Roles.Owner, defaults={"name": "Owner"})
+        self.role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        self.pt = Product_Type.objects.create(name="Destructive PT")
+        self.org = Organization.objects.create(name="Destructive Org", product_type=self.pt)
+        Product_Type_Member.objects.create(product_type=self.pt, user=self.user, role=self.role_owner)
+        self.target = User.objects.create_user("victim", "victim@example.com", "pass")
+        Product_Type_Member.objects.create(product_type=self.pt, user=self.target, role=self.role_reader)
+        self.product = Product.objects.create(
+            name="Destructive Product", description="d", prod_type=self.pt, sla_configuration_id=self.sla.id,
+        )
+
+    def _ro_token(self) -> str:
+        _t, raw = AISTApiToken.issue(user=self.user, name="ro-destructive", scope=ApiTokenScope.READ_ONLY)
+        return raw
+
+    def test_read_only_token_cannot_remove_org_member(self):
+        resp = self._bearer(self._ro_token()).delete(
+            reverse("aist_api:org_member_detail", kwargs={"org_id": self.org.id, "user_id": self.target.id}),
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(
+            Product_Type_Member.objects.filter(product_type=self.pt, user=self.target).exists(),
+            "member must not actually be removed",
+        )
+
+    def test_read_only_token_cannot_revoke_project_grant(self):
+        project = AISTProject.objects.create(
+            product=self.product, supported_languages=["python"], compilable=False, profile={},
+        )
+        Product_Member.objects.create(product=self.product, user=self.target, role=self.role_reader)
+        resp = self._bearer(self._ro_token()).delete(
+            reverse(
+                "aist_api:org_member_project_grant_detail",
+                kwargs={"org_id": self.org.id, "user_id": self.target.id, "project_id": project.id},
+            ),
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(Product_Member.objects.filter(product=self.product, user=self.target).exists())
+
+    def test_read_only_token_cannot_delete_its_own_token(self):
+        other_token, _other_raw = AISTApiToken.issue(user=self.user, name="deletable", scope=ApiTokenScope.READ_WRITE)
+        resp = self._bearer(self._ro_token()).delete(
+            reverse("aist_api:me_token_detail", kwargs={"token_id": other_token.id}),
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(AISTApiToken.objects.filter(pk=other_token.id).exists())
+
+    def test_read_only_token_cannot_clear_launch_queue(self):
+        resp = self._bearer(self._ro_token()).post(
+            reverse("aist_api:pipeline_launch_queue_clear_dispatched"), {"older_than_days": 0}, format="json",
+        )
+        self.assertEqual(resp.status_code, 403)
+
+
+class TokenCrossResourceDataScopeTests(TokenTestBase):
+
+    """
+    A token must never see more data than a real session for the same user —
+    extends MultiOrgTokenTests (org-member management) to a different resource
+    type (findings) to confirm org-scoping via aist.queries applies identically
+    regardless of auth method.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.sla = SLA_Configuration.objects.create(name="Scope SLA")
+        self.role_owner, _ = Role.objects.get_or_create(id=Roles.Owner, defaults={"name": "Owner"})
+
+        self.pt_a = Product_Type.objects.create(name="Findings Org A")
+        Product_Type_Member.objects.create(product_type=self.pt_a, user=self.user, role=self.role_owner)
+        product_a = Product.objects.create(
+            name="FA", description="d", prod_type=self.pt_a, sla_configuration_id=self.sla.id,
+        )
+        self._create_finding(product_a, "Finding in A")
+
+        # self.other belongs to no org at all -> must see nothing either way.
+        self.pt_b = Product_Type.objects.create(name="Findings Org B")
+        product_b = Product.objects.create(
+            name="FB", description="d", prod_type=self.pt_b, sla_configuration_id=self.sla.id,
+        )
+        self._create_finding(product_b, "Finding in B")
+
+    def _create_finding(self, product, title):
+        engagement = Engagement.objects.create(
+            name=f"Eng {title}", target_start=timezone.now(), target_end=timezone.now(), product=product,
+        )
+        test_type = Test_Type.objects.create(name=f"Type {title}")
+        test = Test.objects.create(
+            engagement=engagement, target_start=timezone.now(), target_end=timezone.now(), test_type=test_type,
+        )
+        return Finding.objects.create(test=test, title=title, severity="High", date=timezone.now(), reporter=self.user)
+
+    def test_token_and_session_see_identical_finding_titles(self):
+        _t, raw = AISTApiToken.issue(user=self.user, name="scope-check", scope=ApiTokenScope.READ_ONLY)
+        token_titles = {f["title"] for f in self._bearer(raw).get(reverse("aist_api:finding_list")).json()["results"]}
+        session_titles = {
+            f["title"] for f in self._session(self.user).get(reverse("aist_api:finding_list")).json()["results"]
+        }
+        self.assertEqual(token_titles, session_titles)
+        self.assertIn("Finding in A", token_titles)
+        self.assertNotIn("Finding in B", token_titles, "user has no membership in Org B -> must not see its findings")

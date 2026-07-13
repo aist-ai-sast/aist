@@ -57,6 +57,48 @@ class OrganizationCreateAPITests(TestCase):
         self.assertIn(org_one.id, ids)
         self.assertIn(org_two.id, ids)
 
+    def test_non_privileged_user_cannot_create_organization_via_existing_product_type_name(self):
+        # Attaching an Organization to a pre-existing Product_Type must require
+        # Product_Type_Add just like creating a brand-new one — otherwise any
+        # authenticated user could claim an orphaned Product_Type (and
+        # permanently squat the Organization's unique name) with zero
+        # permission check.
+        Product_Type.objects.create(name="Orphaned PT")
+        regular_user = get_user_model().objects.create_user(
+            username="no_perms_user",
+            email="no_perms_user@example.com",
+            password="pass",  # noqa: S106
+        )
+        client = APIClient()
+        client.force_authenticate(user=regular_user)
+
+        response = client.post(
+            reverse("aist_api:organization_create"),
+            data={"name": "Orphaned PT"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Organization.objects.filter(name="Orphaned PT").exists())
+
+    def test_non_privileged_user_cannot_create_brand_new_organization(self):
+        regular_user = get_user_model().objects.create_user(
+            username="no_perms_user2",
+            email="no_perms_user2@example.com",
+            password="pass",  # noqa: S106
+        )
+        client = APIClient()
+        client.force_authenticate(user=regular_user)
+
+        response = client.post(
+            reverse("aist_api:organization_create"),
+            data={"name": "Brand New Org"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Organization.objects.filter(name="Brand New Org").exists())
+
     def test_list_organizations_for_regular_user_returns_only_authorized(self):
         regular_user = get_user_model().objects.create_user(
             username="org_regular_user",

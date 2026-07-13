@@ -73,13 +73,31 @@ class AistAdminGuardMiddlewareTests(TestCase):
         response = self.middleware(request)
         self.assertEqual(response.status_code, 200)
 
-    def test_allows_api_access_for_non_superuser_with_session(self):
-        user = get_user_model().objects.create_user(username="client_api", password=_make_password())
-        request = self.factory.get("/aist-admin/api/v2/findings/")
-        request.user = user
-        request.COOKIES[settings.SESSION_COOKIE_NAME] = "session"
-        response = self.middleware(request)
-        self.assertEqual(response.status_code, 200)
+    def test_blocks_all_non_superuser_admin_api_access_regardless_of_route(self):
+        # client-ui no longer calls any /aist-admin/api/* route (it has its own
+        # AIST-native endpoints for every call it used to make here) — a
+        # non-superuser session must be denied on ANY such route, no exceptions.
+        user = get_user_model().objects.create_user(username="client_api_blocked", password=_make_password())
+        routes = [
+            ("get", "/aist-admin/api/v2/user_profile/"),
+            ("get", "/aist-admin/api/v2/findings/1/"),
+            ("patch", "/aist-admin/api/v2/findings/1/"),
+            ("post", "/aist-admin/api/v2/findings/1/close/"),
+            ("get", "/aist-admin/api/v2/tests/1/"),
+            ("get", "/aist-admin/api/v2/engagements/1/"),
+            ("get", "/aist-admin/api/v2/findings/"),
+            ("post", "/aist-admin/api/v2/product_members/"),
+            ("get", "/aist-admin/api/v2/product_type_members/"),
+            ("get", "/aist-admin/api/v2/users/"),
+            ("get", "/aist-admin/api/v2/system_settings/"),
+        ]
+        for method, path in routes:
+            with self.subTest(method=method, path=path):
+                request = getattr(self.factory, method)(path)
+                request.user = user
+                request.COOKIES[settings.SESSION_COOKIE_NAME] = "session"
+                response = self.middleware(request)
+                self.assertEqual(response.status_code, 403)
 
     def test_allows_api_access_for_superuser(self):
         user = get_user_model().objects.create_superuser(

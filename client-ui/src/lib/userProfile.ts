@@ -1,21 +1,21 @@
 import type { UserProfile } from "./auth";
 
 export function getDisplayName(profile?: UserProfile | null): string {
-  if (!profile?.user) return "Unknown user";
-  const first = profile.user.first_name?.trim() ?? "";
-  const last = profile.user.last_name?.trim() ?? "";
+  if (!profile) return "Unknown user";
+  const first = profile.first_name?.trim() ?? "";
+  const last = profile.last_name?.trim() ?? "";
   const full = [first, last].filter(Boolean).join(" ").trim();
   if (full) return full;
-  return profile.user.username || "Unknown user";
+  return profile.username || "Unknown user";
 }
 
 export function getUsername(profile?: UserProfile | null): string {
-  if (!profile?.user?.username) return "unknown";
-  return profile.user.username;
+  if (!profile?.username) return "unknown";
+  return profile.username;
 }
 
 export function getRoleLabel(profile?: UserProfile | null): "Admin" | "Client" {
-  if (profile?.user?.is_superuser) return "Admin";
+  if (profile?.is_superuser) return "Admin";
   return "Client";
 }
 

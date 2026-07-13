@@ -8,13 +8,7 @@ import "./styles.css";
 import "highlight.js/styles/github-dark.css";
 import { ToastProvider } from "./components/ToastProvider";
 import { isAccessDeniedError, isAuthExpiredError } from "./lib/api";
-
-function shouldRetry(failureCount: number, error: unknown) {
-  if (isAuthExpiredError(error) || isAccessDeniedError(error)) {
-    return false;
-  }
-  return failureCount < 2;
-}
+import { shouldRetry } from "./lib/queryRetry";
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache({

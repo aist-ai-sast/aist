@@ -19,6 +19,18 @@ ROOT_URLCONF = "aist_site.urls"
 WSGI_APPLICATION = "aist_site.wsgi.application"
 ASGI_APPLICATION = "aist_site.asgi.application"
 
+# Let session login resolve by email (the identifier shown everywhere in the
+# UI) in addition to username — inserted ahead of ModelBackend so email is
+# tried first; declines (returns None) for a non-email match rather than
+# duplicating ModelBackend's own username lookup.
+_EMAIL_BACKEND = "aist.auth_backends.EmailBackend"
+if _EMAIL_BACKEND not in AUTHENTICATION_BACKENDS:  # noqa: F405
+    _model_backend = "django.contrib.auth.backends.ModelBackend"
+    _backends = list(AUTHENTICATION_BACKENDS)  # noqa: F405
+    _insert_at = _backends.index(_model_backend) if _model_backend in _backends else len(_backends)
+    _backends.insert(_insert_at, _EMAIL_BACKEND)
+    AUTHENTICATION_BACKENDS = tuple(_backends)
+
 
 for _middleware in reversed(
     (
@@ -124,7 +136,27 @@ REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] += ("rest_framework.permissions.IsA
 # AistTokenScopeMiddleware (not a DRF permission, which AIST views override).
 REST_FRAMEWORK["DEFAULT_AUTHENTICATION_CLASSES"] += ("aist.authentication.ScopedTokenAuthentication",)  # noqa: F405
 AIST_AUTH_LOGIN_THROTTLE_RATE = env("DD_AIST_AUTH_LOGIN_THROTTLE_RATE", default="10/min")  # noqa: F405
-REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {})["aist_auth_login"] = AIST_AUTH_LOGIN_THROTTLE_RATE  # noqa: F405
+# Set-password (invite/reset link completion) is a distinct, unauthenticated action from
+# login — it used to share the "aist_auth_login" scope/bucket, which let one IP's failed
+# logins exhaust the budget for an unrelated set-password attempt (and vice versa) from
+# the same NAT/address. Split so the two can't cannibalize each other; still IP-keyed
+# (both are pre-auth), so this doesn't by itself defeat NAT-sharing abuse, only scope bleed.
+AIST_AUTH_SET_PASSWORD_THROTTLE_RATE = env("DD_AIST_AUTH_SET_PASSWORD_THROTTLE_RATE", default="10/min")  # noqa: F405
+# Authenticated actions below are keyed by user (DRF's ScopedRateThrottle falls back to
+# IP only when unauthenticated), so these bound each actor's own usage:
+# - invite/reset-password emails: bounds how many emails one admin can fire at arbitrary
+#   addresses per hour (mail-bombing any invitee/member).
+# - change-password: bounds current-password brute-force attempts from a hijacked session.
+AIST_INVITE_EMAIL_THROTTLE_RATE = env("DD_AIST_INVITE_EMAIL_THROTTLE_RATE", default="20/hour")  # noqa: F405
+AIST_RESET_PASSWORD_EMAIL_THROTTLE_RATE = env("DD_AIST_RESET_PASSWORD_EMAIL_THROTTLE_RATE", default="20/hour")  # noqa: F405
+AIST_CHANGE_PASSWORD_THROTTLE_RATE = env("DD_AIST_CHANGE_PASSWORD_THROTTLE_RATE", default="10/min")  # noqa: F405
+REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {}).update({  # noqa: F405
+    "aist_auth_login": AIST_AUTH_LOGIN_THROTTLE_RATE,
+    "aist_auth_set_password": AIST_AUTH_SET_PASSWORD_THROTTLE_RATE,
+    "aist_invite_email": AIST_INVITE_EMAIL_THROTTLE_RATE,
+    "aist_reset_password_email": AIST_RESET_PASSWORD_EMAIL_THROTTLE_RATE,
+    "aist_change_password": AIST_CHANGE_PASSWORD_THROTTLE_RATE,
+})
 
 GITHUB_APP = {
     "WEBHOOK_SECRET": env("WEBHOOK_SECRET", default=""),  # noqa: F405

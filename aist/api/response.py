@@ -5,7 +5,7 @@ from typing import Any
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from aist.utils.secrets import mask_sensitive_data
+from aist.utils.secrets import is_openapi_payload, mask_sensitive_data, view_disables_masking
 
 _PATCHED_ATTR = "_aist_masked_response_patch_installed"
 _ORIGINAL_FINALIZE_ATTR = "_aist_original_finalize_response"
@@ -17,12 +17,8 @@ _MASKED_API_PATH_PREFIXES = (
 
 
 class MaskedAPIResponse(Response):
-    @staticmethod
-    def _is_openapi_payload(data: Any) -> bool:
-        return isinstance(data, dict) and "openapi" in data and "paths" in data and "info" in data
-
     def __init__(self, data: Any = None, *args, skip_mask: bool = False, **kwargs):
-        payload = data if skip_mask or self._is_openapi_payload(data) else mask_sensitive_data(data)
+        payload = data if skip_mask or is_openapi_payload(data) else mask_sensitive_data(data)
         super().__init__(payload, *args, **kwargs)
 
     @classmethod
@@ -52,6 +48,7 @@ def install_masked_api_response() -> None:
             isinstance(response, Response)
             and not isinstance(response, MaskedAPIResponse)
             and path.startswith(_MASKED_API_PATH_PREFIXES)
+            and not view_disables_masking(request)
         ):
             response = MaskedAPIResponse.from_response(response)
         return original_finalize(self, request, response, *args, **kwargs)

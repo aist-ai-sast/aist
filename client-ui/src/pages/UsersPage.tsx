@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { ObjectIcons } from "../components/ObjectIcons";
 import PageErrorState from "../components/PageErrorState";
 import ProjectAccessEditor, { type RoleByProject } from "../components/ProjectAccessEditor";
 import SelectField from "../components/SelectField";
@@ -11,16 +12,37 @@ import { useManageableOrgs, useProjects } from "../lib/queries";
 import {
   ROLE_OPTIONS,
   type OrgMember,
+  inviteResultMessage,
   useChangeMemberRole,
   useGrantProject,
   useInviteMember,
   useOrgMembers,
   useRemoveMember,
   useResetMemberPassword,
+  useResetOrgMemberAccess,
   useRevokeProject,
 } from "../lib/orgMembers";
 
 const roleSelectOptions = ROLE_OPTIONS.map((role) => ({ value: String(role.id), label: role.name }));
+
+// A full member has no per-project grants by default — they see every
+// project at their org-wide role. Seeded as the baseline, then per-project
+// grants (a capped downgrade for a full member, or the sole allow-list source
+// for a restricted member) and explicit denials override individual rows —
+// touching one project never affects any other project's row. Exported for
+// direct testing.
+export function buildRoleByProject(
+  member: Pick<OrgMember, "membership_type" | "role_id" | "project_grants" | "denied_project_ids">,
+  orgProjects: { id: number }[],
+): RoleByProject {
+  const map: RoleByProject = {};
+  if (member.membership_type === "full") {
+    orgProjects.forEach((project) => { map[project.id] = member.role_id; });
+  }
+  member.project_grants.forEach((grant) => { map[grant.project_id] = grant.role_id; });
+  member.denied_project_ids.forEach((projectId) => { map[projectId] = null; });
+  return map;
+}
 
 export default function UsersPage() {
   const orgsQuery = useManageableOrgs();
@@ -48,7 +70,10 @@ export default function UsersPage() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="text-xs uppercase tracking-[0.2em] text-slate-400">User Management</div>
-          <h1 className="mt-2 text-2xl font-semibold text-white">Users</h1>
+          <h1 className="mt-2 flex items-center gap-2 text-2xl font-semibold text-white">
+            <span className="text-brand-200">{ObjectIcons.users}</span>
+            Users
+          </h1>
           <p className="mt-1 text-xs text-slate-400">Invite members, assign roles and per-project access.</p>
         </div>
         {orgsQuery.data && orgsQuery.data.length > 1 ? (
@@ -160,8 +185,8 @@ function InvitePanel({ orgId }: { orgId: number }) {
       payload.project_grants = grants;
     }
     try {
-      await invite.mutateAsync(payload);
-      toast.push("Invitation sent.", "success");
+      const result = await invite.mutateAsync(payload);
+      toast.push(inviteResultMessage(result), "success");
       reset();
     } catch (error) {
       toast.push(toUserMessage(error), "error");
@@ -293,6 +318,7 @@ function MemberRow({
                 label="Role"
                 hideLabel
                 value={member.role_id ? String(member.role_id) : ""}
+                disabled={changeRole.isPending}
                 onChange={async (value) => {
                   try {
                     await changeRole.mutateAsync({ userId: member.user_id, roleId: Number(value) });
@@ -361,6 +387,7 @@ function AccessDrawer({
   const projectsQuery = useProjects();
   const grantProject = useGrantProject(orgId);
   const revokeProject = useRevokeProject(orgId);
+  const resetAccess = useResetOrgMemberAccess(orgId);
   const toast = useToast();
 
   const orgProjects = useMemo(
@@ -369,14 +396,10 @@ function AccessDrawer({
       .map((project) => ({ id: project.id, name: project.name })),
     [projectsQuery.data, orgId],
   );
-  const roleByProject = useMemo(() => {
-    const map: RoleByProject = {};
-    member.project_grants.forEach((grant) => { map[grant.project_id] = grant.role_id; });
-    return map;
-  }, [member.project_grants]);
+  const roleByProject = useMemo(() => buildRoleByProject(member, orgProjects), [member, orgProjects]);
 
   const displayName = [member.first_name, member.last_name].filter(Boolean).join(" ") || member.username;
-  const busy = grantProject.isPending || revokeProject.isPending;
+  const busy = grantProject.isPending || revokeProject.isPending || resetAccess.isPending;
 
   async function setRole(projectId: number, roleId: number | null) {
     try {
@@ -408,10 +431,33 @@ function AccessDrawer({
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {member.membership_type === "full" ? (
             <p className="mb-4 rounded-xl border border-night-500/70 bg-night-800/70 p-3 text-xs text-slate-400">
-              This is a full organization member — they can already see every project. Grants below raise their role on
-              specific projects.
+              This is a full organization member — they can already see every project at their organization role.
+              Changes below only narrow a single project (a lower role, or "No access") and never affect any other
+              project; a project role can never exceed their organization role.
             </p>
-          ) : null}
+          ) : (
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-night-500/70 bg-night-800/70 p-3">
+              <p className="text-xs text-slate-400">
+                This member is restricted to the projects granted below — an empty list means no project access at all.
+              </p>
+              <button
+                type="button"
+                className="aist-icon-button shrink-0 whitespace-nowrap"
+                disabled={resetAccess.isPending}
+                onClick={async () => {
+                  if (!window.confirm(`Reset ${displayName} to full organization access? This clears their per-project grants and denials.`)) return;
+                  try {
+                    await resetAccess.mutateAsync(member.user_id);
+                    toast.push("Member reset to full organization access.", "success");
+                  } catch (error) {
+                    toast.push(toUserMessage(error), "error");
+                  }
+                }}
+              >
+                Reset to full access
+              </button>
+            </div>
+          )}
           {projectsQuery.isLoading ? (
             <p className="text-xs text-slate-400">Loading projects...</p>
           ) : (
@@ -419,6 +465,7 @@ function AccessDrawer({
               projects={orgProjects}
               roleByProject={roleByProject}
               disabled={busy}
+              maxRoleId={member.membership_type === "full" ? member.role_id : null}
               onSetRole={setRole}
             />
           )}

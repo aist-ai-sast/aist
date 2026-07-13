@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.contrib import admin
 
-from aist.models import OrgIntegration, OrgIntegrationVPNSecret
+from aist.models import OrgIntegration, OrgIntegrationVPNSecret, OrgMembershipHistory
 
 
 @admin.register(OrgIntegration)
@@ -83,3 +83,23 @@ class OrgIntegrationVPNSecretAdmin(admin.ModelAdmin):
     @admin.display(boolean=True, description="Username")
     def has_username(self, obj):
         return bool(obj.vpn_username)
+
+
+@admin.register(OrgMembershipHistory)
+class OrgMembershipHistoryAdmin(admin.ModelAdmin):
+
+    """Append-only audit log — no add/change/delete via admin, inspection only."""
+
+    list_display = ("created", "organization", "actor", "target_user", "action", "previous_role", "new_role")
+    list_filter = ("action", "organization")
+    search_fields = ("organization__name", "actor__username", "target_user__username")
+    ordering = ("-created",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

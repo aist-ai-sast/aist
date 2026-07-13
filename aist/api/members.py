@@ -13,6 +13,7 @@ from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_sche
 from rest_framework import serializers, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from aist.api.schema import AISTApiTag
@@ -45,6 +46,7 @@ class AISTMemberSerializer(serializers.Serializer):
     has_token = serializers.BooleanField()
     token_count = serializers.IntegerField()
     project_grants = AISTProjectGrantSerializer(many=True)
+    denied_project_ids = serializers.ListField(child=serializers.IntegerField())
 
 
 class AISTProjectGrantWriteSerializer(serializers.Serializer):
@@ -90,6 +92,15 @@ class _OrgMembersBaseAPI(APIView):
 
 class AISTOrgMemberListCreateAPI(_OrgMembersBaseAPI):
 
+    """Only ``post`` (invite, which sends an email) is throttled — ``get`` stays unlimited."""
+
+    def get_throttles(self):
+        if self.request.method != "POST":
+            return []
+        return [ScopedRateThrottle()]
+
+    throttle_scope = "aist_invite_email"
+
     @extend_schema(
         tags=[AISTApiTag.MEMBERS.value],
         summary="List organization members",
@@ -111,9 +122,14 @@ class AISTOrgMemberListCreateAPI(_OrgMembersBaseAPI):
         service = self._service(request, org_id)
         serializer = AISTMemberInviteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = service.invite_member(**serializer.validated_data)
+        user, invite_status = service.invite_member(**serializer.validated_data)
         return Response(
-            {"user_id": user.id, "username": user.username, "email": user.email},
+            {
+                "user_id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "invite_status": invite_status,
+            },
             status=status.HTTP_201_CREATED,
         )
 
@@ -145,6 +161,8 @@ class AISTOrgMemberDetailAPI(_OrgMembersBaseAPI):
 
 
 class AISTOrgMemberResetPasswordAPI(_OrgMembersBaseAPI):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "aist_reset_password_email"
 
     @extend_schema(
         tags=[AISTApiTag.MEMBERS.value],
@@ -155,6 +173,29 @@ class AISTOrgMemberResetPasswordAPI(_OrgMembersBaseAPI):
     def post(self, request, org_id: int, user_id: int):
         service = self._service(request, org_id)
         service.reset_password(user_id=user_id)
+        return Response({"ok": True})
+
+
+class AISTOrgMemberResetAccessAPI(_OrgMembersBaseAPI):
+
+    """
+    Explicit, deliberate way back to full org access for a restricted member.
+
+    The only path that clears ``OrgMemberAccessScope.restricted`` — narrowing
+    happens implicitly via grant/revoke, but broadening back to "sees every
+    project" always requires this dedicated action, never a side effect of
+    an emptied grant list.
+    """
+
+    @extend_schema(
+        tags=[AISTApiTag.MEMBERS.value],
+        summary="Reset a restricted member to full organization access",
+        request=None,
+        responses={200: OpenApiResponse(description="Member reset to full access")},
+    )
+    def post(self, request, org_id: int, user_id: int):
+        service = self._service(request, org_id)
+        service.reset_to_full_access(user_id=user_id)
         return Response({"ok": True})
 
 

@@ -3,25 +3,20 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiError, fetchJson, fetchText } from "./api";
 import { getRoute } from "./routes";
 
+export type OrganizationMembership = {
+  organization_id: number;
+  organization_name: string;
+  role_id: number | null;
+  role_name: string;
+};
+
 export type UserProfile = {
-  user: {
-    username: string;
-    first_name?: string;
-    last_name?: string;
-    email?: string;
-    is_superuser?: boolean;
-  };
-  global_role?: {
-    role?: number;
-  } | null;
-  product_member?: Array<{
-    product?: number;
-    role?: number;
-  }>;
-  product_type_member?: Array<{
-    product_type?: number;
-    role?: number;
-  }>;
+  username: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  is_superuser?: boolean;
+  organization_memberships?: OrganizationMembership[];
 };
 
 export async function loginWithSession(username: string, password: string) {
@@ -48,7 +43,7 @@ export async function loginWithSession(username: string, password: string) {
   }
 
   try {
-    await fetchJson<UserProfile>(getRoute("user_profile_url"));
+    await fetchJson<UserProfile>(getRoute("me_url"));
   } catch {
     throw new Error("Invalid username or password.");
   }
@@ -61,7 +56,7 @@ export async function logoutSession() {
 export function useAuthStatus(enabled = true) {
   return useQuery({
     queryKey: ["auth-status"],
-    queryFn: () => fetchJson<UserProfile>(getRoute("user_profile_url")),
+    queryFn: () => fetchJson<UserProfile>(getRoute("me_url")),
     enabled,
     staleTime: 60 * 1000,
     retry: false,

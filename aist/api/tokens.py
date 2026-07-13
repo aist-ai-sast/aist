@@ -12,6 +12,7 @@ capability, never widen it.
 from __future__ import annotations
 
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
@@ -88,12 +89,21 @@ class AISTMeTokenListCreateAPI(APIView):
     def post(self, request):
         serializer = AISTApiTokenCreateSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        token, raw = AISTApiToken.issue(
-            user=request.user,
-            name=serializer.validated_data["name"],
-            scope=serializer.validated_data["scope"],
-            expires_at=serializer.validated_data.get("expires_at"),
-        )
+        try:
+            # validate_name's check-then-create isn't race-proof; the DB's
+            # unique_together=(user, name) is the real guard for two
+            # concurrent creates of the same name. Without this, that race
+            # surfaces as an unhandled 500 instead of the same 400 a
+            # sequential duplicate gets.
+            token, raw = AISTApiToken.issue(
+                user=request.user,
+                name=serializer.validated_data["name"],
+                scope=serializer.validated_data["scope"],
+                expires_at=serializer.validated_data.get("expires_at"),
+            )
+        except IntegrityError as exc:
+            msg = "You already have a token with this name."
+            raise serializers.ValidationError({"name": msg}) from exc
         payload = AISTApiTokenSerializer(token).data
         payload["token"] = raw  # the ONLY time the secret is ever returned
         return Response(payload, status=status.HTTP_201_CREATED)

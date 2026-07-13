@@ -120,6 +120,71 @@ Grep changed files for:
 
 ---
 
+### Check 8 — Race conditions / TOCTOU on security invariants (`aist/` files only)
+
+**What to find:** a check ("already exists", "is the last owner", "name/email taken")
+followed by a mutation, with no lock held across both.
+
+Grep for:
+- `.exists()` or `.first()` used to guard a create/update, inside a function decorated
+  `@transaction.atomic`, with no `select_for_update()` anywhere in that function
+- a uniqueness check backed only by a Python `.filter(...)` guard, not a DB `unique`/
+  `UniqueConstraint`
+
+**Flag as CRITICAL if:** two concurrent requests could both pass the check and together
+violate the invariant (leave zero owners/admins, create two rows meant to be unique). If
+Docker/the dev DB is reachable, write and run a minimal two-thread probe to confirm before
+flagging — a race claim needs more than a read-only guess.
+
+---
+
+### Check 9 — Conditional / bypassable permission checks (`aist/` files only)
+
+**What to find:** a permission check that only runs inside a branch gated on caller-
+influenceable state.
+
+Grep for:
+- `user_has_permission_or_403(` / `user_has_global_permission_or_403(` (or equivalent)
+  nested inside an `if` whose condition depends on a `.filter(...).exists()` or similar
+  data lookup, rather than running unconditionally before the mutation
+
+**Flag as CRITICAL if:** an unprivileged caller can reach the privileged create/update/
+delete by satisfying (or avoiding) that branch condition.
+
+---
+
+### Check 10 — Auth timing / enumeration (`aist/` files only)
+
+**What to find:** a new authentication backend or identifier lookup (email, username,
+token) that returns early on "not found" without doing comparable work to the "found"
+path.
+
+Grep for:
+- a new `authenticate(` method, or any `User.objects.get(` / `.filter(...).first()` login-
+  adjacent lookup, whose "not found"/`except` branch returns immediately with no dummy
+  password hash — contrast with `django.contrib.auth.backends.ModelBackend`, which hashes
+  a dummy password on a miss specifically to avoid this
+
+**Flag as HIGH if:** the timing gap between hit and miss could let an attacker enumerate
+valid identifiers.
+
+---
+
+### Check 11 — Rate limiting on abusable actions (`aist/api/` files only)
+
+**What to find:** a new endpoint that sends email, checks/changes a password, or performs
+another naturally abusable action, with no throttle configured.
+
+Grep for:
+- a new view sending mail (`send_mail`, `EmailMultiAlternatives`, or a helper that wraps
+  them) or checking a password, with no `throttle_classes`/`throttle_scope` on that view
+  and no comment explaining why it's intentionally unthrottled
+
+**Flag as WARNING if:** found — absence alone isn't exploitation, but it's a real abuse/
+DoS vector worth surfacing.
+
+---
+
 ## Output format
 
 ```
@@ -142,6 +207,10 @@ Grep changed files for:
 - Serializer usage: ✓ / ✗
 - Docker security: ✓ / N/A
 - Hardcoded credentials: ✓ / ✗
+- Race conditions / TOCTOU: ✓ / ✗
+- Bypassable permission checks: ✓ / ✗
+- Auth timing / enumeration: ✓ / ✗
+- Rate limiting: ✓ / ✗
 ```
 
 If all checks pass: output `No security issues found.`

@@ -11,7 +11,7 @@ const RoleIds = {
   Reader: 5,
 } as const;
 
-const roleRank: Record<number, number> = {
+export const roleRank: Record<number, number> = {
   [RoleIds.Reader]: 0,
   [RoleIds.API_Importer]: 1,
   [RoleIds.Writer]: 2,
@@ -27,17 +27,13 @@ function getBestRole(roles: (number | undefined)[]): number | null {
 
 function getRoleFromProfile(profile?: UserProfile | null): number | "superuser" | null {
   if (!profile) return null;
-  if (profile.user?.is_superuser) return "superuser";
+  if (profile.is_superuser) return "superuser";
 
-  if (profile.product_type_member?.length) {
+  if (profile.organization_memberships?.length) {
     const best = getBestRole(
-      profile.product_type_member.filter((m) => m.role).map((m) => m.role),
+      profile.organization_memberships.map((m) => m.role_id ?? undefined),
     );
     if (best !== null) return best;
-  }
-
-  if (profile.global_role?.role) {
-    return profile.global_role.role;
   }
 
   return null;

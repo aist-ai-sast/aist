@@ -25,7 +25,7 @@ from dojo.models import (
     Test_Type,
 )
 
-from aist.models import AISTProject, Organization
+from aist.models import AISTProject, Organization, OrgMemberAccessScope
 from aist.queries import (
     get_authorized_aist_organizations,
     get_authorized_aist_products,
@@ -65,10 +65,18 @@ class ProjectAccessScopingTests(TestCase):
         self.restricted_a = self._user("restricted_a")
         Product_Type_Member.objects.create(product_type=self.pt_a, user=self.restricted_a, role=self.role_reader)
         Product_Member.objects.create(product=self.prod_a1, user=self.restricted_a, role=self.role_writer)
+        OrgMemberAccessScope.objects.create(organization=self.org_a, user=self.restricted_a, restricted=True)
 
         # Product_Member WITHOUT org membership: must have NO access.
         self.pm_only = self._user("pm_only")
         Product_Member.objects.create(product=self.prod_a1, user=self.pm_only, role=self.role_owner)
+
+        # Restricted member of A with ZERO project grants — the exact state a
+        # full member ends up in after every project grant is revoked. Must
+        # see nothing, not fall back to full org access.
+        self.restricted_zero_a = self._user("restricted_zero_a")
+        Product_Type_Member.objects.create(product_type=self.pt_a, user=self.restricted_zero_a, role=self.role_reader)
+        OrgMemberAccessScope.objects.create(organization=self.org_a, user=self.restricted_zero_a, restricted=True)
 
         self.member_b = self._user("member_b")
         Product_Type_Member.objects.create(product_type=self.pt_b, user=self.member_b, role=self.role_reader)
@@ -123,6 +131,34 @@ class ProjectAccessScopingTests(TestCase):
         ids = self._product_ids(Permissions.Product_View, self.full_a)
         self.assertEqual(ids, {self.prod_a1.id, self.prod_a2.id})
 
+    def test_full_member_rogue_elevated_grant_is_ignored_not_honored(self):
+        # A Product_Member row created by ANY path other than
+        # OrganizationMembershipService._grant_project (e.g. vendor's own
+        # product-member admin API, which doesn't enforce the "project role
+        # can't exceed org role" cap) must never grant more than the org
+        # role would. full_a's org role is Reader (rank 0); this rogue Owner
+        # grant (rank 4) on prod_a2 must be treated as if it didn't exist —
+        # prod_a2 still visible (Reader already grants View), but no Edit.
+        Product_Member.objects.create(product=self.prod_a2, user=self.full_a, role=self.role_owner)
+        self.assertEqual(
+            self._product_ids(Permissions.Product_View, self.full_a), {self.prod_a1.id, self.prod_a2.id},
+        )
+        self.assertEqual(self._product_ids(Permissions.Finding_Edit, self.full_a), set())
+
+    def test_full_member_conforming_downgrade_narrows_only_that_project(self):
+        # The legitimate counterpart: a downgrade override (role rank BELOW
+        # the org role) is honored for that one project, without affecting
+        # the other, untouched project.
+        owner_full = self._user("owner_full")
+        Product_Type_Member.objects.create(product_type=self.pt_a, user=owner_full, role=self.role_owner)
+        Product_Member.objects.create(product=self.prod_a2, user=owner_full, role=self.role_reader)
+        self.assertEqual(
+            self._product_ids(Permissions.Product_View, owner_full), {self.prod_a1.id, self.prod_a2.id},
+        )
+        # Edit still works on prod_a1 (plain org-role Owner), but not on the
+        # downgraded prod_a2.
+        self.assertEqual(self._product_ids(Permissions.Finding_Edit, owner_full), {self.prod_a1.id})
+
     def test_restricted_member_narrowed_to_granted_project(self):
         ids = self._product_ids(Permissions.Product_View, self.restricted_a)
         self.assertEqual(ids, {self.prod_a1.id})  # NOT prod_a2, despite org membership
@@ -140,6 +176,7 @@ class ProjectAccessScopingTests(TestCase):
         reader_restricted = self._user("reader_restricted")
         Product_Type_Member.objects.create(product_type=self.pt_a, user=reader_restricted, role=self.role_reader)
         Product_Member.objects.create(product=self.prod_a1, user=reader_restricted, role=self.role_reader)
+        OrgMemberAccessScope.objects.create(organization=self.org_a, user=reader_restricted, restricted=True)
         self.assertEqual(self._product_ids(Permissions.Product_View, reader_restricted), {self.prod_a1.id})
         self.assertEqual(self._product_ids(Permissions.Finding_Edit, reader_restricted), set())
 
@@ -164,6 +201,21 @@ class ProjectAccessScopingTests(TestCase):
         self.assertNotIn(f_a2.id, finding_ids)
         self.assertNotIn(f_b1.id, finding_ids)
 
+    def test_findings_getter_empty_for_member_restricted_to_no_projects(self):
+        # get_authorized_findings delegates to get_authorized_aist_products, so
+        # this should pass "for free" once that function is fixed — which is
+        # exactly why it matters: it proves the fix is a genuine queryset-level
+        # fix, not something that only happens to work for the Members list
+        # API, and that findings (the actual sensitive data) don't leak through
+        # a separate path.
+        self._finding(self.prod_a1, "should-not-be-visible")
+        self._finding(self.prod_a2, "should-not-be-visible-either")
+        finding_ids = set(
+            get_authorized_findings(Permissions.Finding_View, user=self.restricted_zero_a).values_list("id", flat=True),
+        )
+        self.assertEqual(finding_ids, set())
+        self.assertEqual(self._product_ids(Permissions.Product_View, self.restricted_zero_a), set())
+
     # ---- organization visibility vs management ------------------------
 
     def test_visible_orgs_for_full_and_restricted_members(self):
@@ -179,3 +231,87 @@ class ProjectAccessScopingTests(TestCase):
         self.assertFalse(
             get_authorized_aist_organizations(Permissions.Product_Type_Manage_Members, user=self.full_a).exists(),
         )
+
+
+class MultiOrgMembershipTests(ProjectAccessScopingTests):
+
+    """
+    Every fixture in ProjectAccessScopingTests belongs to at most ONE org —
+    that leaves the genuinely multi-org case (one real user, membership rows
+    in 2+ organizations at once, possibly with different roles/narrowing in
+    each) completely unexercised. These tests build that case explicitly and
+    check every getter still scopes correctly per-org for that single user,
+    instead of only ever comparing across DIFFERENT single-org users.
+
+    Inherits setUp from ProjectAccessScopingTests to reuse its orgs/products.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # One real person, full member of org_a (Reader) AND org_b (Reader).
+        self.multi_full = self._user("multi_full")
+        Product_Type_Member.objects.create(product_type=self.pt_a, user=self.multi_full, role=self.role_reader)
+        Product_Type_Member.objects.create(product_type=self.pt_b, user=self.multi_full, role=self.role_reader)
+
+        # One person, restricted (A1 only) in org_a, but a FULL member of org_b.
+        # Narrowing in one org must not bleed into (or be relaxed by) the other.
+        self.multi_mixed = self._user("multi_mixed")
+        Product_Type_Member.objects.create(product_type=self.pt_a, user=self.multi_mixed, role=self.role_reader)
+        Product_Member.objects.create(product=self.prod_a1, user=self.multi_mixed, role=self.role_writer)
+        OrgMemberAccessScope.objects.create(organization=self.org_a, user=self.multi_mixed, restricted=True)
+        Product_Type_Member.objects.create(product_type=self.pt_b, user=self.multi_mixed, role=self.role_reader)
+
+        # One person, Owner in org_a but only Reader in org_b — management
+        # permission must be evaluated per-org, not as a single blanket grant.
+        self.multi_owner_a_reader_b = self._user("multi_owner_a_reader_b")
+        Product_Type_Member.objects.create(
+            product_type=self.pt_a, user=self.multi_owner_a_reader_b, role=self.role_owner,
+        )
+        Product_Type_Member.objects.create(
+            product_type=self.pt_b, user=self.multi_owner_a_reader_b, role=self.role_reader,
+        )
+
+    def test_full_member_of_two_orgs_sees_products_from_both(self):
+        ids = self._product_ids(Permissions.Product_View, self.multi_full)
+        self.assertEqual(ids, {self.prod_a1.id, self.prod_a2.id, self.prod_b1.id})
+
+    def test_visible_orgs_for_member_of_two_orgs_returns_both(self):
+        org_ids = set(get_visible_aist_organizations(user=self.multi_full).values_list("id", flat=True))
+        self.assertEqual(org_ids, {self.org_a.id, self.org_b.id})
+
+    def test_narrowing_in_one_org_does_not_bleed_into_full_membership_in_another(self):
+        # Restricted to A1 in org_a, but a FULL member of org_b -> must see
+        # A1 (grant) + all of org_b (B1), and must NOT see A2 (org_a's other
+        # project, correctly excluded despite org_b granting full access).
+        ids = self._product_ids(Permissions.Product_View, self.multi_mixed)
+        self.assertEqual(ids, {self.prod_a1.id, self.prod_b1.id})
+        self.assertNotIn(self.prod_a2.id, ids)
+
+    def test_narrowing_in_one_org_does_not_gain_write_from_full_membership_in_another(self):
+        # Full Reader membership in org_b must not grant Finding_Edit on org_b's
+        # product just because the same user has a Writer grant elsewhere (A1).
+        edit_ids = self._product_ids(Permissions.Finding_Edit, self.multi_mixed)
+        self.assertEqual(edit_ids, {self.prod_a1.id})
+        self.assertNotIn(self.prod_b1.id, edit_ids)
+
+    def test_findings_for_member_of_two_orgs_combine_both_without_bleed(self):
+        f_a1 = self._finding(self.prod_a1, "org-a-in-scope")
+        f_a2 = self._finding(self.prod_a2, "org-a-out-of-scope")
+        f_b1 = self._finding(self.prod_b1, "org-b-in-scope")
+        finding_ids = set(
+            get_authorized_findings(Permissions.Finding_View, user=self.multi_mixed).values_list("id", flat=True),
+        )
+        self.assertEqual(finding_ids, {f_a1.id, f_b1.id})
+        self.assertNotIn(f_a2.id, finding_ids)
+
+    def test_management_permission_evaluated_independently_per_org(self):
+        # Owner in org_a, plain Reader in org_b: must be able to manage org_a
+        # only — the Owner role in one org must not implicitly grant
+        # management rights in another org the same person happens to belong to.
+        manageable = set(
+            get_authorized_aist_organizations(
+                Permissions.Product_Type_Manage_Members, user=self.multi_owner_a_reader_b,
+            ).values_list("id", flat=True),
+        )
+        self.assertEqual(manageable, {self.org_a.id})
+        self.assertNotIn(self.org_b.id, manageable)

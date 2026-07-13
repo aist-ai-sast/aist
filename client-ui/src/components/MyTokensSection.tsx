@@ -24,14 +24,14 @@ const SCOPE_LABEL: Record<ApiTokenScope, string> = {
 
 function SectionCard({ title, icon, children }: { title: string; icon?: ReactNode; children: ReactNode }) {
   return (
-    <section className="aist-card border-night-500/80 p-0">
+    <section className="aist-card flex h-full flex-col border-night-500/80 p-0">
       <div className="border-b border-night-500/70 px-5 py-4">
         <div className="inline-flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-slate-300">
           {icon ? <span className="text-brand-200">{icon}</span> : null}
           <span>{title}</span>
         </div>
       </div>
-      <div className="px-5 py-4">{children}</div>
+      <div className="flex-1 px-5 py-4">{children}</div>
     </section>
   );
 }

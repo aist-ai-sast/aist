@@ -480,6 +480,70 @@ class AISTFindingAuthorizationTests(AISTApiBase):
         )
         self.assertEqual(resp.status_code, 404)
 
+    def test_finding_detail_get_returns_expected_fields(self):
+        resp = self.client.get(
+            reverse("aist_api:finding_detail", kwargs={"finding_id": self.own_finding.id}),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["id"], self.own_finding.id)
+        self.assertEqual(resp.data["severity"], "High")
+
+    def test_finding_detail_get_denies_other_product_finding(self):
+        resp = self.client.get(
+            reverse("aist_api:finding_detail", kwargs={"finding_id": self.other_finding.id}),
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_finding_detail_patch_updates_allowed_field(self):
+        resp = self.client.patch(
+            reverse("aist_api:finding_detail", kwargs={"finding_id": self.own_finding.id}),
+            data={"severity": "Critical"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.own_finding.refresh_from_db()
+        self.assertEqual(self.own_finding.severity, "Critical")
+
+    def test_finding_detail_patch_ignores_fields_outside_allowlist(self):
+        resp = self.client.patch(
+            reverse("aist_api:finding_detail", kwargs={"finding_id": self.own_finding.id}),
+            data={"severity": "Low", "tags": ["smuggled"], "push_to_jira": True},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.own_finding.refresh_from_db()
+        self.assertEqual(self.own_finding.severity, "Low")
+        self.assertEqual(list(self.own_finding.tags.all()), [])
+
+    def test_finding_detail_patch_denies_other_product_finding(self):
+        resp = self.client.patch(
+            reverse("aist_api:finding_detail", kwargs={"finding_id": self.other_finding.id}),
+            data={"severity": "Critical"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_finding_close_sets_expected_status(self):
+        resp = self.client.post(
+            reverse("aist_api:finding_close", kwargs={"finding_id": self.own_finding.id}),
+            data={"is_mitigated": True, "false_p": False, "out_of_scope": False, "duplicate": False},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.own_finding.refresh_from_db()
+        self.assertTrue(self.own_finding.is_mitigated)
+        self.assertFalse(self.own_finding.active)
+        self.assertEqual(self.own_finding.mitigated_by_id, self.user.id)
+        self.assertIsNotNone(self.own_finding.mitigated)
+
+    def test_finding_close_denies_other_product_finding(self):
+        resp = self.client.post(
+            reverse("aist_api:finding_close", kwargs={"finding_id": self.other_finding.id}),
+            data={"is_mitigated": True, "false_p": False, "out_of_scope": False, "duplicate": False},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 404)
+
     def test_finding_risk_approval_creates_risk_acceptance_and_sets_status(self):
         response = self.client.post(
             reverse("aist_api:finding_risk_approval", kwargs={"finding_id": self.own_finding.id}),
@@ -823,6 +887,40 @@ class AISTFindingAuthorizationTests(AISTApiBase):
         ids = {row["id"] for row in resp.data.get("results", [])}
         self.assertIn(self.own_finding.id, ids)
         self.assertNotIn(outside.id, ids)
+
+
+class AISTTestEngagementDetailAPITests(AISTFindingAuthorizationTests):
+    def test_test_detail_returns_engagement_linkage(self):
+        own_test = self.own_finding.test
+        resp = self.client.get(
+            reverse("aist_api:test_detail", kwargs={"test_id": own_test.id}),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["engagement_id"], own_test.engagement_id)
+        self.assertEqual(resp.data["engagement"], own_test.engagement_id)
+
+    def test_test_detail_denies_other_product_test(self):
+        other_test = self.other_finding.test
+        resp = self.client.get(
+            reverse("aist_api:test_detail", kwargs={"test_id": other_test.id}),
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_engagement_detail_returns_product_linkage(self):
+        own_engagement = self.own_finding.test.engagement
+        resp = self.client.get(
+            reverse("aist_api:engagement_detail", kwargs={"engagement_id": own_engagement.id}),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["product_id"], self.product.id)
+        self.assertEqual(resp.data["product"], self.product.id)
+
+    def test_engagement_detail_denies_other_product_engagement(self):
+        other_engagement = self.other_finding.test.engagement
+        resp = self.client.get(
+            reverse("aist_api:engagement_detail", kwargs={"engagement_id": other_engagement.id}),
+        )
+        self.assertEqual(resp.status_code, 404)
 
 
 class AIFindingResponseAPITests(AISTApiBase):

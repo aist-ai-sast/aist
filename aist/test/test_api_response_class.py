@@ -59,5 +59,18 @@ class APIResponseClassTests(AISTApiBase):
             force_authenticate(request, user=self.user)
             response = view_func(request, **kwargs)
 
-            if isinstance(response, Response):
+            if not isinstance(response, Response):
+                continue
+
+            if getattr(view_cls, "disable_response_masking", False):
+                # A view that intentionally opts out (e.g. the one-time API
+                # token secret reveal) must NOT be wrapped — that's the whole
+                # point of the flag. Before this was honored, every response
+                # was wrapped unconditionally regardless of the flag, which is
+                # exactly the bug that masked the token secret to "********".
+                self.assertNotIsInstance(
+                    response, MaskedAPIResponse,
+                    msg=f"{pattern.name} declares disable_response_masking — must not be wrapped",
+                )
+            else:
                 self.assertIsInstance(response, MaskedAPIResponse, msg=f"{pattern.name} should return MaskedAPIResponse")

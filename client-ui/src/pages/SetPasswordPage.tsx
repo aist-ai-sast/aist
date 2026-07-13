@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import TextInput from "../components/TextInput";
+import PasswordField from "../components/PasswordField";
 import { fetchJson, toUserMessage } from "../lib/api";
 import { getRoute } from "../lib/routes";
 
@@ -15,7 +15,6 @@ export default function SetPasswordPage() {
   const { uid, token } = useMemo(parseUidToken, []);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [show, setShow] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +42,8 @@ export default function SetPasswordPage() {
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="aist-card w-full max-w-md border-night-500/80 p-6">
-        <div className="text-xs uppercase tracking-[0.3em] text-brand-500">AIST</div>
+        <img src="/logo.svg" alt="AIST logo" className="h-10 w-10 object-contain" />
+        <div className="mt-3 text-xs uppercase tracking-[0.3em] text-brand-500">AIST</div>
         <h1 className="mt-2 text-xl font-semibold text-white">Set your password</h1>
 
         {done ? (
@@ -59,9 +59,7 @@ export default function SetPasswordPage() {
           <div className="mt-4 space-y-3 text-sm text-slate-200">
             <label className="block text-xs text-slate-400">
               New password
-              <TextInput
-                variant="password"
-                type={show ? "text" : "password"}
+              <PasswordField
                 autoComplete="new-password"
                 className="mt-1"
                 value={password}
@@ -71,9 +69,7 @@ export default function SetPasswordPage() {
             </label>
             <label className="block text-xs text-slate-400">
               Confirm password
-              <TextInput
-                variant="password"
-                type={show ? "text" : "password"}
+              <PasswordField
                 autoComplete="new-password"
                 className="mt-1"
                 value={confirm}
@@ -81,13 +77,6 @@ export default function SetPasswordPage() {
                 onChange={(event) => setConfirm(event.target.value)}
               />
             </label>
-            <button
-              type="button"
-              className="text-[11px] text-slate-400 hover:text-slate-200"
-              onClick={() => setShow((value) => !value)}
-            >
-              {show ? "Hide" : "Show"} passwords
-            </button>
 
             {error ? (
               <p className="rounded-xl border border-danger-500/40 bg-danger-500/10 p-3 text-xs text-danger-500">{error}</p>
