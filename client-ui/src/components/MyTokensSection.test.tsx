@@ -12,6 +12,7 @@ const deleteMutateAsync = vi.fn();
 let mockTokens: ApiToken[] = [];
 let mockCreatePending = false;
 let mockDeletePending = false;
+let mockCanCreateWriteToken = true;
 
 vi.mock("../lib/apiTokens", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/apiTokens")>();
@@ -22,6 +23,10 @@ vi.mock("../lib/apiTokens", async (importOriginal) => {
     useDeleteToken: () => ({ mutateAsync: deleteMutateAsync, isPending: mockDeletePending }),
   };
 });
+
+vi.mock("../lib/account", () => ({
+  useAccountProfile: () => ({ data: { can_create_write_token: mockCanCreateWriteToken } }),
+}));
 
 vi.mock("./ToastProvider", () => ({
   useToast: () => ({ push: pushToast }),
@@ -53,6 +58,7 @@ beforeEach(() => {
   mockTokens = [];
   mockCreatePending = false;
   mockDeletePending = false;
+  mockCanCreateWriteToken = true;
   Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
 });
 
@@ -71,6 +77,22 @@ describe("MyTokensSection — create/delete are guarded against double-submit", 
     mockDeletePending = true;
     render(<MyTokensSection />);
     expect(screen.getByRole("button", { name: "Revoke" })).toBeDisabled();
+  });
+});
+
+describe("MyTokensSection — read/write scope is capped by real write capability", () => {
+  it("shows no restriction hint and allows selecting Read and write when the user has write access", () => {
+    mockCanCreateWriteToken = true;
+    render(<MyTokensSection />);
+    expect(screen.queryByText(/only read-only tokens are available/)).not.toBeInTheDocument();
+  });
+
+  it("disables the Read and write option and shows a hint when the user has no write access anywhere", () => {
+    mockCanCreateWriteToken = false;
+    render(<MyTokensSection />);
+    expect(screen.getByText(/only read-only tokens are available/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("combobox", { name: "Scope" }));
+    expect(screen.getByRole("option", { name: "Read and write" })).toHaveAttribute("aria-disabled", "true");
   });
 });
 

@@ -21,7 +21,7 @@ from rest_framework.views import APIView
 from single_session.signals import remove_all_sessions
 
 from aist.api.schema import AISTApiTag
-from aist.queries import get_visible_aist_organizations
+from aist.queries import get_visible_aist_organizations, user_has_write_capability
 from aist.roles import role_rank
 
 User = get_user_model()
@@ -147,6 +147,7 @@ class AISTMeSerializer(serializers.ModelSerializer):
     can_edit_profile = serializers.SerializerMethodField()
     can_edit_username = serializers.SerializerMethodField()
     organization_memberships = serializers.SerializerMethodField()
+    can_create_write_token = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -159,6 +160,7 @@ class AISTMeSerializer(serializers.ModelSerializer):
             "can_edit_profile",
             "can_edit_username",
             "organization_memberships",
+            "can_create_write_token",
         )
         read_only_fields = ("is_superuser",)
         extra_kwargs = {
@@ -177,6 +179,12 @@ class AISTMeSerializer(serializers.ModelSerializer):
     def get_organization_memberships(self, obj) -> list[dict]:
         memberships = _get_organization_memberships(obj)
         return AISTOrganizationMembershipSerializer(memberships, many=True).data
+
+    def get_can_create_write_token(self, obj) -> bool:
+        # Same check the backend enforces in AISTApiTokenCreateSerializer.validate_scope
+        # (aist.queries.user_has_write_capability) — surfaced here purely so the UI can
+        # disable the "read/write" token option up front instead of the user hitting a 400.
+        return user_has_write_capability(obj)
 
     def validate(self, attrs):
         user = self.instance or self.context["request"].user

@@ -7,7 +7,11 @@ Self-service scoped API tokens + a superuser overview.
 Read-only vs read-write scope is enforced by ``AistTokenScopeMiddleware``. The
 org-scoping half of a token's effective permission is unchanged: it comes from
 the owning user's role via ``aist/queries.py``. A token can only narrow
-capability, never widen it.
+capability, never widen it — enforced up front too: creating a ``read_write``
+token requires the user to already hold write access somewhere (see
+``AISTApiTokenCreateSerializer.validate_scope`` /
+``aist.queries.user_has_write_capability``), so a Reader can't even mint a
+token whose scope implies a capability they don't have.
 """
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ from rest_framework.views import APIView
 
 from aist.api.schema import AISTApiTag
 from aist.models import AISTApiToken, ApiTokenScope
+from aist.queries import user_has_write_capability
 
 User = get_user_model()
 
@@ -61,6 +66,13 @@ class AISTApiTokenCreateSerializer(serializers.Serializer):
     def validate_expires_at(self, value):
         if value is not None and value <= timezone.now():
             msg = "Expiry must be in the future."
+            raise serializers.ValidationError(msg)
+        return value
+
+    def validate_scope(self, value: str) -> str:
+        user = self.context["request"].user
+        if value == ApiTokenScope.READ_WRITE and not user_has_write_capability(user):
+            msg = "You have no write access anywhere, so a read/write token would be useless — create a read-only token instead."
             raise serializers.ValidationError(msg)
         return value
 

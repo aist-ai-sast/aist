@@ -164,6 +164,32 @@ def get_authorized_aist_products(permission, user=None):
     ).exclude(pk__in=denied_product_ids).distinct()
 
 
+def user_has_write_capability(user=None) -> bool:
+    """
+    True iff the user could actually perform a write anywhere via the AIST
+    API right now — i.e. holds a qualifying role (Writer or above) on at
+    least one product, through any grant source (org-wide, group, or
+    restricted per-project).
+
+    Reuses ``get_authorized_aist_products`` (the exact function every write
+    endpoint's ``get_authorized_object``/``get_authorized_queryset`` resolves
+    through) so this stays a single source of truth: a role change that
+    widens or narrows write access anywhere is reflected here automatically,
+    with no separate role-matrix logic to keep in sync. ``Finding_Edit`` is
+    used as the representative permission because it is the lowest-privilege
+    write permission in the system (granted starting at Writer) — every
+    other mutating permission requires Maintainer or above, a strictly
+    higher bar, so a negative result here means no write endpoint is
+    reachable, full stop.
+    """
+    user = _resolve_user(user)
+    if user is None:
+        return False
+    if user.is_superuser:
+        return True
+    return get_authorized_aist_products(Permissions.Finding_Edit, user=user).exists()
+
+
 def get_authorized_findings(permission, user=None):
     user = _resolve_user(user)
     if user is None:

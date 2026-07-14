@@ -10,6 +10,7 @@ export type AccountProfile = {
   email: string;
   can_edit_profile: boolean;
   can_edit_username: boolean;
+  can_create_write_token: boolean;
   organization_memberships: Array<{
     organization_id: number;
     organization_name: string;

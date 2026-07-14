@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { toUserMessage } from "../lib/api";
+import { useAccountProfile } from "../lib/account";
 import {
   type ApiTokenScope,
   type CreatedApiToken,
@@ -11,11 +12,6 @@ import {
 import SelectField from "./SelectField";
 import TextInput from "./TextInput";
 import { useToast } from "./ToastProvider";
-
-const SCOPE_OPTIONS = [
-  { value: "read_only", label: "Read only" },
-  { value: "read_write", label: "Read and write" },
-];
 
 const SCOPE_LABEL: Record<ApiTokenScope, string> = {
   read_only: "Read only",
@@ -38,14 +34,34 @@ function SectionCard({ title, icon, children }: { title: string; icon?: ReactNod
 
 export default function MyTokensSection() {
   const tokens = useMyTokens();
+  const profile = useAccountProfile();
   const createToken = useCreateToken();
   const deleteToken = useDeleteToken();
   const toast = useToast();
+
+  const canCreateWriteToken = profile.data?.can_create_write_token ?? false;
+  const scopeOptions = [
+    { value: "read_only", label: "Read only" },
+    {
+      value: "read_write",
+      label: "Read and write",
+      disabled: !canCreateWriteToken,
+    },
+  ];
 
   const [name, setName] = useState("");
   const [scope, setScope] = useState<ApiTokenScope>("read_only");
   const [created, setCreated] = useState<CreatedApiToken | null>(null);
   const [revealed, setRevealed] = useState(false);
+
+  // If write access is (or becomes) unavailable, never leave "read_write" selected —
+  // the backend would reject it anyway (aist.queries.user_has_write_capability), this
+  // just keeps the control itself from showing a choice the user can't act on.
+  useEffect(() => {
+    if (scope === "read_write" && !canCreateWriteToken) {
+      setScope("read_only");
+    }
+  }, [scope, canCreateWriteToken]);
 
   async function handleCreate() {
     if (!name.trim()) {
@@ -129,7 +145,7 @@ export default function MyTokensSection() {
             label="Scope"
             value={scope}
             onChange={(value) => setScope(value as ApiTokenScope)}
-            options={SCOPE_OPTIONS}
+            options={scopeOptions}
             disabled={createToken.isPending}
           />
           <button className="aist-icon-button" disabled={createToken.isPending} onClick={handleCreate}>
@@ -139,6 +155,11 @@ export default function MyTokensSection() {
             Create token
           </button>
         </div>
+        {!canCreateWriteToken ? (
+          <p className="text-[11px] text-slate-400">
+            You have read-only access everywhere, so only read-only tokens are available.
+          </p>
+        ) : null}
 
         <div className="border-t border-night-500 pt-4">
           {tokens.isLoading ? (

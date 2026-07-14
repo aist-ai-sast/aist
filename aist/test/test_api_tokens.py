@@ -34,7 +34,7 @@ from dojo.models import (
 from rest_framework.test import APIClient
 
 from aist import api_urls
-from aist.models import AISTApiToken, AISTProject, ApiTokenScope, LaunchSchedule, Organization
+from aist.models import AISTApiToken, AISTProject, ApiTokenScope, LaunchSchedule, Organization, OrgMemberAccessScope
 from aist.utils.secrets import view_disables_masking
 from aist_site.middleware import AistResponseMaskingMiddleware, AistTokenScopeMiddleware
 
@@ -156,6 +156,71 @@ class TokenScopeEndpointDeclarationTests(TokenTestBase):
         url = reverse("aist_api:me_token_list_create")
         response = self._run_scope_middleware("POST", url, raw)
         self.assertEqual(response.status_code, 200)
+
+
+class TokenScopeCapabilityTests(TokenTestBase):
+
+    """
+    A user must not even be able to MINT a read_write-scope token unless they
+    hold a Writer-or-above role somewhere — enforced centrally by
+    ``aist.queries.user_has_write_capability`` (reused, not reimplemented, by
+    ``AISTApiTokenCreateSerializer.validate_scope`` and by
+    ``AISTMeSerializer.can_create_write_token``). Downstream endpoints already
+    re-derive authorization per-request (see TokenDestructiveActionTests /
+    TokenCrossResourceDataScopeTests), so this is a defense-in-depth /
+    least-privilege guard, not the sole enforcement point.
+    """
+
+    def _create(self, user, scope):
+        client = self._session(user)
+        return client.post(
+            reverse("aist_api:me_token_list_create"),
+            {"name": f"tok-{scope}", "scope": scope}, format="json",
+        )
+
+    def test_user_with_no_org_membership_cannot_create_read_write_token(self):
+        resp = self._create(self.user, ApiTokenScope.READ_WRITE)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_user_with_no_org_membership_can_create_read_only_token(self):
+        resp = self._create(self.user, ApiTokenScope.READ_ONLY)
+        self.assertEqual(resp.status_code, 201)
+
+    def test_full_reader_member_cannot_create_read_write_token(self):
+        pt = Product_Type.objects.create(name="Reader PT")
+        role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        Product_Type_Member.objects.create(product_type=pt, user=self.user, role=role_reader)
+        resp = self._create(self.user, ApiTokenScope.READ_WRITE)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_restricted_member_with_only_a_reader_project_grant_cannot_create_read_write_token(self):
+        # Mirrors a real restricted org member: baseline org membership (Reader,
+        # never real access on its own) plus a single per-project Product_Member
+        # grant that is ALSO Reader — the exact "Reader on one project" shape.
+        sla = SLA_Configuration.objects.create(name="SLA Restricted")
+        pt = Product_Type.objects.create(name="Restricted PT")
+        org = Organization.objects.create(name="Restricted Org", product_type=pt)
+        role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        Product_Type_Member.objects.create(product_type=pt, user=self.user, role=role_reader)
+        OrgMemberAccessScope.objects.create(organization=org, user=self.user, restricted=True)
+        product = Product.objects.create(
+            name="Restricted Product", description="d", prod_type=pt, sla_configuration_id=sla.id,
+        )
+        Product_Member.objects.create(product=product, user=self.user, role=role_reader)
+
+        resp = self._create(self.user, ApiTokenScope.READ_WRITE)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_member_with_a_writer_grant_can_create_read_write_token(self):
+        pt = Product_Type.objects.create(name="Writer PT")
+        role_writer, _ = Role.objects.get_or_create(id=Roles.Writer, defaults={"name": "Writer"})
+        Product_Type_Member.objects.create(product_type=pt, user=self.user, role=role_writer)
+        resp = self._create(self.user, ApiTokenScope.READ_WRITE)
+        self.assertEqual(resp.status_code, 201)
+
+    def test_superuser_can_create_read_write_token_with_no_memberships_at_all(self):
+        resp = self._create(self.superuser, ApiTokenScope.READ_WRITE)
+        self.assertEqual(resp.status_code, 201)
 
 
 class TokenSelfServiceTests(TokenTestBase):

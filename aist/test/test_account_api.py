@@ -140,6 +140,30 @@ class AISTAccountAPITests(AISTApiBase):
         self.assertEqual(len(memberships), 1)
         self.assertEqual(memberships[0]["organization_name"], "Access Org")
         self.assertEqual(memberships[0]["role_name"], "Maintainer")
+        # self.user is a Maintainer (AISTApiBase) -> genuinely has write access somewhere.
+        self.assertTrue(response.data["can_create_write_token"])
+
+    def test_me_get_can_create_write_token_false_for_reader_only_user(self):
+        # A user whose only role anywhere is Reader must not be told they can
+        # mint a read/write API token (aist.queries.user_has_write_capability
+        # backs both this field and AISTApiTokenCreateSerializer.validate_scope).
+        user = self.user.__class__.objects.create_user(
+            username="reader-only",
+            email="reader-only@example.com",
+            password="pass",  # noqa: S106
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        pt = Product_Type.objects.create(name="Reader Only PT")
+        role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        Product_Type_Member.objects.create(product_type=pt, user=user, role=role_reader)
+
+        with patch("aist.api.account.get_system_setting", return_value=True):
+            response = client.get(reverse("aist_api:me"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["can_create_write_token"])
 
     def test_me_get_returns_distinct_roles_for_two_orgs(self):
         # self.user is already a Maintainer of self.prod_type (AISTApiBase).
