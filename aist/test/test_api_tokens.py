@@ -62,6 +62,20 @@ class TokenTestBase(TestCase):
         client.force_authenticate(user=user)
         return client
 
+    def _grant_write_role(self, user, *, role=Roles.Writer) -> None:
+        """
+        Give ``user`` a real Writer-or-above role on a fresh product, so
+        scope=read_write token creation (gated by
+        aist.queries.user_has_write_capability) succeeds for them.
+        """
+        pt = Product_Type.objects.create(name=f"Write-capable PT {user.pk}")
+        sla = SLA_Configuration.objects.create(name=f"SLA {user.pk}")
+        Product.objects.create(
+            name=f"Write-capable Product {user.pk}", description="d", prod_type=pt, sla_configuration_id=sla.id,
+        )
+        role_obj, _ = Role.objects.get_or_create(id=role, defaults={"name": role.name})
+        Product_Type_Member.objects.create(product_type=pt, user=user, role=role_obj)
+
 
 class TokenAuthenticationTests(TokenTestBase):
     def test_valid_token_authenticates_on_aist_api(self):
@@ -187,7 +201,12 @@ class TokenScopeCapabilityTests(TokenTestBase):
         self.assertEqual(resp.status_code, 201)
 
     def test_full_reader_member_cannot_create_read_write_token(self):
+        # A Product must actually exist here — otherwise this would pass for the
+        # wrong reason (empty product set) rather than because Reader genuinely
+        # doesn't qualify for Finding_Edit.
+        sla = SLA_Configuration.objects.create(name="SLA Reader")
         pt = Product_Type.objects.create(name="Reader PT")
+        Product.objects.create(name="Reader Product", description="d", prod_type=pt, sla_configuration_id=sla.id)
         role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
         Product_Type_Member.objects.create(product_type=pt, user=self.user, role=role_reader)
         resp = self._create(self.user, ApiTokenScope.READ_WRITE)
@@ -212,9 +231,7 @@ class TokenScopeCapabilityTests(TokenTestBase):
         self.assertEqual(resp.status_code, 400)
 
     def test_member_with_a_writer_grant_can_create_read_write_token(self):
-        pt = Product_Type.objects.create(name="Writer PT")
-        role_writer, _ = Role.objects.get_or_create(id=Roles.Writer, defaults={"name": "Writer"})
-        Product_Type_Member.objects.create(product_type=pt, user=self.user, role=role_writer)
+        self._grant_write_role(self.user)
         resp = self._create(self.user, ApiTokenScope.READ_WRITE)
         self.assertEqual(resp.status_code, 201)
 
@@ -225,6 +242,10 @@ class TokenScopeCapabilityTests(TokenTestBase):
 
 class TokenSelfServiceTests(TokenTestBase):
     def test_create_returns_secret_once(self):
+        # Secret-reveal behavior is what's under test here, not scope gating —
+        # scope=read_write needs a real Writer+ grant since
+        # aist.queries.user_has_write_capability now enforces it at create time.
+        self._grant_write_role(self.user)
         resp = self._session(self.user).post(
             reverse("aist_api:me_token_list_create"),
             {"name": "ci", "scope": ApiTokenScope.READ_WRITE}, format="json",
@@ -300,6 +321,10 @@ class TokenCreateRealSessionTests(TokenTestBase):
     """
 
     def test_create_token_via_real_session_and_csrf(self):
+        # The real-session/CSRF flow is what's under test here, not scope gating —
+        # scope=read_write needs a real Writer+ grant since
+        # aist.queries.user_has_write_capability now enforces it at create time.
+        self._grant_write_role(self.user)
         client = Client(enforce_csrf_checks=True)
         client.get(reverse("client_login"))
         csrf_token = client.cookies["csrftoken"].value

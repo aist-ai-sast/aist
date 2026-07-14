@@ -91,7 +91,10 @@ describe("MyTokensSection — read/write scope is capped by real write capabilit
     mockCanCreateWriteToken = false;
     render(<MyTokensSection />);
     expect(screen.getByText(/only read-only tokens are available/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("combobox", { name: "Scope" }));
+    // The Scope trigger (a Radix Select) has no accessible name of its own — the
+    // "Scope" text is a plain sibling <label>, not wired via aria-labelledby/htmlFor —
+    // and it's the only combobox this component renders, so select by role alone.
+    fireEvent.click(screen.getByRole("combobox"));
     expect(screen.getByRole("option", { name: "Read and write" })).toHaveAttribute("aria-disabled", "true");
   });
 });

@@ -108,6 +108,8 @@ def mask_sensitive_text(text: str) -> str:
 # "external_id" / "external_url" — issue tracker identifiers, not credentials.
 # "vpn_secret" — API response container that already exposes only presence flags
 # and non-secret metadata from OrgIntegrationVPNSecretSerializer.
+# "can_create_write_token" — a boolean capability hint on /me/ (AISTMeSerializer),
+# not a token or any part of one.
 _NON_SENSITIVE_KEYS: frozenset[str] = frozenset(
     {
         "key",
@@ -120,6 +122,7 @@ _NON_SENSITIVE_KEYS: frozenset[str] = frozenset(
         "vpn_secret",
         "tls_key_type",
         "has_client_key",
+        "can_create_write_token",
     },
 )
 
