@@ -346,7 +346,7 @@ function MemberRow({
             onClick={async () => {
               try {
                 await resetPassword.mutateAsync(member.user_id);
-                toast.push("Password reset email sent.", "success");
+                toast.push(`Password reset email sent to ${member.email || member.username}. They can use the link to choose a new password.`, "success");
               } catch (error) {
                 toast.push(toUserMessage(error), "error");
               }

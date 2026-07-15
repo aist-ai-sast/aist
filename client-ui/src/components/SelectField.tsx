@@ -1,3 +1,4 @@
+import { useId } from "react";
 import * as Select from "@radix-ui/react-select";
 
 type Option = {
@@ -35,15 +36,18 @@ export default function SelectField({
   clearable = false,
   clearLabel = "None",
 }: SelectFieldProps) {
+  const labelId = useId();
+
   function handleChange(v: string) {
     onChange(v === NONE_SENTINEL ? "" : v);
   }
 
   return (
     <div>
-      {hideLabel ? null : <label className="text-xs text-slate-400">{label}</label>}
+      {hideLabel ? null : <span id={labelId} className="text-xs text-slate-400">{label}</span>}
       <Select.Root value={value || undefined} onValueChange={handleChange} disabled={disabled}>
         <Select.Trigger
+          aria-labelledby={hideLabel ? undefined : labelId}
           className={[
             "flex h-10 w-full items-center justify-between rounded-xl border border-night-500 bg-night-600 px-3 text-sm text-white outline-none transition focus-visible:border-brand-600 focus-visible:ring-2 focus-visible:ring-brand-600/60 data-[state=open]:border-brand-600 data-[state=open]:ring-2 data-[state=open]:ring-brand-600/60",
             hideLabel ? "mt-0" : "mt-2",

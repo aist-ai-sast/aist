@@ -1,18 +1,39 @@
 import { expect, type Page } from "@playwright/test";
 
-let cachedAuthCookies: Awaited<ReturnType<Page["context"]["cookies"]>> | null = null;
+const cachedAuthCookies = new Map<string, Awaited<ReturnType<Page["context"]["cookies"]>>>();
 
-export async function loginByApi(page: Page) {
-  const username = process.env.PLAYWRIGHT_USERNAME ?? "admin";
-  const password = process.env.PLAYWRIGHT_PASSWORD ?? "AdminsLoveIntegrationtests!";
+export type E2ECredentials = {
+  username: string;
+  password: string;
+};
 
-  if (cachedAuthCookies && cachedAuthCookies.length > 0) {
-    await page.context().addCookies(cachedAuthCookies);
+export function credentialsFor(role: "admin" | "org_reader" | "org_writer" | "org_owner" | "acme_reader"): E2ECredentials {
+  if (role === "admin") {
+    return {
+      username: process.env.PLAYWRIGHT_USERNAME ?? "admin",
+      password: process.env.PLAYWRIGHT_PASSWORD ?? "AdminsLoveIntegrationtests!",
+    };
+  }
+
+  const envPrefix = role.toUpperCase();
+  return {
+    username: process.env[`PLAYWRIGHT_${envPrefix}_USERNAME`] ?? role,
+    password: process.env[`PLAYWRIGHT_${envPrefix}_PASSWORD`] ?? "pass",
+  };
+}
+
+export async function loginByApi(page: Page, credentials = credentialsFor("admin")) {
+  const { username, password } = credentials;
+  const credentialsKey = `${username}\u0000${password}`;
+  const cachedCookies = cachedAuthCookies.get(credentialsKey);
+
+  if (cachedCookies && cachedCookies.length > 0) {
+    await page.context().addCookies(cachedCookies);
     const meWithCached = await page.request.get("/api/v2/aist/me/");
     if (meWithCached.status() === 200) {
       return;
     }
-    cachedAuthCookies = null;
+    cachedAuthCookies.delete(credentialsKey);
   }
 
   await page.request.get("/auth/login/");
@@ -38,7 +59,29 @@ export async function loginByApi(page: Page) {
 
   const meResponse = await page.request.get("/api/v2/aist/me/");
   expect(meResponse.status(), await meResponse.text()).toBe(200);
-  cachedAuthCookies = await page.context().cookies();
+  cachedAuthCookies.set(credentialsKey, await page.context().cookies());
+}
+
+export async function loginThroughUi(page: Page, credentials: E2ECredentials) {
+  await page.goto("/dashboard");
+
+  const signIn = page.getByRole("button", { name: "Sign in" });
+  await expect(signIn).toBeVisible({ timeout: 30_000 });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.getByPlaceholder("username").fill(credentials.username);
+    await page.getByPlaceholder("password").fill(credentials.password);
+    const [response] = await Promise.all([
+      page.waitForResponse((item) => item.url().includes("/api/v2/aist/auth/login/") && item.request().method() === "POST"),
+      signIn.click(),
+    ]);
+    if (response.status() === 204) break;
+    const body = await response.text();
+    if (response.status() !== 429 || attempt === 2) expect(response.status(), body).toBe(204);
+    const seconds = Number(body.match(/available in (\d+) seconds/i)?.[1] ?? "1");
+    await page.waitForTimeout((seconds + 1) * 1000);
+  }
+
+  await expect(page.getByRole("heading", { name: "Security Dashboard" })).toBeVisible({ timeout: 30_000 });
 }
 
 export async function openCalendar(page: Page) {

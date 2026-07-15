@@ -35,6 +35,7 @@ jobs:
       DD_ADMIN_USER: admin
       DD_ADMIN_PASSWORD: AdminsLoveIntegrationtests!
       DD_EMAIL_URL: smtp://user:password@localhost:25
+      DD_EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
       AIST_TMP_DIR: /tmp/aist
       ACME_WEBROOT_HOST: /tmp/aist/acme-webroot
       NGINX_SSL_HOST_DIR: /tmp/aist/nginx-ssl
@@ -99,6 +100,10 @@ jobs:
           PLAYWRIGHT_BASE_URL: ${{ inputs.base_url || format('http://127.0.0.1:{0}', env.DD_HTTP_PORT) }}
           PLAYWRIGHT_USERNAME: ${{ env.DD_ADMIN_USER }}
           PLAYWRIGHT_PASSWORD: ${{ env.DD_ADMIN_PASSWORD }}
+          PLAYWRIGHT_ORG_READER_PASSWORD: ${{ env.DD_ADMIN_PASSWORD }}
+          PLAYWRIGHT_ORG_WRITER_PASSWORD: ${{ env.DD_ADMIN_PASSWORD }}
+          PLAYWRIGHT_ORG_OWNER_PASSWORD: ${{ env.DD_ADMIN_PASSWORD }}
+          PLAYWRIGHT_ACME_READER_PASSWORD: ${{ env.DD_ADMIN_PASSWORD }}
         run: npm run test:e2e
 
       - name: Logs

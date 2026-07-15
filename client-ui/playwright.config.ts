@@ -8,5 +8,7 @@ export default defineConfig({
   use: {
     baseURL,
     headless: true,
+    // Local Docker development uses a self-signed TLS certificate on :8443.
+    ignoreHTTPSErrors: true,
   },
 });
