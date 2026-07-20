@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="520" viewBox="0 0 1160 520" role="img" aria-labelledby="title desc">
+ <title id="title">AI triage: from ready findings to a retained verdict</title><desc id="desc">A pipeline requests triage manually or AIST selects eligible findings automatically. The configured mode is resolved, AIST accepts the request and the pipeline waits, then a per-finding verdict is retained and shown in the findings UI.</desc>
+ <defs>
+  <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#52616b"/></marker>
+  <style>text{font-family:Arial,sans-serif;fill:#17212b}.h{font-size:20px;font-weight:700}.t{font-size:15px;font-weight:700}.s{font-size:12.5px;fill:#52616b}.b{stroke:#52616b;stroke-width:1.5;rx:12}.l{stroke:#52616b;stroke-width:2;fill:none;marker-end:url(#a)}.chip{fill:#ffffff;fill-opacity:.9;stroke:#d4dce3;stroke-width:1}</style>
+  <symbol id="ico-check-circle" viewBox="0 0 24 24"><path fill="none" stroke="#52616b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM7.5 12l3 3 6-6.5"/></symbol>
+  <symbol id="ico-users" viewBox="0 0 24 24"><path fill="none" stroke="#7d69aa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 20a7 7 0 0 1 14 0M17 5.5a3 3 0 0 1 0 5.8M22 20a7 7 0 0 0-4.7-6.6"/></symbol>
+  <symbol id="ico-refresh" viewBox="0 0 24 24"><path fill="none" stroke="#7d69aa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></symbol>
+  <symbol id="ico-sliders" viewBox="0 0 24 24"><path fill="none" stroke="#9e751d" stroke-width="1.8" stroke-linecap="round" d="M2 6h22M2 12h22M2 18h22"/><circle cx="14" cy="6" r="2.2" fill="#9e751d"/><circle cx="8" cy="12" r="2.2" fill="#9e751d"/><circle cx="17" cy="18" r="2.2" fill="#9e751d"/></symbol>
+  <symbol id="ico-inbox" viewBox="0 0 24 24"><path fill="none" stroke="#7d69aa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M22 12h-6l-2 3h-4l-2-3H2M5 12 2 5a1 1 0 0 1 1-1h18a1 1 0 0 1 1 1l-3 7v6a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="ico-tag" viewBox="0 0 24 24"><path fill="none" stroke="#4d9874" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2 4h8l12 12-8 8L2 12V4z"/><circle cx="7" cy="9" r="1.4" fill="#4d9874" stroke="none"/></symbol>
+  <symbol id="ico-eye" viewBox="0 0 24 24"><path fill="none" stroke="#52616b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3" fill="none" stroke="#52616b" stroke-width="1.8"/></symbol>
+ </defs>
+ <rect width="1160" height="520" fill="#fbfcfd"/>
+ <text x="50" y="44" class="h">AI triage adds a verdict; it does not rerun analysis</text>
+ <text x="50" y="66" class="s">Runs only after pipeline post-processing has made findings ready for review.</text>
+
+ <rect x="50" y="110" width="210" height="56" class="b" fill="#edf5ff"/><text x="70" y="134" class="t">Ready for review</text><text x="70" y="155" class="s">post-processing complete</text>
+ <circle cx="229" cy="128" r="13" class="chip"/><use href="#ico-check-circle" x="220" y="119" width="18" height="18" aria-hidden="true"/>
+
+ <rect x="300" y="85" width="240" height="60" class="b" fill="#f4efff" stroke="#7d69aa"/><text x="322" y="112" class="t">Manual request</text><text x="322" y="133" class="s">authorised for the project</text>
+ <circle cx="509" cy="103" r="13" class="chip"/><use href="#ico-users" x="500" y="94" width="18" height="18" aria-hidden="true"/>
+ <rect x="300" y="155" width="240" height="60" class="b" fill="#f4efff" stroke="#7d69aa"/><text x="322" y="182" class="t">Automatic selection</text><text x="322" y="203" class="s">excludes existing verdicts</text>
+ <circle cx="509" cy="173" r="13" class="chip"/><use href="#ico-refresh" x="500" y="164" width="18" height="18" aria-hidden="true"/>
+ <path d="M260 138L300 115" class="l"/><path d="M260 138L300 185" class="l"/>
+
+ <rect x="600" y="110" width="210" height="56" class="b" fill="#fff8e8" stroke="#9e751d"/><text x="622" y="134" class="t">Mode resolved</text><text x="622" y="155" class="s">launch config, then profile</text>
+ <circle cx="789" cy="128" r="13" class="chip"/><use href="#ico-sliders" x="780" y="119" width="18" height="18" aria-hidden="true"/>
+ <path d="M540 115L600 128" class="l"/><path d="M540 185L600 148" class="l"/>
+
+ <rect x="860" y="110" width="200" height="56" class="b" fill="#f4efff" stroke="#7d69aa"/><text x="882" y="134" class="t">AIST accepts</text><text x="882" y="155" class="s">pipeline waits for a result</text>
+ <circle cx="1039" cy="128" r="13" class="chip"/><use href="#ico-inbox" x="1030" y="119" width="18" height="18" aria-hidden="true"/>
+ <path d="M810 138L860 138" class="l"/>
+
+ <path d="M960 166L960 230" class="l"/>
+ <rect x="820" y="230" width="280" height="110" class="b" fill="#eaf8f1" stroke="#4d9874"/>
+ <text x="842" y="254" class="t">Verdict retained</text>
+ <circle cx="1079" cy="247" r="13" class="chip"/><use href="#ico-tag" x="1070" y="238" width="18" height="18" aria-hidden="true"/>
+ <text x="842" y="275" class="s">True Positive, False Positive,</text>
+ <text x="842" y="293" class="s">or Uncertain</text>
+ <text x="842" y="311" class="s">summary, references, risk,</text>
+ <text x="842" y="329" class="s">uncertainty, and suggested fix</text>
+
+ <path d="M960 340L960 370" class="l"/>
+ <rect x="820" y="370" width="280" height="56" class="b" fill="#edf5ff"/><text x="842" y="394" class="t">Shown in findings list</text><text x="842" y="415" class="s">and the finding detail view</text>
+ <circle cx="1079" cy="388" r="13" class="chip"/><use href="#ico-eye" x="1070" y="379" width="18" height="18" aria-hidden="true"/>
+
+ <text x="50" y="455" class="s">No findings selected: the pipeline completes without a triage request.</text>
+ <text x="50" y="477" class="s">No active local credential, or the request is rejected: the pipeline finishes with warnings.</text>
+ <text x="50" y="499" class="s">A local completion error still finishes without warnings once finding-level verdicts are already retained.</text>
+</svg>

@@ -33,6 +33,10 @@
 - Analyzer pipeline runner (`sast-combinator`)
 - Docker-based execution environment
 
+## Documentation
+
+Start with the [AIST documentation index](docs/README.md).
+
 **Quickstart**
 1. Ensure Docker Desktop is running.
 2. Start the stack:

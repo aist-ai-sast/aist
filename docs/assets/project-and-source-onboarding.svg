@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1450" height="650" viewBox="0 0 1450 650" role="img" aria-labelledby="title desc">
+  <title id="title">Project and source onboarding</title>
+  <desc id="desc">A repository import checks the organization and integration, retrieves metadata, creates project records, and records an initial branch version. A source-version request for an existing project validates either a Git reference or uploaded archive and saves a project-owned version. Neither path starts a pipeline.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0 0L10 3.5 0 7z" fill="#52616b"/></marker>
+    <style>
+      .lane{fill:#f7f9fb;stroke:#d4dce3;stroke-width:2}.box{stroke-width:2}.head{font:700 17px Arial;fill:#17212b;text-anchor:middle}.body{font:14px Arial;fill:#52616b;text-anchor:middle}.lanehead{font:700 17px Arial;fill:#334155}.line{stroke:#52616b;stroke-width:2.5;fill:none;marker-end:url(#arrow)}.optional{stroke:#7d69aa;stroke-width:2.5;fill:none;stroke-dasharray:7 6;marker-end:url(#arrow)}.note{font:14px Arial;fill:#52616b;text-anchor:middle}
+    </style>
+    <symbol id="ico-download" viewBox="0 0 24 24"><path fill="none" stroke="#52616b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>
+    <symbol id="ico-lock" viewBox="0 0 24 24"><path fill="none" stroke="#7d69aa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M6 11V7a6 6 0 0 1 12 0v4M5 11h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1z"/></symbol>
+    <symbol id="ico-tag" viewBox="0 0 24 24"><path fill="none" stroke="#9e751d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2 4h8l12 12-8 8L2 12V4z"/><circle cx="7" cy="9" r="1.4" fill="#9e751d" stroke="none"/></symbol>
+    <symbol id="ico-database" viewBox="0 0 24 24"><path fill="none" stroke="#4d9874" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3c-4.4 0-8 1.3-8 3s3.6 3 8 3 8-1.3 8-3-3.6-3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+    <symbol id="ico-git-branch" viewBox="0 0 24 24"><path fill="none" stroke="#9e751d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M6 3v8M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9v1a5 5 0 0 1-5 5H9"/></symbol>
+    <symbol id="ico-git-branch-n" viewBox="0 0 24 24"><path fill="none" stroke="#52616b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M6 3v8M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9v1a5 5 0 0 1-5 5H9"/></symbol>
+    <symbol id="ico-file" viewBox="0 0 24 24"><path fill="none" stroke="#4d9874" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Zm0 0v5h5"/></symbol>
+    <symbol id="ico-save" viewBox="0 0 24 24"><path fill="none" stroke="#9e751d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8"/></symbol>
+    <symbol id="ico-check-circle" viewBox="0 0 24 24"><path fill="none" stroke="#9e751d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM7.5 12l3 3 6-6.5"/></symbol>
+  </defs>
+  <rect width="1450" height="650" fill="#fff"/>
+  <text x="48" y="44" font-family="Arial" font-size="26" font-weight="700" fill="#17212b">Project and source onboarding</text>
+  <text x="48" y="70" font-family="Arial" font-size="15" fill="#52616b">Two paths make a project-owned source version available for a later pipeline run.</text>
+
+  <rect class="lane" x="45" y="115" width="1360" height="220" rx="16"/>
+  <text class="lanehead" x="72" y="148">Repository import</text>
+  <rect class="box" x="105" y="185" width="190" height="130" rx="11" fill="#edf5ff" stroke="#52616b"/>
+  <use href="#ico-download" x="191" y="199" width="18" height="18"/>
+  <text class="head" x="200" y="246">Import request</text><text class="body" x="200" y="268">organization and repository</text>
+  <rect class="box" x="360" y="185" width="210" height="130" rx="11" fill="#f4efff" stroke="#7d69aa"/>
+  <use href="#ico-lock" x="456" y="199" width="18" height="18"/>
+  <text class="head" x="465" y="246">Authorise and resolve</text><text class="body" x="465" y="268">organization and integration</text>
+  <rect class="box" x="635" y="185" width="210" height="130" rx="11" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-tag" x="731" y="199" width="18" height="18"/>
+  <text class="head" x="740" y="246">Retrieve metadata</text><text class="body" x="740" y="268">repository and default branch</text>
+  <rect class="box" x="910" y="185" width="225" height="130" rx="11" fill="#eaf8f1" stroke="#4d9874"/>
+  <use href="#ico-database" x="1013" y="199" width="18" height="18"/>
+  <text class="head" x="1022" y="240">Create project records</text><text class="body" x="1022" y="262">product, repository binding,</text><text class="body" x="1022" y="283">project, and project script</text>
+  <rect class="box" x="1200" y="185" width="165" height="130" rx="11" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-git-branch" x="1273" y="199" width="18" height="18"/>
+  <text class="head" x="1282" y="246">Initial version</text><text class="body" x="1282" y="268">reported default branch</text>
+  <path class="line" d="M295 250H360"/><path class="line" d="M570 250H635"/><path class="line" d="M845 250H910"/><path class="line" d="M1135 250H1200"/>
+
+  <rect class="lane" x="45" y="365" width="1360" height="220" rx="16"/>
+  <text class="lanehead" x="72" y="398">Additional source version for an existing project</text>
+  <rect class="box" x="105" y="430" width="210" height="130" rx="11" fill="#edf5ff" stroke="#52616b"/>
+  <use href="#ico-git-branch-n" x="201" y="444" width="18" height="18"/>
+  <text class="head" x="210" y="491">Version request</text><text class="body" x="210" y="513">branch, hash, or archive</text>
+  <rect class="box" x="385" y="430" width="210" height="130" rx="11" fill="#f4efff" stroke="#7d69aa"/>
+  <use href="#ico-lock" x="481" y="444" width="18" height="18"/>
+  <text class="head" x="490" y="491">Authorise edit</text><text class="body" x="490" y="513">and validate required input</text>
+  <rect class="box" x="665" y="430" width="225" height="130" rx="11" fill="#eaf8f1" stroke="#4d9874"/>
+  <use href="#ico-file" x="768" y="444" width="18" height="18"/>
+  <text class="head" x="777" y="485">Resolve project script</text><text class="body" x="777" y="507">latest project revision, or</text><text class="body" x="777" y="528">a project-scoped default copy</text>
+  <rect class="box" x="960" y="430" width="210" height="130" rx="11" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-save" x="1056" y="444" width="18" height="18"/>
+  <text class="head" x="1065" y="485">Persist source version</text><text class="body" x="1065" y="507">Git reference, or archive</text><text class="body" x="1065" y="528">with SHA-256 identifier</text>
+  <rect class="box" x="1240" y="430" width="125" height="130" rx="11" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-check-circle" x="1293" y="444" width="18" height="18"/>
+  <text class="head" x="1302" y="491">Ready version</text><text class="body" x="1302" y="513">pipeline input</text>
+  <path class="line" d="M315 495H385"/><path class="line" d="M595 495H665"/><path class="line" d="M890 495H960"/><path class="line" d="M1170 495H1240"/>
+  <path class="optional" d="M1282 315V378H1302V430"/>
+  <text class="note" x="1060" y="354">the imported branch is ready for a pipeline</text>
+  <text class="note" x="725" y="620">A SAST pipeline is started by a separate workflow after a source version exists.</text>
+</svg>

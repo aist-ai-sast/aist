@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1450" height="510" viewBox="0 0 1450 510" role="img" aria-labelledby="title desc">
+  <title id="title">AIST tenant access model</title>
+  <desc id="desc">A user obtains access through organization membership and project visibility. The authorised project scopes versions, pipelines, findings, integrations, and work-item providers. An API token authenticates that same user and only narrows capability.</desc>
+  <defs>
+   <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0 0L10 3.5 0 7z" fill="#52616b"/></marker>
+   <style>.box{stroke-width:2}.head{font:700 17px Arial;fill:#17212b;text-anchor:middle}.body{font:14px Arial;fill:#52616b;text-anchor:middle}.line{stroke:#52616b;stroke-width:2.5;fill:none;marker-end:url(#arrow)}.token{stroke:#7d69aa;stroke-width:2.5;fill:none;stroke-dasharray:7 6;marker-end:url(#arrow)}.zone{fill:#f7f9fb;stroke:#d4dce3;stroke-width:1.5}.label{font:700 15px Arial;fill:#52616b}</style>
+   <symbol id="ico-users" viewBox="0 0 24 24"><path fill="none" stroke="#52616b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 20a7 7 0 0 1 14 0M17 5.5a3 3 0 0 1 0 5.8M22 20a7 7 0 0 0-4.7-6.6"/></symbol>
+   <symbol id="ico-briefcase" viewBox="0 0 24 24"><path fill="none" stroke="#52616b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 7h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zM8 7V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M2 12h20"/></symbol>
+   <symbol id="ico-folder" viewBox="0 0 24 24"><path fill="none" stroke="#52616b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7z"/></symbol>
+   <symbol id="ico-database" viewBox="0 0 24 24"><path fill="none" stroke="#52616b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3c-4.4 0-8 1.3-8 3s3.6 3 8 3 8-1.3 8-3-3.6-3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+   <symbol id="ico-key" viewBox="0 0 24 24"><path fill="none" stroke="#7d69aa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M15 7a4 4 0 1 1-3.9 5H8v2H6v2H3v-3l5.1-5.1A4 4 0 0 1 15 7z"/><circle cx="15.5" cy="6.5" r="0.9" fill="#7d69aa" stroke="none"/></symbol>
+  </defs>
+  <rect width="1450" height="510" fill="#fff"/>
+  <text x="48" y="44" font-family="Arial" font-size="26" font-weight="700" fill="#17212b">AIST tenant access model</text>
+  <text x="48" y="70" font-family="Arial" font-size="15" fill="#52616b">Every protected object is reached through an authorised user and organization scope.</text>
+
+  <rect class="box" x="75" y="185" width="180" height="100" rx="11" fill="#edf5ff" stroke="#52616b"/>
+  <use href="#ico-users" x="156" y="197" width="18" height="18"/>
+  <text class="head" x="165" y="232">Authenticated user</text><text class="body" x="165" y="254">roles and permissions</text>
+
+  <rect class="box" x="350" y="165" width="230" height="130" rx="11" fill="#f4efff" stroke="#7d69aa"/>
+  <use href="#ico-briefcase" x="456" y="178" width="18" height="18"/>
+  <text class="head" x="465" y="212">Organization membership</text><text class="body" x="465" y="234">full or restricted scope</text><text class="body" x="465" y="255">plus project overrides</text>
+
+  <rect class="zone" x="670" y="120" width="680" height="290" rx="18"/><text class="label" x="690" y="150">ONE ORGANIZATION</text>
+
+  <rect class="box" x="740" y="185" width="185" height="100" rx="11" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-folder" x="823" y="197" width="18" height="18"/>
+  <text class="head" x="832" y="232">AIST project</text><text class="body" x="832" y="254">authorised visibility</text>
+
+  <rect class="box" x="1030" y="155" width="240" height="165" rx="11" fill="#eaf8f1" stroke="#4d9874"/>
+  <use href="#ico-database" x="1141" y="168" width="18" height="18"/>
+  <text class="head" x="1150" y="202">Project-owned records</text><text class="body" x="1150" y="224">source versions and pipelines</text><text class="body" x="1150" y="246">findings and launch settings</text><text class="body" x="1150" y="268">integrations and work items</text>
+
+  <path class="line" d="M255 235H350"/><path class="line" d="M580 232H740"/><path class="line" d="M925 235H1030"/>
+
+  <rect class="box" x="335" y="375" width="260" height="95" rx="11" fill="#f4efff" stroke="#7d69aa"/>
+  <use href="#ico-key" x="456" y="388" width="18" height="18"/>
+  <text class="head" x="465" y="422">API token</text><text class="body" x="465" y="444">authenticates the same user</text>
+  <path class="token" d="M465 375V295" />
+
+  <text x="920" y="490" font-family="Arial" font-size="14" fill="#52616b" text-anchor="middle">Authorised querysets and object lookups enforce the selected permission at every request.</text>
+</svg>
