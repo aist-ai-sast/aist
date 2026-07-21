@@ -272,29 +272,42 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             self._validate_gerrit_attrs(attrs)
         if itype == OrgIntegrationType.GITEA:
             self._validate_gitea_attrs(attrs)
+        if itype == OrgIntegrationType.DAST:
+            self._validate_dast_attrs(attrs)
         return super().validate(attrs)
+
+    def _effective_config(self, attrs):
+        """
+        Merge in-flight ``attrs['config']`` with the existing instance's config on a PATCH
+        that doesn't touch config — the single place every per-type validator resolves "the
+        config this save will actually end up with" from, instead of each repeating the
+        attrs-vs-instance fallback itself.
+        """
+        config = attrs.get("config")
+        if config is None and self.instance is not None:
+            config = self.instance.config or {}
+        return config or {}
+
+    def _require_config_key(self, attrs, key, message):
+        """
+        Raise unless ``config[key]`` (post-save, per ``_effective_config``) is a non-empty
+        string — the shared shape behind Gerrit's username, Gitea's base_url, and DAST's
+        gateway_url requirements.
+        """
+        if not (self._effective_config(attrs).get(key) or "").strip():
+            raise serializers.ValidationError({"config": message})
 
     def _validate_gerrit_attrs(self, attrs):
         """Gerrit needs an HTTP username (in config) alongside the HTTP password (secret)."""
-        config = attrs.get("config")
-        if config is None and self.instance is not None:
-            config = self.instance.config or {}
-        config = config or {}
-        if not (config.get("username") or "").strip():
-            raise serializers.ValidationError(
-                {"config": "Gerrit integration requires a 'username' in config."},
-            )
+        self._require_config_key(attrs, "username", "Gerrit integration requires a 'username' in config.")
 
     def _validate_gitea_attrs(self, attrs):
         """Gitea is always self-hosted — there is no public default like gitlab.com."""
-        config = attrs.get("config")
-        if config is None and self.instance is not None:
-            config = self.instance.config or {}
-        config = config or {}
-        if not (config.get("base_url") or "").strip():
-            raise serializers.ValidationError(
-                {"config": "Gitea integration requires a 'base_url' in config."},
-            )
+        self._require_config_key(attrs, "base_url", "Gitea integration requires a 'base_url' in config.")
+
+    def _validate_dast_attrs(self, attrs):
+        """The DAST integration gateway has no public default — every org points at its own."""
+        self._require_config_key(attrs, "gateway_url", "DAST integration requires a 'gateway_url' in config.")
 
     def _validate_claude_attrs(self, attrs):
         """
@@ -690,6 +703,12 @@ def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
         # (architectural invariant I1). Dispatch is a one-liner.
         from aist.integrations.claude import probe_claude_token  # noqa: PLC0415
         return probe_claude_token(integration)
+
+    if itype == OrgIntegrationType.DAST:
+        # All DAST-specific knowledge lives in aist/integrations/dast.py, mirroring
+        # the Claude single-concentrator invariant above. Dispatch is a one-liner.
+        from aist.integrations.dast import probe_dast_gateway  # noqa: PLC0415
+        return probe_dast_gateway(integration)
 
     return False, f"No validator for integration type {itype}"
 

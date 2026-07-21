@@ -13,6 +13,10 @@ Claude Code will automatically delegate security and API checks to subagents in
 - `aist-ui-security-checker` — after any edits to `client-ui/src/pages/`,
   `client-ui/src/components/`, `client-ui/src/lib/`
 - `aist-migration-validator` — after any edits to `aist/models.py` or `aist/migrations/`
+- `aist-architecture-docs-maintainer` — after any change to a product workflow, tenant
+  boundary, integration, task, runtime service, deployment, or security control (i.e.
+  anything described by a page under `docs/`) — see
+  `.codex/skills/security-architecture-maintainer/SKILL.md` for the exact trace method
 
 This trigger list is advisory, not enforced by a hook — a session can lose track of it
 across a long conversation or when work is delegated to a sub-agent that doesn't inherit

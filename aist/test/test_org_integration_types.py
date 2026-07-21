@@ -32,6 +32,12 @@ class OrgIntegrationTypeEnumTests(TestCase):
         self.assertEqual(ScmType.GITEA.value, "GITEA")
         self.assertIn("GITEA", dict(ScmType.choices))
 
+    def test_dast_choice_present(self):
+        # DAST is a credential/config integration only, not a source-control
+        # type — unlike GERRIT/GITEA it has no ScmType counterpart.
+        self.assertEqual(OrgIntegrationType.DAST.value, "DAST")
+        self.assertIn("DAST", dict(OrgIntegrationType.choices))
+
 
 class OrgIntegrationSingleActiveClaudeConstraintTests(TestCase):
 

@@ -262,6 +262,16 @@ AIST_CANONICAL_DEDUPE_SCAN_TYPES = (
     "Claude Full Security",
     "Claude Intake Review",
     "Claude Intake Diff",
+    # DAST findings never carry file_path/line (dynamic, not static), so they never
+    # pass canonical dedupe's own eligibility gate (aist/dedupe/canonical.py
+    # score_signatures hard-gates on both) and always land in custom.py's
+    # fallback-for-ineligible-targets path. Registering the scan type here is what
+    # makes that fallback use unique_id_from_tool_or_hash_code instead of the
+    # DEDUPE_ALGO_LEGACY default (title/CWE matching with no scan-type awareness) —
+    # DAST already emits a stable, cross-run-deterministic unique_id_from_tool
+    # (see dast/engine/dastlib/aist_export.py in the DAST repo), so this is a precise
+    # match instead of a coincidental CWE/title collision with an unrelated finding.
+    "DAST Autonomous Scan",
 )
 AIST_CANONICAL_HASH_FIELDS = ["vuln_id_from_tool", "file_path", "line", "cwe"]
 
@@ -282,6 +292,10 @@ HASHCODE_ALLOWS_NULL_CWE["Claude Diff Security"] = True
 HASHCODE_ALLOWS_NULL_CWE["Claude Full Security"] = True
 HASHCODE_ALLOWS_NULL_CWE["Claude Intake Review"] = True
 HASHCODE_ALLOWS_NULL_CWE["Claude Intake Diff"] = True
+# aist-report-format.md does not require "cwe" in the DAST export draft (only
+# title/severity/description are mandatory) — allow the hash fallback to still
+# match these findings instead of silently excluding every CWE-less one.
+HASHCODE_ALLOWS_NULL_CWE["DAST Autonomous Scan"] = True
 
 AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD = env.int("DD_AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD", default=2)  # noqa: F405
 AIST_CANONICAL_CANDIDATE_MIN_SCORE = env.int("DD_AIST_CANONICAL_CANDIDATE_MIN_SCORE", default=1)  # noqa: F405

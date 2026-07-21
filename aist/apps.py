@@ -12,6 +12,7 @@ class AistConfig(AppConfig):
         from .parser_overrides import (  # noqa: PLC0415
             install_bearer_parser_override,
             install_claude_parsers,
+            install_dast_parser,
             install_horusec_parser_override,
             install_semgrep_parser_override,
             install_snyk_code_parser_override,
@@ -23,3 +24,4 @@ class AistConfig(AppConfig):
         install_horusec_parser_override()
         install_bearer_parser_override()
         install_claude_parsers()
+        install_dast_parser()

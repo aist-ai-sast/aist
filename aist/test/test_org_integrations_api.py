@@ -102,6 +102,30 @@ class OrgIntegrationListCreateAPITests(AISTApiBase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("config", resp.data)
 
+    def test_create_dast_integration(self):
+        resp = self.client.post(self.url, {
+            "integration_type": "DAST",
+            "name": "Production DAST",
+            "config": {"gateway_url": "https://dast-gateway.internal"},
+            "secret": "pub_abc123.secretvaluevaluevalue",
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data["integration_type"], "DAST")
+        self.assertTrue(resp.data["has_secret"])
+        self.assertNotIn("secret", resp.data)  # write-only
+
+    def test_create_dast_integration_requires_gateway_url(self):
+        resp = self.client.post(self.url, {
+            "integration_type": "DAST",
+            "name": "Bad DAST",
+            "config": {},
+            "secret": "pub_abc123.secretvaluevaluevalue",
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("config", resp.data)
+
     def test_create_slack_integration(self):
         resp = self.client.post(self.url, {
             "integration_type": "SLACK",

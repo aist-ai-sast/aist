@@ -35,6 +35,11 @@ CLAUDE_FULL_SECURITY_SCAN_TYPE = "Claude Full Security"
 CLAUDE_INTAKE_REVIEW_SCAN_TYPE = "Claude Intake Review"
 CLAUDE_INTAKE_DIFF_SCAN_TYPE = "Claude Intake Diff"
 CLAUDE_LINE_BUCKET_SIZE = 5
+# Same dedicated-scan-type pattern as the Claude analyzers above, for the external-triggered
+# DAST analyzer (dast/runtime/reports/_plans/aist-dast-integration-plan.md) — a plain
+# "Generic Findings Import" scan_type is NOT covered by canonical dedupe's SUPPORTED_SCAN_TYPES
+# allowlist (aist/dedupe/custom.py), so DAST findings need their own scan_type to participate.
+DAST_SCAN_TYPE = "DAST Autonomous Scan"
 SNYK_RULE_TITLE_OVERRIDES = {
     "OR": "Open Redirect Vulnerability",
 }
@@ -291,15 +296,19 @@ def _stabilize_claude_finding(finding) -> None:  # type: ignore[no-untyped-def]
     )
 
 
-class _ClaudeGenericParserBase(GenericParser):
+class _SubtypedGenericParserBase(GenericParser):
 
     """
-    Generic-format parser for Claude agent-bridge analyzers.
+    Generic-format parser base for an analyzer that needs its OWN dedicated
+    ``test_type``/scan_type instead of being lumped into the generic "Generic
+    Findings Import" bucket — which canonical dedupe's SUPPORTED_SCAN_TYPES
+    allowlist (aist/dedupe/custom.py) does not cover at all.
 
-    Inherits the JSON/CSV reading logic from ``GenericParser`` but reports a
-    distinct ``ID`` so the imported Test gets a Claude-specific
-    ``test_type``. Findings are stabilized in place so dedupe keys are
-    reproducible across runs (paraphrased titles / drifting line anchors).
+    Inherits the actual JSON/CSV reading logic from ``GenericParser``; only
+    identity (``ID``) and the resulting test's naming differ. Subclasses that
+    also need to stabilize findings (e.g. Claude's paraphrased-title/drifting-
+    line-anchor problem) add that in their own ``get_findings``/``get_tests``
+    override on top of this base's.
     """
 
     ID: str = ""
@@ -309,6 +318,28 @@ class _ClaudeGenericParserBase(GenericParser):
 
     def get_label_for_scan_types(self, scan_type):
         return scan_type
+
+    def get_description_for_scan_types(self, scan_type):
+        return f"Generic Findings Import emitted by the {self.ID} analyzer."
+
+    def get_tests(self, scan_type, filename):  # type: ignore[no-untyped-def]
+        tests = super().get_tests(scan_type, filename)
+        for parser_test in tests:
+            # GenericJSONParser defaults ParserTest.type to its own ID
+            # ("Generic Findings Import"). Reassign so consolidate_dynamic_tests
+            # in base_importer keeps this scan_type as the final test_type_name
+            # (otherwise it produces "Generic Findings Import Scan (X)").
+            parser_test.type = scan_type
+        return tests
+
+
+class _ClaudeGenericParserBase(_SubtypedGenericParserBase):
+
+    """
+    Adds Claude-specific finding stabilization on top of the shared subtyped-generic
+    base: paraphrased titles / drifting line anchors make ``vuln_id_from_tool`` non-
+    reproducible across runs without this, unlike DAST's already-deterministic export.
+    """
 
     def get_description_for_scan_types(self, scan_type):
         return (
@@ -326,12 +357,6 @@ class _ClaudeGenericParserBase(GenericParser):
     def get_tests(self, scan_type, filename):  # type: ignore[no-untyped-def]
         tests = super().get_tests(scan_type, filename)
         for parser_test in tests:
-            # GenericJSONParser defaults ParserTest.type to its own ID
-            # ("Generic Findings Import"). Reassign so consolidate_dynamic_tests
-            # in base_importer keeps our Claude scan_type as the final
-            # test_type_name (otherwise it produces "Generic Findings Import
-            # Scan (Claude Diff Security)").
-            parser_test.type = scan_type
             for finding in getattr(parser_test, "findings", None) or []:
                 _stabilize_claude_finding(finding)
         return tests
@@ -353,6 +378,24 @@ class ClaudeIntakeDiffParser(_ClaudeGenericParserBase):
     ID = CLAUDE_INTAKE_DIFF_SCAN_TYPE
 
 
+class DastReportParser(_SubtypedGenericParserBase):
+
+    """
+    DAST findings are already deterministic (``unique_id_from_tool``/``vuln_id_from_tool``
+    are check_id+title based — see the separate DAST repo's
+    dast/engine/dastlib/aist_export.py), so no finding-stabilization pass is needed here,
+    unlike the Claude parsers above.
+    """
+
+    ID = DAST_SCAN_TYPE
+
+    def get_description_for_scan_types(self, scan_type):
+        return (
+            "Redacted, deep-linked finding export from an autonomous DAST run, produced "
+            "by the integration gateway's dast-report-writer + `dast export-findings`."
+        )
+
+
 def install_claude_parsers() -> None:
     for scan_type, parser_cls in (
         (CLAUDE_DIFF_SECURITY_SCAN_TYPE, ClaudeDiffSecurityParser),
@@ -364,3 +407,10 @@ def install_claude_parsers() -> None:
             continue
         factory.PARSERS[scan_type] = parser_cls()
         logger.info("Registered Claude analyzer parser for '%s'", scan_type)
+
+
+def install_dast_parser() -> None:
+    if isinstance(factory.PARSERS.get(DAST_SCAN_TYPE), DastReportParser):
+        return
+    factory.PARSERS[DAST_SCAN_TYPE] = DastReportParser()
+    logger.info("Registered DAST analyzer parser for '%s'", DAST_SCAN_TYPE)

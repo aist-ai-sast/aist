@@ -594,6 +594,7 @@ class OrgIntegrationType(models.TextChoices):
     CLAUDE_CODE = "CLAUDE_CODE", "Claude Code"
     GERRIT = "GERRIT", "Gerrit"
     GITEA = "GITEA", "Gitea"
+    DAST = "DAST", "DAST"
 
 
 class OrgIntegration(models.Model):
