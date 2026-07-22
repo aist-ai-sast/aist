@@ -118,7 +118,9 @@ test.describe("password-change validation", () => {
       submitPasswordChange(page, credentialsFor("org_reader").password, "123", "123"),
     ]);
     expect(response.status()).toBe(400);
-    await expect(page.getByText(/password is too short/i)).toBeVisible();
+    // dojo.user.validators.MinLengthValidator's actual message — not "password is too
+    // short", which this assertion previously (and incorrectly) expected.
+    await expect(page.getByText(/must be at least \d+ characters long/i)).toBeVisible();
   });
 });
 
@@ -153,7 +155,9 @@ test("reader cannot reach integration management controls by navigating directly
   await loginThroughUi(page, credentialsFor("org_reader"));
   await page.goto("/integrations");
 
-  await expect(page.getByText("Access denied.")).toBeVisible();
+  // OrgIntegrationsPage.tsx's actual restricted-access copy — not the generic
+  // "Access denied." this assertion previously (and incorrectly) expected.
+  await expect(page.getByText(/need Maintainer or Owner role to manage integrations/i)).toBeVisible();
   await expect(page.getByRole("button", { name: "Add" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create" })).toHaveCount(0);
 });

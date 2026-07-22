@@ -74,6 +74,16 @@ export type Finding = {
   lastStatusUpdate?: string;
   isRegression?: boolean;
   workItems?: WorkItemLink[];
+  dynamicFinding?: boolean;
+  affectedEndpoints?: string[];
+  stepsToReproduce?: string;
+  impact?: string;
+  mitigation?: string;
+  param?: string;
+  payload?: string;
+  cvssv3?: string;
+  cvssv3Score?: number;
+  references?: string;
 };
 
 export type AiFixType = "code_change" | "config_change" | "architectural";

@@ -1,11 +1,30 @@
 import type { Finding } from "../types";
+import { countReproductionSteps } from "../lib/dastNarrative";
 import { formatDateForUI } from "../lib/dateDisplay";
 import { formatProjectVersionText } from "../lib/projectVersion";
 import { findingStatusBadgeClass, severityBadgeClass } from "../lib/badgeStyles";
-import { getFindingStatusBadges } from "../lib/findingStatus";
+import { getFindingStatusBadges, isDastFinding } from "../lib/findingStatus";
 import { PROVIDER_ICON_PATHS } from "../lib/providerIcons";
 import AiVerdictBadge from "./AiVerdictBadge";
 import FindingSnippetPreview from "./FindingSnippetPreview";
+
+function EndpointsPreview({ endpoints }: { endpoints: string[] }) {
+  if (endpoints.length === 0) {
+    return <p className="mt-3 text-xs text-slate-500">No endpoints reported.</p>;
+  }
+  return (
+    <div className="mt-3 flex flex-col gap-1 text-xs text-slate-400">
+      {endpoints.slice(0, 3).map((endpoint) => (
+        <span key={endpoint} className="truncate" title={endpoint}>
+          {endpoint}
+        </span>
+      ))}
+      {endpoints.length > 3 ? (
+        <span className="text-slate-500">+{endpoints.length - 3} more endpoint(s)</span>
+      ) : null}
+    </div>
+  );
+}
 
 type FindingCardProps = {
   finding: Finding;
@@ -35,6 +54,7 @@ export default function FindingCard({
   bulkLocked = false,
 }: FindingCardProps) {
   const createdLabel = formatDateForUI(finding.createdAt) ?? formatDateForUI(finding.date);
+  const isDast = isDastFinding(finding);
   return (
     <article
       className={[
@@ -98,6 +118,11 @@ export default function FindingCard({
             {finding.severity}
           </span>
           <AiVerdictBadge verdict={finding.aiVerdict} />
+          {isDast ? (
+            <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs font-medium uppercase tracking-wide text-rose-300">
+              DAST
+            </span>
+          ) : null}
           {finding.isRegression ? (
             <span className="rounded-full border border-orange-500/40 bg-orange-500/10 px-3 py-1 text-xs font-medium text-orange-200">
               Regression
@@ -131,24 +156,35 @@ export default function FindingCard({
         {finding.title}
       </div>
       <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-400">
-        <button
-          type="button"
-          className="aist-clickable-text inline-flex max-w-full items-center gap-1 truncate text-left"
-          title={finding.filePath}
-          onClick={(event) => {
-            event.stopPropagation();
-            onSelectFile?.(finding.filePath);
-          }}
-        >
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm7 1.5V7h3.5L13 3.5ZM6 4v16h10V8h-4a1 1 0 0 1-1-1V4H6Z"
-            />
-          </svg>
-          <span className="truncate">File: {finding.filePath}</span>
-        </button>
-        {finding.line && finding.line > 0 ? <span>Line {finding.line}</span> : null}
+        {isDast ? (
+          <span className="inline-flex items-center gap-1">
+            {finding.affectedEndpoints?.length ?? 0} endpoint
+            {(finding.affectedEndpoints?.length ?? 0) === 1 ? "" : "s"} ·{" "}
+            {countReproductionSteps(finding.stepsToReproduce)} step
+            {countReproductionSteps(finding.stepsToReproduce) === 1 ? "" : "s"}
+          </span>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="aist-clickable-text inline-flex max-w-full items-center gap-1 truncate text-left"
+              title={finding.filePath}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelectFile?.(finding.filePath);
+              }}
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm7 1.5V7h3.5L13 3.5ZM6 4v16h10V8h-4a1 1 0 0 1-1-1V4H6Z"
+                />
+              </svg>
+              <span className="truncate">File: {finding.filePath}</span>
+            </button>
+            {finding.line && finding.line > 0 ? <span>Line {finding.line}</span> : null}
+          </>
+        )}
         {finding.projectVersion ? (
           <button
             type="button"
@@ -234,6 +270,8 @@ export default function FindingCard({
               {expandedContent}
             </div>
           </div>
+        ) : isDast ? (
+          <EndpointsPreview endpoints={finding.affectedEndpoints ?? []} />
         ) : (
           <FindingSnippetPreview
             filePath={finding.filePath}

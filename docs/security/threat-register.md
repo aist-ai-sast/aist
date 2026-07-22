@@ -66,12 +66,22 @@ cross-organization VPN reference rejection for each configuration path.
 intended run workspace or silently change another pipeline's data.
 
 **Threat:** hostile repository content drives a builder/analyzer container into
-host-impacting behaviour, report files collide between runs, or an imported
-report is applied to the wrong pipeline.
+host-impacting behaviour, report files collide between runs, an imported
+report is applied to the wrong pipeline, or an attacker-crafted report
+uploaded through the manual report-import path is treated as trusted scan
+output.
 
 **Implemented barrier:** the platform allocates a pipeline-specific output
 directory; runtime container names include the pipeline identifier; pipeline
-status and pipeline records are locked while key transitions are applied.
+status and pipeline records are locked while key transitions are applied. The
+manual report import scopes its project relation to the caller's project-edit
+permissions, restricts `scan_type` to the registered parser set, delegates
+content validation to that parser, caps upload size, and applies a per-user
+rate limit. The shared import wrapper unlinks endpoints carrying schemes
+outside `http` and `https`. The backend treats report endpoint and reference
+URLs as data. The client creates links for `http` and `https` reference lines
+with opener isolation and renders other reference values as text. See
+[DAST integration](../integrations/dast.md).
 
 **Open review item:** the builder runtime mounts the Docker socket. This is a
 high-impact boundary and needs a dedicated deployment review of image trust,

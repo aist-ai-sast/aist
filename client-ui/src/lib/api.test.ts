@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import type { InternalAxiosRequestConfig } from "axios";
+import { describe, expect, it, vi } from "vitest";
 
-import { ApiError, toUserMessage } from "./api";
+import { apiClient, ApiError, postFormData, toUserMessage } from "./api";
 
 describe("toUserMessage", () => {
   it("joins DRF field-level validation errors into a readable message", () => {
@@ -110,5 +111,45 @@ describe("toUserMessage", () => {
     expect(message).toBe("Access denied.");
     expect(message).not.toContain("Acme Internal");
     expect(message).not.toContain("99");
+  });
+});
+
+describe("postFormData", () => {
+  it("sends the FormData body without forcing a JSON Content-Type header", async () => {
+    // buildHeaders() forces Content-Type: application/json for every non-GET
+    // request that doesn't already set one — that would break a multipart
+    // upload, since the browser must set `multipart/form-data; boundary=...`
+    // itself, which only happens when no Content-Type header is present.
+    let capturedConfig: InternalAxiosRequestConfig | undefined;
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => {
+      capturedConfig = config;
+      return {
+        data: { pipeline_id: "abc123", run_task_id: "task-1" },
+        status: 202,
+        statusText: "Accepted",
+        headers: {},
+        config,
+      };
+    });
+    const originalAdapter = apiClient.defaults.adapter;
+    apiClient.defaults.adapter = adapter;
+
+    try {
+      const formData = new FormData();
+      formData.append("file", new Blob(["{}"], { type: "application/json" }), "report.json");
+      formData.append("project_id", "42");
+
+      const result = await postFormData<{ pipeline_id: string; run_task_id: string }>(
+        "/api/v2/aist/pipelines/import/",
+        formData,
+      );
+
+      expect(result).toEqual({ pipeline_id: "abc123", run_task_id: "task-1" });
+      expect(capturedConfig?.data).toBeInstanceOf(FormData);
+      const contentType = capturedConfig?.headers?.["Content-Type"];
+      expect(contentType).not.toBe("application/json");
+    } finally {
+      apiClient.defaults.adapter = originalAdapter;
+    }
   });
 });

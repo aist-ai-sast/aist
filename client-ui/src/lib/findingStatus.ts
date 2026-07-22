@@ -14,6 +14,11 @@ const FINDING_STATUS_RULES: FindingStatusRule[] = [
   { key: "Duplicate", enabled: (finding) => Boolean(finding.duplicate) },
 ];
 
+/** Selects the endpoint and reproduction-evidence layout used for DAST findings. */
+export function isDastFinding(finding: Finding): boolean {
+  return Boolean(finding.dynamicFinding) || Boolean(finding.tags?.includes("dast"));
+}
+
 export function getFindingStatusBadges(finding: Finding): FindingStatusBadge[] {
   const statuses = FINDING_STATUS_RULES
     .filter((rule) => rule.enabled(finding))

@@ -56,6 +56,26 @@ def _send_to_bridge(
     return True
 
 
+def _clone_project_via_vpn(project, vpn_resolved, execution_id: str, clone_dir: str, project_id: int) -> None:
+    with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_vpn_container, vpn_proxy):
+        clone_url = project.repository.clone_url
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        if vpn_proxy:
+            env["https_proxy"] = vpn_proxy
+            env["http_proxy"] = vpn_proxy
+
+        shutil.rmtree(clone_dir, ignore_errors=True)
+        os.makedirs(clone_dir, exist_ok=True)  # noqa: PTH103
+        logger.info("Cloning project %s to %s", project_id, clone_dir)
+        subprocess.run(
+            ["git", "clone", "--depth=1", clone_url, clone_dir],  # noqa: S607
+            env=env,
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+
+
 @shared_task(bind=True)
 def analyze_project_after_import(self, project_id: int, async_user=None) -> None:
     """
@@ -115,23 +135,7 @@ def analyze_project_after_import(self, project_id: int, async_user=None) -> None
         vpn_resolved = None
 
     try:
-        with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_vpn_container, vpn_proxy):
-            clone_url = project.repository.clone_url
-            env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-            if vpn_proxy:
-                env["https_proxy"] = vpn_proxy
-                env["http_proxy"] = vpn_proxy
-
-            shutil.rmtree(clone_dir, ignore_errors=True)
-            os.makedirs(clone_dir, exist_ok=True)  # noqa: PTH103
-            logger.info("Cloning project %s to %s", project_id, clone_dir)
-            subprocess.run(
-                ["git", "clone", "--depth=1", clone_url, clone_dir],  # noqa: S607
-                env=env,
-                check=True,
-                capture_output=True,
-                timeout=300,
-            )
+        _clone_project_via_vpn(project, vpn_resolved, execution_id, clone_dir, project_id)
     except subprocess.TimeoutExpired:
         # Do NOT log the exception object: its str() includes the git argv,
         # and clone_url embeds credentials (PAT / Gerrit HTTP password).

@@ -37,6 +37,29 @@ def _csv(items: Iterable[Any]) -> str:
     return ", ".join(result)
 
 
+def _gather_ai_push_payload(pipeline_id: str, log) -> tuple[bool, Any, str, str, str]:
+    with transaction.atomic():
+        pipeline = (
+            AISTPipeline.objects
+            .select_for_update()
+            .select_related("project__product")
+            .get(id=pipeline_id)
+        )
+        if pipeline.status != AISTStatus.PUSH_TO_AI:
+            log.error(
+                "Unexpected pipeline status %s for AI push (pipeline_id=%s)",
+                pipeline.status,
+                pipeline_id,
+            )
+            return False, None, "", "", ""
+        project = pipeline.project
+        product = getattr(project, "product", None)
+        project_name = getattr(product, "name", None) or getattr(project, "project_name", "")
+        languages = _csv(PipelineLaunchData(pipeline.launch_data).languages)
+        callback_url = build_callback_url(pipeline_id)
+        return True, project, project_name, languages, callback_url
+
+
 @shared_task(bind=True)
 def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="INFO", async_user=None) -> None:
     log = install_pipeline_logging(pipeline_id, log_level)
@@ -49,31 +72,8 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
     triage_secret = getattr(settings, "AIST_AI_TRIAGE_SECRET", None)
 
     # ── 1. Validate state and gather payload data (short transaction, no I/O) ────
-    status_ok = True
-    project_name = ""
-    languages = ""
-    callback_url = ""
     try:
-        with transaction.atomic():
-            pipeline = (
-                AISTPipeline.objects
-                .select_for_update()
-                .select_related("project__product")
-                .get(id=pipeline_id)
-            )
-            if pipeline.status != AISTStatus.PUSH_TO_AI:
-                log.error(
-                    "Unexpected pipeline status %s for AI push (pipeline_id=%s)",
-                    pipeline.status,
-                    pipeline_id,
-                )
-                status_ok = False
-            else:
-                project = pipeline.project
-                product = getattr(project, "product", None)
-                project_name = getattr(product, "name", None) or getattr(project, "project_name", "")
-                languages = _csv(PipelineLaunchData(pipeline.launch_data).languages)
-                callback_url = build_callback_url(pipeline_id)
+        status_ok, project, project_name, languages, callback_url = _gather_ai_push_payload(pipeline_id, log)
     except AISTPipeline.DoesNotExist:
         log.error("Pipeline not found (pipeline_id=%s)", pipeline_id)
         return
@@ -152,6 +152,36 @@ def _resolve_effective_filter(snap: dict | None, triage_type: str) -> dict | Non
     return snap
 
 
+def _gather_local_triage_payload(pipeline_id: str, log) -> tuple[bool, str, str, dict[str, str]]:
+    with transaction.atomic():
+        pipeline = (
+            AISTPipeline.objects
+            .select_for_update()
+            .select_related("project__product")
+            .get(id=pipeline_id)
+        )
+        if pipeline.status != AISTStatus.PUSH_TO_AI:
+            log.error(
+                "Unexpected pipeline status %s for local triage push (pipeline_id=%s)",
+                pipeline.status,
+                pipeline_id,
+            )
+            return False, "", "", {}
+        ld = PipelineLaunchData(pipeline.launch_data)
+        product_name = getattr(pipeline.project.product, "name", "") or ""
+        source_path = ld.resolve_source_root(product_name)
+        callback_url = build_local_triage_callback_url(pipeline_id)
+        # Resolve Claude credentials for the pipeline's project. The
+        # factory itself stays agent-agnostic (invariant I4) and the
+        # Claude-specific env-var mapping lives in
+        # aist/integrations/claude.py (invariant I1).
+        claude_auth = {
+            var: secret.get_secret_value()
+            for var, secret in claude_auth_env(pipeline.project).items()
+        }
+        return True, source_path, callback_url, claude_auth
+
+
 @shared_task(bind=True)
 def push_request_to_local_triage(
     self,
@@ -164,38 +194,8 @@ def push_request_to_local_triage(
     log = install_pipeline_logging(pipeline_id, log_level)
 
     # ── 1. Validate state and gather data ──
-    status_ok = True
-    source_path = ""
-    callback_url = ""
-    claude_auth: dict[str, str] = {}
     try:
-        with transaction.atomic():
-            pipeline = (
-                AISTPipeline.objects
-                .select_for_update()
-                .select_related("project__product")
-                .get(id=pipeline_id)
-            )
-            if pipeline.status != AISTStatus.PUSH_TO_AI:
-                log.error(
-                    "Unexpected pipeline status %s for local triage push (pipeline_id=%s)",
-                    pipeline.status,
-                    pipeline_id,
-                )
-                status_ok = False
-            else:
-                ld = PipelineLaunchData(pipeline.launch_data)
-                product_name = getattr(pipeline.project.product, "name", "") or ""
-                source_path = ld.resolve_source_root(product_name)
-                callback_url = build_local_triage_callback_url(pipeline_id)
-                # Resolve Claude credentials for the pipeline's project. The
-                # factory itself stays agent-agnostic (invariant I4) and the
-                # Claude-specific env-var mapping lives in
-                # aist/integrations/claude.py (invariant I1).
-                claude_auth = {
-                    var: secret.get_secret_value()
-                    for var, secret in claude_auth_env(pipeline.project).items()
-                }
+        status_ok, source_path, callback_url, claude_auth = _gather_local_triage_payload(pipeline_id, log)
     except AISTPipeline.DoesNotExist:
         log.error("Pipeline not found (pipeline_id=%s)", pipeline_id)
         return

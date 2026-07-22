@@ -55,6 +55,16 @@ type FindingApi = {
   is_regression?: boolean;
   finding_meta?: { name: string; value: string }[];
   work_items?: WorkItemLinkApi[];
+  dynamic_finding?: boolean;
+  affected_endpoints?: string[];
+  steps_to_reproduce?: string | null;
+  impact?: string | null;
+  mitigation?: string | null;
+  param?: string | null;
+  payload?: string | null;
+  cvssv3?: string | null;
+  cvssv3_score?: number | null;
+  references?: string | null;
 };
 
 type AistProjectApi = {
@@ -98,6 +108,7 @@ type ProjectMetaApi = {
 type PipelineApi = {
   id: string;
   status: string;
+  run_task_id: string | null;
   response_from_ai: unknown;
   created: string;
   updated: string;
@@ -266,6 +277,16 @@ function mapFindingApiToUi(item: FindingApi): Finding {
       item.under_review ? "under_review" : null,
       item.is_mitigated ? "mitigated" : null,
     ].filter(Boolean) as Finding["riskStates"],
+    dynamicFinding: item.dynamic_finding ?? false,
+    affectedEndpoints: item.affected_endpoints ?? [],
+    stepsToReproduce: item.steps_to_reproduce ?? undefined,
+    impact: item.impact ?? undefined,
+    mitigation: item.mitigation ?? undefined,
+    param: item.param ?? undefined,
+    payload: item.payload ?? undefined,
+    cvssv3: item.cvssv3 ?? undefined,
+    cvssv3Score: item.cvssv3_score ?? undefined,
+    references: item.references ?? undefined,
   };
 }
 
@@ -1050,6 +1071,22 @@ export function useValidationStatus(integrationId: number | null, taskId: string
     refetchInterval: (query) => {
       const s = query.state.data?.state;
       if (s === "SUCCESS" || s === "FAILURE") return false;
+      return 2000;
+    },
+  });
+}
+
+const PIPELINE_TERMINAL_STATUSES = new Set(["FINISHED", "FINISHED_WITH_WARNINGS"]);
+
+/** Polls a pipeline's status (e.g. while a DAST report import runs asynchronously). */
+export function usePipelineStatus(pipelineId: string | null) {
+  return useQuery({
+    queryKey: ["pipeline-status", pipelineId],
+    queryFn: () => fetchJson<PipelineApi>(getRoute("pipeline_detail_url", { pipeline_id: pipelineId! })),
+    enabled: Boolean(pipelineId),
+    refetchInterval: (query) => {
+      const s = query.state.data?.status;
+      if (s && PIPELINE_TERMINAL_STATUSES.has(s) && !query.state.data?.run_task_id) return false;
       return 2000;
     },
   });

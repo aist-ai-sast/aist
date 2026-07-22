@@ -76,6 +76,17 @@ class BootstrapDemoAccessCommandTests(TestCase):
             actual_by_day = Counter(findings_qs.values_list("date", flat=True))
             self.assertEqual(actual_by_day, expected_by_day)
 
+            dast_finding = Finding.objects.get(
+                test__engagement__product=project.product,
+                title__contains=f"[DAST-{spec.slug.upper()}-",
+            )
+            self.assertTrue(dast_finding.dynamic_finding)
+            self.assertEqual(
+                dast_finding.references,
+                "https://dast-triage.internal/demo/cross-tenant-bola.html",
+            )
+            self.assertEqual(dast_finding.endpoints.count(), 1)
+
             launch_config = AISTProjectLaunchConfig.objects.get(
                 project=project,
                 name=spec.launch_config_name,

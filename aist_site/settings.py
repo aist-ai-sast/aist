@@ -94,6 +94,10 @@ AIST_PROJECTS_BUILD_DIR = env("AIST_PROJECTS_BUILD_DIR", default="/tmp/aist/proj
 AIST_TRIAGE_OUTPUT_DIR = env("AIST_TRIAGE_OUTPUT_DIR", default="/tmp/aist/triage-output")  # noqa: F405,S108
 AIST_VPN_SIDECAR_IMAGE = env("AIST_VPN_SIDECAR_IMAGE", default="aist-vpn-sidecar:latest")  # noqa: F405
 
+# Manual report import accepts every registered scan_type. Registered parsers validate
+# their report format, while this setting bounds the upload payload size.
+PIPELINE_IMPORT_MAX_SIZE_BYTES = env.int("AIST_PIPELINE_IMPORT_MAX_SIZE_BYTES", default=15 * 1024 * 1024)  # noqa: F405
+
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="https://aist.itsec-europe.com/")  # noqa: F405
 AIST_AI_TRIAGE_WEBHOOK_URL = env(  # noqa: F405
     "AIST_AI_TRIAGE_WEBHOOK_URL",
@@ -150,12 +154,18 @@ AIST_AUTH_SET_PASSWORD_THROTTLE_RATE = env("DD_AIST_AUTH_SET_PASSWORD_THROTTLE_R
 AIST_INVITE_EMAIL_THROTTLE_RATE = env("DD_AIST_INVITE_EMAIL_THROTTLE_RATE", default="20/hour")  # noqa: F405
 AIST_RESET_PASSWORD_EMAIL_THROTTLE_RATE = env("DD_AIST_RESET_PASSWORD_EMAIL_THROTTLE_RATE", default="20/hour")  # noqa: F405
 AIST_CHANGE_PASSWORD_THROTTLE_RATE = env("DD_AIST_CHANGE_PASSWORD_THROTTLE_RATE", default="10/min")  # noqa: F405
+# Report import (any registered scan_type) fans out to DefaultImporter + Celery and
+# creates Test/Finding/AISTProjectVersion rows plus a storage write per call — bound how
+# many imports one user can fire per hour. One shared scope covers the read-only preview
+# and confirmed import endpoints.
+AIST_PIPELINE_IMPORT_THROTTLE_RATE = env("DD_AIST_PIPELINE_IMPORT_THROTTLE_RATE", default="20/hour")  # noqa: F405
 REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {}).update({  # noqa: F405
     "aist_auth_login": AIST_AUTH_LOGIN_THROTTLE_RATE,
     "aist_auth_set_password": AIST_AUTH_SET_PASSWORD_THROTTLE_RATE,
     "aist_invite_email": AIST_INVITE_EMAIL_THROTTLE_RATE,
     "aist_reset_password_email": AIST_RESET_PASSWORD_EMAIL_THROTTLE_RATE,
     "aist_change_password": AIST_CHANGE_PASSWORD_THROTTLE_RATE,
+    "aist_pipeline_import": AIST_PIPELINE_IMPORT_THROTTLE_RATE,
 })
 
 GITHUB_APP = {

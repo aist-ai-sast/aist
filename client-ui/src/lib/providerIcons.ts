@@ -18,6 +18,9 @@ export const PROVIDER_ICON_PATHS: Record<string, string> = {
   GENERIC:
     "M10 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4m-4-8h6m0 0v6m0-6L10 14",
   VPN: "M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z",
+  // Stylised radar sweep, representing DAST's autonomous scanning.
+  DAST:
+    "M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8V2Zm0 5a5 5 0 1 0 5 5h-2a3 3 0 1 1-3-3V7Zm.4 4.1L18 4l-4.6 8.4-1.4-1.3Z",
   // Stylised code-review checkmark, representing Gerrit's review workflow.
   GERRIT:
     "M12 2 3 5.5v6C3 17 6.8 21.7 12 23c5.2-1.3 9-6 9-11.5v-6L12 2Zm-1.1 14.2-4-4L8.3 10.8l2.6 2.6 5.8-5.8L18 9.2l-7.1 7Z",

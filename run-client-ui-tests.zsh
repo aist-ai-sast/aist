@@ -160,7 +160,14 @@ run_e2e_tests() {
 
     echo "==> Starting db/cache"
     CLIENT_UI_STARTED_STACK=1
-    docker compose "${compose_args[@]}" up --no-deps -d postgres valkey
+    # mailhog is only defined in docker-compose.integration.yml (not the base compose
+    # file) and every `up` call in this script uses --no-deps, which skips Compose's
+    # own dependency resolution — without starting it explicitly here, it never runs
+    # at all, and any code path that sends real email (e.g. the reset-password-email
+    # endpoint) fails outright with a DNS-resolution error against the "mailhog"
+    # hostname. Started alongside postgres/valkey, well before uwsgi, since it has no
+    # dependencies of its own and boots near-instantly.
+    docker compose "${compose_args[@]}" up --no-deps -d postgres valkey mailhog
 
     echo "==> Initializer"
     docker compose "${compose_args[@]}" up --no-deps --exit-code-from initializer initializer

@@ -25,6 +25,16 @@ services:
     build:
       target: development
     entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '-t', '30', '--', '/entrypoint-uwsgi-dev.sh']
+    # mailhog is only defined in this integration overlay, so the base uwsgi
+    # service (docker-compose.yml) has no dependency on it at all — without
+    # this, uwsgi (which boots fast, no migrations to wait for beyond
+    # wait-for-it) can start accepting requests and attempt an SMTP send
+    # (e.g. the reset-password-email endpoint) before mailhog's near-instant
+    # but not-yet-scheduled container is actually listening on 1025, which
+    # surfaces as a flaky 400 in e2e specs that trigger an email send.
+    depends_on:
+      mailhog:
+        condition: service_started
     volumes:
       - defectdojo_media_integration_tests:${DD_MEDIA_ROOT:-/app/media}
     environment:
@@ -34,6 +44,27 @@ services:
       DD_SECURE_CROSS_ORIGIN_OPENER_POLICY: 'None'
       DD_SECRET_KEY: "${DD_SECRET_KEY:-.}"
       DD_EMAIL_URL: "smtp://mailhog:1025"
+      # The base docker-compose.yml passes DD_EMAIL_USE_TLS/DD_EMAIL_USE_SSL through
+      # from the shell/.env unchanged (`${DD_EMAIL_USE_TLS:-}` etc.) — this repo's own
+      # .env sets DD_EMAIL_USE_TLS=true for the real Gmail relay used outside e2e, and
+      # without an explicit override here that leaks into this stack too. mailhog does
+      # not support STARTTLS at all, so Django's SMTP backend raised
+      # SMTPNotSupportedError on every send (surfaced to callers as a generic 400),
+      # e.g. the reset-password-email endpoint, 100% reproducibly, every run.
+      DD_EMAIL_USE_TLS: 'false'
+      DD_EMAIL_USE_SSL: 'false'
+      # Playwright's e2e suite runs many parallel workers, all authenticating
+      # through the UI (no session caching for those flows) from one
+      # container IP — production's per-IP/per-user throttle scopes are far
+      # too tight for that concurrency and cause flaky 429s/timeouts that
+      # have nothing to do with the throttle logic itself being under test
+      # (no e2e spec asserts on 429 behavior). Loosened here, in the e2e-only
+      # overlay, not in aist_site/settings.py's production defaults.
+      DD_AIST_AUTH_LOGIN_THROTTLE_RATE: '1000/min'
+      DD_AIST_AUTH_SET_PASSWORD_THROTTLE_RATE: '1000/min'
+      DD_AIST_INVITE_EMAIL_THROTTLE_RATE: '1000/hour'
+      DD_AIST_RESET_PASSWORD_EMAIL_THROTTLE_RATE: '1000/hour'
+      DD_AIST_CHANGE_PASSWORD_THROTTLE_RATE: '1000/min'
   celerybeat:
     environment:
       DD_DATABASE_URL: ${DD_TEST_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/test_defectdojo}

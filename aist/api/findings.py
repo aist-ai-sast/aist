@@ -106,11 +106,22 @@ class AISTFindingListItemSerializer(dojo_serializers.FindingSerializer):
     created = serializers.SerializerMethodField()
     is_regression = serializers.SerializerMethodField()
     work_items = WorkItemLinkInlineSerializer(source="work_item_links", many=True, read_only=True)
+    # Human-readable endpoint strings (e.g. "https://api.example.com/v1/subscriptions/123"),
+    # used by the client-ui DAST finding view. The base FindingSerializer's own
+    # `endpoints` field returns bare PKs, which isn't useful for display.
+    affected_endpoints = serializers.SerializerMethodField()
 
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_regression(self, obj) -> bool:
         annotation = getattr(obj, "aist_annotation", None)
         return bool(annotation and annotation.is_regression)
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_affected_endpoints(self, obj) -> list[str]:
+        # The import path used here (GenericJSONParser -> DefaultImporter -> endpoint_manager)
+        # populates the classic `Finding.endpoints` M2M, not the newer `locations` relation
+        # (that's a separate, not-yet-wired-up system) — so this reads from `endpoints`.
+        return sorted({str(endpoint) for endpoint in obj.endpoints.all()})
 
     @extend_schema_field(OpenApiTypes.STR)
     def get_project_version(self, obj) -> str | None:
@@ -337,7 +348,7 @@ class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
         queryset = (
             self.get_authorized_queryset()
             .select_related("test__engagement")
-            .prefetch_related("tags", "aist_project_versions", "aist_annotation")
+            .prefetch_related("tags", "aist_project_versions", "aist_annotation", "endpoints")
         )
         filterset = AISTFindingFilter(data=request.query_params, queryset=queryset, request=request)
         if not filterset.is_valid():
@@ -389,7 +400,7 @@ class AISTFindingDetailAPI(AuthorizedQuerySetMixin, APIView):
         finding = get_object_or_404(
             self.get_authorized_queryset()
             .select_related("test__engagement")
-            .prefetch_related("tags", "aist_project_versions", "aist_annotation"),
+            .prefetch_related("tags", "aist_project_versions", "aist_annotation", "endpoints"),
             id=finding_id,
         )
         return Response(AISTFindingListItemSerializer(finding, context={"request": request}).data)
@@ -855,48 +866,21 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
         close_reason = serializer.validated_data.get("close_reason")
         reason_note = serializer.validated_data["reason"]
         bulk_note_entry = f"Bulk status update: {reason_note}"
-        updated_ids: list[int] = []
         try:
-            with transaction.atomic():
-                # select_for_update(nowait=True) is the actual integrity guard:
-                # - raises OperationalError immediately if any row is already
-                #   locked by another transaction (bulk-vs-bulk race).
-                # - a count mismatch after the lock means a finding was deleted
-                #   or became inaccessible between the pre-check and now.
-                findings = list(
-                    self.get_authorized_queryset(permission=risk_permission)
-                    .select_for_update(nowait=True)
-                    .select_related("test__engagement__product")
-                    .filter(id__in=requested_ids),
-                )
-                if len(findings) != len(requested_ids):
-                    return Response(
-                        {"detail": "Some findings were modified concurrently. Please retry."},
-                        status=status.HTTP_409_CONFLICT,
-                    )
-                for finding in findings:
-                    if action == "reopen":
-                        _bulk_reopen_finding(
-                            finding=finding,
-                            user=request.user,
-                            note_entry=bulk_note_entry,
-                        )
-                    elif action == "risk_accept":
-                        _bulk_accept_risk_finding(
-                            finding=finding,
-                            user=request.user,
-                            justification=reason_note,
-                            request=request,
-                            note_entry=bulk_note_entry,
-                        )
-                    else:
-                        _bulk_close_finding(
-                            finding=finding,
-                            user=request.user,
-                            close_reason=close_reason or "mitigated",
-                            note_entry=bulk_note_entry,
-                        )
-                    updated_ids.append(finding.id)
+            updated_ids = _apply_bulk_status_update(
+                queryset=self.get_authorized_queryset(permission=risk_permission),
+                requested_ids=requested_ids,
+                action=action,
+                close_reason=close_reason,
+                reason_note=reason_note,
+                bulk_note_entry=bulk_note_entry,
+                request=request,
+            )
+        except _BulkStatusConcurrentModificationError:
+            return Response(
+                {"detail": "Some findings were modified concurrently. Please retry."},
+                status=status.HTTP_409_CONFLICT,
+            )
         except OperationalError:
             # Another DB transaction already holds a row lock on one or more
             # findings.  The cache pre-check handles the common case; this
@@ -912,6 +896,62 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
             {"updated_count": len(updated_ids), "updated_ids": updated_ids},
             status=status.HTTP_200_OK,
         )
+
+
+class _BulkStatusConcurrentModificationError(Exception):
+
+    """Raised when the row count after locking no longer matches the pre-check."""
+
+
+def _apply_bulk_status_update(
+    *,
+    queryset,
+    requested_ids: list[int],
+    action: str,
+    close_reason: str | None,
+    reason_note: str,
+    bulk_note_entry: str,
+    request,
+) -> list[int]:
+    """
+    Lock and update the requested findings inside one transaction.
+
+    select_for_update(nowait=True) is the actual integrity guard: it raises
+    OperationalError immediately if any row is already locked by another
+    transaction (bulk-vs-bulk race), and a post-lock count mismatch means a
+    finding was deleted or became inaccessible between the pre-check and now
+    (raised as _BulkStatusConcurrentModificationError for the caller to turn into a 409).
+    """
+    updated_ids: list[int] = []
+    with transaction.atomic():
+        findings = list(
+            queryset
+            .select_for_update(nowait=True)
+            .select_related("test__engagement__product")
+            .filter(id__in=requested_ids),
+        )
+        if len(findings) != len(requested_ids):
+            raise _BulkStatusConcurrentModificationError
+        for finding in findings:
+            if action == "reopen":
+                _bulk_reopen_finding(finding=finding, user=request.user, note_entry=bulk_note_entry)
+            elif action == "risk_accept":
+                _bulk_accept_risk_finding(
+                    finding=finding,
+                    user=request.user,
+                    justification=reason_note,
+                    request=request,
+                    note_entry=bulk_note_entry,
+                )
+            else:
+                _bulk_close_finding(
+                    finding=finding,
+                    user=request.user,
+                    close_reason=close_reason or "mitigated",
+                    note_entry=bulk_note_entry,
+                )
+            updated_ids.append(finding.id)
+    return updated_ids
 
 
 def _bulk_reopen_finding(*, finding, user, note_entry: str) -> None:

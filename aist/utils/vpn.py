@@ -142,27 +142,31 @@ def _get_own_docker_network() -> str | None:
     Returns ``None`` on any error so callers can fall back gracefully.
     """
     try:
-        docker_bin = _find_executable("docker")
-        if docker_bin is None:
-            return None
-        container_id = Path("/etc/hostname").read_text(encoding="utf-8").strip()
-        result = subprocess.run(
-            [
-                docker_bin,
-                "inspect",
-                "--format",
-                "{{range $k,$v := .NetworkSettings.Networks}}{{$k}}\n{{end}}",
-                container_id,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        networks = [n.strip() for n in result.stdout.splitlines() if n.strip()]
-        named = [n for n in networks if n not in {"bridge", "host", "none"}]
-        return named[0] if named else None
+        return _resolve_own_docker_network()
     except Exception:
         return None
+
+
+def _resolve_own_docker_network() -> str | None:
+    docker_bin = _find_executable("docker")
+    if docker_bin is None:
+        return None
+    container_id = Path("/etc/hostname").read_text(encoding="utf-8").strip()
+    result = subprocess.run(
+        [
+            docker_bin,
+            "inspect",
+            "--format",
+            "{{range $k,$v := .NetworkSettings.Networks}}{{$k}}\n{{end}}",
+            container_id,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    networks = [n.strip() for n in result.stdout.splitlines() if n.strip()]
+    named = [n for n in networks if n not in {"bridge", "host", "none"}]
+    return named[0] if named else None
 
 
 def _get_own_eth0_ip() -> str | None:
@@ -189,38 +193,50 @@ def _get_own_eth0_ip() -> str | None:
 
     # Method 2: ip command (iproute2 — not always installed in minimal images)
     try:
-        ip_bin = _find_executable("ip")
-        if ip_bin is None:
-            msg = "ip not found"
-            raise FileNotFoundError(msg)
-        result = subprocess.run(
-            [ip_bin, "-4", "addr", "show", "eth0"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        for raw_line in result.stdout.splitlines():
-            line = raw_line.strip()
-            if line.startswith("inet "):
-                # "inet 172.20.0.5/16 brd ..."
-                return line.split()[1].split("/")[0]
+        ip = _eth0_ip_via_ip_command()
+        if ip:
+            return ip
     except Exception:
         logger.debug("vpn: ip-command eth0 detection failed", exc_info=True)
 
     # Method 3: hostname -i (busybox / minimal Debian)
     try:
-        hostname_bin = _find_executable("hostname")
-        if hostname_bin is None:
-            msg = "hostname not found"
-            raise FileNotFoundError(msg)
-        result = subprocess.run([hostname_bin, "-i"], capture_output=True, text=True, check=False)
-        ip = result.stdout.strip().split()[0]
-        if ip and not ip.startswith("127."):
+        ip = _eth0_ip_via_hostname_command()
+        if ip:
             return ip
     except Exception:
         logger.debug("vpn: hostname-based eth0 detection failed", exc_info=True)
 
     return None
+
+
+def _eth0_ip_via_ip_command() -> str | None:
+    ip_bin = _find_executable("ip")
+    if ip_bin is None:
+        msg = "ip not found"
+        raise FileNotFoundError(msg)
+    result = subprocess.run(
+        [ip_bin, "-4", "addr", "show", "eth0"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if line.startswith("inet "):
+            # "inet 172.20.0.5/16 brd ..."
+            return line.split()[1].split("/")[0]
+    return None
+
+
+def _eth0_ip_via_hostname_command() -> str | None:
+    hostname_bin = _find_executable("hostname")
+    if hostname_bin is None:
+        msg = "hostname not found"
+        raise FileNotFoundError(msg)
+    result = subprocess.run([hostname_bin, "-i"], capture_output=True, text=True, check=False)
+    ip = result.stdout.strip().split()[0]
+    return ip if ip and not ip.startswith("127.") else None
 
 
 def _b64(value: str) -> str:

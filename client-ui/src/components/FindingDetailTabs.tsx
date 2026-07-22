@@ -4,6 +4,9 @@ import type { AIResponse, Finding, FindingTimelineEvent } from "../types";
 import CodeSnippet from "./CodeSnippet";
 import CweTooltip from "./CweTooltip";
 import DescriptionBlock from "./DescriptionBlock";
+import StepsToReproduce from "./StepsToReproduce";
+import { inferMarkdownStructure } from "../lib/dastNarrative";
+import { isDastFinding } from "../lib/findingStatus";
 import { useAddFindingNote } from "../lib/mutations";
 import { useFinding, useFindingNotes, useFindingTimeline } from "../lib/queries";
 import PermissionGate from "./PermissionGate";
@@ -25,13 +28,65 @@ type FindingDetailTabsProps = {
 
 type TabId = "overview" | "ai" | "code" | "notes" | "history" | "work_items";
 
-const tabs: Array<{ id: TabId; label: string }> = [
-  { id: "overview", label: "Overview" },
-  { id: "ai", label: "AI Assessment" },
-  { id: "code", label: "Code" },
-  { id: "notes", label: "Notes" },
-  { id: "history", label: "History" },
-  { id: "work_items", label: "Work Items" },
+function OverviewIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2.5" />
+      <line x1="7" y1="8.5" x2="17" y2="8.5" />
+      <line x1="7" y1="12" x2="17" y2="12" />
+      <line x1="7" y1="15.5" x2="13" y2="15.5" />
+    </svg>
+  );
+}
+function AiIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+function CodeEvidenceIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="8 6 3 12 8 18" />
+      <polyline points="16 6 21 12 16 18" />
+    </svg>
+  );
+}
+function NotesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+function HistoryIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <polyline points="12 7 12 12 15.5 14" />
+    </svg>
+  );
+}
+function WorkItemsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3.5" y="5.5" width="17" height="15" rx="2" />
+      <line x1="3.5" y1="10" x2="20.5" y2="10" />
+      <line x1="8" y1="3" x2="8" y2="7" />
+      <line x1="16" y1="3" x2="16" y2="7" />
+    </svg>
+  );
+}
+
+const tabs: Array<{ id: TabId; label: string; Icon: () => JSX.Element }> = [
+  { id: "overview", label: "Overview", Icon: OverviewIcon },
+  { id: "ai", label: "AI Assessment", Icon: AiIcon },
+  { id: "code", label: "Code", Icon: CodeEvidenceIcon },
+  { id: "notes", label: "Notes", Icon: NotesIcon },
+  { id: "history", label: "History", Icon: HistoryIcon },
+  { id: "work_items", label: "Work Items", Icon: WorkItemsIcon },
 ];
 
 const verdictMeta: Record<NonNullable<AIResponse["verdict"]>, { label: string; className: string }> = {
@@ -90,10 +145,50 @@ function confidenceMeta(uncertaintyLevel?: number): { text: string; className: s
 }
 
 function refLabel(url: string): string {
-  try { return new URL(url).hostname.replace(/^www\./, ""); }
-  catch { return url; }
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname.startsWith("www.") ? hostname.slice(4) : hostname;
+  } catch {
+    return url;
+  }
 }
 
+function FindingReferences({ value }: { value: string }) {
+  const references = value
+    .split("\n")
+    .map((reference) => reference.trim())
+    .filter(Boolean);
+  return (
+    <ul className="space-y-1">
+      {references.map((reference, index) => {
+        try {
+          const url = new URL(reference);
+          if (url.protocol === "http:" || url.protocol === "https:") {
+            return (
+              <li key={`${index}-${reference}`}>
+                <a
+                  href={url.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="break-all text-brand-200 hover:text-brand-100"
+                >
+                  {reference}
+                </a>
+              </li>
+            );
+          }
+        } catch {
+          // Plain reference labels fall through to text rendering.
+        }
+        return (
+          <li key={`${index}-${reference}`} className="break-all">
+            {reference}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 export default function FindingDetailTabs({
   finding,
@@ -120,6 +215,8 @@ export default function FindingDetailTabs({
       : detailQuery.data?.tags ?? [];
   const tagsLoading = !finding.tags?.length && detailQuery.isLoading;
 
+  const isDast = isDastFinding(finding);
+
   return (
     <div>
       <div className="flex flex-wrap gap-2">
@@ -128,14 +225,15 @@ export default function FindingDetailTabs({
             key={item.id}
             type="button"
             className={[
-              "rounded-full border px-3 py-1 text-xs",
+              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs",
               tab === item.id
                 ? ACCENT_SELECTED_CLASS
                 : "border-night-500 bg-night-900 text-slate-300",
             ].join(" ")}
             onClick={() => setTab(item.id)}
           >
-            {item.label}
+            <item.Icon />
+            {item.id === "code" && isDast ? "Evidence" : item.label}
           </button>
         ))}
       </div>
@@ -175,6 +273,84 @@ export default function FindingDetailTabs({
               <DescriptionBlock value={finding.description} />
             </div>
           </div>
+
+          {isDastFinding(finding) ? (
+            <>
+              {finding.impact ? (
+                <div>
+                  <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Impact</div>
+                  <div className="mt-2 rounded-xl border border-night-500 bg-night-900 px-4 py-3">
+                    <DescriptionBlock value={inferMarkdownStructure(finding.impact)} />
+                  </div>
+                </div>
+              ) : null}
+
+              {finding.mitigation ? (
+                <div>
+                  <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Mitigation</div>
+                  <div className="mt-2 rounded-xl border border-night-500 bg-night-900 px-4 py-3">
+                    <DescriptionBlock value={inferMarkdownStructure(finding.mitigation)} />
+                  </div>
+                </div>
+              ) : null}
+
+              <div>
+                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Affected Endpoints</div>
+                <div className="mt-2 rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-sm text-slate-200">
+                  {finding.affectedEndpoints?.length ? (
+                    <ul className="space-y-1">
+                      {finding.affectedEndpoints.map((endpoint) => (
+                        <li key={endpoint} className="break-all font-mono text-xs">
+                          {endpoint}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <span className="text-slate-500">No endpoints reported.</span>
+                  )}
+                </div>
+              </div>
+
+              {finding.param || finding.payload || finding.cvssv3 ? (
+                <div>
+                  <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Attack Vector</div>
+                  <div className="mt-2 space-y-2 rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-sm text-slate-200">
+                    {finding.param ? (
+                      <div>
+                        <span className="text-xs text-slate-400">Param: </span>
+                        <span className="font-mono text-xs">{finding.param}</span>
+                      </div>
+                    ) : null}
+                    {finding.payload ? (
+                      <div>
+                        <span className="text-xs text-slate-400">Payload: </span>
+                        <span className="break-all font-mono text-xs">{finding.payload}</span>
+                      </div>
+                    ) : null}
+                    {finding.cvssv3 ? (
+                      <div>
+                        <span className="text-xs text-slate-400">CVSS: </span>
+                        <span className="font-mono text-xs">
+                          {finding.cvssv3}
+                          {typeof finding.cvssv3Score === "number" ? ` (${finding.cvssv3Score})` : ""}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {finding.references ? (
+                <div>
+                  <div className="text-xs uppercase tracking-[0.2em] text-slate-400">References</div>
+                  <div className="mt-2 rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-sm text-slate-200">
+                    <FindingReferences value={finding.references} />
+                  </div>
+                </div>
+              ) : null}
+
+            </>
+          ) : null}
 
           {finding.cwe && embedded ? (
             <div>
@@ -303,11 +479,15 @@ export default function FindingDetailTabs({
 
       {tab === "code" ? (
         <div className="mt-4">
-          <CodeSnippet
-            filePath={finding.filePath}
-            sourceFileLink={finding.sourceFileLink}
-            line={finding.line}
-          />
+          {isDast ? (
+            <StepsToReproduce raw={finding.stepsToReproduce} />
+          ) : (
+            <CodeSnippet
+              filePath={finding.filePath}
+              sourceFileLink={finding.sourceFileLink}
+              line={finding.line}
+            />
+          )}
         </div>
       ) : null}
 

@@ -145,7 +145,7 @@ function toApiError(error: AxiosError): ApiError {
   });
 }
 
-const apiClient = axios.create({
+export const apiClient = axios.create({
   withCredentials: true,
 });
 
@@ -208,6 +208,27 @@ export function toUserMessage(error: unknown): string {
 
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const resp = await request<T>(url, init, "json");
+  return resp.data;
+}
+
+/**
+ * POST a FormData body (multipart upload). Unlike fetchJson/request, this never
+ * sets Content-Type: application/json (buildHeaders would force it for any
+ * non-GET request) — the browser must set `multipart/form-data; boundary=...`
+ * itself, which only happens when no Content-Type header is present at all.
+ */
+export async function postFormData<T>(url: string, formData: FormData): Promise<T> {
+  const headers: Record<string, string> = {};
+  const csrf = getCsrfToken();
+  if (csrf) {
+    headers["X-CSRFToken"] = csrf;
+  }
+  const resp = await apiClient.request<T>({
+    url,
+    method: "POST",
+    headers,
+    data: formData,
+  });
   return resp.data;
 }
 

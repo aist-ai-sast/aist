@@ -1,3 +1,5 @@
+import io
+import json
 from datetime import datetime
 from unittest.mock import patch
 
@@ -9,6 +11,7 @@ from dojo.tools.semgrep.parser import SemgrepParser
 from dojo.tools.snyk_code.parser import SnykCodeParser
 
 from aist.parser_overrides import (
+    DastReportParser,
     HumanizedBearerParser,
     HumanizedHorusecParser,
     HumanizedSemgrepParser,
@@ -19,6 +22,28 @@ from aist.parser_overrides import (
     install_snyk_code_parser_override,
     normalize_bearer_title,
 )
+
+
+class DastReportParserSourceCommitsTests(SimpleTestCase):
+    def _file(self, payload: dict) -> io.BytesIO:
+        return io.BytesIO(json.dumps(payload).encode())
+
+    def test_returns_source_commits_by_repo(self):
+        payload = {"dast_run_metadata": {"source_commits": {
+            "cloud_portal": "fd5b25aa1234567890abcdef1234567890abcdef",
+        }}}
+        result = DastReportParser().extract_source_commits(self._file(payload))
+        self.assertEqual(result, {"cloud_portal": "fd5b25aa1234567890abcdef1234567890abcdef"})
+
+    def test_returns_empty_dict_when_metadata_is_absent(self):
+        result = DastReportParser().extract_source_commits(self._file({}))
+        self.assertEqual(result, {})
+
+    def test_leaves_the_file_position_at_the_start(self):
+        payload = {"dast_run_metadata": {"source_commits": {"cloud_portal": "a" * 40}}}
+        file_obj = self._file(payload)
+        DastReportParser().extract_source_commits(file_obj)
+        self.assertEqual(file_obj.tell(), 0)
 
 
 class HumanizedSnykCodeParserTests(SimpleTestCase):

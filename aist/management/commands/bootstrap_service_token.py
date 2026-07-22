@@ -26,6 +26,17 @@ _SERVICE_USERNAME = "aist-service"
 _ENV_VAR = "AIST_SERVICE_TOKEN"
 
 
+def _upsert_token(user, desired_key: str) -> tuple[Token, str]:
+    try:
+        token = Token.objects.get(user=user)
+    except Token.DoesNotExist:
+        return Token.objects.create(user=user, key=desired_key), "created"
+    if token.key != desired_key:
+        token.delete()
+        return Token.objects.create(user=user, key=desired_key), "updated"
+    return token, "unchanged"
+
+
 class Command(BaseCommand):
     help = "Ensure the AIST internal service account and API token exist."
 
@@ -59,17 +70,7 @@ class Command(BaseCommand):
                 user.is_staff = True
                 user.save(update_fields=["is_superuser", "is_staff"])
 
-            try:
-                token = Token.objects.get(user=user)
-                if token.key != desired_key:
-                    token.delete()
-                    token = Token.objects.create(user=user, key=desired_key)
-                    action = "updated"
-                else:
-                    action = "unchanged"
-            except Token.DoesNotExist:
-                token = Token.objects.create(user=user, key=desired_key)
-                action = "created"
+            _token, action = _upsert_token(user, desired_key)
 
         verb = "Created" if user_created else "Found"
         self.stdout.write(

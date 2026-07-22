@@ -259,61 +259,64 @@ def watch_deduplication(self, pipeline_id: str, log_level, async_user=None) -> N
 
     # Poll until all deduplication flags are true.
     # The watcher does not "do work" itself: it only triggers reconcile when progress stalls.
-    last_duplicate_delete_trigger_at: float | None = None
     try:
-        while True:
-            # Reload pipeline to capture any manual status change
-            pipeline.refresh_from_db()
-            # Exit early if status moved away from WAITING_DEDUPLICATION_TO_FINISH.
-            # This handles both terminal statuses (user stopped the pipeline) and the
-            # case where a concurrent watch_deduplication instance already called
-            # _release_pipeline_after_dedup and transitioned to FINDING_POSTPROCESSING.
-            if pipeline.status != AISTStatus.WAITING_DEDUPLICATION_TO_FINISH:
-                return
-            now = timezone.now()
-            deadlines = _dedup_deadlines(now)
-
-            # Query for tests still undergoing deduplication
-            remaining = AISTTestMeta.objects.filter(
-                test_id__in=test_ids,
-                deduplication_complete=False,
-            ).count()
-            if remaining > 0:
-                should_stop = _process_remaining_dedup(
-                    pipeline=pipeline,
-                    pipeline_id=pipeline_id,
-                    test_ids=test_ids,
-                    now=now,
-                    deadlines=deadlines,
-                    logger=logger,
-                )
-                if should_stop:
-                    return
-                _sleep_poll()
-                continue
-
-            should_stop, last_duplicate_delete_trigger_at, has_duplicates = _process_duplicate_cleanup(
-                pipeline=pipeline,
-                pipeline_id=pipeline_id,
-                test_ids=test_ids,
-                deadlines=deadlines,
-                logger=logger,
-                last_duplicate_delete_trigger_at=last_duplicate_delete_trigger_at,
-            )
-            if should_stop:
-                return
-            if has_duplicates:
-                _sleep_poll()
-                continue
-
-            _release_pipeline_after_dedup(pipeline.id)
-            return
-
+        _poll_dedup_until_done(pipeline, pipeline_id, test_ids, logger)
     except Exception:
         logger.exception(
             "Exception while waiting for deduplication to finish (pipeline_id=%s)", pipeline_id,
         )
         finish_pipeline(pipeline_id, degraded=True)
+
+
+def _poll_dedup_until_done(pipeline, pipeline_id: str, test_ids: list[int], logger) -> None:
+    last_duplicate_delete_trigger_at: float | None = None
+    while True:
+        # Reload pipeline to capture any manual status change
+        pipeline.refresh_from_db()
+        # Exit early if status moved away from WAITING_DEDUPLICATION_TO_FINISH.
+        # This handles both terminal statuses (user stopped the pipeline) and the
+        # case where a concurrent watch_deduplication instance already called
+        # _release_pipeline_after_dedup and transitioned to FINDING_POSTPROCESSING.
+        if pipeline.status != AISTStatus.WAITING_DEDUPLICATION_TO_FINISH:
+            return
+        now = timezone.now()
+        deadlines = _dedup_deadlines(now)
+
+        # Query for tests still undergoing deduplication
+        remaining = AISTTestMeta.objects.filter(
+            test_id__in=test_ids,
+            deduplication_complete=False,
+        ).count()
+        if remaining > 0:
+            should_stop = _process_remaining_dedup(
+                pipeline=pipeline,
+                pipeline_id=pipeline_id,
+                test_ids=test_ids,
+                now=now,
+                deadlines=deadlines,
+                logger=logger,
+            )
+            if should_stop:
+                return
+            _sleep_poll()
+            continue
+
+        should_stop, last_duplicate_delete_trigger_at, has_duplicates = _process_duplicate_cleanup(
+            pipeline=pipeline,
+            pipeline_id=pipeline_id,
+            test_ids=test_ids,
+            deadlines=deadlines,
+            logger=logger,
+            last_duplicate_delete_trigger_at=last_duplicate_delete_trigger_at,
+        )
+        if should_stop:
+            return
+        if has_duplicates:
+            _sleep_poll()
+            continue
+
+        _release_pipeline_after_dedup(pipeline.id)
+        return
 
 
 @shared_task(

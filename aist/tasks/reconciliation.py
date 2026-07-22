@@ -57,28 +57,34 @@ def _recover_stuck_dedup_pipelines(*, dry_run: bool = False) -> int:
             )
             continue
         try:
-            new_task_id = uuid.uuid4().hex
-            with transaction.atomic():
-                p = AISTPipeline.objects.select_for_update().get(id=pipeline.id)
-                if p.status != AISTStatus.WAITING_DEDUPLICATION_TO_FINISH:
-                    continue
-                p.watch_dedup_task_id = new_task_id
-                p.save(update_fields=["watch_dedup_task_id"])
-                transaction.on_commit(
-                    lambda pid=pipeline.id, tid=new_task_id: watch_deduplication.apply_async(
-                        kwargs={"pipeline_id": pid, "log_level": "INFO"},
-                        task_id=tid,
-                    ),
-                )
-            count += 1
-            logger.warning(
-                "Recovered stuck dedup watcher for pipeline=%s (new_task_id=%s)",
-                pipeline.id,
-                new_task_id,
-            )
+            if _recover_one_stuck_dedup_pipeline(pipeline, watch_deduplication):
+                count += 1
         except Exception:
             logger.exception("Failed to recover stuck dedup pipeline=%s", pipeline.id)
     return count
+
+
+def _recover_one_stuck_dedup_pipeline(pipeline, watch_deduplication) -> bool:
+    """Returns True if recovered, False if the pipeline's status changed before we could lock it."""
+    new_task_id = uuid.uuid4().hex
+    with transaction.atomic():
+        p = AISTPipeline.objects.select_for_update().get(id=pipeline.id)
+        if p.status != AISTStatus.WAITING_DEDUPLICATION_TO_FINISH:
+            return False
+        p.watch_dedup_task_id = new_task_id
+        p.save(update_fields=["watch_dedup_task_id"])
+        transaction.on_commit(
+            lambda pid=pipeline.id, tid=new_task_id: watch_deduplication.apply_async(
+                kwargs={"pipeline_id": pid, "log_level": "INFO"},
+                task_id=tid,
+            ),
+        )
+    logger.warning(
+        "Recovered stuck dedup watcher for pipeline=%s (new_task_id=%s)",
+        pipeline.id,
+        new_task_id,
+    )
+    return True
 
 
 def _recover_stuck_enrich_pipelines(*, dry_run: bool = False) -> int:
@@ -109,20 +115,25 @@ def _recover_stuck_enrich_pipelines(*, dry_run: bool = False) -> int:
             )
             continue
         try:
-            with transaction.atomic():
-                p = AISTPipeline.objects.select_for_update().get(id=pipeline.id)
-                if p.status != AISTStatus.FINDING_POSTPROCESSING:
-                    continue
-                transaction.on_commit(
-                    lambda pid=pipeline.id: make_enrich_chord(pipeline_id=pid).apply_async(),
+            if _recover_one_stuck_enrich_pipeline(pipeline, make_enrich_chord):
+                count += 1
+                logger.warning(
+                    "Re-dispatched enrich chord for stuck pipeline=%s", pipeline.id,
                 )
-            count += 1
-            logger.warning(
-                "Re-dispatched enrich chord for stuck pipeline=%s", pipeline.id,
-            )
         except Exception:
             logger.exception("Failed to recover stuck enrich pipeline=%s", pipeline.id)
     return count
+
+
+def _recover_one_stuck_enrich_pipeline(pipeline, make_enrich_chord) -> bool:
+    with transaction.atomic():
+        p = AISTPipeline.objects.select_for_update().get(id=pipeline.id)
+        if p.status != AISTStatus.FINDING_POSTPROCESSING:
+            return False
+        transaction.on_commit(
+            lambda pid=pipeline.id: make_enrich_chord(pipeline_id=pid).apply_async(),
+        )
+    return True
 
 
 @shared_task(name="aist.tasks.reconciliation.reconcile_pipeline_orphans")

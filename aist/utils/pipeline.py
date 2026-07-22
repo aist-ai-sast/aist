@@ -67,22 +67,26 @@ def get_project_build_path(project_name: str, project_version: str, pipeline_id:
     return str(resolved)
 
 
+def _remove_pipeline_workspace(project_name: str, project_version: str, pipeline_id: str) -> None:
+    project_build_path = getattr(settings, "AIST_PROJECTS_BUILD_DIR", None)
+    if not project_build_path:
+        return
+    run_dir = (
+        Path(project_build_path)
+        / (project_name or "project")
+        / (project_version or "default")
+        / "runs"
+        / pipeline_id
+    )
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
+        _logger.info("Cleaned up pipeline workspace: %s", run_dir)
+
+
 def cleanup_project_build_path(project_name: str, project_version: str, pipeline_id: str) -> None:
     """Remove the per-pipeline workspace directory created by get_project_build_path."""
     try:
-        project_build_path = getattr(settings, "AIST_PROJECTS_BUILD_DIR", None)
-        if not project_build_path:
-            return
-        run_dir = (
-            Path(project_build_path)
-            / (project_name or "project")
-            / (project_version or "default")
-            / "runs"
-            / pipeline_id
-        )
-        if run_dir.exists():
-            shutil.rmtree(run_dir)
-            _logger.info("Cleaned up pipeline workspace: %s", run_dir)
+        _remove_pipeline_workspace(project_name, project_version, pipeline_id)
     except Exception:
         _logger.exception("Failed to clean up pipeline workspace (pipeline_id=%s)", pipeline_id)
 
@@ -173,34 +177,38 @@ def finish_pipeline(pipeline_id: str, *, degraded: bool = False) -> None:
 
     # Phase 2: status update in its own independent transaction
     try:
-        with transaction.atomic():
-            pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-            if is_terminal_pipeline_status(pipeline.status):
-                # Already finished - skip to avoid overwriting a terminal status
-                # (e.g. FINISHED -> FINISHED_WITH_WARNINGS on a stale degraded=True call).
-                return
-            launch_data_degraded = PipelineLaunchData(pipeline.launch_data).has_analyzer_degraded_reasons
-            target_status = (
-                AISTStatus.FINISHED_WITH_WARNINGS
-                if degraded or launch_data_degraded or (reconcile_stats.get("remaining_violations") or 0) > 0
-                else AISTStatus.FINISHED
-            )
-            set_pipeline_status(pipeline, target_status)
-            transaction.on_commit(lambda: pipeline_finished.send(
-                sender=AISTPipeline, pipeline_id=pipeline_id,
-            ))
-        uninstall_pipeline_file_logging(pipeline_id)
+        _finalize_pipeline_status(pipeline_id, degraded=degraded, reconcile_stats=reconcile_stats)
     except Exception:
         _logger.exception("Failed to set terminal status (pipeline_id=%s)", pipeline_id)
 
 
-def create_pipeline_object(aist_project, project_version, pull_request):
+def _finalize_pipeline_status(pipeline_id: str, *, degraded: bool, reconcile_stats: dict) -> None:
+    with transaction.atomic():
+        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        if is_terminal_pipeline_status(pipeline.status):
+            # Already finished - skip to avoid overwriting a terminal status
+            # (e.g. FINISHED -> FINISHED_WITH_WARNINGS on a stale degraded=True call).
+            return
+        launch_data_degraded = PipelineLaunchData(pipeline.launch_data).has_analyzer_degraded_reasons
+        target_status = (
+            AISTStatus.FINISHED_WITH_WARNINGS
+            if degraded or launch_data_degraded or (reconcile_stats.get("remaining_violations") or 0) > 0
+            else AISTStatus.FINISHED
+        )
+        set_pipeline_status(pipeline, target_status)
+        transaction.on_commit(lambda: pipeline_finished.send(
+            sender=AISTPipeline, pipeline_id=pipeline_id,
+        ))
+    uninstall_pipeline_file_logging(pipeline_id)
+
+
+def create_pipeline_object(aist_project, project_version, pull_request, *, status: str = AISTStatus.FINISHED):
     return AISTPipeline.objects.create(
         id=uuid.uuid4().hex[:8],
         project=aist_project,
         project_version=project_version,
         pull_request=pull_request,
-        status=AISTStatus.FINISHED,
+        status=status,
     )
 
 

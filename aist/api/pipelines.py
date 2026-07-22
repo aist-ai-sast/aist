@@ -89,6 +89,7 @@ class PipelineStartRequestSerializer(serializers.Serializer):
 class PipelineResponseSerializer(serializers.Serializer):
     id = serializers.CharField()
     status = serializers.CharField()
+    run_task_id = serializers.CharField(allow_null=True)
     response_from_ai = serializers.JSONField(allow_null=True)
     created = serializers.DateTimeField()
     updated = serializers.DateTimeField()
@@ -217,7 +218,7 @@ class PipelineStartAPI(AuthorizedQuerySetMixin, APIView):
 
         out = PipelineResponseSerializer(
             {"id": p.id, "status": p.status, "response_from_ai": p.response_from_ai, "created": p.created,
-             "updated": p.updated})
+             "updated": p.updated, "run_task_id": p.run_task_id})
         return Response(out.data, status=status.HTTP_201_CREATED)
 
 
@@ -307,6 +308,7 @@ class PipelineAPI(AuthorizedQuerySetMixin, APIView):
         data = {
             "id": p.id,
             "status": p.status,
+            "run_task_id": p.run_task_id,
             "response_from_ai": p.response_from_ai,
             "created": p.created,
             "updated": p.updated,
@@ -632,17 +634,20 @@ def stream_logs_sse_redis_response(pipeline: AISTPipeline) -> StreamingHttpRespo
     def _sse_comment(comment: str) -> bytes:
         return f": {comment}\n\n".encode()
 
+    def _iter_backlog_lines(entries):
+        for _entry_id, fields in reversed(entries):  # B007
+            pid = (fields or {}).get("pipeline_id")
+            msg = (fields or {}).get("message")
+            lvl = (fields or {}).get("level")
+            if not pid or pid != pipeline.id or not msg:
+                continue
+            line = f"{lvl} {msg}" if lvl else msg
+            yield _sse_data(line)
+
     def _stream_last_lines_from_redis_stream(limit: int):
         try:
             entries = r.xrevrange(STREAM_KEY, max="+", min="-", count=limit) or []
-            for _entry_id, fields in reversed(entries):  # B007
-                pid = (fields or {}).get("pipeline_id")
-                msg = (fields or {}).get("message")
-                lvl = (fields or {}).get("level")
-                if not pid or pid != pipeline.id or not msg:
-                    continue
-                line = f"{lvl} {msg}" if lvl else msg
-                yield _sse_data(line)
+            yield from _iter_backlog_lines(entries)
         except Exception:
             return
 

@@ -7,6 +7,8 @@ import PipelineFilterPanel from "../components/PipelineFilterPanel";
 import PaginationBar from "../components/PaginationBar";
 import { getRoute } from "../lib/routes";
 import PageErrorState from "../components/PageErrorState";
+import PermissionGate from "../components/PermissionGate";
+import ImportPipelineDialog, { ImportUploadIcon } from "../components/ImportPipelineDialog";
 import { pipelineStatusBadgeClass } from "../lib/badgeStyles";
 
 const statusOptions = [
@@ -142,6 +144,7 @@ export default function PipelinesPage() {
   const [pageSize, setPageSize] = useState<number>(50);
   const [pageIndex, setPageIndex] = useState<number>(0);
   const [expandedPipelineId, setExpandedPipelineId] = useState<string | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   const projects = projectsQuery.data ?? [];
   useEffect(() => {
@@ -278,6 +281,16 @@ export default function PipelinesPage() {
               </span>
             </div>
           </div>
+          <PermissionGate action="write">
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium text-night-900 transition hover:bg-brand-500"
+              onClick={() => setImportDialogOpen(true)}
+            >
+              <ImportUploadIcon />
+              Import pipeline launch
+            </button>
+          </PermissionGate>
         </div>
 
         <div className="flex min-h-[calc(100vh-280px)] flex-col">
@@ -439,6 +452,7 @@ export default function PipelinesPage() {
           ) : null}
         </div>
       </div>
+      <ImportPipelineDialog open={importDialogOpen} onClose={() => setImportDialogOpen(false)} />
     </div>
   );
 }

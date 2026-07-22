@@ -109,6 +109,7 @@ from aist.api.projects import (
     AISTProjectScriptDetailAPI,
     AISTProjectScriptListCreateAPI,
 )
+from aist.api.report_import import PipelineImportAPI, PipelineImportValidateAPI
 from aist.api.tags import AvailableFindingTagsAPI
 
 app_name = "aist_api"
@@ -149,6 +150,8 @@ urlpatterns = [
     ),
     path("projects/default-analyzers/", AISTDefaultAnalyzersAPI.as_view(), name="default_analyzers"),
     path("pipelines/start/", PipelineStartAPI.as_view(), name="pipeline_start"),
+    path("pipelines/import/validate/", PipelineImportValidateAPI.as_view(), name="aist_pipeline_import_validate"),
+    path("pipelines/import/", PipelineImportAPI.as_view(), name="aist_pipeline_import"),
     path("pipelines/<str:pipeline_id>", PipelineAPI.as_view(), name="pipeline_status"),
     path("pipelines/<str:pipeline_id>/stop/", PipelineStopAPI.as_view(), name="pipeline_stop"),
     path("pipelines/<str:pipeline_id>/source-info/", PipelineSourceInfoAPI.as_view(), name="pipeline_source_info"),

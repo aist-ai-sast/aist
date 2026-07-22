@@ -45,7 +45,7 @@ def _dast_findings_payload() -> bytes:
                 "dynamic_finding": True,
                 "unique_id_from_tool": "BOLA-cross-cp-cross-tenant-bola",
                 "vuln_id_from_tool": "BOLA-cross-cp-cross-tenant-bola",
-                "references": "Full authenticated report: https://dast-triage.internal/cp-backend/x.html",
+                "references": "CWE-639\nhttps://dast-triage.internal/cp-backend/x.html",
                 "tags": ["dast", "autonomous", "cp-backend", "prod-vulnerable"],
             },
         ],
@@ -109,3 +109,4 @@ class DastParserParsingTests(SimpleTestCase):
         self.assertEqual(finding.unique_id_from_tool, "BOLA-cross-cp-cross-tenant-bola")
         self.assertEqual(finding.vuln_id_from_tool, "BOLA-cross-cp-cross-tenant-bola")
         self.assertEqual(finding.cwe, 639)
+        self.assertEqual(finding.references, "CWE-639\nhttps://dast-triage.internal/cp-backend/x.html")

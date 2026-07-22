@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import textwrap
 
 from dojo.tools import factory
 from dojo.tools.bearer_cli.parser import BearerCLIParser
+from dojo.tools.generic.json_parser import GenericJSONParser
 from dojo.tools.generic.parser import GenericParser
 from dojo.tools.horusec.parser import HorusecParser
 from dojo.tools.sarif.parser import SarifParser
@@ -380,12 +382,7 @@ class ClaudeIntakeDiffParser(_ClaudeGenericParserBase):
 
 class DastReportParser(_SubtypedGenericParserBase):
 
-    """
-    DAST findings are already deterministic (``unique_id_from_tool``/``vuln_id_from_tool``
-    are check_id+title based — see the separate DAST repo's
-    dast/engine/dastlib/aist_export.py), so no finding-stabilization pass is needed here,
-    unlike the Claude parsers above.
-    """
+    """Parse the Generic Findings envelope emitted by the DAST exporter."""
 
     ID = DAST_SCAN_TYPE
 
@@ -394,6 +391,40 @@ class DastReportParser(_SubtypedGenericParserBase):
             "Redacted, deep-linked finding export from an autonomous DAST run, produced "
             "by the integration gateway's dast-report-writer + `dast export-findings`."
         )
+
+    def get_tests(self, scan_type, filename):  # type: ignore[no-untyped-def]
+        data = json.load(filename)
+        if not isinstance(data, dict):
+            msg = "DAST report root must be a JSON object."
+            raise ValueError(msg)
+        test_internal = GenericJSONParser()._get_test_json(data)
+        test_internal.type = scan_type
+        return [test_internal]
+
+    def extract_source_commits(self, filename) -> dict[str, str]:
+        """Return ``dast_run_metadata.source_commits`` as ``{repo_name: commit_sha}``."""
+        filename.seek(0)
+        data = json.load(filename)
+        filename.seek(0)
+        if not isinstance(data, dict):
+            msg = "DAST report root must be a JSON object."
+            raise ValueError(msg)
+        metadata = data.get("dast_run_metadata", {})
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            msg = "dast_run_metadata must be a JSON object."
+            raise ValueError(msg)
+        source_commits = metadata.get("source_commits", {})
+        if source_commits is None:
+            source_commits = {}
+        if not isinstance(source_commits, dict) or any(
+            not isinstance(repo_name, str) or not isinstance(commit_hash, str)
+            for repo_name, commit_hash in source_commits.items()
+        ):
+            msg = "dast_run_metadata.source_commits must map repository names to commit strings."
+            raise ValueError(msg)
+        return source_commits
 
 
 def install_claude_parsers() -> None:

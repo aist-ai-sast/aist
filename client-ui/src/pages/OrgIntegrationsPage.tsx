@@ -40,7 +40,7 @@ import { PROVIDER_ICON_PATHS } from "../lib/providerIcons";
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-type IntegrationType = "GITLAB" | "GITHUB" | "GERRIT" | "GITEA" | "SLACK" | "EMAIL" | "VPN" | "CLAUDE_CODE";
+type IntegrationType = "GITLAB" | "GITHUB" | "GERRIT" | "GITEA" | "SLACK" | "EMAIL" | "VPN" | "CLAUDE_CODE" | "DAST";
 
 const ORG_INTEGRATION_TYPES: IntegrationType[] = [
   "GITLAB",
@@ -51,6 +51,7 @@ const ORG_INTEGRATION_TYPES: IntegrationType[] = [
   "EMAIL",
   "VPN",
   "CLAUDE_CODE",
+  "DAST",
 ];
 
 const TYPE_LABELS: Record<string, string> = {
@@ -62,6 +63,7 @@ const TYPE_LABELS: Record<string, string> = {
   EMAIL: "Email",
   VPN: "VPN",
   CLAUDE_CODE: "Claude Code",
+  DAST: "DAST",
   JIRA: "Jira",
   YOUTRACK: "YouTrack",
   LINEAR: "Linear",
@@ -87,6 +89,7 @@ const TYPE_BADGE_CLASSES: Record<string, string> = {
   GENERIC: "border-slate-400/30 bg-slate-400/10 text-slate-400",
   VPN: "border-slate-400/40 bg-slate-400/10 text-slate-300",
   CLAUDE_CODE: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+  DAST: "border-rose-500/40 bg-rose-500/10 text-rose-300",
 };
 
 
@@ -415,6 +418,23 @@ function OrgIntegrationConfigFields({
           value={config.from_email ?? ""}
           onChange={(e) => onChange("from_email", e.target.value)}
         />
+      </label>
+    );
+  }
+  if (type === "DAST") {
+    return (
+      <label className="text-xs text-slate-400 sm:col-span-2">
+        Gateway URL
+        <TextInput
+          className="mt-1"
+          placeholder="https://dast-gateway.internal"
+          value={config.gateway_url ?? ""}
+          onChange={(e) => onChange("gateway_url", e.target.value)}
+        />
+        <p className="mt-1 text-[11px] text-slate-500">
+          Base URL of the DAST integration gateway. The integrator token below authenticates
+          against it.
+        </p>
       </label>
     );
   }
@@ -783,7 +803,11 @@ function OrgIntegrationForm({
             />
             {form.integration_type !== "EMAIL" && (
               <label className="text-xs text-slate-400 sm:col-span-2">
-                {form.integration_type === "SLACK" ? "Bot Token" : "Access Token"}
+                {form.integration_type === "SLACK"
+                  ? "Bot Token"
+                  : form.integration_type === "DAST"
+                    ? "Integrator Token"
+                    : "Access Token"}
                 {form.integration_type === "GITHUB" && <span className="text-slate-500"> (optional)</span>}
                 {editing?.has_secret && <span className="ml-1 text-slate-500">(leave blank to keep existing)</span>}
                 <PasswordField

@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { fetchBlob, fetchJson } from "./api";
+import { fetchBlob, fetchJson, postFormData } from "./api";
 import { getRoute } from "./routes";
 
 export type FindingCloseReason = "mitigated" | "false_positive" | "out_of_scope" | "duplicate";
@@ -480,6 +480,60 @@ export function useDeleteOrgIntegration(orgId: number) {
       fetchJson(getRoute("org_integration_detail_url", { integration_id: integrationId }), { method: "DELETE" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
+    },
+  });
+}
+
+export type ImportPipelinePreview = {
+  findings_count: number;
+  severity_breakdown: Record<string, number>;
+  name: string | null;
+  version: string | null;
+  detected_commit_hash: string | null;
+};
+
+/**
+ * Parses the file on the backend (whatever parser is registered for scanType) and
+ * returns a read-only preview. The caller resubmits the same File to useImportPipeline
+ * once the user confirms.
+ */
+export function useValidateImportPipeline() {
+  return useMutation({
+    mutationFn: ({ file, projectId, scanType }: { file: File; projectId: number; scanType: string }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("project_id", String(projectId));
+      formData.append("scan_type", scanType);
+      return postFormData<ImportPipelinePreview>(getRoute("pipelines_import_validate_url"), formData);
+    },
+  });
+}
+
+export type ImportPipelineResponse = { pipeline_id: string; run_task_id: string };
+
+export function useImportPipeline() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      file,
+      projectId,
+      scanType,
+      commitHash,
+    }: {
+      file: File;
+      projectId: number;
+      scanType: string;
+      commitHash: string;
+    }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("project_id", String(projectId));
+      formData.append("scan_type", scanType);
+      formData.append("commit_hash", commitHash);
+      return postFormData<ImportPipelineResponse>(getRoute("pipelines_import_url"), formData);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["pipelines"] });
     },
   });
 }

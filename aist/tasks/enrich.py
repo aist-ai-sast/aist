@@ -93,6 +93,59 @@ def after_upload_enrich_and_watch(results: list[int],
             auto_push_to_ai_if_configured.delay(pipeline_id)
 
 
+def _enrich_finding_link(
+    f,
+    file_path: str,
+    trim_path: str,
+    project_version_descriptor: dict[str, Any],
+    finding_id: int,
+    test_id,
+) -> int:
+    if trim_path and file_path.startswith(trim_path):
+        tp = trim_path if trim_path.endswith("/") else trim_path + "/"
+        f.file_path = file_path.replace(tp, "")
+        f.save(update_fields=["file_path"])
+        file_path = f.file_path
+
+    linker = LinkBuilder(project_version_descriptor)
+    try:
+        link = linker.build(file_path)
+    except Exception:
+        logger.exception(
+            "Failed to build source link for finding enrichment: "
+            "finding_id=%s file_path=%s test_id=%s project_version_descriptor=%s",
+            finding_id,
+            file_path,
+            test_id,
+            project_version_descriptor,
+        )
+        return 0
+
+    if not link:
+        return 0
+    acceptable = not linker.contains_excluded_path(link)
+    if acceptable:
+        try:
+            DojoMeta.objects.update_or_create(
+                finding=f,
+                name="sourcefile_link",
+                defaults={"value": link},
+            )
+        except Exception:
+            logger.exception(
+                "Failed to upsert sourcefile_link meta for finding enrichment: "
+                "finding_id=%s file_path=%s test_id=%s project_version_descriptor=%s",
+                finding_id,
+                file_path,
+                test_id,
+                project_version_descriptor,
+            )
+            return 0
+    else:
+        f.delete()
+    return 1
+
+
 @shared_task(bind=False)
 def enrich_finding_task(
     finding_id: int,
@@ -117,49 +170,7 @@ def enrich_finding_task(
             return 1
 
         try:
-            if trim_path and file_path.startswith(trim_path):
-                tp = trim_path if trim_path.endswith("/") else trim_path + "/"
-                f.file_path = file_path.replace(tp, "")
-                f.save(update_fields=["file_path"])
-                file_path = f.file_path
-
-            linker = LinkBuilder(project_version_descriptor)
-            try:
-                link = linker.build(file_path)
-            except Exception:
-                logger.exception(
-                    "Failed to build source link for finding enrichment: "
-                    "finding_id=%s file_path=%s test_id=%s project_version_descriptor=%s",
-                    finding_id,
-                    file_path,
-                    test_id,
-                    project_version_descriptor,
-                )
-                return 0
-
-            if not link:
-                return 0
-            acceptable = not linker.contains_excluded_path(link)
-            if acceptable:
-                try:
-                    DojoMeta.objects.update_or_create(
-                        finding=f,
-                        name="sourcefile_link",
-                        defaults={"value": link},
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to upsert sourcefile_link meta for finding enrichment: "
-                        "finding_id=%s file_path=%s test_id=%s project_version_descriptor=%s",
-                        finding_id,
-                        file_path,
-                        test_id,
-                        project_version_descriptor,
-                    )
-                    return 0
-            else:
-                f.delete()
-            return 1  # noqa: TRY300
+            return _enrich_finding_link(f, file_path, trim_path, project_version_descriptor, finding_id, test_id)
         except Exception:
             logger.exception(
                 "Unexpected finding enrichment error: "

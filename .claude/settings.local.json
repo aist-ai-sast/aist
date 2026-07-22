@@ -19,7 +19,8 @@
       "WebFetch(domain:simpleicons.org)",
       "Skill(artifact-design)",
       "Artifact",
-      "WebFetch(domain:claude.com)"
+      "WebFetch(domain:claude.com)",
+      "Skill(claude-in-chrome)"
     ]
   }
 }

@@ -34,6 +34,7 @@ provider-specific detail.
 - [Azure DevOps](integrations/azure-devops.md) — work-item provider (no sync backend yet)
 - [Slack](integrations/slack.md) — pipeline action handler
 - [VPN](integrations/vpn.md) — shared routing for internal-network integrations
+- [DAST](integrations/dast.md) — autonomous-scan gateway and manual report import
 
 ## Understand the platform
 

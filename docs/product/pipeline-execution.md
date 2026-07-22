@@ -22,6 +22,14 @@ pipeline, and queues its worker task.
 The launch queue is not Celery. It answers *which scheduled runs are waiting to
 start?* A pipeline answers *what happened during a run that has started?*
 
+A pipeline can also be fabricated directly from an uploaded report instead of
+executing an analyzer: a user with project edit access uploads a report
+(DAST is the format currently wired into client-ui), confirms the target
+commit, AIST resolves it onto a matching `GIT_HASH` project version and
+creates the pipeline immediately, then imports the report asynchronously. See
+[DAST integration](../integrations/dast.md) for the upload flow and
+version-resolution rule.
+
 ## Execute and import
 
 The worker locks the pipeline before it starts it, so a duplicate task delivery
@@ -31,6 +39,11 @@ reports as tests and findings.
 
 The imported tests are attached to the pipeline. Imported findings are attached
 to its project version. A run with no findings completes after import.
+
+A manually imported DAST report skips analyzer execution but rejoins the same
+path from here: its findings are imported as a test, attached to the resolved
+project version, and the pipeline proceeds through the same deduplication,
+enrichment, and completion steps below.
 
 ## Prepare findings for review
 

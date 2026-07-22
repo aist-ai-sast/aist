@@ -54,18 +54,22 @@ def _emit_for_finding_ids(finding_ids) -> None:  # type: ignore[no-untyped-def]
         _emit_for_finding(finding)
 
 
+def _emit_for_batch(finding_ids) -> None:  # type: ignore[no-untyped-def]
+    if not finding_ids:
+        return
+    first = next(iter(finding_ids))
+    if hasattr(first, "id") and hasattr(first, "test"):
+        for finding in finding_ids:
+            _emit_for_finding(finding)
+    else:
+        _emit_for_finding_ids(finding_ids)
+
+
 def _wrap_dedupe_batch(func: Callable[..., Any]) -> Callable[..., Any]:
     def wrapper(finding_ids, *args, **kwargs):  # type: ignore[no-untyped-def]
         result = func(finding_ids, *args, **kwargs)
         try:
-            if not finding_ids:
-                return result
-            first = next(iter(finding_ids))
-            if hasattr(first, "id") and hasattr(first, "test"):
-                for finding in finding_ids:
-                    _emit_for_finding(finding)
-            else:
-                _emit_for_finding_ids(finding_ids)
+            _emit_for_batch(finding_ids)
         except Exception:
             logger.exception("Failed to emit finding_deduplicated (batch)")
         return result

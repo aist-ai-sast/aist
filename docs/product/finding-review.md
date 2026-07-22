@@ -14,6 +14,15 @@ severity, status, AI verdict when one exists, notes, and linked work items. A
 reviewer can change severity or close the finding as mitigated, false positive,
 out of scope, or duplicate.
 
+A DAST finding (dynamic, or imported from a DAST report — see
+[DAST integration](../integrations/dast.md)) uses dynamic evidence. The detail
+view shows affected endpoints and an attack vector (parameter, payload, CVSS),
+and its evidence tab shows numbered steps-to-reproduce. References appear in
+the overview, including the deep link to the full report. It is still an
+ordinary finding record: notes, history, work-item
+links, severity changes, and every closing/risk-acceptance action below work
+identically to any other finding.
+
 Closing a duplicate also links it to a selected primary finding. The duplicate
 is not triaged independently; follow-up belongs to the primary finding. A
 reviewer can reopen a finding, returning it to an active state.

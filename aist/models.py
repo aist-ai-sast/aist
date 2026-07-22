@@ -254,20 +254,24 @@ class ScmGitlabBinding(models.Model):
         tok = self._token()
         return {"PRIVATE-TOKEN": tok} if tok else {}
 
+    @staticmethod
+    def _fetch_gitlab_project(base: str, token: str | None, repo_full: str, proxy_url: str | None):
+        kwargs: dict = {"private_token": token or None}
+        if proxy_url:
+            import requests as _requests  # noqa: PLC0415
+            session = _requests.Session()
+            session.proxies = {"http": proxy_url, "https": proxy_url}
+            kwargs["session"] = session
+        gl = gitlab.Gitlab(base, **kwargs)
+        return gl.projects.get(repo_full)
+
     def get_project_info(self, scm: RepositoryInfo, *, proxy_url: str | None = None):
         logger = logging.getLogger("aist")
         base = self.host(scm).rstrip("/")
         token = self._token()
 
         try:
-            kwargs: dict = {"private_token": token or None}
-            if proxy_url:
-                import requests as _requests  # noqa: PLC0415
-                session = _requests.Session()
-                session.proxies = {"http": proxy_url, "https": proxy_url}
-                kwargs["session"] = session
-            gl = gitlab.Gitlab(base, **kwargs)
-            project = gl.projects.get(scm.repo_full)
+            project = self._fetch_gitlab_project(base, token, scm.repo_full, proxy_url)
         except gitlab.exceptions.GitlabGetError as exc:
             logger.warning(
                 "GitLab API %s returned %s when requesting default branch for %s",

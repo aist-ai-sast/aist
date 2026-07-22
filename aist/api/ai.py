@@ -65,35 +65,43 @@ def send_request_to_ai_for_pipeline(
         return JsonResponse({"detail": "No valid findings for this pipeline/product"}, status=400)
 
     try:
-        logger = install_pipeline_logging(pipeline.id)
-        status_ok = True
-        with transaction.atomic():
-            locked = (
-                AISTPipeline.objects
-                .select_for_update()
-                .get(id=pipeline.id)
-            )
-            if locked.status != AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI:
-                logger.error("Attempt to push to AI before receiving confirmation")
-                status_ok = False
-            else:
-                set_pipeline_status(locked, AISTStatus.PUSH_TO_AI)
-
-        if not status_ok:
-            finish_pipeline(pipeline.id, degraded=True)
-            return JsonResponse(
-                {"error": "Attempt to push to AI before receiving confirmation"},
-                status=400,
-            )
-        triage_type = _resolve_triage_type(locked)
-        if triage_type == "local":
-            push_request_to_local_triage.delay(pipeline.id, ids_int)
-        else:
-            push_request_to_ai.delay(pipeline.id, ids_int, filters)
+        early_response = _push_pipeline_to_ai(pipeline, ids_int, filters)
     except Exception as exc:
         return JsonResponse({"ok": False, "error": str(exc)}, status=500)
+    if early_response is not None:
+        return early_response
 
     return JsonResponse({"ok": True, "count": len(found_ids)})
+
+
+def _push_pipeline_to_ai(pipeline: AISTPipeline, ids_int: list[int], filters: dict) -> JsonResponse | None:
+    """Push confirmed findings to AI triage; returns an early-exit response, or None to continue."""
+    logger = install_pipeline_logging(pipeline.id)
+    status_ok = True
+    with transaction.atomic():
+        locked = (
+            AISTPipeline.objects
+            .select_for_update()
+            .get(id=pipeline.id)
+        )
+        if locked.status != AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI:
+            logger.error("Attempt to push to AI before receiving confirmation")
+            status_ok = False
+        else:
+            set_pipeline_status(locked, AISTStatus.PUSH_TO_AI)
+
+    if not status_ok:
+        finish_pipeline(pipeline.id, degraded=True)
+        return JsonResponse(
+            {"error": "Attempt to push to AI before receiving confirmation"},
+            status=400,
+        )
+    triage_type = _resolve_triage_type(locked)
+    if triage_type == "local":
+        push_request_to_local_triage.delay(pipeline.id, ids_int)
+    else:
+        push_request_to_ai.delay(pipeline.id, ids_int, filters)
+    return None
 
 
 def delete_ai_response_for_pipeline(pipeline: AISTPipeline, response_id: int) -> None:

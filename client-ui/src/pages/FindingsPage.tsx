@@ -196,7 +196,10 @@ export default function FindingsPage() {
   const availableTags = tagsQuery.data ?? [];
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [expandedIds, setExpandedIds] = useState<number[]>([]);
-  const pageError = projectsQuery.error ?? findingsQuery.error ?? tagsQuery.error;
+  // tagsQuery failing (e.g. a project_id the user can't access) only means the tag
+  // filter's options can't populate — it must not block the findings list itself,
+  // which already renders its own correctly org-scoped (possibly empty) result.
+  const pageError = projectsQuery.error ?? findingsQuery.error;
 
   useEffect(() => {
     if (!tagsQuery.isSuccess) return;

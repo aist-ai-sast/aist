@@ -7,7 +7,9 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
+from dojo.endpoint.utils import endpoint_get_or_create
 from dojo.models import (
+    Endpoint_Status,
     Engagement,
     Finding,
     Product,
@@ -90,6 +92,9 @@ ORG_NAMES = [
     "Nova Payments",
     "Helios Core",
 ]
+
+# Test type name used by the DAST parser registration and demo records.
+DAST_DEMO_SCAN_TYPE = "DAST Autonomous Scan"
 
 
 def demo_ai_filter_snapshot() -> dict:
@@ -740,6 +745,15 @@ class Command(BaseCommand):
             if release_ids:
                 release_version.findings.add(*release_ids)
 
+            dast_finding_id = self._ensure_dast_demo_finding(
+                spec=spec,
+                project=project,
+                engagement=engagement,
+                reporter=default_reporter,
+                base_date=today,
+            )
+            main_version.findings.add(dast_finding_id)
+
             self._ensure_historical_queue(
                 spec=spec,
                 project=project,
@@ -804,6 +818,83 @@ class Command(BaseCommand):
                 finding_ids.append(finding.id)
                 sequence += 1
         return finding_ids
+
+    def _ensure_dast_demo_finding(
+        self,
+        *,
+        spec: DemoProjectSpec,
+        project: AISTProject,
+        engagement: Engagement,
+        reporter,
+        base_date,
+    ) -> int:
+        """Seed one DAST finding for the client-ui demo view."""
+        test_type, _ = Test_Type.objects.get_or_create(name=DAST_DEMO_SCAN_TYPE)
+        now = timezone.now()
+        dast_test, _ = Test.objects.get_or_create(
+            engagement=engagement,
+            test_type=test_type,
+            title=f"{spec.slug} dast baseline scan",
+            defaults={"target_start": now - timedelta(days=1), "target_end": now},
+        )
+
+        # The DAST prefix keeps the SAST distribution fixture stable.
+        title = f"Cross-tenant BOLA on subscription keys [DAST-{spec.slug.upper()}-001]"
+        desired = {
+            "severity": "High",
+            "date": base_date,
+            "reporter": reporter,
+            "dynamic_finding": True,
+            "static_finding": False,
+            "unique_id_from_tool": f"{spec.slug}-dast-bola-001",
+            "vuln_id_from_tool": f"{spec.slug}-dast-bola-001",
+            "description": (
+                "An authenticated user of one tenant can access another tenant's "
+                "subscription resource by guessing the numeric subscription id in the "
+                "URL path."
+            ),
+            "mitigation": (
+                "Enforce per-tenant authorization checks on the subscription lookup "
+                "instead of relying on the id alone."
+            ),
+            "steps_to_reproduce": (
+                "1. Authenticate as a user in tenant A.\n"
+                "2. Request /v1/subscriptions/{tenant B's id}.\n"
+                "3. Observe tenant B's subscription data is returned."
+            ),
+            "param": "subscription_id",
+            "payload": "123",
+            "cvssv3": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+            "cvssv3_score": 6.5,
+            "references": "https://dast-triage.internal/demo/cross-tenant-bola.html",
+        }
+        finding, _ = Finding.objects.get_or_create(
+            test=dast_test,
+            title=title,
+            defaults=desired,
+        )
+        updates = []
+        for field, value in desired.items():
+            current = getattr(finding, f"{field}_id") if field == "reporter" else getattr(finding, field)
+            target = value.id if field == "reporter" else value
+            if current != target:
+                setattr(finding, field, value)
+                updates.append(field)
+        if updates:
+            finding.save(update_fields=updates)
+
+        endpoint, _ = endpoint_get_or_create(
+            protocol="https",
+            host="api.example.com",
+            path="v1/subscriptions/123",
+            product=project.product,
+        )
+        Endpoint_Status.objects.get_or_create(
+            finding=finding,
+            endpoint=endpoint,
+            defaults={"date": finding.date},
+        )
+        return finding.id
 
     def _ensure_historical_queue(
             self,
