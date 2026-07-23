@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1450" height="820" viewBox="0 0 1450 820" role="img" aria-labelledby="title desc">
+  <title id="title">AIST effective authorization flow and role ladder</title>
+  <desc id="desc">A request passes authentication, tenant scope, object scope, named action permission, and token scope before it is allowed. Reader, Writer, Maintainer, and Owner form a capability ladder. Restricted membership, project downgrade, denial, and token scope can narrow access.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0 0L10 3.5 0 7z" fill="#52616b"/>
+    </marker>
+    <symbol id="ico-user" viewBox="0 0 24 24">
+      <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M4 21a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="ico-building" viewBox="0 0 24 24">
+      <path d="M3 21h18M5 21V9h14v12M3 9l9-6 9 6M9 13v4M15 13v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-hierarchy" viewBox="0 0 24 24">
+      <rect x="8" y="3" width="8" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <rect x="2" y="16" width="7" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <rect x="15" y="16" width="7" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M12 8v4M5.5 16v-4h13v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-shield" viewBox="0 0 24 24">
+      <path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6l8-3zM8.5 12l2.2 2.2 4.8-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-check" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M8 12.3l2.6 2.6L16.5 9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-eye" viewBox="0 0 24 24">
+      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    </symbol>
+    <symbol id="ico-pencil" viewBox="0 0 24 24">
+      <path d="M4 20l4.2-1 10-10-3.2-3.2-10 10L4 20zM13.8 7l3.2 3.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-tools" viewBox="0 0 24 24">
+      <path d="M14 6a5 5 0 0 0 6 6l-8.5 8.5a2.1 2.1 0 0 1-3-3L17 9a5 5 0 0 0-6-6l3 3-3 3-3-3a5 5 0 0 0 6 0z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-crown" viewBox="0 0 24 24">
+      <path d="M3 7l4.5 4L12 4l4.5 7L21 7l-2 11H5L3 7zM6 21h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <style>
+      .title{font:700 27px Arial;fill:#17212b}.subtitle{font:15px Arial;fill:#52616b}
+      .box{stroke-width:2}.head{font:700 16px Arial;fill:#17212b;text-anchor:middle}
+      .body{font:14px Arial;fill:#52616b;text-anchor:middle}.small{font:13px Arial;fill:#52616b;text-anchor:middle}
+      .flow{stroke:#52616b;stroke-width:2.5;fill:none;marker-end:url(#arrow)}
+      .narrow{stroke:#b44b4b;stroke-width:2;fill:none;stroke-dasharray:7 6;marker-end:url(#arrow)}
+      .zone{fill:#f7f9fb;stroke:#d4dce3;stroke-width:1.5}.zoneLabel{font:700 14px Arial;fill:#52616b}
+      .chip{font:700 13px Arial;fill:#fff;text-anchor:middle}.roleTitle{font:700 17px Arial;fill:#17212b}
+      .roleBody{font:14px Arial;fill:#52616b}.plus{font:700 22px Arial;fill:#4d9874;text-anchor:middle}
+    </style>
+  </defs>
+
+  <rect width="1450" height="820" fill="#fff"/>
+  <text class="title" x="48" y="46">AIST effective authorization</text>
+  <text class="subtitle" x="48" y="73">The role is one input. Tenant, object, action, project, and token scopes must all allow the request.</text>
+
+  <rect class="zone" x="42" y="105" width="1366" height="330" rx="18"/>
+  <text class="zoneLabel" x="66" y="134">PER-REQUEST SERVER-SIDE DECISION</text>
+
+  <rect class="box" x="72" y="180" width="210" height="150" rx="12" fill="#edf5ff" stroke="#52616b"/>
+  <use href="#ico-user" x="166" y="190" width="22" height="22" color="#52616b"/>
+  <text class="head" x="177" y="228">1 · Principal</text>
+  <text class="body" x="177" y="254">authenticated user</text>
+  <text class="body" x="177" y="276">session · PAT · service</text>
+  <text class="body" x="177" y="298">active account</text>
+
+  <rect class="box" x="345" y="180" width="210" height="150" rx="12" fill="#f4efff" stroke="#7d69aa"/>
+  <use href="#ico-building" x="439" y="190" width="22" height="22" color="#7d69aa"/>
+  <text class="head" x="450" y="228">2 · Tenant scope</text>
+  <text class="body" x="450" y="254">organization membership</text>
+  <text class="body" x="450" y="276">full or restricted</text>
+  <text class="body" x="450" y="298">PAT: exactly one org</text>
+
+  <rect class="box" x="618" y="180" width="210" height="150" rx="12" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-hierarchy" x="712" y="190" width="22" height="22" color="#9e751d"/>
+  <text class="head" x="723" y="228">3 · Object scope</text>
+  <text class="body" x="723" y="254">org → project → object</text>
+  <text class="body" x="723" y="276">grant / downgrade / deny</text>
+  <text class="body" x="723" y="298">cross-tenant ID → 404</text>
+
+  <rect class="box" x="891" y="180" width="210" height="150" rx="12" fill="#eaf8f1" stroke="#4d9874"/>
+  <use href="#ico-shield" x="985" y="190" width="22" height="22" color="#4d9874"/>
+  <text class="head" x="996" y="228">4 · Named action</text>
+  <text class="body" x="996" y="254">read · finding edit</text>
+  <text class="body" x="996" y="276">project operate</text>
+  <text class="body" x="996" y="298">org manage · owner grant</text>
+
+  <rect class="box" x="1164" y="180" width="210" height="150" rx="12" fill="#eef8f3" stroke="#397b5d"/>
+  <use href="#ico-check" x="1258" y="190" width="22" height="22" color="#397b5d"/>
+  <text class="head" x="1269" y="228">5 · Decision</text>
+  <rect x="1214" y="247" width="110" height="31" rx="15" fill="#397b5d"/>
+  <text class="chip" x="1269" y="268">ALLOW</text>
+  <text class="body" x="1269" y="305">otherwise deny / 404</text>
+
+  <path class="flow" d="M282 255H345"/>
+  <path class="flow" d="M555 255H618"/>
+  <path class="flow" d="M828 255H891"/>
+  <path class="flow" d="M1101 255H1164"/>
+
+  <rect x="335" y="354" width="796" height="54" rx="10" fill="#fff2f2" stroke="#d59a9a"/>
+  <text class="head" x="733" y="377">Narrowing controls</text>
+  <text class="small" x="733" y="398">restricted project allow-list · full-member downgrade · explicit denial · read-only token</text>
+  <path class="narrow" d="M733 354V330"/>
+
+  <text class="title" x="48" y="486">Human role ladder</text>
+  <text class="subtitle" x="48" y="513">Capabilities accumulate left to right, but only inside the effective object scope above.</text>
+
+  <rect class="box" x="64" y="548" width="285" height="190" rx="14" fill="#edf5ff" stroke="#52616b"/>
+  <use href="#ico-eye" x="90" y="565" width="22" height="22" color="#52616b"/>
+  <text class="roleTitle" x="122" y="584">Reader</text>
+  <text class="roleBody" x="90" y="616">View permitted projects</text>
+  <text class="roleBody" x="90" y="642">Pipelines, source, findings</text>
+  <text class="roleBody" x="90" y="668">Exports and own account</text>
+  <rect x="90" y="692" width="164" height="28" rx="14" fill="#52616b"/>
+  <text class="chip" x="172" y="711">read-only PAT</text>
+
+  <text class="plus" x="374" y="652">+</text>
+
+  <rect class="box" x="400" y="548" width="285" height="190" rx="14" fill="#f4efff" stroke="#7d69aa"/>
+  <use href="#ico-pencil" x="426" y="565" width="22" height="22" color="#7d69aa"/>
+  <text class="roleTitle" x="458" y="584">Writer</text>
+  <text class="roleBody" x="426" y="616">Edit and close findings</text>
+  <text class="roleBody" x="426" y="642">Risk acceptance</text>
+  <text class="roleBody" x="426" y="668">Finding work-item links</text>
+  <rect x="426" y="692" width="172" height="28" rx="14" fill="#7d69aa"/>
+  <text class="chip" x="512" y="711">read/write PAT*</text>
+
+  <text class="plus" x="710" y="652">+</text>
+
+  <rect class="box" x="736" y="548" width="285" height="190" rx="14" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-tools" x="762" y="565" width="22" height="22" color="#9e751d"/>
+  <text class="roleTitle" x="794" y="584">Maintainer</text>
+  <text class="roleBody" x="762" y="616">Operate projects and pipelines</text>
+  <text class="roleBody" x="762" y="642">Create projects and versions</text>
+  <text class="roleBody" x="762" y="668">Manage org config and members</text>
+  <rect x="762" y="692" width="204" height="28" rx="14" fill="#9e751d"/>
+  <text class="chip" x="864" y="711">assign through Maintainer</text>
+
+  <text class="plus" x="1046" y="652">+</text>
+
+  <rect class="box" x="1072" y="548" width="314" height="190" rx="14" fill="#eaf8f1" stroke="#4d9874"/>
+  <use href="#ico-crown" x="1098" y="565" width="22" height="22" color="#4d9874"/>
+  <text class="roleTitle" x="1130" y="584">Owner</text>
+  <text class="roleBody" x="1098" y="616">All Maintainer capabilities</text>
+  <text class="roleBody" x="1098" y="642">Grant, edit, or remove Owner</text>
+  <text class="roleBody" x="1098" y="668">Last Owner cannot be removed</text>
+  <rect x="1098" y="692" width="202" height="28" rx="14" fill="#4d9874"/>
+  <text class="chip" x="1199" y="711">owner-grant permission</text>
+
+  <text class="subtitle" x="64" y="775">* A read/write PAT is issued only when the user has write capability in the selected organization; it never elevates the owner.</text>
+</svg>

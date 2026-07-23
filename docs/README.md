@@ -57,9 +57,4 @@ the platform and security pages.
 
 ## Assess security
 
-- [Tenant isolation and access](security/tenant-isolation-and-access.md)
-- [Threat-model scope](security/threat-model-scope.md)
-- [Threat register](security/threat-register.md)
-
-Security pages describe trust boundaries and the threat model after the
-corresponding product and data-flow pages have been verified.
+- [Access control, roles, object permissions, and API tokens](security/access-control-and-roles.md)

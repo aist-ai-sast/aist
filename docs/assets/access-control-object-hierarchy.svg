@@ -1,0 +1,186 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1450" height="850" viewBox="0 0 1450 850" role="img" aria-labelledby="title desc">
+  <title id="title">AIST protected object hierarchy</title>
+  <desc id="desc">An organization owns one product type, products, AIST projects, security findings, integrations, and work item providers. Project versions, pipelines, launch configuration, schedules, actions, and queue entries inherit project scope. Work item links inherit finding scope and may reference an organization work item provider.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0 0L10 3.5 0 7z" fill="#52616b"/>
+    </marker>
+    <marker id="optionalArrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0 0L10 3.5 0 7z" fill="#7d69aa"/>
+    </marker>
+    <symbol id="ico-building" viewBox="0 0 24 24">
+      <path d="M3 21h18M5 21V9h14v12M3 9l9-6 9 6M9 13v4M15 13v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-layers" viewBox="0 0 24 24">
+      <path d="M12 3l9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 16l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-cube" viewBox="0 0 24 24">
+      <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM4 7.5l8 4.5 8-4.5M12 12v9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-plug" viewBox="0 0 24 24">
+      <path d="M8 3v5M16 3v5M6 8h12v3a6 6 0 0 1-6 6v4M9 21h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-ticket" viewBox="0 0 24 24">
+      <path d="M4 5h16v4a3 3 0 0 0 0 6v4H4v-4a3 3 0 0 0 0-6V5zM9 8h6M9 12h6M9 16h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-folder" viewBox="0 0 24 24">
+      <path d="M3 7h6l2 2h10v10H3V7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-clipboard" viewBox="0 0 24 24">
+      <path d="M8 5H5v16h14V5h-3M9 3h6v4H9V3zM8 12h8M8 16h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-flask" viewBox="0 0 24 24">
+      <path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4A2 2 0 0 0 19 18l-5-9V3M8 15h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-alert" viewBox="0 0 24 24">
+      <path d="M12 3l10 18H2L12 3zM12 9v5M12 18h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-branch" viewBox="0 0 24 24">
+      <circle cx="6" cy="5" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <circle cx="18" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <circle cx="6" cy="19" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M6 7v10M8 9c5 0 6-2 8-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="ico-play" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M10 8l6 4-6 4V8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-sliders" viewBox="0 0 24 24">
+      <path d="M4 6h6M14 6h6M4 12h10M18 12h2M4 18h3M11 18h9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <circle cx="12" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <circle cx="16" cy="12" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+      <circle cx="9" cy="18" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    </symbol>
+    <symbol id="ico-list" viewBox="0 0 24 24">
+      <path d="M9 6h11M9 12h11M9 18h11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <circle cx="4.5" cy="6" r="1" fill="currentColor"/><circle cx="4.5" cy="12" r="1" fill="currentColor"/><circle cx="4.5" cy="18" r="1" fill="currentColor"/>
+    </symbol>
+    <symbol id="ico-calendar" viewBox="0 0 24 24">
+      <path d="M4 6h16v15H4V6zM8 3v6M16 3v6M4 11h16M8 15h2M14 15h2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-bolt" viewBox="0 0 24 24">
+      <path d="M13 2L5 14h6l-1 8 9-13h-6V2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-link" viewBox="0 0 24 24">
+      <path d="M10 14l4-4M8 17H6a4 4 0 0 1 0-8h4M14 7h4a4 4 0 0 1 0 8h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <style>
+      .title{font:700 27px Arial;fill:#17212b}.subtitle{font:15px Arial;fill:#52616b}
+      .box{stroke-width:2}.head{font:700 16px Arial;fill:#17212b;text-anchor:middle}
+      .body{font:13px Arial;fill:#52616b;text-anchor:middle}.zone{fill:#f7f9fb;stroke:#d4dce3;stroke-width:1.5}
+      .zoneLabel{font:700 14px Arial;fill:#52616b}.ownership{stroke:#52616b;stroke-width:2.4;fill:none;marker-end:url(#arrow)}
+      .optional{stroke:#7d69aa;stroke-width:2.2;fill:none;stroke-dasharray:7 6;marker-end:url(#optionalArrow)}
+      .legend{font:13px Arial;fill:#52616b}.badge{font:700 12px Arial;fill:#fff;text-anchor:middle}
+    </style>
+  </defs>
+
+  <rect width="1450" height="850" fill="#fff"/>
+  <text class="title" x="48" y="46">AIST protected object hierarchy</text>
+  <text class="subtitle" x="48" y="73">Authorization follows these ownership paths from the organization to the requested object.</text>
+
+  <rect class="zone" x="42" y="100" width="1366" height="690" rx="18"/>
+  <text class="zoneLabel" x="66" y="130">ONE ORGANIZATION TENANT</text>
+
+  <rect class="box" x="575" y="142" width="300" height="76" rx="12" fill="#f4efff" stroke="#7d69aa"/>
+  <use href="#ico-building" x="595" y="159" width="22" height="22" color="#7d69aa"/>
+  <text class="head" x="725" y="174">Organization</text>
+  <text class="body" x="725" y="197">tenant boundary</text>
+
+  <rect class="box" x="580" y="258" width="290" height="70" rx="12" fill="#edf5ff" stroke="#52616b"/>
+  <use href="#ico-layers" x="600" y="274" width="21" height="21" color="#52616b"/>
+  <text class="head" x="725" y="286">Product_Type</text>
+  <text class="body" x="725" y="307">canonical project-owning scope</text>
+
+  <rect class="box" x="590" y="368" width="270" height="70" rx="12" fill="#edf5ff" stroke="#52616b"/>
+  <use href="#ico-cube" x="610" y="384" width="21" height="21" color="#52616b"/>
+  <text class="head" x="725" y="397">Product</text>
+  <text class="body" x="725" y="418">authorization anchor</text>
+
+  <path class="ownership" d="M725 218V258"/>
+  <path class="ownership" d="M725 328V368"/>
+
+  <rect class="box" x="96" y="174" width="250" height="76" rx="12" fill="#eaf8f1" stroke="#4d9874"/>
+  <use href="#ico-plug" x="112" y="191" width="22" height="22" color="#4d9874"/>
+  <text class="head" x="221" y="205">OrgIntegration</text>
+  <text class="body" x="221" y="228">org credentials and configuration</text>
+  <path class="ownership" d="M575 180H346"/>
+
+  <rect class="box" x="1104" y="174" width="250" height="76" rx="12" fill="#eaf8f1" stroke="#4d9874"/>
+  <use href="#ico-ticket" x="1120" y="191" width="22" height="22" color="#4d9874"/>
+  <text class="head" x="1229" y="205">WorkItemProvider</text>
+  <text class="body" x="1229" y="228">org issue-tracker connection</text>
+  <path class="ownership" d="M875 180H1104"/>
+
+  <rect class="box" x="278" y="486" width="250" height="76" rx="12" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-folder" x="294" y="503" width="22" height="22" color="#9e751d"/>
+  <text class="head" x="403" y="517">AISTProject</text>
+  <text class="body" x="403" y="540">organization derived via Product</text>
+  <path class="ownership" d="M657 438L486 486"/>
+
+  <rect class="box" x="930" y="486" width="190" height="76" rx="12" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-clipboard" x="944" y="503" width="21" height="21" color="#9e751d"/>
+  <text class="head" x="1025" y="517">Engagement</text>
+  <text class="body" x="1025" y="540">DefectDojo scan scope</text>
+  <path class="ownership" d="M793 438L964 486"/>
+
+  <rect class="box" x="1140" y="486" width="105" height="76" rx="12" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-flask" x="1148" y="503" width="18" height="18" color="#9e751d"/>
+  <text class="head" x="1193" y="517">Test</text>
+  <text class="body" x="1193" y="540">scan run</text>
+  <path class="ownership" d="M1120 524H1140"/>
+
+  <rect class="box" x="1270" y="486" width="110" height="76" rx="12" fill="#fff8e8" stroke="#9e751d"/>
+  <use href="#ico-alert" x="1278" y="503" width="18" height="18" color="#9e751d"/>
+  <text class="head" x="1325" y="517">Finding</text>
+  <text class="body" x="1325" y="540">result</text>
+  <path class="ownership" d="M1245 524H1270"/>
+
+  <rect class="box" x="70" y="616" width="190" height="64" rx="11" fill="#fff" stroke="#9e751d"/>
+  <use href="#ico-branch" x="82" y="630" width="20" height="20" color="#9e751d"/>
+  <text class="head" x="165" y="644">ProjectVersion</text>
+  <text class="body" x="165" y="664">source revision</text>
+  <path class="ownership" d="M342 562L214 616"/>
+
+  <rect class="box" x="292" y="616" width="190" height="64" rx="11" fill="#fff" stroke="#9e751d"/>
+  <use href="#ico-play" x="304" y="630" width="20" height="20" color="#9e751d"/>
+  <text class="head" x="387" y="644">AISTPipeline</text>
+  <text class="body" x="387" y="664">pipeline execution</text>
+  <path class="ownership" d="M403 562L397 616"/>
+  <path class="optional" d="M260 648H292"/>
+
+  <rect class="box" x="514" y="616" width="190" height="64" rx="11" fill="#fff" stroke="#9e751d"/>
+  <use href="#ico-sliders" x="526" y="630" width="20" height="20" color="#9e751d"/>
+  <text class="head" x="609" y="644">LaunchConfig</text>
+  <text class="body" x="609" y="664">saved launch preset</text>
+  <path class="ownership" d="M464 562L563 616"/>
+
+  <rect class="box" x="736" y="616" width="180" height="64" rx="11" fill="#fff" stroke="#9e751d"/>
+  <use href="#ico-list" x="748" y="630" width="20" height="20" color="#9e751d"/>
+  <text class="head" x="826" y="644">LaunchQueue</text>
+  <text class="body" x="826" y="664">queued execution</text>
+  <path class="ownership" d="M492 562L780 616"/>
+
+  <rect class="box" x="500" y="716" width="180" height="64" rx="11" fill="#fff" stroke="#9e751d"/>
+  <use href="#ico-calendar" x="512" y="730" width="20" height="20" color="#9e751d"/>
+  <text class="head" x="590" y="744">Schedule</text>
+  <text class="body" x="590" y="764">via LaunchConfig</text>
+  <path class="ownership" d="M609 680V696Q609 706 599 706H590V716"/>
+
+  <rect class="box" x="710" y="716" width="180" height="64" rx="11" fill="#fff" stroke="#9e751d"/>
+  <use href="#ico-bolt" x="722" y="730" width="20" height="20" color="#9e751d"/>
+  <text class="head" x="800" y="744">Action</text>
+  <text class="body" x="800" y="764">via LaunchConfig</text>
+  <path class="ownership" d="M609 680V696Q609 706 619 706H800V716"/>
+
+  <rect class="box" x="1246" y="616" width="142" height="64" rx="11" fill="#eef8f3" stroke="#397b5d"/>
+  <use href="#ico-link" x="1255" y="631" width="18" height="18" color="#397b5d"/>
+  <text class="head" x="1327" y="644">WorkItemLink</text>
+  <text class="body" x="1322" y="664">finding-owned</text>
+  <path class="ownership" d="M1325 562V616"/>
+  <path class="optional" d="M1229 250V300Q1229 330 1259 330H1368Q1392 330 1392 354V580Q1392 604 1368 604H1360V616"/>
+
+  <line x1="70" y1="821" x2="118" y2="821" stroke="#52616b" stroke-width="2.4"/>
+  <text class="legend" x="130" y="826">ownership / authorization path</text>
+  <line x1="390" y1="821" x2="438" y2="821" stroke="#7d69aa" stroke-width="2.2" stroke-dasharray="7 6"/>
+  <text class="legend" x="450" y="826">optional association (`project_version` or provider-backed link)</text>
+</svg>

@@ -10,7 +10,11 @@ from dojo.models import Global_Role
 def forbid_non_superuser_global_roles(app_configs, **kwargs):
     """AIST tenant isolation recognizes only ``is_superuser`` as a global bypass."""
     try:
-        forbidden = Global_Role.objects.filter(group__isnull=False).exists() or Global_Role.objects.filter(
+        forbidden = Global_Role.objects.filter(
+            group__isnull=False,
+            role__isnull=False,
+        ).exists() or Global_Role.objects.filter(
+            role__isnull=False,
             user__is_superuser=False,
         ).exists()
     except (OperationalError, ProgrammingError):

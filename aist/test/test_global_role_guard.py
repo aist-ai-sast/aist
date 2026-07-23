@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.core.checks import run_checks
 from django.test import TestCase
 from dojo.authorization.roles_permissions import Permissions, Roles
-from dojo.models import Global_Role, Product, Product_Type, Role, SLA_Configuration
+from dojo.models import Dojo_Group, Global_Role, Product, Product_Type, Role, SLA_Configuration
 
 from aist.queries import get_authorized_aist_products
 
@@ -35,3 +35,17 @@ class GlobalRoleGuardTests(TestCase):
     def test_system_check_rejects_non_superuser_global_role(self):
         Global_Role.objects.create(user=self.user, role=self.role)
         self.assertIn("aist.E001", {error.id for error in run_checks(tags=["security"])})
+
+    def test_system_check_allows_unassigned_non_superuser_global_role(self):
+        Global_Role.objects.create(user=self.user)
+        self.assertNotIn("aist.E001", {error.id for error in run_checks(tags=["security"])})
+
+    def test_system_check_rejects_group_global_role(self):
+        group = Dojo_Group.objects.create(name="global-group")
+        Global_Role.objects.create(group=group, role=self.role)
+        self.assertIn("aist.E001", {error.id for error in run_checks(tags=["security"])})
+
+    def test_system_check_allows_unassigned_group_global_role(self):
+        group = Dojo_Group.objects.create(name="unassigned-global-group")
+        Global_Role.objects.create(group=group)
+        self.assertNotIn("aist.E001", {error.id for error in run_checks(tags=["security"])})

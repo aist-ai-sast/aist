@@ -18,26 +18,12 @@
 - Project- and product-scoped access control
 - Audit-friendly pipeline history and logs
 
-**Integrations**
-- GitHub: projects can be created via GitHub App events; source links resolve to GitHub repositories.
-- GitLab: import projects by ID or list projects via API, including self-hosted GitLab.
-- Archives: upload source archives to create immutable project versions.
-
-**Export & Notifications**
-- Export AI triage results for a pipeline.
-- Optional actions on pipeline status: send to Slack or email.
-
-
-**Architecture**
-- Django application (`aist`, `aist_site`)
-- Analyzer pipeline runner (`sast-combinator`)
-- Docker-based execution environment
-
 ## Documentation
 
 Start with the [AIST documentation index](docs/README.md).
 
-**Quickstart**
+## Quickstart
+
 1. Ensure Docker Desktop is running.
 2. Start the stack:
 ```bash
@@ -52,7 +38,8 @@ If TLS is enabled in your environment, use:
 https://localhost:443
 ```
 
-**Tests**
+## Tests
+
 Unit tests:
 ```bash
 ./run-unittest.sh
@@ -68,7 +55,8 @@ Integration tests:
 ./run-integration-tests.sh
 ```
 
-**CI**
+## CI
+
 GitHub Actions runs unit tests and linting on `master`. See workflows in `.github/workflows`.
 
 **Configuration**
