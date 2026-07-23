@@ -1,8 +1,8 @@
 # Pipeline Execution
 
-A pipeline is the record of one SAST run for one project version. It is created
-before asynchronous work starts and remains the place where imported tests,
-findings, progress, and later AI responses are connected.
+A pipeline is the record of one AIST execution or report import for one project
+version. It is created before asynchronous work starts and remains the place
+where imported tests, findings, progress, and later AI responses are connected.
 
 ![Pipeline execution from launch to review](../assets/pipeline-execution.svg)
 

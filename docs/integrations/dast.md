@@ -42,6 +42,13 @@ gateway; the platform never does. If either the URL or the token is missing,
 `[INFO] DAST not configured` instead of attempting a request with partial
 credentials.
 
+The DAST integration may reference an organization VPN. The validation ping
+uses `integration.scoped_session()` and therefore honors that VPN link. The
+pipeline analyzer path is different: `sast-dast` receives the URL and token but
+is launched without the builder container's optional VPN network namespace, so
+its gateway calls are currently direct. Linking a VPN to the DAST integration
+does not yet create an end-to-end VPN route for an autonomous pipeline run.
+
 ## Role 2 — manual report import (any registered scan_type)
 
 Some scans happen out of band (a separate scanning environment, a scheduled
@@ -161,7 +168,7 @@ commit_hash: <sha>
   pattern as every other AIST endpoint (`get_authorized_aist_projects`;
   `Permissions.Product_View` for validate, `Permissions.Product_Edit` for
   confirm) — see
-  [tenant isolation and access](../security/tenant-isolation-and-access.md).
+  [access control and roles](../security/access-control-and-roles.md).
   There is no DAST-specific bypass of that model.
 - **Per-format validation is the registered parser's job, not a bespoke
   schema:** `scan_type` is gated to what `dojo.tools.factory` actually has

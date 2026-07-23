@@ -1,9 +1,10 @@
 # AI Triage
 
 AI triage adds a finding-level verdict to an imported pipeline result. It runs
-only after pipeline post-processing has made findings ready for review. A
-pipeline can request triage manually, or AIST can select eligible active
-findings automatically from its recorded launch configuration.
+only after pipeline post-processing has made findings ready for review. Two
+independent decisions control it: findings are selected manually or
+automatically, then the selected set is executed through the configured webhook
+or local CLI backend.
 
 ![AI triage workflow](../assets/ai-triage.svg)
 
@@ -11,13 +12,15 @@ findings automatically from its recorded launch configuration.
 
 A manual request is authorised against the pipeline's project and verifies that
 each selected finding belongs to that project. Automatic triage selects active
-findings after post-processing, applies the saved filter for the chosen triage
-mode, and excludes findings that already have an analyzer-produced AI verdict.
+findings after post-processing, applies the saved filter for the execution
+backend, and excludes findings that already have an analyzer-produced AI
+verdict.
 
-The configured mode is resolved from the launch configuration first, then from
-the project profile. AIST supports a webhook-based mode and a local bridge mode.
-The selected mode and filter are part of the run's recorded configuration, so a
-later project-profile change does not rewrite a completed run's selection.
+The execution backend is resolved independently: a per-launch override takes
+priority over the project profile. AIST supports an n8n webhook and a local
+Claude bridge. The selection trigger, backend override, and filter snapshot are
+recorded with the run, so a later project-profile change does not rewrite a
+completed run.
 
 ## Receive and retain a verdict
 
@@ -26,6 +29,11 @@ stored as one AI response per pipeline and one verdict per finding in that
 pipeline. A verdict is `True Positive`, `False Positive`, or `Uncertain`; it can
 include summary, references, risk scores, uncertainty values, and a suggested
 fix. The findings list and detail view show the saved verdict.
+
+In the normal callback flow a `False Positive` verdict automatically closes the
+finding, marks it as false positive, and records the AI action. `True Positive`
+and `Uncertain` findings remain active for human review. A reviewer can later
+change any of these dispositions through the normal finding controls.
 
 ## Failure behaviour
 

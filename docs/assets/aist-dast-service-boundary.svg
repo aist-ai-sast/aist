@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="740" viewBox="0 0 1100 740" role="img" aria-labelledby="title desc">
+ <title id="title">AIST-to-DAST request, authorization, execution, and result flow</title>
+ <desc id="desc">An authorized AIST pipeline starts the AIST-side sast-dast connector. Organization configuration supplies the DAST gateway URL and service token. The connector calls the gateway, which authorizes an isolated DAST run. DAST returns bounded logs and a redacted report to the AIST importer. User sessions and imported findings remain in AIST; raw evidence and target credentials remain in DAST.</desc>
+ <defs>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#52616b"/></marker>
+  <marker id="green-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#287955"/></marker>
+  <marker id="blue-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#315f9c"/></marker>
+  <style>
+   text{font-family:Arial,sans-serif;fill:#17212b}.h{font-size:25px;font-weight:700}.sub{font-size:15px;fill:#52616b}.ph{font-size:21px;font-weight:700}.sh{font-size:17px;font-weight:700}.t{font-size:15px;font-weight:700}.s{font-size:14px;fill:#52616b}.xs{font-size:13px;fill:#52616b}.action{font-size:12px;font-weight:700;fill:#43515c}.security{font-size:12px;font-weight:700;fill:#52616b}.boundary-label{font-size:11px;font-weight:700;letter-spacing:1px;fill:#6b7883}.zone{stroke-width:2;rx:18}.box{stroke:#667681;stroke-width:1.3;rx:12}.line{stroke:#52616b;stroke-width:2;fill:none;marker-end:url(#arrow)}.return{stroke:#287955;stroke-width:2.4;fill:none;marker-end:url(#green-arrow)}.config{stroke:#6b54a3;stroke-width:1.8;stroke-dasharray:6 5;fill:none;marker-end:url(#arrow)}.manual{stroke:#315f9c;stroke-width:1.8;fill:none;marker-end:url(#blue-arrow)}.boundary{stroke:#8b98a4;stroke-width:1.5;stroke-dasharray:7 6}.badge{font-size:13px;font-weight:700;fill:#fff}
+  </style>
+  <symbol id="shield" viewBox="0 0 24 24"><path d="M12 2l8 3v6c0 5.2-3.4 9-8 11-4.6-2-8-5.8-8-11V5l8-3zM8.5 12l2.2 2.2 4.8-5" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 21c.8-5 3.5-7 8-7s7.2 2 8 7" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="container" viewBox="0 0 24 24"><path d="M4 7h16v12H4zM4 11h16M9 7v12M15 7v12" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="gateway" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 9h8M8 13h5M17 15l3-3-3-3" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="radar" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 12l6-6" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></symbol>
+  <symbol id="lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 10V7a4 4 0 018 0v3M12 14v3" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13 12h9M18 12v3M21 12v3" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="report" viewBox="0 0 24 24"><path d="M5 3h10l4 4v14H5zM15 3v5h4M8 12h8M8 16h8" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 15v6h16v-6" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+ </defs>
+
+ <rect width="1100" height="740" fill="#fbfcfd"/>
+ <text x="40" y="44" class="h">One authenticated request, one connected result flow</text>
+ <text x="40" y="70" class="sub">AIST initiates and imports. DAST authorizes, executes, and retains raw evidence.</text>
+
+ <rect x="30" y="100" width="450" height="510" class="zone" fill="#f4f8ff" stroke="#5c83b6"/>
+ <g color="#315f9c"><use href="#shield" x="55" y="120" width="28" height="28"/></g><text x="98" y="142" class="ph">AIST host and network</text>
+ <rect x="620" y="100" width="450" height="510" class="zone" fill="#fff8f3" stroke="#bd7a4d"/>
+ <g color="#a65324"><use href="#radar" x="645" y="120" width="28" height="28"/></g><text x="688" y="142" class="ph">DAST host and network</text>
+
+  <line x1="550" y1="105" x2="550" y2="176" class="boundary"/>
+  <line x1="550" y1="203" x2="550" y2="235" class="boundary"/>
+  <line x1="550" y1="270" x2="550" y2="600" class="boundary"/>
+  <text x="568" y="398" class="boundary-label" transform="rotate(-90 568 398)">SERVICE BOUNDARY</text>
+
+ <rect x="55" y="175" width="200" height="88" class="box" fill="#edf5ff"/>
+ <circle cx="78" cy="197" r="14" fill="#315f9c"/><text x="74" y="202" class="badge">1</text>
+ <g color="#315f9c"><use href="#user" x="101" y="185" width="24" height="24"/></g>
+ <text x="137" y="201" class="t">AIST pipeline</text><text x="72" y="242" class="s">Authorized run</text>
+
+ <rect x="275" y="175" width="180" height="88" class="box" fill="#fff8e8"/>
+ <circle cx="298" cy="197" r="14" fill="#9e751d"/><text x="294" y="202" class="badge">2</text>
+ <g color="#9e751d"><use href="#container" x="321" y="185" width="24" height="24"/></g>
+ <text x="357" y="201" class="t">sast-dast</text><text x="292" y="242" class="s">Connector container</text>
+ <path d="M255 219H275" class="line"/>
+
+ <rect x="645" y="175" width="200" height="88" class="box" fill="#fff0f0"/>
+ <circle cx="668" cy="197" r="14" fill="#a84949"/><text x="664" y="202" class="badge">3</text>
+ <g color="#a84949"><use href="#gateway" x="691" y="185" width="24" height="24"/></g>
+ <text x="727" y="201" class="t">DAST gateway</text><text x="662" y="242" class="s">Auth + target policy</text>
+
+ <rect x="865" y="175" width="180" height="88" class="box" fill="#f4efff"/>
+ <circle cx="888" cy="197" r="14" fill="#6b54a3"/><text x="884" y="202" class="badge">4</text>
+ <g color="#6b54a3"><use href="#radar" x="911" y="185" width="24" height="24"/></g>
+ <text x="947" y="201" class="t">DAST run</text><text x="882" y="242" class="s">Test + verify</text>
+ <path d="M845 219H865" class="line"/>
+
+  <path d="M455 219H645" class="line"/>
+  <text x="550" y="195" class="action" text-anchor="middle">Start run · Poll status/logs</text>
+  <g color="#52616b"><use href="#lock" x="521" y="235" width="15" height="15"/></g>
+  <text x="541" y="247" class="security">HTTPS</text>
+  <g color="#52616b"><use href="#key" x="504" y="252" width="15" height="15"/></g>
+  <text x="524" y="264" class="security">Bearer token</text>
+
+ <rect x="275" y="305" width="180" height="82" class="box" fill="#fff"/>
+ <g color="#6b54a3"><use href="#key" x="292" y="322" width="24" height="24"/></g>
+ <text x="328" y="336" class="t">DAST integration</text><text x="292" y="372" class="s">URL + service token</text>
+ <path d="M365 305V263" class="config"/>
+ <text x="374" y="290" class="xs">supplies config</text>
+
+ <rect x="645" y="405" width="400" height="104" class="box" fill="#eaf8f1"/>
+ <circle cx="670" cy="430" r="14" fill="#287955"/><text x="666" y="435" class="badge">5</text>
+ <g color="#287955"><use href="#report" x="695" y="418" width="24" height="24"/></g>
+ <text x="731" y="434" class="t">DAST response</text>
+ <text x="662" y="465" class="s">Run status + logs</text><text x="662" y="487" class="s">Redacted report</text>
+ <path d="M955 263V405" class="line"/>
+ <text x="966" y="340" class="xs">complete</text>
+
+ <rect x="55" y="405" width="400" height="104" class="box" fill="#eaf8f1"/>
+ <circle cx="80" cy="430" r="14" fill="#287955"/><text x="76" y="435" class="badge">6</text>
+ <g color="#287955"><use href="#report" x="105" y="418" width="24" height="24"/></g>
+ <text x="141" y="434" class="t">AIST import</text>
+ <text x="72" y="476" class="s">Parse → deduplicate → review</text>
+ <path d="M645 457H455" class="return"/>
+ <rect x="478" y="443" width="144" height="28" rx="14" fill="#eaf8f1" stroke="#89bfa5"/>
+ <g color="#287955"><use href="#report" x="491" y="449" width="16" height="16"/></g>
+ <text x="512" y="462" class="xs">redacted report</text>
+
+ <rect x="55" y="545" width="400" height="44" rx="12" fill="#edf5ff" stroke="#5c83b6"/>
+ <g color="#315f9c"><use href="#upload" x="70" y="555" width="24" height="24"/></g>
+ <text x="106" y="572" class="s">Manual report upload</text>
+ <path d="M255 545V509" class="manual"/>
+
+ <rect x="30" y="632" width="500" height="88" rx="14" fill="#edf5ff" stroke="#5c83b6"/>
+ <g color="#315f9c"><use href="#database" x="50" y="652" width="28" height="28"/></g>
+ <text x="92" y="658" class="t">Remains in AIST</text><text x="92" y="690" class="s">User session · permissions · imported findings</text>
+ <rect x="570" y="632" width="500" height="88" rx="14" fill="#fff8f3" stroke="#bd7a4d"/>
+ <g color="#a65324"><use href="#database" x="590" y="652" width="28" height="28"/></g>
+ <text x="632" y="658" class="t">Remains in DAST</text><text x="632" y="690" class="s">Raw evidence · credentials · runtime state</text>
+</svg>

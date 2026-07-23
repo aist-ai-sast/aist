@@ -24,9 +24,11 @@ containers. Container names include the pipeline identifier, which lets the
 runtime terminate containers belonging to a failed or completed execution.
 
 For a pipeline configured with a project VPN integration, the worker starts an
-execution-specific VPN sidecar and runs the pipeline containers in that
-sidecar's network namespace. The sidecar lifetime and interactive-source route
-are documented separately in the VPN data-flow page.
+execution-specific VPN sidecar and runs the builder container in that sidecar's
+network namespace. Analyzer containers mount the builder's volumes but do not
+inherit its network namespace. In particular, the `sast-dast` connector
+currently calls its remote gateway directly. The sidecar lifetime and
+interactive-source route are documented separately in the VPN data-flow page.
 
 ## Report hand-off
 

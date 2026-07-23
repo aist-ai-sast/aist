@@ -110,9 +110,9 @@ resolves a proxy URL and connects.
   exactly one org, so per-VPN keying still guarantees org isolation. A
   defense-in-depth cross-org guard in `vpn_integration_for_project_version`
   ignores any SCM binding that points at another org's VPN.
-- **Separate pool from the pipeline sidecar:** the analyzer keeps its own
+- **Separate pool from the pipeline sidecar:** the pipeline builder uses an
   ephemeral `aist-vpn-<execution_id>`; UI fetches never share a container or lock
-  with it, so browsing blobs can never block an analysis.
+  with it, so browsing blobs can never block source acquisition or a build.
 - **Cold path:** if the tunnel is not up, the blob endpoint answers
   `202 {"status":"warming"}` and enqueues `prewarm_egress`; the UI retries. First
   view of an idle VPN pays the ~30 s once, server-wide (shared by all users);

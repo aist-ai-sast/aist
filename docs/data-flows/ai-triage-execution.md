@@ -1,9 +1,10 @@
 # AI Triage Execution
 
 AI triage begins only after imported findings reach the AI confirmation stage.
-The pipeline selects eligible active findings, records the transition to
-`PUSH_TO_AI`, and sends the selected identifiers through the configured triage
-mode. A completed verdict is stored as an AIST AI finding response.
+Findings are selected automatically from the recorded launch rules or manually
+by an authorized user. The pipeline records the transition to `PUSH_TO_AI` and
+sends the selected identifiers through the independently configured execution
+backend. A completed verdict is stored as an AIST AI finding response.
 
 ![AI triage execution flow](../assets/ai-triage-execution.svg)
 
@@ -11,7 +12,7 @@ mode. A completed verdict is stored as an AIST AI finding response.
 
 Manual triage validates the selected finding identifiers against the pipeline
 and its current state. Automatic triage uses the launch-data filter snapshot,
-the selected triage type, and active findings from the pipeline's tests.
+the resolved execution backend, and active findings from the pipeline's tests.
 Findings already carrying an analyzer-produced AI response are excluded from
 post-import selection. A selection of zero findings finishes the pipeline
 without an AI request.
@@ -39,5 +40,7 @@ without a degraded final state.
 
 Each response is associated with a pipeline and finding and stores the verdict
 and related triage fields. The [finding review](../product/finding-review.md)
-page explains how a reviewer uses the resulting verdict; the verdict does not
-replace the finding's review controls.
+page explains how a reviewer uses the resulting verdict. A `False Positive`
+verdict automatically closes and marks the finding as false positive in the
+normal callback flow. `True Positive` and `Uncertain` findings remain active.
+Reviewers retain the normal controls to change the resulting disposition.

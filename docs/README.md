@@ -42,6 +42,7 @@ Architecture pages describe one internal component or runtime responsibility at
 a time. They are linked here after their supporting data flows have been
 reviewed.
 
+- [AIST and DAST product architecture at a glance](product-architecture/README.md)
 - [Platform building blocks](architecture/platform-building-blocks.md)
 - [SAST pipeline runtime](architecture/sast-pipeline-runtime.md)
 - [Runtime deployment](architecture/runtime-deployment.md)
