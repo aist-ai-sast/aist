@@ -642,7 +642,10 @@ export default function FindingsPage() {
             </span>
           </div>
           <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-end">
-            <PermissionGate action="write">
+            <PermissionGate
+              action="write"
+              organizationId={projects.find((project) => project.id === selectedProjectId)?.organizationId ?? undefined}
+            >
               <button
                 className="aist-icon-button h-10 w-full sm:w-auto text-xs font-semibold uppercase tracking-[0.14em]"
                 onClick={toggleBulkEditMode}
@@ -842,6 +845,7 @@ export default function FindingsPage() {
                               <DetailPanel
                                 finding={finding}
                                 permissionProductId={projectsById.get(finding.projectId ?? 0)?.productId}
+                                permissionOrganizationId={projectsById.get(finding.projectId ?? 0)?.organizationId ?? undefined}
                                 aiResponse={aiResponse}
                                 selectedTags={selectedTags}
                                 onToggleTag={(tag) =>

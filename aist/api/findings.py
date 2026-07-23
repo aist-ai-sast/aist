@@ -10,7 +10,6 @@ from urllib.parse import urlsplit
 
 from django.db import OperationalError, transaction
 from django.http import HttpResponse
-from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django_filters import rest_framework as django_filters
 from dojo.api_v2 import serializers as dojo_serializers
@@ -23,23 +22,21 @@ from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_sche
 from openpyxl import Workbook
 from rest_framework import serializers, status
 from rest_framework.pagination import LimitOffsetPagination
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.common import API_SEVERITY_VALUES
 from aist.api.finding_event_stream import FindingEventStream
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
 from aist.api.work_items import WorkItemLinkInlineSerializer
+from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.findings_bulk_lock import (
     acquire_bulk_locks,
     get_locked_finding_ids,
     normalize_finding_ids,
     release_bulk_locks,
 )
-from aist.models import AISTAIFindingResponse, VersionType
-from aist.queries import get_authorized_aist_pipelines, get_authorized_findings
+from aist.models import AISTAIFindingResponse, AISTPipeline, VersionType
+from aist.queries import get_authorized_aist_pipelines
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,12 +303,8 @@ class AISTFindingFilter(ApiFindingFilter):
         return queryset.exclude(id__in=ai_finding_ids)
 
 
-class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_findings,
-        permission=Permissions.Finding_View,
-    )
+class AISTFindingListAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.FINDING_EDIT)
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],
@@ -346,7 +339,7 @@ class AISTFindingListAPI(AuthorizedQuerySetMixin, APIView):
     )
     def get(self, request, *args, **kwargs) -> Response:
         queryset = (
-            self.get_authorized_queryset()
+            self.authorized_queryset()
             .select_related("test__engagement")
             .prefetch_related("tags", "aist_project_versions", "aist_annotation", "endpoints")
         )
@@ -384,12 +377,8 @@ class AISTFindingCloseRequestSerializer(serializers.Serializer):
     duplicate = serializers.BooleanField()
 
 
-class AISTFindingDetailAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_findings,
-        permission=Permissions.Finding_View,
-    )
+class AISTFindingDetailAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.FINDING_EDIT)
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],
@@ -397,12 +386,7 @@ class AISTFindingDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: AISTFindingListItemSerializer},
     )
     def get(self, request, finding_id: int):
-        finding = get_object_or_404(
-            self.get_authorized_queryset()
-            .select_related("test__engagement")
-            .prefetch_related("tags", "aist_project_versions", "aist_annotation", "endpoints"),
-            id=finding_id,
-        )
+        finding = self.resolve(id=finding_id)
         return Response(AISTFindingListItemSerializer(finding, context={"request": request}).data)
 
     @extend_schema(
@@ -412,20 +396,16 @@ class AISTFindingDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: AISTFindingListItemSerializer},
     )
     def patch(self, request, finding_id: int):
-        finding = self.get_authorized_object(permission=Permissions.Finding_Edit, id=finding_id)
+        finding = self.resolve(id=finding_id)
         serializer = AISTFindingUpdateSerializer(finding, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(AISTFindingListItemSerializer(finding, context={"request": request}).data)
 
 
-class AISTFindingCloseAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
+class AISTFindingCloseAPI(AISTAPIView):
     serializer_class = AISTFindingCloseRequestSerializer
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_findings,
-        permission=Permissions.Finding_Edit,
-    )
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.FINDING_EDIT)
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],
@@ -434,7 +414,7 @@ class AISTFindingCloseAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: AISTFindingListItemSerializer},
     )
     def post(self, request, finding_id: int):
-        finding = self.get_authorized_object(id=finding_id)
+        finding = self.resolve(id=finding_id)
         input_serializer = self.serializer_class(data=request.data)
         input_serializer.is_valid(raise_exception=True)
         _close_finding_with_reason(
@@ -472,13 +452,9 @@ class AISTFindingCreateNoteSerializer(serializers.Serializer):
         return normalized
 
 
-class AISTFindingNotesAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
+class AISTFindingNotesAPI(AISTAPIView):
     serializer_class = AISTFindingNoteSerializer
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_findings,
-        permission=Permissions.Finding_View,
-    )
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.FINDING_EDIT)
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],
@@ -486,7 +462,7 @@ class AISTFindingNotesAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: AISTFindingNoteSerializer(many=True)},
     )
     def get(self, request, finding_id: int):
-        finding = self.get_authorized_object(id=finding_id)
+        finding = self.resolve(id=finding_id)
         notes = finding.notes.select_related("author").all().order_by("-date")
         out = AISTFindingNoteSerializer(notes, many=True)
         return Response(out.data, status=status.HTTP_200_OK)
@@ -498,7 +474,7 @@ class AISTFindingNotesAPI(AuthorizedQuerySetMixin, APIView):
         responses={201: AISTFindingNoteSerializer},
     )
     def post(self, request, finding_id: int):
-        finding = self.get_authorized_object(permission=Permissions.Finding_Edit, id=finding_id)
+        finding = self.resolve(id=finding_id)
         input_serializer = AISTFindingCreateNoteSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
 
@@ -519,15 +495,11 @@ class AISTFindingExportRequestSerializer(serializers.Serializer):
     format = serializers.ChoiceField(choices=FINDING_API_CHOICES.export_format, required=False, default="csv")
 
 
-class AISTFindingExportAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
+class AISTFindingExportAPI(AISTAPIView):
     serializer_class = AISTFindingExportRequestSerializer
     # A POST that only reads (produces an export file) — a read-only token may call it.
     token_read_only = True
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_findings,
-        permission=Permissions.Finding_View,
-    )
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.FINDING_READ)
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],
@@ -549,19 +521,11 @@ class AISTFindingExportAPI(AuthorizedQuerySetMixin, APIView):
         query_format = query_serializer.validated_data.get("format")
         fmt = body_format or query_format or "csv"
 
-        finding = get_object_or_404(
-            self.get_authorized_queryset()
-            .select_related("test__engagement__product")
-            .prefetch_related("tags", "aist_project_versions", "aist_annotation"),
-            id=finding_id,
-        )
+        finding = self.resolve(id=finding_id)
         project_version, project_version_type, _project_id = _pick_project_version_info(finding)
         created = getattr(finding, "date", None) or getattr(finding, "created", None)
 
-        pipeline_qs = self.get_authorized_queryset(
-            getter=get_authorized_aist_pipelines,
-            permission=Permissions.Product_View,
-        )
+        pipeline_qs = self.authorized_queryset(resource=AISTPipeline, action=Action.PRODUCT_READ)
         ai = (
             AISTAIFindingResponse.objects.filter(finding_id=finding.id, pipeline__in=pipeline_qs)
             .select_related("pipeline")
@@ -666,13 +630,9 @@ class AISTRiskApprovalStatusSerializer(serializers.Serializer):
     current = AISTRiskApprovalCurrentSerializer(allow_null=True)
 
 
-class AISTFindingRiskApprovalAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
+class AISTFindingRiskApprovalAPI(AISTAPIView):
     serializer_class = AISTFindingRiskApprovalRequestSerializer
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_findings,
-        permission=Permissions.Risk_Acceptance,
-    )
+    authz = ResourcePolicy(resource=Finding, read=Action.RISK_ACCEPT, write=Action.RISK_ACCEPT)
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],
@@ -680,7 +640,7 @@ class AISTFindingRiskApprovalAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: AISTRiskApprovalStatusSerializer},
     )
     def get(self, request, finding_id: int):
-        finding = self.get_authorized_object(id=finding_id)
+        finding = self.resolve(id=finding_id)
         enabled = finding.test.engagement.product.enable_full_risk_acceptance
         risk_acceptance = Risk_Acceptance.objects.filter(accepted_findings=finding).first()
         current = None
@@ -702,7 +662,7 @@ class AISTFindingRiskApprovalAPI(AuthorizedQuerySetMixin, APIView):
         responses={201: dojo_serializers.RiskAcceptanceSerializer},
     )
     def post(self, request, finding_id: int):
-        finding = self.get_authorized_object(id=finding_id)
+        finding = self.resolve(id=finding_id)
         input_serializer = self.serializer_class(data=request.data)
         input_serializer.is_valid(raise_exception=True)
 
@@ -745,7 +705,7 @@ class AISTFindingRiskApprovalAPI(AuthorizedQuerySetMixin, APIView):
         responses={204: None, 404: None},
     )
     def delete(self, request, finding_id: int):
-        finding = self.get_authorized_object(id=finding_id)
+        finding = self.resolve(id=finding_id)
         risk_acceptance = Risk_Acceptance.objects.filter(accepted_findings=finding).first()
         if not risk_acceptance:
             return Response(status=status.HTTP_404_NOT_FOUND)
@@ -787,13 +747,9 @@ class AISTFindingBulkStatusRequestSerializer(serializers.Serializer):
         return attrs
 
 
-class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
+class AISTFindingBulkStatusAPI(AISTAPIView):
     serializer_class = AISTFindingBulkStatusRequestSerializer
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_findings,
-        permission=Permissions.Finding_Edit,
-    )
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.FINDING_EDIT)
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],
@@ -807,7 +763,7 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
         requested_ids = normalize_finding_ids(serializer.validated_data["finding_ids"])
         action = serializer.validated_data["action"]
         # risk_accept requires a stricter permission than the default Finding_Edit.
-        risk_permission = Permissions.Risk_Acceptance if action == "risk_accept" else None
+        required_action = Action.RISK_ACCEPT if action == "risk_accept" else Action.FINDING_EDIT
         if not requested_ids:
             return Response(
                 {"detail": "finding_ids must contain at least one valid id."},
@@ -818,7 +774,7 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
         # Verify all findings are accessible before acquiring any markers so we
         # never mark findings the user cannot edit.
         authorized_ids = set(
-            self.get_authorized_queryset(permission=risk_permission)
+            self.authorized_queryset(action=required_action)
             .filter(id__in=requested_ids)
             .values_list("id", flat=True),
         )
@@ -835,7 +791,7 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
         # make security conditional on vendor implementation details.
         if action == "risk_accept":
             disabled_count = (
-                self.get_authorized_queryset(permission=risk_permission)
+                self.authorized_queryset(action=required_action)
                 .filter(id__in=requested_ids)
                 .exclude(test__engagement__product__enable_full_risk_acceptance=True)
                 .count()
@@ -868,7 +824,7 @@ class AISTFindingBulkStatusAPI(AuthorizedQuerySetMixin, APIView):
         bulk_note_entry = f"Bulk status update: {reason_note}"
         try:
             updated_ids = _apply_bulk_status_update(
-                queryset=self.get_authorized_queryset(permission=risk_permission),
+                queryset=self.authorized_queryset(action=required_action),
                 requested_ids=requested_ids,
                 action=action,
                 close_reason=close_reason,
@@ -1041,7 +997,7 @@ class AISTFindingMarkDuplicateRequestSerializer(serializers.Serializer):
     original_finding_id = serializers.IntegerField(min_value=1)
 
 
-class AISTFindingMarkDuplicateAPI(AuthorizedQuerySetMixin, APIView):
+class AISTFindingMarkDuplicateAPI(AISTAPIView):
 
     """
     Set the duplicate_finding FK on an already-closed duplicate finding.
@@ -1052,12 +1008,8 @@ class AISTFindingMarkDuplicateAPI(AuthorizedQuerySetMixin, APIView):
     record as a valid duplicate; without it the algorithm resets the flag.
     """
 
-    permission_classes = [IsAuthenticated]
     serializer_class = AISTFindingMarkDuplicateRequestSerializer
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_findings,
-        permission=Permissions.Finding_Edit,
-    )
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.FINDING_EDIT)
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],
@@ -1070,7 +1022,7 @@ class AISTFindingMarkDuplicateAPI(AuthorizedQuerySetMixin, APIView):
         },
     )
     def post(self, request, finding_id: int):
-        finding = self.get_authorized_object(id=finding_id)
+        finding = self.resolve(id=finding_id)
         input_serializer = self.serializer_class(data=request.data)
         input_serializer.is_valid(raise_exception=True)
 
@@ -1081,7 +1033,7 @@ class AISTFindingMarkDuplicateAPI(AuthorizedQuerySetMixin, APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        original = self.get_authorized_object(id=original_id)
+        original = self.resolve(id=original_id)
 
         finding.duplicate_finding = original
         finding.save(update_fields=["duplicate_finding"])

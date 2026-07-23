@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
-from aist.models import AISTProjectScript, AISTProjectVersion, VersionType
-from aist.queries import get_authorized_aist_projects
+from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.models import AISTProject, AISTProjectScript, AISTProjectVersion, VersionType
 
 SCRIPT_SOURCE_VERSION = "version"
 SCRIPT_SOURCE_PROJECT_REVISION = "project_revision"
@@ -122,15 +118,11 @@ class AISTProjectVersionScriptUpdateSerializer(serializers.Serializer):
         return value
 
 
-class ProjectVersionCreateAPI(AuthorizedQuerySetMixin, APIView):
+class ProjectVersionCreateAPI(AISTAPIView):
 
     """API endpoint for creating AISTProjectVersion instances."""
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         methods=["post"],
@@ -150,7 +142,7 @@ class ProjectVersionCreateAPI(AuthorizedQuerySetMixin, APIView):
         tags=[AISTApiTag.PROJECTS.value],
     )
     def post(self, request, project_id):
-        project = self.get_authorized_object(permission=Permissions.Product_Edit, pk=project_id)
+        project = self.resolve(pk=project_id)
 
         serializer = AISTProjectVersionCreateSerializer(
             data=request.data,
@@ -194,15 +186,11 @@ def _serialize_version_script(script: AISTProjectScript, source: str) -> dict:
     }
 
 
-class ProjectVersionScriptUpdateAPI(AuthorizedQuerySetMixin, APIView):
+class ProjectVersionScriptUpdateAPI(AISTAPIView):
 
     """GET/PATCH endpoint for a project version's entrypoint script."""
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         methods=["get"],
@@ -220,7 +208,7 @@ class ProjectVersionScriptUpdateAPI(AuthorizedQuerySetMixin, APIView):
         ),
     )
     def get(self, request, project_id, version_id):
-        project = self.get_authorized_object(id=project_id)
+        project = self.resolve(id=project_id)
 
         try:
             version = AISTProjectVersion.objects.select_related("script").get(
@@ -248,7 +236,7 @@ class ProjectVersionScriptUpdateAPI(AuthorizedQuerySetMixin, APIView):
         ),
     )
     def patch(self, request, project_id, version_id):
-        project = self.get_authorized_object(permission=Permissions.Product_Edit, pk=project_id)
+        project = self.resolve(pk=project_id)
 
         try:
             version = AISTProjectVersion.objects.get(pk=version_id, project=project)

@@ -156,6 +156,22 @@ class PipelineStartAPITests(AISTApiBase):
 
 
 class PipelineCallbackAPITests(AISTApiBase):
+    def test_pipeline_callback_rejects_ordinary_authenticated_user(self):
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-callback-ordinary-user",
+            project=self.project,
+            status=AISTStatus.WAITING_RESULT_FROM_AI,
+        )
+
+        resp = self.client.post(
+            reverse("aist_api:pipeline_callback", kwargs={"pipeline_id": pipeline.id}),
+            data={"results": {"true_positives": []}},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(AISTAIResponse.objects.filter(pipeline=pipeline).exists())
+
     def test_pipeline_callback_accepts_token_on_api_url(self):
         superuser = get_user_model().objects.create_superuser(
             username="callback_admin",
@@ -1640,7 +1656,7 @@ class AISTFindingBulkStatusTests(AISTApiBase):
         423 without crashing and cache markers are cleaned up.
         """
         call_count = [0]
-        original_get_qs = AISTFindingBulkStatusAPI.get_authorized_queryset
+        original_get_qs = AISTFindingBulkStatusAPI.authorized_queryset
 
         class _LockedQS:
 
@@ -1665,7 +1681,7 @@ class AISTFindingBulkStatusTests(AISTApiBase):
                 return original_get_qs(self_view, *args, **kwargs)
             return _LockedQS()
 
-        with patch.object(AISTFindingBulkStatusAPI, "get_authorized_queryset", patched_get_qs):
+        with patch.object(AISTFindingBulkStatusAPI, "authorized_queryset", patched_get_qs):
             resp = self.client.post(
                 reverse("aist_api:finding_bulk_status"),
                 data={
@@ -1687,7 +1703,7 @@ class AISTFindingBulkStatusTests(AISTApiBase):
         are cleaned up.
         """
         call_count = [0]
-        original_get_qs = AISTFindingBulkStatusAPI.get_authorized_queryset
+        original_get_qs = AISTFindingBulkStatusAPI.authorized_queryset
 
         class _DeletedQS:
 
@@ -1711,7 +1727,7 @@ class AISTFindingBulkStatusTests(AISTApiBase):
                 return original_get_qs(self_view, *args, **kwargs)
             return _DeletedQS()
 
-        with patch.object(AISTFindingBulkStatusAPI, "get_authorized_queryset", patched_get_qs):
+        with patch.object(AISTFindingBulkStatusAPI, "authorized_queryset", patched_get_qs):
             resp = self.client.post(
                 reverse("aist_api:finding_bulk_status"),
                 data={
@@ -1893,17 +1909,8 @@ class AISTUIApiTests(AISTApiBase):
         self.assertEqual(sorted(self.project.supported_languages), ["go", "python"])
 
     def test_project_update_keeps_organization_when_not_provided(self):
-        org = Organization.objects.create(name="Org Keep")
-        org_pt = org.ensure_product_type()
-        self.product.prod_type = org_pt
-        self.product.save(update_fields=["prod_type"])
-        Product_Type_Member.objects.create(
-            product_type=org_pt,
-            user=self.user,
-            role=self.role_maintainer,
-        )
-        self.project.organization = org
-        self.project.save(update_fields=["organization"])
+        org = Organization.objects.create(name="Org Keep", product_type=self.prod_type)
+        self.project.refresh_from_db()
 
         url = reverse("aist_api:project_detail", kwargs={"project_id": self.project.id})
         resp = self.client.post(
@@ -1937,7 +1944,6 @@ class AISTUIApiTests(AISTApiBase):
             supported_languages=["python"],
             compilable=False,
             profile={},
-            organization=mismatch_org,
         )
 
         url = reverse("aist_api:project_detail", kwargs={"project_id": self.project.id})
@@ -1949,13 +1955,11 @@ class AISTUIApiTests(AISTApiBase):
             },
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("ok", resp.data)
-        self.assertFalse(resp.data["ok"])
-        self.assertIn("organization", resp.data["errors"])
+        self.assertIn("organization", resp.data)
 
     def test_project_update_rejects_unauthorized_organization(self):
-        hidden_org = Organization.objects.create(name="Org Hidden")
         hidden_pt = Product_Type.objects.create(name="Hidden PT")
+        hidden_org = Organization.objects.create(name="Org Hidden", product_type=hidden_pt)
         hidden_product = Product.objects.create(
             name="Hidden Product",
             description="desc",
@@ -1967,7 +1971,6 @@ class AISTUIApiTests(AISTApiBase):
             supported_languages=["python"],
             compilable=False,
             profile={},
-            organization=hidden_org,
         )
 
         url = reverse("aist_api:project_detail", kwargs={"project_id": self.project.id})
@@ -1983,16 +1986,9 @@ class AISTUIApiTests(AISTApiBase):
             "organization" in resp.data.get("errors", {}) or "organization" in resp.data,
         )
 
-    def test_project_update_view_accepts_organization_id_from_form(self):
-        org = Organization.objects.create(name="Org UI Edit")
-        org_pt = org.ensure_product_type()
-        self.product.prod_type = org_pt
-        self.product.save(update_fields=["prod_type"])
-        Product_Type_Member.objects.create(
-            product_type=org_pt,
-            user=self.user,
-            role=self.role_maintainer,
-        )
+    def test_project_update_view_rejects_organization_id_from_form(self):
+        org = Organization.objects.create(name="Org UI Edit", product_type=self.prod_type)
+        self.project.refresh_from_db()
         admin_user = get_user_model().objects.create_superuser(
             username="ui-admin",
             email="ui-admin@example.com",
@@ -2009,11 +2005,10 @@ class AISTUIApiTests(AISTApiBase):
                 "organization": str(org.id),
             },
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 400)
         self.project.refresh_from_db()
         self.assertEqual(self.project.organization_id, org.id)
-        self.assertEqual(sorted(self.project.supported_languages), ["go", "python"])
-        self.assertTrue(self.project.compilable)
+        self.assertIn("organization", resp.json()["errors"])
 
     def test_pipeline_stop_api(self):
         pipeline = AISTPipeline.objects.create(

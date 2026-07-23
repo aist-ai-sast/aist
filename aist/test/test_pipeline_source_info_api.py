@@ -21,7 +21,7 @@ class PipelineSourceInfoAPITests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        self.service_user = get_user_model().objects.create_user(
+        self.service_user = get_user_model().objects.create_superuser(
             username="service_mcp",
             email="service_mcp@example.com",
             password="pass",  # noqa: S106
@@ -126,6 +126,20 @@ class PipelineSourceInfoAPITests(AISTApiBase):
 
         anon_client = APIClient()
         resp = anon_client.get(self._url("pipe-src-noauth"))
+
+        self.assertEqual(resp.status_code, 403)
+
+    def test_rejects_ordinary_users_even_with_stock_api_token(self):
+        ordinary_user = get_user_model().objects.create_user(
+            username="ordinary_source_client",
+            email="ordinary_source_client@example.com",
+            password="pass",  # noqa: S106
+        )
+        token = Token.objects.create(user=ordinary_user)
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        resp = client.get(self._url("nonexistent-id"))
 
         self.assertEqual(resp.status_code, 403)
 

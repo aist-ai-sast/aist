@@ -7,15 +7,15 @@ from urllib.parse import urlparse
 from celery.result import AsyncResult
 from django.shortcuts import get_object_or_404
 from dojo.authorization.roles_permissions import Permissions
+from dojo.models import Finding
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.models import (
+    Organization,
     OrgIntegration,
     OrgIntegrationType,
     WorkItemLink,
@@ -23,7 +23,7 @@ from aist.models import (
     WorkItemProviderType,
     WorkItemStatusCategory,
 )
-from aist.queries import get_authorized_aist_organizations, get_authorized_findings, get_authorized_work_item_providers
+from aist.queries import get_authorized_work_item_providers
 from aist.tasks.work_items import sync_work_item_link, sync_work_item_provider
 from aist.work_items.backends import get_backend
 
@@ -77,7 +77,7 @@ class WorkItemProviderSerializer(serializers.ModelSerializer):
             "created",
             "updated",
         ]
-        read_only_fields = ["id", "created", "updated"]
+        read_only_fields = ["id", "organization", "created", "updated"]
 
     def get_has_token(self, obj) -> bool:
         return bool(obj.api_token)
@@ -91,10 +91,10 @@ class WorkItemProviderSerializer(serializers.ModelSerializer):
     def validate_vpn_integration(self, value):
         if value is None:
             return value
-        # Determine the organization from the instance (PATCH) or the request data (POST)
-        instance = self.instance
-        organization_id = instance.organization_id if instance is not None else self.initial_data.get("organization")
-        if organization_id and str(value.organization_id) != str(organization_id):
+        organization = self.context.get("organization")
+        if organization is None and self.instance is not None:
+            organization = self.instance.organization
+        if organization is not None and value.organization_id != organization.id:
             msg = "VPN integration must belong to the same organization as this provider."
             raise serializers.ValidationError(msg)
         return value
@@ -187,6 +187,44 @@ class WorkItemLinkCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         provider = attrs.get("provider")
+        request = self.context["request"]
+        if provider is not None:
+            allowed = get_authorized_work_item_providers(
+                Permissions.Product_Type_Manage_Members,
+                user=request.user,
+            ).filter(pk=provider.pk).exists()
+            if not allowed:
+                raise serializers.ValidationError({"provider": "Provider is not available."})
+            finding = self.context["finding"]
+            finding_organization_id = (
+                Organization.objects
+                .filter(product_type_id=finding.test.engagement.product.prod_type_id)
+                .values_list("id", flat=True)
+                .first()
+            )
+            if provider.organization_id != finding_organization_id:
+                raise serializers.ValidationError({
+                    "provider": "Provider must belong to the finding's organization.",
+                })
+        elif attrs.get("external_url"):
+            try:
+                url_host = urlparse(attrs["external_url"]).netloc.lower()
+            except Exception:
+                url_host = ""
+            if url_host:
+                providers = get_authorized_work_item_providers(
+                    Permissions.Product_Type_Manage_Members,
+                    user=request.user,
+                ).exclude(base_url="")
+                for candidate in providers:
+                    try:
+                        provider_host = urlparse(candidate.base_url).netloc.lower()
+                    except Exception:  # noqa: S112
+                        continue
+                    if provider_host and url_host == provider_host:
+                        attrs["provider"] = candidate
+                        provider = candidate
+                        break
         external_key = attrs.get("external_key", "")
         # For manual links (no provider) external_url is mandatory.
         if not provider and not attrs.get("external_url"):
@@ -229,18 +267,15 @@ class WorkItemLinkUpdateSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 
-class WorkItemProviderListCreateAPI(AuthorizedQuerySetMixin, APIView):
+class WorkItemProviderListCreateAPI(AISTAPIView):
 
     """
     GET  /organizations/<org_id>/work-item-providers/   — list providers for an org
     POST /organizations/<org_id>/work-item-providers/   — create a new provider
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_work_item_providers,
-        permission=Permissions.Product_View,
-    )
+    # Scoped by organization: GET needs Product_View, POST (create) needs Manage_Members.
+    authz = ResourcePolicy(resource=Organization, read=Action.PRODUCT_READ, write=Action.ORG_MANAGE)
 
     @extend_schema(
         tags=[AISTApiTag.WORK_ITEMS],
@@ -251,10 +286,7 @@ class WorkItemProviderListCreateAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: WorkItemProviderSerializer(many=True)},
     )
     def get(self, request, org_id: int):
-        org = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_View, user=request.user),
-            pk=org_id,
-        )
+        org = self.resolve(pk=org_id)
         qs = org.work_item_providers.all()
         return Response(WorkItemProviderSerializer(qs, many=True).data)
 
@@ -272,18 +304,14 @@ class WorkItemProviderListCreateAPI(AuthorizedQuerySetMixin, APIView):
         },
     )
     def post(self, request, org_id: int):
-        org = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_Type_Manage_Members, user=request.user),
-            pk=org_id,
-        )
-        data = {**request.data, "organization": org.pk}
-        serializer = WorkItemProviderSerializer(data=data)
+        org = self.resolve(pk=org_id)
+        serializer = WorkItemProviderSerializer(data=request.data, context={"organization": org})
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        serializer.save(organization=org)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-class WorkItemProviderDetailAPI(AuthorizedQuerySetMixin, APIView):
+class WorkItemProviderDetailAPI(AISTAPIView):
 
     """
     GET    /work-item-providers/<provider_id>/
@@ -291,14 +319,10 @@ class WorkItemProviderDetailAPI(AuthorizedQuerySetMixin, APIView):
     DELETE /work-item-providers/<provider_id>/
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_work_item_providers,
-        permission=Permissions.Product_Type_Manage_Members,
-    )
+    authz = ResourcePolicy(resource=WorkItemProvider, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
     def _get_provider(self, provider_id: int) -> WorkItemProvider:
-        return self.get_authorized_object(pk=provider_id)
+        return self.resolve(pk=provider_id)
 
     @extend_schema(
         tags=[AISTApiTag.WORK_ITEMS],
@@ -317,7 +341,12 @@ class WorkItemProviderDetailAPI(AuthorizedQuerySetMixin, APIView):
     )
     def patch(self, request, provider_id: int):
         provider = self._get_provider(provider_id)
-        serializer = WorkItemProviderSerializer(provider, data=request.data, partial=True)
+        serializer = WorkItemProviderSerializer(
+            provider,
+            data=request.data,
+            partial=True,
+            context={"organization": provider.organization},
+        )
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
@@ -354,7 +383,7 @@ def _validate_work_item_provider(provider: WorkItemProvider) -> tuple[bool, str]
         return False, f"Validation failed ({type(exc).__name__}) — see server logs."
 
 
-class WorkItemProviderValidateAPI(AuthorizedQuerySetMixin, APIView):
+class WorkItemProviderValidateAPI(AISTAPIView):
 
     """
     POST /work-item-providers/<provider_id>/validate/
@@ -363,11 +392,7 @@ class WorkItemProviderValidateAPI(AuthorizedQuerySetMixin, APIView):
     access for VPN-routed validation).  Returns 202 with a task_id to poll.
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_work_item_providers,
-        permission=Permissions.Product_Type_Manage_Members,
-    )
+    authz = ResourcePolicy(resource=WorkItemProvider, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
     @extend_schema(
         tags=[AISTApiTag.WORK_ITEMS],
@@ -378,14 +403,14 @@ class WorkItemProviderValidateAPI(AuthorizedQuerySetMixin, APIView):
         },
     )
     def post(self, request, provider_id: int):
-        provider = self.get_authorized_object(pk=provider_id)
+        provider = self.resolve(pk=provider_id)
         from aist.tasks.validate import validate_work_item_provider  # noqa: PLC0415
 
         result = validate_work_item_provider.delay(provider.pk)
         return Response({"task_id": result.id}, status=status.HTTP_202_ACCEPTED)
 
 
-class WorkItemProviderValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
+class WorkItemProviderValidateStatusAPI(AISTAPIView):
 
     """
     GET /work-item-providers/<provider_id>/validate/<task_id>/
@@ -395,11 +420,7 @@ class WorkItemProviderValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
     a task_id that belongs to a different provider returns PENDING.
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_work_item_providers,
-        permission=Permissions.Product_Type_Manage_Members,
-    )
+    authz = ResourcePolicy(resource=WorkItemProvider, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
     @extend_schema(
         tags=[AISTApiTag.WORK_ITEMS],
@@ -416,7 +437,7 @@ class WorkItemProviderValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
         },
     )
     def get(self, request, provider_id: int, task_id: str):
-        self.get_authorized_object(pk=provider_id)
+        self.resolve(pk=provider_id)
         ar = AsyncResult(task_id)
         if ar.state == "SUCCESS":
             result = ar.result or {}
@@ -431,7 +452,7 @@ class WorkItemProviderValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
         return Response({"state": ar.state, "valid": None, "detail": ""})
 
 
-class WorkItemProviderSyncAPI(AuthorizedQuerySetMixin, APIView):
+class WorkItemProviderSyncAPI(AISTAPIView):
 
     """
     POST /work-item-providers/<provider_id>/sync/
@@ -440,11 +461,7 @@ class WorkItemProviderSyncAPI(AuthorizedQuerySetMixin, APIView):
     The task runs asynchronously; returns 202 immediately.
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_work_item_providers,
-        permission=Permissions.Product_Type_Manage_Members,
-    )
+    authz = ResourcePolicy(resource=WorkItemProvider, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
     @extend_schema(
         tags=[AISTApiTag.WORK_ITEMS],
@@ -455,7 +472,7 @@ class WorkItemProviderSyncAPI(AuthorizedQuerySetMixin, APIView):
         },
     )
     def post(self, request, provider_id: int):
-        provider = self.get_authorized_object(pk=provider_id)
+        provider = self.resolve(pk=provider_id)
         sync_work_item_provider.delay(provider.pk)
         return Response({"queued": True}, status=status.HTTP_202_ACCEPTED)
 
@@ -465,21 +482,18 @@ class WorkItemProviderSyncAPI(AuthorizedQuerySetMixin, APIView):
 # ---------------------------------------------------------------------------
 
 
-class FindingWorkItemListCreateAPI(AuthorizedQuerySetMixin, APIView):
+class FindingWorkItemListCreateAPI(AISTAPIView):
 
     """
     GET  /findings/<finding_id>/work-items/   — list all links for a finding
     POST /findings/<finding_id>/work-items/   — create a new link
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_findings,
-        permission=Permissions.Product_View,
-    )
+    # G-1: attaching/editing work-item links is a finding write (Writer+), not a read.
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.FINDING_EDIT)
 
     def _get_finding(self, finding_id: int):
-        return self.get_authorized_object(pk=finding_id)
+        return self.resolve(pk=finding_id)
 
     @extend_schema(
         tags=[AISTApiTag.WORK_ITEMS],
@@ -506,37 +520,8 @@ class FindingWorkItemListCreateAPI(AuthorizedQuerySetMixin, APIView):
     def post(self, request, finding_id: int):
         finding = self._get_finding(finding_id)
 
-        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
-
-        # If provider is given, verify user can access it
-        provider_id = data.get("provider")
-        if provider_id:
-            get_object_or_404(
-                get_authorized_work_item_providers(Permissions.Product_Type_Manage_Members, user=request.user),
-                pk=provider_id,
-            )
-        elif data.get("external_url"):
-            # Auto-detect provider from URL hostname matching base_url
-            try:
-                url_host = urlparse(data["external_url"]).netloc.lower()
-            except Exception:
-                url_host = ""
-            if url_host:
-                providers_qs = get_authorized_work_item_providers(
-                    Permissions.Product_Type_Manage_Members,
-                    user=request.user,
-                )
-                for provider in providers_qs.exclude(base_url=""):
-                    try:
-                        provider_host = urlparse(provider.base_url).netloc.lower()
-                    except Exception:  # noqa: S112
-                        continue
-                    if provider_host and url_host == provider_host:
-                        data["provider"] = provider.pk
-                        break
-
         serializer = WorkItemLinkCreateSerializer(
-            data=data,
+            data=request.data,
             context={"finding": finding, "request": request},
         )
         serializer.is_valid(raise_exception=True)
@@ -549,21 +534,18 @@ class FindingWorkItemListCreateAPI(AuthorizedQuerySetMixin, APIView):
         )
 
 
-class FindingWorkItemDetailAPI(AuthorizedQuerySetMixin, APIView):
+class FindingWorkItemDetailAPI(AISTAPIView):
 
     """
     PATCH  /findings/<finding_id>/work-items/<link_id>/
     DELETE /findings/<finding_id>/work-items/<link_id>/
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_findings,
-        permission=Permissions.Product_View,
-    )
+    # G-1: attaching/editing work-item links is a finding write (Writer+), not a read.
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.FINDING_EDIT)
 
     def _get_link(self, finding_id: int, link_id: int) -> WorkItemLink:
-        finding = self.get_authorized_object(pk=finding_id)
+        finding = self.resolve(pk=finding_id)
         return get_object_or_404(WorkItemLink, pk=link_id, finding=finding)
 
     @extend_schema(

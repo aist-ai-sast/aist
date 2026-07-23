@@ -14,13 +14,13 @@ from dojo.models import Product_Type_Group, Product_Type_Member, UserContactInfo
 from dojo.utils import get_system_setting
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
-from rest_framework.views import APIView
 from single_session.signals import remove_all_sessions
 
 from aist.api.schema import AISTApiTag
+from aist.authz import PUBLIC, AISTAPIView
 from aist.queries import get_visible_aist_organizations, user_has_write_capability
 from aist.roles import role_rank
 
@@ -37,6 +37,22 @@ class OrganizationMembership:
     organization_name: str
     role_id: int | None
     role_name: str
+
+    @property
+    def can_write_findings(self) -> bool:
+        return self.role_name == "Superuser" or role_rank(self.role_id) >= role_rank(Roles.Writer.value)
+
+    @property
+    def can_operate_projects(self) -> bool:
+        return self.role_name == "Superuser" or role_rank(self.role_id) >= role_rank(Roles.Maintainer.value)
+
+    @property
+    def can_manage_access(self) -> bool:
+        return self.can_operate_projects
+
+    @property
+    def can_grant_owner(self) -> bool:
+        return self.role_name == "Superuser" or role_rank(self.role_id) >= role_rank(Roles.Owner.value)
 
 
 class _MembershipAccumulator:
@@ -141,6 +157,10 @@ class AISTOrganizationMembershipSerializer(serializers.Serializer):
     organization_name = serializers.CharField()
     role_id = serializers.IntegerField(allow_null=True)
     role_name = serializers.CharField()
+    can_write_findings = serializers.BooleanField()
+    can_operate_projects = serializers.BooleanField()
+    can_manage_access = serializers.BooleanField()
+    can_grant_owner = serializers.BooleanField()
 
 
 class AISTMeSerializer(serializers.ModelSerializer):
@@ -303,8 +323,8 @@ class AISTSetPasswordSerializer(serializers.Serializer):
         return user
 
 
-class AISTMeAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class AISTMeAPI(AISTAPIView):
+    authz = PUBLIC
 
     @extend_schema(
         tags=[AISTApiTag.PROFILE.value],
@@ -333,8 +353,8 @@ class AISTMeAPI(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-class AISTMeChangePasswordAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class AISTMeChangePasswordAPI(AISTAPIView):
+    authz = PUBLIC
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "aist_change_password"
 
@@ -352,7 +372,8 @@ class AISTMeChangePasswordAPI(APIView):
 
 
 @method_decorator(csrf_protect, name="dispatch")
-class AISTAuthLoginAPI(APIView):
+class AISTAuthLoginAPI(AISTAPIView):
+    authz = PUBLIC
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "aist_auth_login"
@@ -380,10 +401,11 @@ class AISTAuthLoginAPI(APIView):
 
 
 @method_decorator(csrf_protect, name="dispatch")
-class AISTSetPasswordAPI(APIView):
+class AISTSetPasswordAPI(AISTAPIView):
 
     """Anonymous endpoint: set a password from an emailed invite/reset link."""
 
+    authz = PUBLIC
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "aist_auth_set_password"
@@ -401,8 +423,8 @@ class AISTSetPasswordAPI(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class AISTAuthLogoutAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class AISTAuthLogoutAPI(AISTAPIView):
+    authz = PUBLIC
 
     @extend_schema(
         tags=[AISTApiTag.AUTH.value],
@@ -417,8 +439,8 @@ class AISTAuthLogoutAPI(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class AISTAuthLogoutAllAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class AISTAuthLogoutAllAPI(AISTAPIView):
+    authz = PUBLIC
 
     @extend_schema(
         tags=[AISTApiTag.AUTH.value],

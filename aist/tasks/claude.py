@@ -92,7 +92,7 @@ def analyze_project_after_import(self, project_id: int, async_user=None) -> None
     try:
         project = (
             AISTProject.objects
-            .select_related("repository", "product", "organization")
+            .select_related("repository", "product__prod_type__aist_organization")
             .get(id=project_id)
         )
     except AISTProject.DoesNotExist:

@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-from django.shortcuts import get_object_or_404
-from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.schema import AISTApiTag
-from aist.models import OrgIntegration, OrgIntegrationType, ScmGiteaBinding, ScmType
-from aist.queries import get_authorized_aist_organizations
+from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.models import Organization, OrgIntegration, OrgIntegrationType, ScmGiteaBinding, ScmType
 from aist.scm_import import ScmImportConflictError, ScmImportRequest, import_scm_project
 from aist.tasks.integrations import fetch_gitea_project_info
 from aist.utils.pipeline_imports import _load_analyzers_config  # same helper as GitLab/GH flows use
@@ -38,7 +34,7 @@ class ImportGiteaResponseSerializer(serializers.Serializer):
     repo_full = serializers.CharField()
 
 
-class ImportProjectFromGiteaAPI(APIView):
+class ImportProjectFromGiteaAPI(AISTAPIView):
 
     """
     Create Product + RepositoryInfo(GITEA) + ScmGiteaBinding + AISTProject
@@ -50,7 +46,7 @@ class ImportProjectFromGiteaAPI(APIView):
     ``aist.scm_import.import_scm_project``.
     """
 
-    permission_classes = [IsAuthenticated]
+    authz = ResourcePolicy(resource=Organization, read=Action.PROJECT_CREATE, write=Action.PROJECT_CREATE)
 
     @extend_schema(
         request=ImportGiteaRequestSerializer,
@@ -67,10 +63,7 @@ class ImportProjectFromGiteaAPI(APIView):
             return Response({"detail": "repo_full_name must be 'owner/repo'."}, status=status.HTTP_400_BAD_REQUEST)
 
         organization_id = serializer.validated_data.get("organization_id")
-        organization = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_Type_Add_Product, user=request.user),
-            pk=organization_id,
-        )
+        organization = self.resolve(pk=organization_id)
 
         integration = (
             OrgIntegration.objects.filter(

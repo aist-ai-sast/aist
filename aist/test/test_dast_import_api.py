@@ -204,7 +204,7 @@ class PipelineImportAPITests(TestCase):
 
     @patch("aist.api.report_import.import_report.apply_async", side_effect=RuntimeError("broker unavailable"))
     @patch("aist.api.report_import.uuid4")
-    def test_dispatch_failure_cleans_upload_and_pipeline(self, mock_uuid4, _mock_apply_async):
+    def test_dispatch_failure_cleans_upload_and_pipeline(self, mock_uuid4, mock_apply_async):
         mock_uuid4.return_value.hex = "failed-task-id"
         before_files = set(
             default_storage.listdir("report_imports")[1]
@@ -213,16 +213,17 @@ class PipelineImportAPITests(TestCase):
         )
         before_pipelines = AISTPipeline.objects.filter(project=self.project).count()
 
-        with self.assertRaises(RuntimeError):
-            self.client.post(
-                self._import_url(),
-                {
-                    "file": _upload(_report_payload()),
-                    "project_id": self.project.id,
-                    "scan_type": DAST_SCAN_TYPE,
-                    "commit_hash": SHA,
-                },
-            )
+        response = self.client.post(
+            self._import_url(),
+            {
+                "file": _upload(_report_payload()),
+                "project_id": self.project.id,
+                "scan_type": DAST_SCAN_TYPE,
+                "commit_hash": SHA,
+            },
+        )
+        self.assertEqual(response.status_code, 500)
+        mock_apply_async.assert_called_once()
 
         after_files = set(
             default_storage.listdir("report_imports")[1]

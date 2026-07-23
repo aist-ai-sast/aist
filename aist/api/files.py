@@ -6,20 +6,17 @@ from pathlib import Path
 import requests
 from django.http import FileResponse, Http404, HttpResponse
 from django.utils.encoding import iri_to_uri
-from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.authz import Action, AISTAuthzMixin, ResourcePolicy
 from aist.integrations import egress
 from aist.link_builder import LinkBuilder
-from aist.models import VersionType
-from aist.queries import get_authorized_aist_project_versions
+from aist.models import AISTProjectVersion, VersionType
 
 # ----------------------------
 # Module-level error messages
@@ -37,19 +34,15 @@ class _NoBodySerializer(serializers.Serializer):
     """Empty serializer used to satisfy schema generation for APIView-like endpoints."""
 
 
-class ProjectVersionFileBlobAPI(AuthorizedQuerySetMixin, generics.GenericAPIView):
+class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
 
     """
     GET /projects_version/<id>/files/blob/<path:subpath>
     Returns the specified file from project version.
     """
 
-    permission_classes = [IsAuthenticated]
     serializer_class = _NoBodySerializer
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_project_versions,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTProjectVersion, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.PROJECTS.value],
@@ -136,7 +129,7 @@ class ProjectVersionFileBlobAPI(AuthorizedQuerySetMixin, generics.GenericAPIView
         return resp
 
     def get(self, request, project_version_id: int, subpath: str, *args, **kwargs):
-        project_version = self.get_authorized_object(pk=project_version_id)
+        project_version = self.resolve(pk=project_version_id)
 
         # --- Case 1: Local FILE_HASH (from extracted archive) ---
         if project_version.version_type == VersionType.FILE_HASH:
@@ -197,7 +190,7 @@ class ProjectVersionFileBlobAPI(AuthorizedQuerySetMixin, generics.GenericAPIView
         return self._return_remote_bytes(raw_url, Path(subpath).name, {}, proxy_url=proxy_url)
 
 
-class ProjectVersionPrewarmAPI(AuthorizedQuerySetMixin, generics.GenericAPIView):
+class ProjectVersionPrewarmAPI(AISTAuthzMixin, generics.GenericAPIView):
 
     """
     POST /projects_version/<id>/files/prewarm
@@ -208,12 +201,10 @@ class ProjectVersionPrewarmAPI(AuthorizedQuerySetMixin, generics.GenericAPIView)
     immediately without waiting for the tunnel.  No-op for public (non-VPN) repos.
     """
 
-    permission_classes = [IsAuthenticated]
     serializer_class = _NoBodySerializer
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_project_versions,
-        permission=Permissions.Product_View,
-    )
+    # Prewarm is a benign cache-warm intentionally at Product_View grade, so its
+    # POST maps to a read action (preserves who can call it: Reader+).
+    authz = ResourcePolicy(resource=AISTProjectVersion, read=Action.PRODUCT_READ, write=Action.PRODUCT_READ)
 
     @extend_schema(
         tags=[AISTApiTag.PROJECTS.value],
@@ -222,7 +213,7 @@ class ProjectVersionPrewarmAPI(AuthorizedQuerySetMixin, generics.GenericAPIView)
         responses={200: OpenApiResponse(description='{"status": "warming" | "no_vpn"}')},
     )
     def post(self, request, project_version_id: int, *args, **kwargs):
-        project_version = self.get_authorized_object(pk=project_version_id)
+        project_version = self.resolve(pk=project_version_id)
         # Resolution is derived from the authorized object only (no user input) —
         # a user can never warm another org's tunnel.
         vpn_integration = egress.vpn_integration_for_project_version(project_version)

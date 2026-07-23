@@ -5,21 +5,20 @@ import re
 import shutil
 import subprocess
 
-from django.shortcuts import get_object_or_404
-from dojo.authorization.roles_permissions import Permissions
+from django.http import Http404
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
-from aist.models import OrgIntegration, OrgIntegrationType, OrgIntegrationVPNSecret, ProjectIntegrationOverride
-from aist.queries import (
-    get_authorized_aist_organizations,
-    get_authorized_aist_projects,
-    get_authorized_org_integrations,
+from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.models import (
+    AISTProject,
+    Organization,
+    OrgIntegration,
+    OrgIntegrationType,
+    OrgIntegrationVPNSecret,
+    ProjectIntegrationOverride,
 )
 
 logger = logging.getLogger(__name__)
@@ -254,7 +253,7 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             "created",
             "updated",
         ]
-        read_only_fields = ["id", "created_by", "created", "updated"]
+        read_only_fields = ["id", "organization", "created_by", "created", "updated"]
 
     def get_has_secret(self, obj) -> bool:
         return bool(obj.secret)
@@ -274,6 +273,18 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             self._validate_gitea_attrs(attrs)
         if itype == OrgIntegrationType.DAST:
             self._validate_dast_attrs(attrs)
+        organization = self.context.get("organization")
+        name = attrs.get("name") or (self.instance.name if self.instance is not None else None)
+        if organization is not None and itype and name:
+            duplicate = OrgIntegration.objects.filter(
+                organization=organization,
+                integration_type=itype,
+                name=name,
+            )
+            if self.instance is not None:
+                duplicate = duplicate.exclude(pk=self.instance.pk)
+            if duplicate.exists():
+                raise serializers.ValidationError({"name": "An integration with this name and type already exists."})
         return super().validate(attrs)
 
     def _effective_config(self, attrs):
@@ -336,8 +347,9 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         if is_active is None:
             is_active = self.instance.is_active if self.instance is not None else True
         if is_active:
+            organization = self.context.get("organization")
             organization_id = (
-                attrs.get("organization").pk if attrs.get("organization") is not None
+                organization.pk if organization is not None
                 else (self.instance.organization_id if self.instance is not None else None)
             )
             if organization_id is not None:
@@ -358,8 +370,11 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
     def validate_vpn_integration(self, value):
         if value is None:
             return value
-        instance = self.instance
-        organization_id = instance.organization_id if instance is not None else self.initial_data.get("organization")
+        organization = self.context.get("organization")
+        organization_id = (
+            organization.pk if organization is not None
+            else (self.instance.organization_id if self.instance is not None else None)
+        )
         # Unconditional check — raise even if organization_id is None/empty so that
         # a missing context never silently allows cross-org VPN linkage.
         if not organization_id:
@@ -422,7 +437,19 @@ class ProjectIntegrationOverrideSerializer(serializers.ModelSerializer):
             "config_override",
             "is_disabled",
         ]
-        read_only_fields = ["id", "project"]
+        read_only_fields = ["id", "project", "integration_type"]
+
+    def validate_org_integration(self, value):
+        project = self.context["project"]
+        if value is not None:
+            if value.organization_id != project.organization_id:
+                msg = "Integration belongs to a different organization."
+                raise serializers.ValidationError(msg)
+            integration_type = self.instance.integration_type if self.instance is not None else None
+            if integration_type and value.integration_type != integration_type:
+                msg = "Integration type must match the override type."
+                raise serializers.ValidationError(msg)
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -430,18 +457,15 @@ class ProjectIntegrationOverrideSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 
-class OrgIntegrationListCreateAPI(AuthorizedQuerySetMixin, APIView):
+class OrgIntegrationListCreateAPI(AISTAPIView):
 
     """
     GET  /organizations/<org_id>/integrations/   — list integrations for an org
     POST /organizations/<org_id>/integrations/   — create a new integration
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_org_integrations,
-        permission=Permissions.Product_Type_Manage_Members,
-    )
+    # Org-scoped: managing an org's integrations is Manage_Members for read and write.
+    authz = ResourcePolicy(resource=Organization, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
     @extend_schema(
         tags=[AISTApiTag.INTEGRATIONS],
@@ -450,10 +474,7 @@ class OrgIntegrationListCreateAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: OrgIntegrationSerializer(many=True)},
     )
     def get(self, request, org_id: int):
-        org = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_Type_Manage_Members, user=request.user),
-            pk=org_id,
-        )
+        org = self.resolve(pk=org_id)
         qs = org.integrations.all()
         return Response(OrgIntegrationSerializer(qs, many=True).data)
 
@@ -469,18 +490,14 @@ class OrgIntegrationListCreateAPI(AuthorizedQuerySetMixin, APIView):
         },
     )
     def post(self, request, org_id: int):
-        org = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_Type_Manage_Members, user=request.user),
-            pk=org_id,
-        )
-        data = {**request.data, "organization": org.pk}
-        serializer = OrgIntegrationSerializer(data=data)
+        org = self.resolve(pk=org_id)
+        serializer = OrgIntegrationSerializer(data=request.data, context={"organization": org})
         serializer.is_valid(raise_exception=True)
-        serializer.save(created_by=request.user)
+        serializer.save(organization=org, created_by=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-class OrgIntegrationDetailAPI(AuthorizedQuerySetMixin, APIView):
+class OrgIntegrationDetailAPI(AISTAPIView):
 
     """
     GET    /integrations/<integration_id>/
@@ -488,14 +505,10 @@ class OrgIntegrationDetailAPI(AuthorizedQuerySetMixin, APIView):
     DELETE /integrations/<integration_id>/
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_org_integrations,
-        permission=Permissions.Product_Type_Manage_Members,
-    )
+    authz = ResourcePolicy(resource=OrgIntegration, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
     def _get_integration(self, integration_id: int) -> OrgIntegration:
-        return self.get_authorized_object(pk=integration_id)
+        return self.resolve(pk=integration_id)
 
     @extend_schema(
         tags=[AISTApiTag.INTEGRATIONS],
@@ -513,7 +526,12 @@ class OrgIntegrationDetailAPI(AuthorizedQuerySetMixin, APIView):
     )
     def patch(self, request, integration_id: int):
         integration = self._get_integration(integration_id)
-        serializer = OrgIntegrationSerializer(integration, data=request.data, partial=True)
+        serializer = OrgIntegrationSerializer(
+            integration,
+            data=request.data,
+            partial=True,
+            context={"organization": integration.organization},
+        )
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
@@ -528,7 +546,7 @@ class OrgIntegrationDetailAPI(AuthorizedQuerySetMixin, APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class OrgIntegrationValidateAPI(AuthorizedQuerySetMixin, APIView):
+class OrgIntegrationValidateAPI(AISTAPIView):
 
     """
     POST /integrations/<integration_id>/validate/
@@ -538,11 +556,7 @@ class OrgIntegrationValidateAPI(AuthorizedQuerySetMixin, APIView):
     Poll GET /integrations/<id>/validate/<task_id>/ for the result.
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_org_integrations,
-        permission=Permissions.Product_Type_Manage_Members,
-    )
+    authz = ResourcePolicy(resource=OrgIntegration, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
     @extend_schema(
         tags=[AISTApiTag.INTEGRATIONS],
@@ -553,14 +567,14 @@ class OrgIntegrationValidateAPI(AuthorizedQuerySetMixin, APIView):
         },
     )
     def post(self, request, integration_id: int):
-        integration = self.get_authorized_object(pk=integration_id)
+        integration = self.resolve(pk=integration_id)
         from aist.tasks.validate import validate_integration  # noqa: PLC0415
 
         result = validate_integration.delay(integration.pk)
         return Response({"task_id": result.id}, status=status.HTTP_202_ACCEPTED)
 
 
-class OrgIntegrationValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
+class OrgIntegrationValidateStatusAPI(AISTAPIView):
 
     """
     GET /integrations/<integration_id>/validate/<task_id>/
@@ -569,11 +583,7 @@ class OrgIntegrationValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
     State is one of PENDING, STARTED, SUCCESS, FAILURE.
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_org_integrations,
-        permission=Permissions.Product_Type_Manage_Members,
-    )
+    authz = ResourcePolicy(resource=OrgIntegration, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
     @extend_schema(
         tags=[AISTApiTag.INTEGRATIONS],
@@ -594,7 +604,7 @@ class OrgIntegrationValidateStatusAPI(AuthorizedQuerySetMixin, APIView):
         },
     )
     def get(self, request, integration_id: int, task_id: str):
-        self.get_authorized_object(pk=integration_id)  # org isolation check
+        self.resolve(pk=integration_id)  # org isolation check
         from celery.result import AsyncResult  # noqa: PLC0415
 
         ar = AsyncResult(task_id)
@@ -772,7 +782,7 @@ def _validate_vpn_integration(integration: OrgIntegration) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
-class ProjectIntegrationOverrideAPI(AuthorizedQuerySetMixin, APIView):
+class ProjectIntegrationOverrideAPI(AISTAPIView):
 
     """
     GET    /projects/<project_id>/integration-overrides/
@@ -780,14 +790,12 @@ class ProjectIntegrationOverrideAPI(AuthorizedQuerySetMixin, APIView):
     DELETE /projects/<project_id>/integration-overrides/<type>/
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    # G-2: mutating a project's integration override is a project config change
+    # (Product_Edit / Maintainer+); reads stay Product_View.
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     def _get_project(self, project_id: int):
-        return self.get_authorized_object(pk=project_id)
+        return self.resolve(pk=project_id)
 
     @extend_schema(
         tags=[AISTApiTag.INTEGRATIONS],
@@ -801,23 +809,21 @@ class ProjectIntegrationOverrideAPI(AuthorizedQuerySetMixin, APIView):
         return Response(ProjectIntegrationOverrideSerializer(overrides, many=True).data)
 
 
-class ProjectIntegrationOverrideDetailAPI(AuthorizedQuerySetMixin, APIView):
+class ProjectIntegrationOverrideDetailAPI(AISTAPIView):
 
     """
     PUT    /projects/<project_id>/integration-overrides/<integration_type>/
     DELETE /projects/<project_id>/integration-overrides/<integration_type>/
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    # G-2: mutating a project's integration override is a project config change
+    # (Product_Edit / Maintainer+); reads stay Product_View.
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     _VALID_TYPES = {t.value for t in OrgIntegrationType}
 
     def _get_project(self, project_id: int):
-        return self.get_authorized_object(pk=project_id)
+        return self.resolve(pk=project_id)
 
     @extend_schema(
         tags=[AISTApiTag.INTEGRATIONS],
@@ -836,27 +842,16 @@ class ProjectIntegrationOverrideDetailAPI(AuthorizedQuerySetMixin, APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         project = self._get_project(project_id)
-        # Cross-org guard: an explicit org_integration must belong to the project's org.
-        # This prevents a user from routing a project's integrations through another org's credentials.
-        org_integration_id = request.data.get("org_integration")
-        if org_integration_id:
-            try:
-                oi = OrgIntegration.objects.get(pk=org_integration_id)
-            except OrgIntegration.DoesNotExist:
-                return Response(
-                    {"org_integration": "Integration not found."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if oi.organization_id != project.organization_id:
-                return Response(
-                    {"org_integration": "Integration belongs to a different organization."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
         override, _ = ProjectIntegrationOverride.objects.get_or_create(
             project=project,
             integration_type=integration_type,
         )
-        serializer = ProjectIntegrationOverrideSerializer(override, data=request.data, partial=True)
+        serializer = ProjectIntegrationOverrideSerializer(
+            override,
+            data=request.data,
+            partial=True,
+            context={"project": project},
+        )
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(ProjectIntegrationOverrideSerializer(override).data)
@@ -872,5 +867,10 @@ class ProjectIntegrationOverrideDetailAPI(AuthorizedQuerySetMixin, APIView):
     )
     def delete(self, request, project_id: int, integration_type: str):
         project = self._get_project(project_id)
-        get_object_or_404(ProjectIntegrationOverride, project=project, integration_type=integration_type).delete()
+        deleted, _ = ProjectIntegrationOverride.objects.filter(
+            project=project,
+            integration_type=integration_type,
+        ).delete()
+        if not deleted:
+            raise Http404
         return Response(status=status.HTTP_204_NO_CONTENT)

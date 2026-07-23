@@ -60,11 +60,13 @@ def get_queryset(self):
     qs = Model.objects.all()
     if self.request.user.is_superuser:
         return qs
-    return qs.filter(project__organization=self.request.user.aist_organization)
+    return qs.filter(
+        project__product__prod_type__aist_organization=self.request.user.aist_organization,
+    )
 ```
 
 - Never use `.all()` without org filter on org-owned models.
-- Org hierarchy: User → OrgMembership → Organization → AISTProject → AISTPipeline → Finding.
+- Org hierarchy: User → OrgMembership → Organization → ProductType → Product → AISTProject → AISTPipeline → Finding.
   Cross-org access is absolutely prohibited even through nested lookups. Full model
   (full vs. restricted member, per-project overrides can only narrow — never elevate — the
   org-level role) is in

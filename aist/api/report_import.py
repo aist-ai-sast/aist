@@ -12,13 +12,11 @@ from dojo.utils import is_scan_file_too_large
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.parsers import MultiPartParser
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
-from rest_framework.views import APIView
 
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.models import AISTProject
 from aist.queries import get_authorized_aist_projects
 from aist.tasks.report_import import import_report
@@ -103,18 +101,15 @@ class PipelineImportResponseSerializer(serializers.Serializer):
     run_task_id = serializers.CharField()
 
 
-class PipelineImportValidateAPI(AuthorizedQuerySetMixin, APIView):
+class PipelineImportValidateAPI(AISTAPIView):
 
     """Parse an upload and return its preview."""
 
-    permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "aist_pipeline_import"
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PRODUCT_READ)
+    token_read_only = True
 
     @extend_schema(
         request=PipelineImportValidateRequestSerializer,
@@ -162,18 +157,14 @@ class PipelineImportValidateAPI(AuthorizedQuerySetMixin, APIView):
         return Response(out.data, status=status.HTTP_200_OK)
 
 
-class PipelineImportAPI(AuthorizedQuerySetMixin, APIView):
+class PipelineImportAPI(AISTAPIView):
 
     """Persist an already-validated report upload and fabricate a pipeline from it (async)."""
 
-    permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "aist_pipeline_import"
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_Edit,
-    )
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         request=PipelineImportRequestSerializer,

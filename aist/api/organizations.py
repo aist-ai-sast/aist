@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from dojo.authorization.authorization import user_has_global_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, serializers
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response  # noqa: TC002
 
 from aist.api.schema import AISTApiTag
+from aist.authz import PUBLIC, AISTAuthzMixin
 from aist.models import Organization
 from aist.queries import get_authorized_aist_organizations, get_visible_aist_organizations
 
@@ -29,19 +29,20 @@ class AISTOrganizationSerializer(serializers.ModelSerializer):
         # any authenticated user create an Organization (and permanently claim
         # its unique name) with zero permission check, just by naming it after
         # any pre-existing Product_Type.
-        if request:
-            user_has_global_permission_or_403(request.user, Permissions.Product_Type_Add)
+        if request and not request.user.is_superuser:
+            msg = "Only a superuser can create an organization."
+            raise PermissionDenied(msg)
         organization = super().create(validated_data)
         organization.ensure_product_type()
         organization.refresh_from_db()
         return organization
 
 
-class OrganizationCreateAPI(generics.ListCreateAPIView):
+class OrganizationCreateAPI(AISTAuthzMixin, generics.ListCreateAPIView):
 
-    """Create a new Organization that can be assigned to AISTProject instances."""
+    """Create an Organization whose Product_Type owns its AIST projects."""
 
-    permission_classes = [IsAuthenticated]
+    authz = PUBLIC
     serializer_class = AISTOrganizationSerializer
     queryset = Organization.objects.all()
 
@@ -58,7 +59,7 @@ class OrganizationCreateAPI(generics.ListCreateAPIView):
     @extend_schema(
         tags=[AISTApiTag.ORGANIZATIONS.value],
         summary="Create organization",
-        description="Creates a new organization that can be used to group AIST projects.",
+        description="Creates an organization and its canonical project-owning product type.",
         request=AISTOrganizationSerializer,
         responses={201: OpenApiResponse(AISTOrganizationSerializer, description="Organization created")},
     )

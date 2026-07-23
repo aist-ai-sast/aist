@@ -8,11 +8,12 @@ from django.test import TestCase
 from django.test.client import RequestFactory
 from django.test.utils import override_settings
 from django.utils.crypto import get_random_string
+from dojo.models import Product_Type
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.exceptions import AuthenticationFailed
 
-from aist.models import AISTApiToken, ApiTokenScope
+from aist.models import AISTApiToken, ApiTokenScope, Organization
 from aist_site.middleware import AistAdminGuardMiddleware
 
 
@@ -30,6 +31,15 @@ class AistAdminGuardMiddlewareTests(TestCase):
     def setUp(self):
         self.factory = RequestFactory()
         self.middleware = AistAdminGuardMiddleware(lambda _request: HttpResponse("ok"))
+        product_type = Product_Type.objects.create(name=f"Admin guard token PT {self.id()}")
+        self.token_organization = Organization.objects.create(
+            name=f"Admin guard token org {self.id()}", product_type=product_type,
+        )
+
+    def _issue_token(self, *, user, name, scope):
+        return AISTApiToken.issue(
+            user=user, organization=self.token_organization, name=name, scope=scope,
+        )
 
     def test_allows_admin_auth_pages_for_anonymous(self):
         for path in ("/aist-admin/login/", "/aist-admin/logout/"):
@@ -251,7 +261,7 @@ class AistAdminGuardMiddlewareTests(TestCase):
 
     def test_blocks_scoped_token_on_admin_api_for_non_superuser(self):
         user = get_user_model().objects.create_user(username="scoped_client", password=_make_password())
-        _token, raw = AISTApiToken.issue(user=user, name="t", scope=ApiTokenScope.READ_WRITE)
+        _token, raw = self._issue_token(user=user, name="t", scope=ApiTokenScope.READ_WRITE)
         request = self.factory.get(
             "/aist-admin/api/v2/findings/",
             HTTP_AUTHORIZATION=f"Bearer {raw}",
@@ -266,7 +276,7 @@ class AistAdminGuardMiddlewareTests(TestCase):
         superuser = get_user_model().objects.create_superuser(
             username="scoped_root", password=_make_password(), email="scoped_root@example.com",
         )
-        _token, raw = AISTApiToken.issue(user=superuser, name="t", scope=ApiTokenScope.READ_ONLY)
+        _token, raw = self._issue_token(user=superuser, name="t", scope=ApiTokenScope.READ_ONLY)
         request = self.factory.get(
             "/aist-admin/api/v2/findings/",
             HTTP_AUTHORIZATION=f"Bearer {raw}",
@@ -280,7 +290,7 @@ class AistAdminGuardMiddlewareTests(TestCase):
         superuser = get_user_model().objects.create_superuser(
             username="scoped_swagger", password=_make_password(), email="scoped_swagger@example.com",
         )
-        _token, raw = AISTApiToken.issue(user=superuser, name="t", scope=ApiTokenScope.READ_ONLY)
+        _token, raw = self._issue_token(user=superuser, name="t", scope=ApiTokenScope.READ_ONLY)
         request = self.factory.get(
             "/aist-admin/api/v2/oa3/swagger-ui/",
             HTTP_AUTHORIZATION=f"Bearer {raw}",

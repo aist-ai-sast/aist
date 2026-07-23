@@ -127,8 +127,6 @@ class AISTAccountAPITests(AISTApiBase):
         organization = Organization.objects.create(name="Access Org")
         organization.product_type = self.prod_type
         organization.save(update_fields=["product_type"])
-        self.project.organization = organization
-        self.project.save(update_fields=["organization"])
 
         with patch("aist.api.account.get_system_setting", return_value=True):
             response = self.client.get(reverse("aist_api:me"))
@@ -173,16 +171,14 @@ class AISTAccountAPITests(AISTApiBase):
         organization = Organization.objects.create(name="Org One")
         organization.product_type = self.prod_type
         organization.save(update_fields=["product_type"])
-        self.project.organization = organization
-        self.project.save(update_fields=["organization"])
 
         pt_two = Product_Type.objects.create(name="PT Two")
-        org_two = Organization.objects.create(name="Org Two", product_type=pt_two)
+        Organization.objects.create(name="Org Two", product_type=pt_two)
         product_two = Product.objects.create(
             name="Product Two", description="desc", prod_type=pt_two, sla_configuration_id=self.sla.id,
         )
         AISTProject.objects.create(
-            product=product_two, supported_languages=["python"], compilable=False, profile={}, organization=org_two,
+            product=product_two, supported_languages=["python"], compilable=False, profile={},
         )
         role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
         Product_Type_Member.objects.create(product_type=pt_two, user=self.user, role=role_reader)
@@ -206,8 +202,6 @@ class AISTAccountAPITests(AISTApiBase):
         organization = Organization.objects.create(name="Group Org")
         organization.product_type = self.prod_type
         organization.save(update_fields=["product_type"])
-        self.project.organization = organization
-        self.project.save(update_fields=["organization"])
 
         auth_group = Group.objects.create(name="aist-group")
         group = Dojo_Group.objects.create(name="aist-group", auth_group=auth_group)

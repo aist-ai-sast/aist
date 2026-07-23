@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 from django.urls import reverse
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Product_Type_Member, Role
+from dojo.models import Role
 
 from aist.models import OrgIntegration, OrgIntegrationType
 from aist.test.test_api import AISTApiBase
@@ -27,22 +27,15 @@ class ClaudeIntegrationCreateAPITests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import Organization  # noqa: PLC0415
 
-        self.org_prod_type = Product_Type.objects.create(name="Claude API PT")
+        self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(name="Claude API Org", product_type=self.org_prod_type)
         self.role_maintainer, _ = Role.objects.get_or_create(
             id=Roles.Maintainer, defaults={"name": "Maintainer"},
         )
-        Product_Type_Member.objects.create(
-            product_type=self.org_prod_type,
-            user=self.user,
-            role=self.role_maintainer,
-        )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
         self.url = reverse("aist_api:org_integration_list_create", kwargs={"org_id": self.org.pk})
 
     def _payload(self, **overrides) -> dict:

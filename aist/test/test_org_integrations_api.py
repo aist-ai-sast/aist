@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from django.urls import reverse
 from dojo.authorization.roles_permissions import Roles
 from dojo.models import Product_Type_Member, Role
@@ -18,20 +19,12 @@ class OrgIntegrationListCreateAPITests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import Organization  # noqa: PLC0415
 
-        self.org_prod_type = Product_Type.objects.create(name="Org PT")
+        self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(name="Test Org", product_type=self.org_prod_type)
-        Product_Type_Member.objects.create(
-            product_type=self.org_prod_type,
-            user=self.user,
-            role=self.role_maintainer,
-        )
-        # Link project to org
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
         self.url = reverse("aist_api:org_integration_list_create", kwargs={"org_id": self.org.pk})
 
     def test_list_empty(self):
@@ -186,19 +179,12 @@ class OrgIntegrationDetailAPITests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import Organization  # noqa: PLC0415
 
-        self.org_prod_type = Product_Type.objects.create(name="Org PT2")
+        self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(name="Detail Org", product_type=self.org_prod_type)
-        Product_Type_Member.objects.create(
-            product_type=self.org_prod_type,
-            user=self.user,
-            role=self.role_maintainer,
-        )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
         self.integration = OrgIntegration.objects.create(
             organization=self.org,
             integration_type="GITLAB",
@@ -262,21 +248,14 @@ class OrgIntegrationValidateAPITests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import Organization  # noqa: PLC0415
 
         self.org = Organization.objects.create(
             name="Validate Org",
-            product_type=Product_Type.objects.create(name="Validate PT"),
+            product_type=self.prod_type,
         )
-        Product_Type_Member.objects.create(
-            product_type=self.org.product_type,
-            user=self.user,
-            role=self.role_maintainer,
-        )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
 
     def _post_validate(self, integration):
         url = reverse("aist_api:org_integration_validate", kwargs={"integration_id": integration.pk})
@@ -370,21 +349,14 @@ class ProjectIntegrationOverrideAPITests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import Organization  # noqa: PLC0415
 
         self.org = Organization.objects.create(
             name="Override Org",
-            product_type=Product_Type.objects.create(name="Override PT"),
+            product_type=self.prod_type,
         )
-        Product_Type_Member.objects.create(
-            product_type=self.org.product_type,
-            user=self.user,
-            role=self.role_maintainer,
-        )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
         self.integration = OrgIntegration.objects.create(
             organization=self.org,
             integration_type="SLACK",
@@ -402,6 +374,26 @@ class ProjectIntegrationOverrideAPITests(AISTApiBase):
         resp = self.client.get(self.list_url)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data, [])
+
+    def test_writer_can_read_but_cannot_put_or_delete_override(self):
+        role_writer, _ = Role.objects.get_or_create(id=Roles.Writer, defaults={"name": "Writer"})
+        Product_Type_Member.objects.filter(product_type=self.project.product.prod_type, user=self.user).update(
+            role=role_writer,
+        )
+        self.assertEqual(self.client.get(self.list_url).status_code, 200)
+        put = self.client.put(
+            self.detail_url,
+            {"org_integration": self.integration.pk, "config_override": {}},
+            format="json",
+        )
+        self.assertEqual(put.status_code, 404)
+        override = ProjectIntegrationOverride.objects.create(
+            project=self.project,
+            integration_type="SLACK",
+            org_integration=self.integration,
+        )
+        self.assertEqual(self.client.delete(self.detail_url).status_code, 404)
+        self.assertTrue(ProjectIntegrationOverride.objects.filter(pk=override.pk).exists())
 
     def test_put_creates_override(self):
         resp = self.client.put(self.detail_url, {
@@ -448,8 +440,10 @@ class ProjectIntegrationOverrideAPITests(AISTApiBase):
 class CrossOrgDataLeakTests(AISTApiBase):
 
     """
-    User from Org A must never see integrations of Org B,
-    even if a project in Org B happens to have a product in Org A's product_type.
+    User from Org A must never see integrations of a valid Org B project.
+
+    A project whose explicit organization disagrees with its Product_Type is
+    now rejected by the database and covered in test_tenant_model_integrity.py.
     """
 
     def setUp(self):
@@ -477,16 +471,14 @@ class CrossOrgDataLeakTests(AISTApiBase):
             config={"default_channel": "#b"},
         )
 
-        # Anomaly: a product in Prod_Type A is used by a project assigned to Org B
-        product_in_a = Product.objects.create(
-            name="Leaked Product",
+        product_in_b = Product.objects.create(
+            name="Isolated Product",
             description="",
-            prod_type=self.prod_type,  # Org A's product_type!
+            prod_type=self.prod_type_b,
             sla_configuration_id=self.sla.id,
         )
         AISTProject.objects.create(
-            product=product_in_a,
-            organization=self.org_b,  # but assigned to Org B
+            product=product_in_b,
             supported_languages=[],
             compilable=False,
             profile={},
@@ -525,14 +517,12 @@ class OrgIntegrationReaderAccessTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import Organization  # noqa: PLC0415
 
-        self.org_prod_type = Product_Type.objects.create(name="Reader Test PT")
+        self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(name="Reader Test Org", product_type=self.org_prod_type)
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
 
         # Give the base (Maintainer) user access to this org too so integrations exist
         Product_Type_Member.objects.get_or_create(
@@ -621,16 +611,14 @@ class IntegrationResolverTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import Organization  # noqa: PLC0415
 
         self.org = Organization.objects.create(
             name="Resolver Org",
-            product_type=Product_Type.objects.create(name="Resolver PT"),
+            product_type=self.prod_type,
         )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
 
     def test_returns_none_when_no_integration(self):
         from aist.integrations.resolver import resolve_integration  # noqa: PLC0415
@@ -694,9 +682,10 @@ class IntegrationResolverTests(AISTApiBase):
     def test_returns_none_when_project_has_no_org(self):
         from aist.integrations.resolver import resolve_integration  # noqa: PLC0415
 
-        self.project.organization = None
-        self.project.save(update_fields=["organization"])
-        result = resolve_integration(self.project, OrgIntegrationType.GITLAB)
+        # An unowned Product_Type has no derivable AIST organization and
+        # therefore fails closed. A project under an owned Product_Type cannot
+        # be detached from that organization anymore.
+        result = resolve_integration(self.other_project, OrgIntegrationType.GITLAB)
         self.assertIsNone(result)
 
 
@@ -706,19 +695,12 @@ class OrgIntegrationVPNLinkTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import Organization  # noqa: PLC0415
 
-        self.org_prod_type = Product_Type.objects.create(name="VPN Link PT")
+        self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(name="VPN Link Org", product_type=self.org_prod_type)
-        Product_Type_Member.objects.create(
-            product_type=self.org_prod_type,
-            user=self.user,
-            role=self.role_maintainer,
-        )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
 
         self.vpn = OrgIntegration.objects.create(
             organization=self.org,
@@ -811,19 +793,12 @@ class VpnProjectOverrideTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import Organization  # noqa: PLC0415
 
-        self.org_prod_type = Product_Type.objects.create(name="VPN Override PT")
+        self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(name="VPN Override Org", product_type=self.org_prod_type)
-        Product_Type_Member.objects.create(
-            product_type=self.org_prod_type,
-            user=self.user,
-            role=self.role_maintainer,
-        )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
 
         self.vpn = OrgIntegration.objects.create(
             organization=self.org,
@@ -927,7 +902,6 @@ class VpnProjectOverrideTests(AISTApiBase):
         )
         other_project = AISTProject.objects.create(
             product=other_product,
-            organization=self.org,
             supported_languages=[],
             compilable=False,
             profile={},
@@ -955,13 +929,9 @@ class VpnOrgIsolationAPITests(AISTApiBase):
 
         from aist.models import Organization  # noqa: PLC0415
 
-        self.org_pt = Product_Type.objects.create(name="VPN Iso PT")
+        self.org_pt = self.prod_type
         self.org = Organization.objects.create(name="VPN Iso Org", product_type=self.org_pt)
-        Product_Type_Member.objects.create(
-            product_type=self.org_pt, user=self.user, role=self.role_maintainer,
-        )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
 
         # Own-org VPN
         self.own_vpn = OrgIntegration.objects.create(
@@ -1039,10 +1009,9 @@ class ResolverCrossOrgDefenseTests(AISTApiBase):
 
         from aist.models import Organization  # noqa: PLC0415
 
-        self.org_pt = Product_Type.objects.create(name="Resolver Sec PT")
+        self.org_pt = self.prod_type
         self.org = Organization.objects.create(name="Resolver Sec Org", product_type=self.org_pt)
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
 
         # Legitimate org-level VPN
         self.org_vpn = OrgIntegration.objects.create(
@@ -1055,19 +1024,15 @@ class ResolverCrossOrgDefenseTests(AISTApiBase):
             organization=self.other_org, integration_type="VPN", name="Cross VPN",
         )
 
-    def test_cross_org_override_ignored_falls_back_to_org_default(self):
-        """
-        If a ProjectIntegrationOverride somehow points to a cross-org OrgIntegration,
-        resolve_integration must log an error and return the org default instead.
-        """
+    def test_cross_org_override_is_rejected_and_default_remains_effective(self):
         from aist.integrations.resolver import resolve_integration  # noqa: PLC0415
 
-        # Simulate a corrupt override bypassing the view-level check
-        ProjectIntegrationOverride.objects.create(
-            project=self.project,
-            integration_type="VPN",
-            org_integration=self.cross_vpn,  # cross-org!
-        )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ProjectIntegrationOverride.objects.create(
+                project=self.project,
+                integration_type="VPN",
+                org_integration=self.cross_vpn,
+            )
 
         result = resolve_integration(self.project, OrgIntegrationType.VPN)
         # Must NOT return the cross-org integration
@@ -1085,19 +1050,14 @@ class ValidateStatusTaskBindingTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import Organization  # noqa: PLC0415
 
         self.org = Organization.objects.create(
             name="Binding Test Org",
-            product_type=Product_Type.objects.create(name="Binding Test PT"),
+            product_type=self.prod_type,
         )
-        Product_Type_Member.objects.create(
-            product_type=self.org.product_type, user=self.user, role=self.role_maintainer,
-        )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
 
         self.my_integration = OrgIntegration.objects.create(
             organization=self.org, integration_type="GITHUB", name="My GitHub",

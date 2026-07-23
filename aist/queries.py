@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from crum import get_current_user
 from django.db.models import Q, Subquery
-from dojo.authorization.authorization import get_roles_for_permission, user_has_global_permission
+from dojo.authorization.authorization import get_roles_for_permission
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import (
     Engagement,
@@ -33,6 +33,10 @@ from aist.roles import role_rank
 
 def _resolve_user(user):
     return user or get_current_user()
+
+
+def _token_organization_id(user) -> int | None:
+    return getattr(user, "_aist_token_organization_id", None)
 
 
 def get_restricted_organization_ids(user, product_type_ids) -> set[int]:
@@ -66,8 +70,12 @@ def get_authorized_aist_products(permission, user=None):
     user = _resolve_user(user)
     if user is None:
         return Product.objects.none()
-    if user.is_superuser or user_has_global_permission(user, permission):
-        return Product.objects.all()
+    token_organization_id = _token_organization_id(user)
+    if user.is_superuser:
+        queryset = Product.objects.all()
+        if token_organization_id is not None:
+            queryset = queryset.filter(prod_type__aist_organization__id=token_organization_id)
+        return queryset
 
     roles = get_roles_for_permission(permission)
 
@@ -157,14 +165,17 @@ def get_authorized_aist_products(permission, user=None):
         prod_type_id__in=qualifying_type_ids,
     ).exclude(pk__in=capped_override_product_ids).values("pk")
 
-    return Product.objects.filter(
+    queryset = Product.objects.filter(
         Q(pk__in=Subquery(org_role_product_ids))
         | Q(pk__in=Subquery(restricted_qualifying_ids))
         | Q(pk__in=capped_qualifying_product_ids),
     ).exclude(pk__in=denied_product_ids).distinct()
+    if token_organization_id is not None:
+        queryset = queryset.filter(prod_type__aist_organization__id=token_organization_id)
+    return queryset
 
 
-def user_has_write_capability(user=None) -> bool:
+def user_has_write_capability(user=None, *, organization: Organization | None = None) -> bool:
     """
     True iff the user could actually perform a write anywhere via the AIST
     API right now — i.e. holds a qualifying role (Writer or above) on at
@@ -187,7 +198,10 @@ def user_has_write_capability(user=None) -> bool:
         return False
     if user.is_superuser:
         return True
-    return get_authorized_aist_products(Permissions.Finding_Edit, user=user).exists()
+    products = get_authorized_aist_products(Permissions.Finding_Edit, user=user)
+    if organization is not None:
+        products = products.filter(prod_type=organization.product_type)
+    return products.exists()
 
 
 def get_authorized_findings(permission, user=None):
@@ -274,8 +288,12 @@ def get_authorized_aist_organizations(permission, user=None):
     user = _resolve_user(user)
     if user is None:
         return Organization.objects.none()
-    if user.is_superuser or user_has_global_permission(user, permission):
-        return Organization.objects.all()
+    token_organization_id = _token_organization_id(user)
+    if user.is_superuser:
+        queryset = Organization.objects.all()
+        if token_organization_id is not None:
+            queryset = queryset.filter(id=token_organization_id)
+        return queryset
 
     roles = get_roles_for_permission(permission)
     authorized_product_type_roles = Product_Type_Member.objects.filter(
@@ -287,10 +305,13 @@ def get_authorized_aist_organizations(permission, user=None):
         role__in=roles,
     ).values("product_type_id")
 
-    return Organization.objects.filter(
+    queryset = Organization.objects.filter(
         Q(product_type_id__in=Subquery(authorized_product_type_roles))
         | Q(product_type_id__in=Subquery(authorized_product_type_groups)),
     ).distinct()
+    if token_organization_id is not None:
+        queryset = queryset.filter(id=token_organization_id)
+    return queryset
 
 
 def get_visible_aist_organizations(user=None):
@@ -308,13 +329,20 @@ def get_visible_aist_organizations(user=None):
     user = _resolve_user(user)
     if user is None:
         return Organization.objects.none()
-    if user.is_superuser or user_has_global_permission(user, Permissions.Product_View):
-        return Organization.objects.all()
+    token_organization_id = _token_organization_id(user)
+    if user.is_superuser:
+        queryset = Organization.objects.all()
+        if token_organization_id is not None:
+            queryset = queryset.filter(id=token_organization_id)
+        return queryset
 
     products = get_authorized_aist_products(Permissions.Product_View, user=user)
-    return Organization.objects.filter(
+    queryset = Organization.objects.filter(
         product_type_id__in=Subquery(products.values("prod_type_id")),
     ).distinct()
+    if token_organization_id is not None:
+        queryset = queryset.filter(id=token_organization_id)
+    return queryset
 
 
 def get_authorized_work_item_providers(permission, user=None):

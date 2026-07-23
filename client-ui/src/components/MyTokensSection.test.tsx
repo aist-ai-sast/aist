@@ -25,7 +25,24 @@ vi.mock("../lib/apiTokens", async (importOriginal) => {
 });
 
 vi.mock("../lib/account", () => ({
-  useAccountProfile: () => ({ data: { can_create_write_token: mockCanCreateWriteToken } }),
+  useAccountProfile: () => ({
+    data: {
+      is_superuser: false,
+      // The user may write somewhere else; the selected organization's
+      // capability must still control the scope option.
+      can_create_write_token: true,
+      organization_memberships: [{
+        organization_id: 7,
+        organization_name: "Acme",
+        role_id: mockCanCreateWriteToken ? 2 : 5,
+        role_name: mockCanCreateWriteToken ? "Writer" : "Reader",
+        can_write_findings: mockCanCreateWriteToken,
+        can_operate_projects: false,
+        can_manage_access: false,
+        can_grant_owner: false,
+      }],
+    },
+  }),
 }));
 
 vi.mock("./ToastProvider", () => ({
@@ -41,6 +58,8 @@ function createdToken(): CreatedApiToken {
     id: 1,
     name: "CI pipeline",
     scope: "read_only",
+    organization_id: 7,
+    organization_name: "Acme",
     last4: RAW_SECRET.slice(-4),
     created: "2026-01-01T00:00:00Z",
     last_used_at: null,
@@ -72,7 +91,7 @@ describe("MyTokensSection — create/delete are guarded against double-submit", 
 
   it("disables the Revoke button for a token while its own delete is pending", () => {
     mockTokens = [
-      { id: 1, name: "CI pipeline", scope: "read_only", last4: "1234", created: "2026-01-01T00:00:00Z", last_used_at: null, expires_at: null },
+      { id: 1, name: "CI pipeline", scope: "read_only", organization_id: 7, organization_name: "Acme", last4: "1234", created: "2026-01-01T00:00:00Z", last_used_at: null, expires_at: null },
     ];
     mockDeletePending = true;
     render(<MyTokensSection />);
@@ -87,7 +106,7 @@ describe("MyTokensSection — read/write scope is capped by real write capabilit
     expect(screen.queryByText(/only read-only tokens are available/)).not.toBeInTheDocument();
   });
 
-  it("disables the Read and write option and shows a hint when the user has no write access anywhere", () => {
+  it("disables the Read and write option when the selected organization is read-only", () => {
     mockCanCreateWriteToken = false;
     render(<MyTokensSection />);
     expect(screen.getByText(/only read-only tokens are available/)).toBeInTheDocument();
@@ -100,7 +119,7 @@ describe("MyTokensSection — token name is rendered as literal text, not markup
   it("renders a malicious token name as escaped text in the token list", () => {
     const xssName = "<script>alert(1)</script>";
     mockTokens = [
-      { id: 1, name: xssName, scope: "read_only", last4: "1234", created: "2026-01-01T00:00:00Z", last_used_at: null, expires_at: null },
+      { id: 1, name: xssName, scope: "read_only", organization_id: 7, organization_name: "Acme", last4: "1234", created: "2026-01-01T00:00:00Z", last_used_at: null, expires_at: null },
     ];
     render(<MyTokensSection />);
 

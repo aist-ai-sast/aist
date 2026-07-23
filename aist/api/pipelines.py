@@ -13,23 +13,19 @@ from typing import TYPE_CHECKING
 from django.db import close_old_connections, transaction
 from django.db.models import Count
 from django.http import HttpResponse, HttpResponseBadRequest, StreamingHttpResponse
-from django.shortcuts import get_object_or_404
 from django_filters import rest_framework as django_filters
-from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from openpyxl import Workbook
 from rest_framework import generics, serializers, status
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
-from rest_framework.views import APIView
 
 from aist.ai_filter import validate_and_normalize_filter
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.authz import ACTION_PERMISSIONS, INTERNAL_SERVICE, Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import (
     BACKLOG_COUNT,
@@ -130,15 +126,11 @@ class PipelineLogsProgressiveQuerySerializer(serializers.Serializer):
     bridge_start = serializers.IntegerField(required=False, min_value=0)
 
 
-class PipelineStartAPI(AuthorizedQuerySetMixin, APIView):
+class PipelineStartAPI(AISTAPIView):
 
     """Start a new AIST pipeline."""
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_project_versions,
-        permission=Permissions.Product_Edit,
-    )
+    authz = ResourcePolicy(resource=AISTProjectVersion, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         request=PipelineStartRequestSerializer,
@@ -174,7 +166,6 @@ class PipelineStartAPI(AuthorizedQuerySetMixin, APIView):
         serializer.is_valid(raise_exception=True)
         project_version = serializer.validated_data["project_version_id"]
         project = project_version.project
-        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
         provided_ai_filter = serializer.validated_data.get("ai_filter", None)
 
         if has_unfinished_pipeline(project_version):
@@ -222,16 +213,12 @@ class PipelineStartAPI(AuthorizedQuerySetMixin, APIView):
         return Response(out.data, status=status.HTTP_201_CREATED)
 
 
-class PipelineListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
+class PipelineListAPI(AISTAuthzMixin, generics.ListAPIView):
 
     """Paginated list of pipelines with simple filtering."""
 
-    permission_classes = [IsAuthenticated]
     serializer_class = PipelineResponseSerializer
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     class FilterSet(django_filters.FilterSet):
         project_id = django_filters.NumberFilter(field_name="project_id")
@@ -276,7 +263,7 @@ class PipelineListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
         filterset = self.FilterSet(
             data=self.request.query_params,
             queryset=(
-                self.get_authorized_queryset()
+                self.authorized_queryset()
                 .select_related("project", "project_version")
                 .order_by("-created")
             ),
@@ -287,15 +274,11 @@ class PipelineListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
         return filterset.qs
 
 
-class PipelineAPI(AuthorizedQuerySetMixin, APIView):
+class PipelineAPI(AISTAPIView):
 
     """Retrieve or delete a pipeline by id."""
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: PipelineResponseSerializer, 404: OpenApiResponse(description="Not found")},
@@ -304,7 +287,7 @@ class PipelineAPI(AuthorizedQuerySetMixin, APIView):
         description="Returns pipeline status and AI response.",
     )
     def get(self, request, pipeline_id: str, *args, **kwargs) -> Response:
-        p = self.get_authorized_object(id=pipeline_id)
+        p = self.resolve(id=pipeline_id)
         data = {
             "id": p.id,
             "status": p.status,
@@ -325,8 +308,7 @@ class PipelineAPI(AuthorizedQuerySetMixin, APIView):
         description="Deletes the specified AISTPipeline by id.",
     )
     def delete(self, request, pipeline_id: str, *args, **kwargs) -> Response:
-        p = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
-        user_has_permission_or_403(request.user, p.project.product, Permissions.Product_Edit)
+        p = self.resolve(id=pipeline_id)
         if not is_terminal_pipeline_status(p.status):
             return Response(status=status.HTTP_400_BAD_REQUEST)
         p.delete()
@@ -832,12 +814,8 @@ def pipeline_enrich_progress_response(pipeline_id: str) -> StreamingHttpResponse
     return resp
 
 
-class PipelineStopAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class PipelineStopAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         request=None,
@@ -845,18 +823,14 @@ class PipelineStopAPI(AuthorizedQuerySetMixin, APIView):
         tags=[AISTApiTag.PIPELINES.value],
     )
     def post(self, request, pipeline_id: str):
-        pipeline = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
-        user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
+        pipeline = self.resolve(id=pipeline_id)
         stop_pipeline(pipeline)
         return Response({"ok": True})
 
 
-class ExportAIResultsAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class ExportAIResultsAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PRODUCT_READ)
+    token_read_only = True
 
     @extend_schema(
         request=ExportAIResultsRequestSerializer,
@@ -867,7 +841,7 @@ class ExportAIResultsAPI(AuthorizedQuerySetMixin, APIView):
         tags=[AISTApiTag.PIPELINES.value],
     )
     def post(self, request, pipeline_id: str):
-        pipeline = self.get_authorized_object(id=pipeline_id)
+        pipeline = self.resolve(id=pipeline_id)
         serializer = ExportAIResultsRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         return export_ai_results_response(
@@ -876,19 +850,15 @@ class ExportAIResultsAPI(AuthorizedQuerySetMixin, APIView):
         )
 
 
-class PipelineLogsProgressiveAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class PipelineLogsProgressiveAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: OpenApiResponse(description="Log chunk")},
         tags=[AISTApiTag.PIPELINES.value],
     )
     def get(self, request, pipeline_id: str):
-        pipeline = self.get_authorized_object(id=pipeline_id)
+        pipeline = self.resolve(id=pipeline_id)
         serializer = PipelineLogsProgressiveQuerySerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
         return pipeline_logs_progressive_response(
@@ -899,118 +869,90 @@ class PipelineLogsProgressiveAPI(AuthorizedQuerySetMixin, APIView):
         )
 
 
-class PipelineLogsFullAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class PipelineLogsFullAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: OpenApiResponse(description="Full log")},
         tags=[AISTApiTag.PIPELINES.value],
     )
     def get(self, request, pipeline_id: str):
-        pipeline = self.get_authorized_object(id=pipeline_id)
+        pipeline = self.resolve(id=pipeline_id)
         return pipeline_logs_full_response(pipeline)
 
 
-class PipelineLogsDownloadAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class PipelineLogsDownloadAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: OpenApiResponse(description="Log download")},
         tags=[AISTApiTag.PIPELINES.value],
     )
     def get(self, request, pipeline_id: str):
-        pipeline = self.get_authorized_object(id=pipeline_id)
+        pipeline = self.resolve(id=pipeline_id)
         return pipeline_logs_download_response(pipeline)
 
 
-class PipelineLogsStreamAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class PipelineLogsStreamAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: OpenApiResponse(description="SSE stream")},
         tags=[AISTApiTag.PIPELINES.value],
     )
     def get(self, request, pipeline_id: str):
-        pipeline = self.get_authorized_object(id=pipeline_id)
+        pipeline = self.resolve(id=pipeline_id)
         return stream_logs_sse_response(pipeline)
 
 
-class PipelineLogsStreamRedisAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class PipelineLogsStreamRedisAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: OpenApiResponse(description="SSE stream (redis)")},
         tags=[AISTApiTag.PIPELINES.value],
     )
     def get(self, request, pipeline_id: str):
-        pipeline = self.get_authorized_queryset().only("id").filter(id=pipeline_id).first()
+        pipeline = self.authorized_queryset().only("id").filter(id=pipeline_id).first()
         if not pipeline:
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
         return stream_logs_sse_redis_response(pipeline)
 
 
-class PipelineStatusStreamAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class PipelineStatusStreamAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: OpenApiResponse(description="Status SSE stream")},
         tags=[AISTApiTag.PIPELINES.value],
     )
     def get(self, request, pipeline_id: str):
-        if not self.get_authorized_queryset().filter(id=pipeline_id).exists():
+        if not self.authorized_queryset().filter(id=pipeline_id).exists():
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
         return pipeline_status_stream_response(pipeline_id)
 
 
-class PipelineDeduplicationProgressAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class PipelineDeduplicationProgressAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: OpenApiResponse(description="Deduplication progress")},
         tags=[AISTApiTag.PIPELINES.value],
     )
     def get(self, request, pipeline_id: str):
-        pipeline = self.get_authorized_object(id=pipeline_id)
+        pipeline = self.resolve(id=pipeline_id)
         return Response(deduplication_progress_payload(pipeline))
 
 
-class PipelineEnrichProgressAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class PipelineEnrichProgressAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: OpenApiResponse(description="Enrichment SSE stream")},
         tags=[AISTApiTag.PIPELINES.value],
     )
     def get(self, request, pipeline_id: str):
-        if not self.get_authorized_queryset().filter(id=pipeline_id).exists():
+        if not self.authorized_queryset().filter(id=pipeline_id).exists():
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
         return pipeline_enrich_progress_response(pipeline_id)
 
@@ -1023,11 +965,11 @@ class PipelineSourceInfoSerializer(serializers.Serializer):
     languages = serializers.ListField(child=serializers.CharField())
 
 
-class PipelineSourceInfoAPI(AuthorizedQuerySetMixin, APIView):
+class PipelineSourceInfoAPI(AISTAPIView):
 
     """Internal endpoint for MCP services to resolve pipeline source path."""
 
-    permission_classes = [IsAuthenticated]
+    authz = INTERNAL_SERVICE
 
     @extend_schema(
         responses={
@@ -1043,10 +985,14 @@ class PipelineSourceInfoAPI(AuthorizedQuerySetMixin, APIView):
         ),
     )
     def get(self, request, pipeline_id: str):
-        pipeline = get_object_or_404(
-            AISTPipeline.objects.select_related("project__product"),
-            id=pipeline_id,
+        pipeline = (
+            get_authorized_aist_pipelines(ACTION_PERMISSIONS[Action.PRODUCT_READ], user=request.user)
+            .select_related("project__product")
+            .filter(id=pipeline_id)
+            .first()
         )
+        if pipeline is None:
+            return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
 
         if is_terminal_pipeline_status(pipeline.status):
             return Response(

@@ -29,11 +29,12 @@ from dataclasses import dataclass, field
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, connection, transaction
 from django.db.models import Count
+from django.utils import timezone
 from django.utils.crypto import get_random_string
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions, Roles
-from dojo.models import Product_Member, Product_Type_Member, Role, UserContactInfo
-from rest_framework.exceptions import ValidationError
+from dojo.models import Product_Member, Product_Type_Group, Product_Type_Member, Role, UserContactInfo
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from aist.members.email import send_set_password_email
 from aist.models import (
@@ -45,7 +46,7 @@ from aist.models import (
     OrgMembershipHistory,
     ProjectAccessDenial,
 )
-from aist.roles import ROLE_RANK, role_rank
+from aist.roles import role_rank
 
 User = get_user_model()
 
@@ -58,6 +59,12 @@ User = get_user_model()
 # they already have working credentials, so no email is sent.
 INVITE_OUTCOME_INVITED = "invited"
 INVITE_OUTCOME_EXISTING_USER_NO_EMAIL = "existing_user_added_no_email"
+AIST_ASSIGNABLE_ROLE_IDS = {
+    Roles.Reader.value,
+    Roles.Writer.value,
+    Roles.Maintainer.value,
+    Roles.Owner.value,
+}
 
 
 @dataclass(slots=True)
@@ -137,11 +144,10 @@ class OrganizationMembershipService:
 
         return sorted(members, key=lambda m: (m.username or "").lower())
 
-    @staticmethod
-    def _token_counts(user_ids) -> dict[int, int]:
+    def _token_counts(self, user_ids) -> dict[int, int]:
         rows = (
             AISTApiToken.objects
-            .filter(user_id__in=user_ids)
+            .filter(user_id__in=user_ids, organization=self.organization, revoked_at__isnull=True)
             .values("user_id")
             .annotate(count=Count("id"))
         )
@@ -176,6 +182,9 @@ class OrganizationMembershipService:
         project_grants: list[dict] | None = None,
     ) -> tuple[User, str]:
         self._require_full_or_restricted(role_id, project_grants)
+        requested_role = self._role_or_400(role_id) if role_id is not None else None
+        if requested_role is not None:
+            self._require_actor_can_assign(requested_role.id)
         user, created = self._get_or_create_user(email, first_name, last_name)
         # A deactivated user only got that way by remove_member finding them
         # orphaned (no membership left in ANY org) — an active user of another
@@ -195,7 +204,7 @@ class OrganizationMembershipService:
             # email previously belonged to a restricted member of this same
             # org who was removed — remove_member clears the scope row, but
             # being explicit here doesn't depend on that invariant holding.
-            self._set_org_role(user, self._role_or_400(role_id))
+            self._set_org_role(user, requested_role)
             self._set_restricted(user, restricted=False)
         else:
             # Restricted member: MUST still be an org member (baseline Reader), then
@@ -222,8 +231,11 @@ class OrganizationMembershipService:
 
     @transaction.atomic
     def change_role(self, *, user_id: int, role_id: int) -> None:
+        if user_id == self.actor.id:
+            raise ValidationError({"user_id": "You cannot change your own organization role."})
         member = self._org_member_or_404(user_id)
         new_role = self._role_or_400(role_id)
+        self._require_actor_can_assign(new_role.id)
         # Touching an Owner in either direction (promoting to, or editing/demoting
         # an existing one) requires the Add_Owner permission. Mirrors DefectDojo's
         # own edit_product_type_member, which gates on the CURRENT role too — so a
@@ -265,6 +277,15 @@ class OrganizationMembershipService:
         OrgMemberAccessScope.objects.filter(
             organization=self.organization, user_id=user_id,
         ).delete()
+        ProjectAccessDenial.objects.filter(
+            user_id=user_id,
+            project__product__prod_type=self.product_type,
+        ).delete()
+        AISTApiToken.objects.filter(
+            user_id=user_id,
+            organization=self.organization,
+            revoked_at__isnull=True,
+        ).update(revoked_at=timezone.now())
         self._deactivate_if_orphaned(user_id)
         self._record_history(
             target_user=target_user,
@@ -532,9 +553,25 @@ class OrganizationMembershipService:
 
     def _role_or_400(self, role_id: int) -> Role:
         role = Role.objects.filter(id=role_id).first()
-        if role is None or role_id not in ROLE_RANK:
+        if role is None or role_id not in AIST_ASSIGNABLE_ROLE_IDS:
             raise ValidationError({"role_id": "Unknown role."})
         return role
+
+    def _require_actor_can_assign(self, role_id: int) -> None:
+        if self.actor.is_superuser:
+            return
+        direct_role_ids = Product_Type_Member.objects.filter(
+            product_type=self.product_type,
+            user=self.actor,
+        ).values_list("role_id", flat=True)
+        group_role_ids = Product_Type_Group.objects.filter(
+            product_type=self.product_type,
+            group__users=self.actor,
+        ).values_list("role_id", flat=True)
+        actor_rank = max((role_rank(value) for value in [*direct_role_ids, *group_role_ids]), default=-1)
+        if role_rank(role_id) > actor_rank:
+            msg = "Cannot assign a role higher than your own organization role."
+            raise PermissionDenied(msg)
 
     def _member_or_404(self, user_id: int) -> User:
         """Return the user iff they are an organization member (Product_Type_Member)."""

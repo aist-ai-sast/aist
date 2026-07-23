@@ -4,22 +4,17 @@ from django.core.cache import cache
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.models import AISTProject
 from aist.queries import get_authorized_aist_projects, get_authorized_findings
 
 
-class AvailableFindingTagsAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+class AvailableFindingTagsAPI(AISTAPIView):
+    # Read-only; write action is a fail-secure default (GET only).
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     class QuerySerializer(serializers.Serializer):
         project_id = serializers.PrimaryKeyRelatedField(
@@ -58,10 +53,7 @@ class AvailableFindingTagsAPI(AuthorizedQuerySetMixin, APIView):
         if cached is not None:
             return Response({"tags": cached})
 
-        findings = self.get_authorized_queryset(
-            getter=get_authorized_findings,
-            permission=Permissions.Finding_View,
-        )
+        findings = get_authorized_findings(Permissions.Finding_View, user=request.user)
         if project:
             findings = findings.filter(test__engagement__product_id=project.product_id)
         tags = (

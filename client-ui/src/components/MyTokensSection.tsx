@@ -39,7 +39,16 @@ export default function MyTokensSection() {
   const deleteToken = useDeleteToken();
   const toast = useToast();
 
-  const canCreateWriteToken = profile.data?.can_create_write_token ?? false;
+  const [name, setName] = useState("");
+  const [scope, setScope] = useState<ApiTokenScope>("read_only");
+  const [organizationId, setOrganizationId] = useState<number | null>(null);
+  const [created, setCreated] = useState<CreatedApiToken | null>(null);
+  const [revealed, setRevealed] = useState(false);
+  const organizations = profile.data?.organization_memberships ?? [];
+  const selectedMembership = organizations.find(
+    (organization) => organization.organization_id === organizationId,
+  );
+  const canCreateWriteToken = Boolean(profile.data?.is_superuser || selectedMembership?.can_write_findings);
   const scopeOptions = [
     { value: "read_only", label: "Read only" },
     {
@@ -48,11 +57,6 @@ export default function MyTokensSection() {
       disabled: !canCreateWriteToken,
     },
   ];
-
-  const [name, setName] = useState("");
-  const [scope, setScope] = useState<ApiTokenScope>("read_only");
-  const [created, setCreated] = useState<CreatedApiToken | null>(null);
-  const [revealed, setRevealed] = useState(false);
 
   // If write access is (or becomes) unavailable, never leave "read_write" selected —
   // the backend would reject it anyway (aist.queries.user_has_write_capability), this
@@ -63,13 +67,23 @@ export default function MyTokensSection() {
     }
   }, [scope, canCreateWriteToken]);
 
+  useEffect(() => {
+    if (organizationId === null && organizations.length) {
+      setOrganizationId(organizations[0].organization_id);
+    }
+  }, [organizationId, organizations]);
+
   async function handleCreate() {
     if (!name.trim()) {
       toast.push("Give the token a name.", "error");
       return;
     }
+    if (organizationId === null) {
+      toast.push("Choose an organization for the token.", "error");
+      return;
+    }
     try {
-      const token = await createToken.mutateAsync({ name: name.trim(), scope });
+      const token = await createToken.mutateAsync({ name: name.trim(), scope, organization_id: organizationId });
       setCreated(token);
       setName("");
       setScope("read_only");
@@ -89,7 +103,7 @@ export default function MyTokensSection() {
     >
       <div className="space-y-4 text-sm text-slate-200">
         <p className="text-xs text-slate-400">
-          Personal tokens authenticate to the AIST API only, scoped to your own permissions.
+          Personal tokens authenticate to the AIST API only and are restricted to one organization.
         </p>
 
         {created ? (
@@ -129,7 +143,7 @@ export default function MyTokensSection() {
           </div>
         ) : null}
 
-        <div className="grid gap-3 sm:grid-cols-[1fr_12rem_auto] sm:items-end">
+        <div className="grid gap-3 sm:grid-cols-[1fr_12rem_12rem_auto] sm:items-end">
           <label className="text-xs text-slate-400">
             Name
             <TextInput
@@ -141,6 +155,16 @@ export default function MyTokensSection() {
               onChange={(event) => setName(event.target.value)}
             />
           </label>
+          <SelectField
+            label="Organization"
+            value={organizationId === null ? "" : String(organizationId)}
+            onChange={(value) => setOrganizationId(Number(value))}
+            options={organizations.map((organization) => ({
+              value: String(organization.organization_id),
+              label: organization.organization_name,
+            }))}
+            disabled={createToken.isPending || organizations.length === 0}
+          />
           <SelectField
             label="Scope"
             value={scope}
@@ -157,7 +181,7 @@ export default function MyTokensSection() {
         </div>
         {!canCreateWriteToken ? (
           <p className="text-[11px] text-slate-400">
-            You have read-only access everywhere, so only read-only tokens are available.
+            You have read-only access in this organization, so only read-only tokens are available.
           </p>
         ) : null}
 
@@ -174,7 +198,7 @@ export default function MyTokensSection() {
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium text-slate-100">{token.name}</div>
                     <div className="mt-0.5 text-[11px] text-slate-400">
-                      {SCOPE_LABEL[token.scope]} · ····{token.last4}
+                      {token.organization_name} · {SCOPE_LABEL[token.scope]} · ····{token.last4}
                       {token.expires_at ? ` · expires ${new Date(token.expires_at).toLocaleDateString()}` : ""}
                       {token.last_used_at ? ` · last used ${new Date(token.last_used_at).toLocaleDateString()}` : " · never used"}
                     </div>

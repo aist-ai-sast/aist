@@ -12,6 +12,7 @@ const FindingDetailTabs = lazy(() => import("./FindingDetailTabs"));
 type DetailPanelProps = {
   finding?: Finding;
   permissionProductId?: number;
+  permissionOrganizationId?: number;
   aiResponse?: AIResponse | null;
   embedded?: boolean;
   selectedTags?: string[];
@@ -27,6 +28,7 @@ type DetailPanelProps = {
 export default function DetailPanel({
   finding,
   permissionProductId,
+  permissionOrganizationId,
   aiResponse,
   embedded = false,
   selectedTags,
@@ -117,6 +119,7 @@ export default function DetailPanel({
           <FindingDetailTabs
             finding={finding}
             permissionProductId={permissionProductId}
+            permissionOrganizationId={permissionOrganizationId}
             aiResponse={aiResponse}
             embedded={embedded}
             selectedTags={selectedTags}
@@ -130,12 +133,14 @@ export default function DetailPanel({
         <FindingSeverityControl
           finding={finding}
           permissionProductId={permissionProductId}
+          permissionOrganizationId={permissionOrganizationId}
           onChanged={(severity) => onSeverityChanged?.(finding.id, severity)}
           isLocked={isStatusEditLocked}
         />
         <FindingStatusActions
           finding={finding}
           permissionProductId={permissionProductId}
+          permissionOrganizationId={permissionOrganizationId}
           onApplied={(reason) => onCloseApplied?.(finding.id, reason)}
           onReopened={() => onReopened?.(finding.id)}
           isLocked={isStatusEditLocked}

@@ -9,9 +9,7 @@ from dojo.models import Product, SLA_Configuration
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.project_versions import (
     SCRIPT_SOURCE_PROJECT_REVISION,
@@ -19,17 +17,14 @@ from aist.api.project_versions import (
     SCRIPT_SOURCE_VERSION,
     _serialize_version_script,
 )
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.authz import Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.integrations.claude import claude_auth_env
 from aist.integrations.resolver import resolve_integration
 from aist.models import AISTProject, AISTProjectScript, Organization, OrgIntegrationType
 from aist.profile import ProjectProfile
-from aist.queries import (
-    get_authorized_aist_organizations,
-    get_authorized_aist_projects,
-)
+from aist.queries import get_authorized_aist_organizations
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 # Script content hard cap: 256 KB is more than enough for any real entrypoint script.
@@ -176,19 +171,12 @@ class ProjectUpdateRequestSerializer(serializers.Serializer):
     supported_languages = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     compilable = serializers.BooleanField(required=False, default=False)
     profile = serializers.JSONField(required=False, default=dict)
-    organization = serializers.PrimaryKeyRelatedField(queryset=Organization.objects.all(), required=False, allow_null=True)
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        request = self.context.get("request")
-        if not request:
-            return
-        self.fields["organization"].queryset = get_authorized_aist_organizations(
-            Permissions.Product_View,
-            user=request.user,
-        )
 
     def to_internal_value(self, data):
+        if "organization" in data:
+            raise serializers.ValidationError({
+                "organization": "Project organization is read-only and derived from its product type.",
+            })
         mutable = data.copy()
         raw_languages = mutable.get("supported_languages")
         if isinstance(raw_languages, str):
@@ -209,16 +197,12 @@ class ProjectUpdateRequestSerializer(serializers.Serializer):
         return value
 
 
-class AISTProjectListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
+class AISTProjectListAPI(AISTAuthzMixin, generics.ListAPIView):
 
     """List all current AISTProjects."""
 
     serializer_class = AISTProjectSerializer
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.PROJECTS.value],
@@ -230,7 +214,7 @@ class AISTProjectListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
 
     def get_queryset(self):
         return (
-            self.get_authorized_queryset()
+            self.authorized_queryset_for_request()
             .select_related("product")
             .order_by("created")
         )
@@ -283,7 +267,6 @@ class AISTProjectListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
         with transaction.atomic():
             project = AISTProject.objects.create(
                 product=product,
-                organization=org,
                 compilable=serializer.validated_data["compilable"],
                 supported_languages=serializer.validated_data["supported_languages"],
                 profile=serializer.validated_data["profile"] or {},
@@ -296,14 +279,10 @@ class AISTProjectListAPI(AuthorizedQuerySetMixin, generics.ListAPIView):
         return Response({"ok": True, "project": out.data}, status=status.HTTP_201_CREATED)
 
 
-class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIView):
+class AISTProjectDetailAPI(AISTAuthzMixin, generics.RetrieveDestroyAPIView):
     serializer_class = AISTProjectSerializer
-    permission_classes = [IsAuthenticated]
     lookup_field = "id"
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={204: OpenApiResponse(description="AIST project deleted"), 404: OpenApiResponse(description="Not found")},
@@ -312,11 +291,7 @@ class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIV
         description="Deletes the specified AISTProject by id.",
     )
     def delete(self, request, project_id: int, *args, **kwargs) -> Response:
-        p = self.get_authorized_object(
-            permission=Permissions.Product_Edit,
-            id=project_id,
-        )
-        user_has_permission_or_403(request.user, p.product, Permissions.Product_Edit)
+        p = self.resolve(id=project_id)
         p.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -327,9 +302,7 @@ class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIV
         description="Get the specified AISTProject by id.",
     )
     def get(self, request, project_id: int, *args, **kwargs) -> Response:
-        project = self.get_authorized_object(
-            id=project_id,
-        )
+        project = self.resolve(id=project_id)
         serializer = AISTProjectSerializer(project)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -340,11 +313,7 @@ class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIV
         tags=[AISTApiTag.PROJECTS.value],
     )
     def post(self, request, project_id: int, *args, **kwargs) -> Response:
-        project = self.get_authorized_object(
-            permission=Permissions.Product_Edit,
-            id=project_id,
-        )
-        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+        project = self.resolve(id=project_id)
         serializer = ProjectUpdateRequestSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         payload, errors = update_project_from_payload(project=project, payload=serializer.validated_data)
@@ -353,7 +322,7 @@ class AISTProjectDetailAPI(AuthorizedQuerySetMixin, generics.RetrieveDestroyAPIV
         return Response({"ok": True, "project": payload})
 
 
-class AISTProjectRegenerateAnalysisAPI(AuthorizedQuerySetMixin, APIView):
+class AISTProjectRegenerateAnalysisAPI(AISTAPIView):
 
     """
     Manually re-trigger the Claude-based init-script + exclusion-profile
@@ -366,11 +335,7 @@ class AISTProjectRegenerateAnalysisAPI(AuthorizedQuerySetMixin, APIView):
     has changed significantly).
     """
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         request=None,
@@ -389,11 +354,7 @@ class AISTProjectRegenerateAnalysisAPI(AuthorizedQuerySetMixin, APIView):
         ),
     )
     def post(self, request, project_id: int, *args, **kwargs) -> Response:
-        project = self.get_authorized_object(
-            permission=Permissions.Product_Edit,
-            id=project_id,
-        )
-        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+        project = self.resolve(id=project_id)
 
         if not project.repository:
             return Response(
@@ -417,15 +378,11 @@ class AISTProjectRegenerateAnalysisAPI(AuthorizedQuerySetMixin, APIView):
         return Response({"queued": True}, status=status.HTTP_202_ACCEPTED)
 
 
-class AISTProjectScriptListCreateAPI(AuthorizedQuerySetMixin, APIView):
+class AISTProjectScriptListCreateAPI(AISTAPIView):
 
     """List script revisions or create a new revision for a project."""
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: AISTProjectScriptSerializer(many=True)},
@@ -434,7 +391,7 @@ class AISTProjectScriptListCreateAPI(AuthorizedQuerySetMixin, APIView):
         description="Returns all script revisions for the project (metadata only, no content).",
     )
     def get(self, request, project_id: int) -> Response:
-        project = self.get_authorized_object(id=project_id)
+        project = self.resolve(id=project_id)
         scripts = project.script_revisions.select_related("created_by").order_by("-created_at")
         serializer = AISTProjectScriptSerializer(scripts, many=True)
         return Response(serializer.data)
@@ -456,11 +413,7 @@ class AISTProjectScriptListCreateAPI(AuthorizedQuerySetMixin, APIView):
         ),
     )
     def post(self, request, project_id: int) -> Response:
-        project = self.get_authorized_object(
-            permission=Permissions.Product_Edit,
-            id=project_id,
-        )
-        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+        project = self.resolve(id=project_id)
         serializer = AISTProjectScriptCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -504,15 +457,11 @@ class AISTProjectScriptListCreateAPI(AuthorizedQuerySetMixin, APIView):
         return Response(AISTProjectScriptContentSerializer(script).data, status=response_status)
 
 
-class AISTProjectScriptDetailAPI(AuthorizedQuerySetMixin, APIView):
+class AISTProjectScriptDetailAPI(AISTAPIView):
 
     """Retrieve a single script revision (with content)."""
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={
@@ -524,7 +473,7 @@ class AISTProjectScriptDetailAPI(AuthorizedQuerySetMixin, APIView):
         description="Returns the content of a specific script revision.",
     )
     def get(self, request, project_id: int, script_id: int) -> Response:
-        project = self.get_authorized_object(id=project_id)
+        project = self.resolve(id=project_id)
         script = get_object_or_404(
             AISTProjectScript.objects.select_related("created_by").filter(
                 Q(project_id=None) | Q(project_id=project.id),
@@ -534,15 +483,11 @@ class AISTProjectScriptDetailAPI(AuthorizedQuerySetMixin, APIView):
         return Response(AISTProjectScriptContentSerializer(script).data)
 
 
-class AISTProjectActiveScriptAPI(AuthorizedQuerySetMixin, APIView):
+class AISTProjectActiveScriptAPI(AISTAPIView):
 
     """Retrieve the active script content for a project (shared or project-specific)."""
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={
@@ -558,7 +503,7 @@ class AISTProjectActiveScriptAPI(AuthorizedQuerySetMixin, APIView):
         ),
     )
     def get(self, request, project_id: int) -> Response:
-        project = self.get_authorized_object(id=project_id)
+        project = self.resolve(id=project_id)
         source = self._resolve_active_script_source(project)
         return Response(_serialize_version_script(project.active_script, source))
 
@@ -616,7 +561,6 @@ def update_project_from_payload(*, project: AISTProject, payload: dict):
     compilable = bool(payload.get("compilable"))
     supported_languages_raw = payload.get("supported_languages") or []
     profile = payload.get("profile") or {}
-    organization = payload.get("organization") if "organization" in payload else project.organization
 
     cfg = _load_analyzers_config()
     if not cfg:
@@ -626,20 +570,11 @@ def update_project_from_payload(*, project: AISTProject, payload: dict):
     project.compilable = compilable
     project.supported_languages = languages
     project.profile = profile or {}
-    if organization is not None:
-        if not organization.product_type_id:
-            organization.ensure_product_type()
-        if project.product.prod_type_id != organization.product_type_id:
-            return None, {
-                "organization": "Organization product type does not match project product type.",
-            }
-    project.organization = organization
     project.save(
         update_fields=[
             "compilable",
             "supported_languages",
             "profile",
-            "organization",
             "updated",
         ],
     )
@@ -656,30 +591,20 @@ def update_project_from_payload(*, project: AISTProject, payload: dict):
     }, None
 
 
-class AISTProjectMetaAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+class AISTProjectMetaAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={200: OpenApiResponse(description="Project meta")},
         tags=[AISTApiTag.PROJECTS.value],
     )
     def get(self, request, project_id: int):
-        project = self.get_authorized_object(
-            id=project_id,
-        )
+        project = self.resolve(id=project_id)
         return Response(project_meta_payload(project))
 
 
-class AISTDefaultAnalyzersAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+class AISTDefaultAnalyzersAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         request=DefaultAnalyzersRequestSerializer,
@@ -693,7 +618,7 @@ class AISTDefaultAnalyzersAPI(AuthorizedQuerySetMixin, APIView):
         time_class = serializer.validated_data.get("time_class_level") or "slow"
         langs = serializer.validated_data.get("languages", [])
 
-        project = self.get_authorized_queryset().filter(id=project_id).first()
+        project = self.authorized_queryset_for_request().filter(id=project_id).first()
         if not project:
             return Response({"detail": "Project not found"}, status=status.HTTP_404_NOT_FOUND)
 

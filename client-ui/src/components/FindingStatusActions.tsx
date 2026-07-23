@@ -66,6 +66,7 @@ const statusHelpRows = [
 type FindingStatusActionsProps = {
   finding: Finding;
   permissionProductId?: number;
+  permissionOrganizationId?: number;
   onApplied?: (reason: FindingCloseReason | "risk_accepted") => void;
   onReopened?: () => void;
   isLocked?: boolean;
@@ -74,6 +75,7 @@ type FindingStatusActionsProps = {
 export default function FindingStatusActions({
   finding,
   permissionProductId,
+  permissionOrganizationId,
   onApplied,
   onReopened,
   isLocked = false,
@@ -265,7 +267,7 @@ export default function FindingStatusActions({
 
   return (
     <div>
-      <PermissionGate action="enable">
+      <PermissionGate action="enable" organizationId={permissionOrganizationId}>
         <div className="flex flex-wrap items-end gap-2">
           {/* ── Active finding: Close + Risk Approval ── */}
           {finding.active ? (

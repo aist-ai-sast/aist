@@ -21,7 +21,7 @@ def launching_dashboard(request: HttpRequest) -> HttpResponse:
     organizations = get_authorized_aist_organizations(Permissions.Product_View, user=request.user).order_by("name")
     projects = (
         get_authorized_aist_projects(Permissions.Product_View, user=request.user)
-        .select_related("product", "organization")
+        .select_related("product__prod_type__aist_organization")
         .order_by("product__name", "id")
     )
 

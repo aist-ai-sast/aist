@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Engagement, Test
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
-from aist.queries import get_authorized_engagements, get_authorized_tests
+from aist.authz import Action, AISTAPIView, ResourcePolicy
 
 
 class AISTTestDetailSerializer(serializers.ModelSerializer):
@@ -24,12 +20,9 @@ class AISTTestDetailSerializer(serializers.ModelSerializer):
         fields = ("id", "engagement", "engagement_id")
 
 
-class AISTTestDetailAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_tests,
-        permission=Permissions.Test_View,
-    )
+class AISTTestDetailAPI(AISTAPIView):
+    # Read-only linkage endpoint; write action is a fail-secure default (no mutating handler).
+    authz = ResourcePolicy(resource=Test, read=Action.TEST_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],
@@ -37,7 +30,7 @@ class AISTTestDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: AISTTestDetailSerializer},
     )
     def get(self, request, test_id: int):
-        test = self.get_authorized_object(id=test_id)
+        test = self.resolve(id=test_id)
         return Response(AISTTestDetailSerializer(test).data)
 
 
@@ -52,12 +45,8 @@ class AISTEngagementDetailSerializer(serializers.ModelSerializer):
         fields = ("id", "product", "product_id")
 
 
-class AISTEngagementDetailAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_engagements,
-        permission=Permissions.Engagement_View,
-    )
+class AISTEngagementDetailAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=Engagement, read=Action.ENGAGEMENT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],
@@ -65,5 +54,5 @@ class AISTEngagementDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: AISTEngagementDetailSerializer},
     )
     def get(self, request, engagement_id: int):
-        engagement = self.get_authorized_object(id=engagement_id)
+        engagement = self.resolve(id=engagement_id)
         return Response(AISTEngagementDetailSerializer(engagement).data)

@@ -20,7 +20,7 @@ _import_sast_pipeline_package()
 from pipeline.defect_dojo.repo_info import RepoParams  # noqa: E402
 
 
-class _ReportAlreadyImported(Exception):
+class _ReportAlreadyImportedError(Exception):
     pass
 
 
@@ -46,7 +46,7 @@ def _resolve_version_and_mark_uploading(
             return None
         launch_data = pipeline.launch_data or {}
         if launch_data.get("source") == "manual_import" and launch_data.get("sha256") == sha256:
-            raise _ReportAlreadyImported
+            raise _ReportAlreadyImportedError
         version = resolve_import_version(project, commit_hash)
         pipeline.project_version = version
         set_pipeline_status(pipeline, AISTStatus.UPLOADING_RESULTS, update_fields_extra=["project_version"])
@@ -131,7 +131,7 @@ def import_report(
             log_level=log_level,
             logger=logger,
         )
-    except _ReportAlreadyImported:
+    except _ReportAlreadyImportedError:
         logger.info("Report with sha256=%s is already attached to pipeline %s.", sha256, pipeline_id)
         uninstall_pipeline_file_logging(pipeline_id)
     except Exception:

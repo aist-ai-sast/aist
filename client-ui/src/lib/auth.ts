@@ -8,6 +8,10 @@ export type OrganizationMembership = {
   organization_name: string;
   role_id: number | null;
   role_name: string;
+  can_write_findings?: boolean;
+  can_operate_projects?: boolean;
+  can_manage_access?: boolean;
+  can_grant_owner?: boolean;
 };
 
 export type UserProfile = {

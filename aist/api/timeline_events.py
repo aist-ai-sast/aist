@@ -12,14 +12,13 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.common import CommaSeparatedListField, TimezoneNameField
 from aist.api.finding_event_stream import FindingEventStream
 from aist.api.finding_history import history_events_with_users
 from aist.api.schema import AISTApiTag
+from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.queries import get_authorized_findings
 
 if TYPE_CHECKING:
@@ -119,8 +118,9 @@ class FindingTimelineRowSerializer(serializers.Serializer):
     link = serializers.CharField()
 
 
-class AISTFindingTimelineAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class AISTFindingTimelineAPI(AISTAPIView):
+    # Read-only aggregation; scopes findings internally via get_authorized_findings.
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.PROJECT_OPERATE)
 
     @staticmethod
     def _render_owner(user_row: dict[str, str | None] | None) -> str:

@@ -51,6 +51,20 @@ class TokenTestBase(TestCase):
         self.user = User.objects.create_user("alice", "alice@example.com", "pass")
         self.other = User.objects.create_user("bob", "bob@example.com", "pass")
         self.superuser = User.objects.create_superuser("root", "root@example.com", "pass")
+        token_product_type = Product_Type.objects.create(name=f"Token org PT {self.id()}")
+        self.token_org = Organization.objects.create(name=f"Token org {self.id()}", product_type=token_product_type)
+        Product.objects.create(
+            name=f"Token org product {self.id()}",
+            description="d",
+            prod_type=token_product_type,
+        )
+        reader_role, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        Product_Type_Member.objects.create(product_type=token_product_type, user=self.user, role=reader_role)
+        Product_Type_Member.objects.create(product_type=token_product_type, user=self.other, role=reader_role)
+
+    def _issue(self, **kwargs):
+        kwargs.setdefault("organization", self.token_org)
+        return AISTApiToken.issue(**kwargs)
 
     def _bearer(self, raw: str) -> APIClient:
         client = APIClient()
@@ -62,42 +76,44 @@ class TokenTestBase(TestCase):
         client.force_authenticate(user=user)
         return client
 
-    def _grant_write_role(self, user, *, role=Roles.Writer) -> None:
+    def _grant_write_role(self, user, *, role=Roles.Writer) -> Organization:
         """
         Give ``user`` a real Writer-or-above role on a fresh product, so
         scope=read_write token creation (gated by
         aist.queries.user_has_write_capability) succeeds for them.
         """
         pt = Product_Type.objects.create(name=f"Write-capable PT {user.pk}")
+        organization = Organization.objects.create(name=f"Write-capable Org {user.pk}", product_type=pt)
         sla = SLA_Configuration.objects.create(name=f"SLA {user.pk}")
         Product.objects.create(
             name=f"Write-capable Product {user.pk}", description="d", prod_type=pt, sla_configuration_id=sla.id,
         )
         role_obj, _ = Role.objects.get_or_create(id=role, defaults={"name": role.name})
         Product_Type_Member.objects.create(product_type=pt, user=user, role=role_obj)
+        return organization
 
 
 class TokenAuthenticationTests(TokenTestBase):
     def test_valid_token_authenticates_on_aist_api(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
         resp = self._bearer(raw).get(reverse("aist_api:me"))
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["username"], "alice")
 
     def test_invalid_secret_rejected(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
         tampered = raw[:-4] + "xxxx"
         resp = self._bearer(tampered).get(reverse("aist_api:me"))
         self.assertEqual(resp.status_code, 403)
 
     def test_revoked_token_rejected(self):
-        token, raw = AISTApiToken.issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
+        token, raw = self._issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
         token.delete()
         resp = self._bearer(raw).get(reverse("aist_api:me"))
         self.assertEqual(resp.status_code, 403)
 
     def test_expired_token_rejected(self):
-        _t, raw = AISTApiToken.issue(
+        _t, raw = self._issue(
             user=self.user, name="t", scope=ApiTokenScope.READ_ONLY,
             expires_at=timezone.now() - timedelta(hours=1),
         )
@@ -105,7 +121,7 @@ class TokenAuthenticationTests(TokenTestBase):
         self.assertEqual(resp.status_code, 403)
 
     def test_inactive_user_token_rejected(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
         self.user.is_active = False
         self.user.save(update_fields=["is_active"])
         resp = self._bearer(raw).get(reverse("aist_api:me"))
@@ -121,23 +137,25 @@ class TokenAuthenticationTests(TokenTestBase):
 
 class TokenScopeEnforcementTests(TokenTestBase):
     def test_read_only_token_allows_get(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="ro", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(user=self.user, name="ro", scope=ApiTokenScope.READ_ONLY)
         resp = self._bearer(raw).get(reverse("aist_api:me_token_list_create"))
         self.assertEqual(resp.status_code, 200)
 
     def test_read_only_token_blocks_write(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="ro", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(user=self.user, name="ro", scope=ApiTokenScope.READ_ONLY)
         resp = self._bearer(raw).post(
             reverse("aist_api:me_token_list_create"),
-            {"name": "another", "scope": ApiTokenScope.READ_ONLY}, format="json",
+            {"name": "another", "scope": ApiTokenScope.READ_ONLY, "organization_id": self.token_org.id},
+            format="json",
         )
         self.assertEqual(resp.status_code, 403)
 
     def test_read_write_token_allows_write(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="rw", scope=ApiTokenScope.READ_WRITE)
+        _t, raw = self._issue(user=self.user, name="rw", scope=ApiTokenScope.READ_WRITE)
         resp = self._bearer(raw).post(
             reverse("aist_api:me_token_list_create"),
-            {"name": "another", "scope": ApiTokenScope.READ_ONLY}, format="json",
+            {"name": "another", "scope": ApiTokenScope.READ_ONLY, "organization_id": self.token_org.id},
+            format="json",
         )
         self.assertEqual(resp.status_code, 201)
 
@@ -154,19 +172,19 @@ class TokenScopeEndpointDeclarationTests(TokenTestBase):
 
     def test_read_only_token_allowed_on_declared_read_post(self):
         # finding export is a POST declared token_read_only=True.
-        _t, raw = AISTApiToken.issue(user=self.user, name="ro", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(user=self.user, name="ro", scope=ApiTokenScope.READ_ONLY)
         url = reverse("aist_api:finding_export", kwargs={"finding_id": 1})
         response = self._run_scope_middleware("POST", url, raw)
         self.assertEqual(response.status_code, 200)
 
     def test_read_only_token_blocked_on_normal_write(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="ro2", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(user=self.user, name="ro2", scope=ApiTokenScope.READ_ONLY)
         url = reverse("aist_api:me_token_list_create")
         response = self._run_scope_middleware("POST", url, raw)
         self.assertEqual(response.status_code, 403)
 
     def test_read_write_token_allowed_on_normal_write(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="rw", scope=ApiTokenScope.READ_WRITE)
+        _t, raw = self._issue(user=self.user, name="rw", scope=ApiTokenScope.READ_WRITE)
         url = reverse("aist_api:me_token_list_create")
         response = self._run_scope_middleware("POST", url, raw)
         self.assertEqual(response.status_code, 200)
@@ -175,30 +193,33 @@ class TokenScopeEndpointDeclarationTests(TokenTestBase):
 class TokenScopeCapabilityTests(TokenTestBase):
 
     """
-    A user must not even be able to MINT a read_write-scope token unless they
-    hold a Writer-or-above role somewhere — enforced centrally by
+    A user must not be able to mint a read_write token unless they hold a
+    Writer-or-above role in the selected organization — enforced centrally by
     ``aist.queries.user_has_write_capability`` (reused, not reimplemented, by
-    ``AISTApiTokenCreateSerializer.validate_scope`` and by
+    ``AISTApiTokenCreateSerializer.validate`` and by
     ``AISTMeSerializer.can_create_write_token``). Downstream endpoints already
     re-derive authorization per-request (see TokenDestructiveActionTests /
     TokenCrossResourceDataScopeTests), so this is a defense-in-depth /
     least-privilege guard, not the sole enforcement point.
     """
 
-    def _create(self, user, scope):
+    def _create(self, user, scope, *, organization=None):
         client = self._session(user)
+        organization = organization or self.token_org
         return client.post(
             reverse("aist_api:me_token_list_create"),
-            {"name": f"tok-{scope}", "scope": scope}, format="json",
+            {"name": f"tok-{scope}", "scope": scope, "organization_id": organization.id}, format="json",
         )
 
     def test_user_with_no_org_membership_cannot_create_read_write_token(self):
-        resp = self._create(self.user, ApiTokenScope.READ_WRITE)
+        outsider = User.objects.create_user("no-org-rw", "no-org-rw@example.com", "pass")
+        resp = self._create(outsider, ApiTokenScope.READ_WRITE)
         self.assertEqual(resp.status_code, 400)
 
-    def test_user_with_no_org_membership_can_create_read_only_token(self):
-        resp = self._create(self.user, ApiTokenScope.READ_ONLY)
-        self.assertEqual(resp.status_code, 201)
+    def test_user_with_no_org_membership_cannot_create_read_only_token(self):
+        outsider = User.objects.create_user("no-org-ro", "no-org-ro@example.com", "pass")
+        resp = self._create(outsider, ApiTokenScope.READ_ONLY)
+        self.assertEqual(resp.status_code, 400)
 
     def test_full_reader_member_cannot_create_read_write_token(self):
         # A Product must actually exist here — otherwise this would pass for the
@@ -206,10 +227,11 @@ class TokenScopeCapabilityTests(TokenTestBase):
         # doesn't qualify for Finding_Edit.
         sla = SLA_Configuration.objects.create(name="SLA Reader")
         pt = Product_Type.objects.create(name="Reader PT")
+        organization = Organization.objects.create(name="Reader Org", product_type=pt)
         Product.objects.create(name="Reader Product", description="d", prod_type=pt, sla_configuration_id=sla.id)
         role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
         Product_Type_Member.objects.create(product_type=pt, user=self.user, role=role_reader)
-        resp = self._create(self.user, ApiTokenScope.READ_WRITE)
+        resp = self._create(self.user, ApiTokenScope.READ_WRITE, organization=organization)
         self.assertEqual(resp.status_code, 400)
 
     def test_restricted_member_with_only_a_reader_project_grant_cannot_create_read_write_token(self):
@@ -227,13 +249,18 @@ class TokenScopeCapabilityTests(TokenTestBase):
         )
         Product_Member.objects.create(product=product, user=self.user, role=role_reader)
 
-        resp = self._create(self.user, ApiTokenScope.READ_WRITE)
+        resp = self._create(self.user, ApiTokenScope.READ_WRITE, organization=org)
         self.assertEqual(resp.status_code, 400)
 
     def test_member_with_a_writer_grant_can_create_read_write_token(self):
-        self._grant_write_role(self.user)
-        resp = self._create(self.user, ApiTokenScope.READ_WRITE)
+        organization = self._grant_write_role(self.user)
+        resp = self._create(self.user, ApiTokenScope.READ_WRITE, organization=organization)
         self.assertEqual(resp.status_code, 201)
+
+    def test_writer_cannot_bind_read_write_token_to_reader_organization(self):
+        self._grant_write_role(self.user)
+        resp = self._create(self.user, ApiTokenScope.READ_WRITE, organization=self.token_org)
+        self.assertEqual(resp.status_code, 400)
 
     def test_superuser_can_create_read_write_token_with_no_memberships_at_all(self):
         resp = self._create(self.superuser, ApiTokenScope.READ_WRITE)
@@ -245,10 +272,10 @@ class TokenSelfServiceTests(TokenTestBase):
         # Secret-reveal behavior is what's under test here, not scope gating —
         # scope=read_write needs a real Writer+ grant since
         # aist.queries.user_has_write_capability now enforces it at create time.
-        self._grant_write_role(self.user)
+        organization = self._grant_write_role(self.user)
         resp = self._session(self.user).post(
             reverse("aist_api:me_token_list_create"),
-            {"name": "ci", "scope": ApiTokenScope.READ_WRITE}, format="json",
+            {"name": "ci", "scope": ApiTokenScope.READ_WRITE, "organization_id": organization.id}, format="json",
         )
         self.assertEqual(resp.status_code, 201)
         body = resp.json()
@@ -256,7 +283,7 @@ class TokenSelfServiceTests(TokenTestBase):
         self.assertEqual(body["scope"], ApiTokenScope.READ_WRITE)
 
     def test_list_never_exposes_secret(self):
-        AISTApiToken.issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
+        self._issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
         resp = self._session(self.user).get(reverse("aist_api:me_token_list_create"))
         self.assertEqual(resp.status_code, 200)
         for item in resp.json():
@@ -265,18 +292,18 @@ class TokenSelfServiceTests(TokenTestBase):
             self.assertNotIn("public_id", item)
 
     def test_duplicate_name_rejected(self):
-        AISTApiToken.issue(user=self.user, name="dup", scope=ApiTokenScope.READ_ONLY)
+        self._issue(user=self.user, name="dup", scope=ApiTokenScope.READ_ONLY)
         resp = self._session(self.user).post(
             reverse("aist_api:me_token_list_create"),
-            {"name": "dup", "scope": ApiTokenScope.READ_ONLY}, format="json",
+            {"name": "dup", "scope": ApiTokenScope.READ_ONLY, "organization_id": self.token_org.id}, format="json",
         )
         self.assertEqual(resp.status_code, 400)
 
     def test_same_name_allowed_across_users(self):
-        AISTApiToken.issue(user=self.user, name="shared", scope=ApiTokenScope.READ_ONLY)
+        self._issue(user=self.user, name="shared", scope=ApiTokenScope.READ_ONLY)
         resp = self._session(self.other).post(
             reverse("aist_api:me_token_list_create"),
-            {"name": "shared", "scope": ApiTokenScope.READ_ONLY}, format="json",
+            {"name": "shared", "scope": ApiTokenScope.READ_ONLY, "organization_id": self.token_org.id}, format="json",
         )
         self.assertEqual(resp.status_code, 201)
 
@@ -284,13 +311,14 @@ class TokenSelfServiceTests(TokenTestBase):
         resp = self._session(self.user).post(
             reverse("aist_api:me_token_list_create"),
             {"name": "t", "scope": ApiTokenScope.READ_ONLY,
+             "organization_id": self.token_org.id,
              "expires_at": (timezone.now() - timedelta(days=1)).isoformat()},
             format="json",
         )
         self.assertEqual(resp.status_code, 400)
 
     def test_cannot_delete_another_users_token(self):
-        token, _raw = AISTApiToken.issue(user=self.user, name="mine", scope=ApiTokenScope.READ_ONLY)
+        token, _raw = self._issue(user=self.user, name="mine", scope=ApiTokenScope.READ_ONLY)
         resp = self._session(self.other).delete(
             reverse("aist_api:me_token_detail", kwargs={"token_id": token.id}),
         )
@@ -298,7 +326,7 @@ class TokenSelfServiceTests(TokenTestBase):
         self.assertTrue(AISTApiToken.objects.filter(pk=token.id).exists())
 
     def test_delete_own_token(self):
-        token, _raw = AISTApiToken.issue(user=self.user, name="mine", scope=ApiTokenScope.READ_ONLY)
+        token, _raw = self._issue(user=self.user, name="mine", scope=ApiTokenScope.READ_ONLY)
         resp = self._session(self.user).delete(
             reverse("aist_api:me_token_detail", kwargs={"token_id": token.id}),
         )
@@ -324,7 +352,7 @@ class TokenCreateRealSessionTests(TokenTestBase):
         # The real-session/CSRF flow is what's under test here, not scope gating —
         # scope=read_write needs a real Writer+ grant since
         # aist.queries.user_has_write_capability now enforces it at create time.
-        self._grant_write_role(self.user)
+        organization = self._grant_write_role(self.user)
         client = Client(enforce_csrf_checks=True)
         client.get(reverse("client_login"))
         csrf_token = client.cookies["csrftoken"].value
@@ -339,7 +367,7 @@ class TokenCreateRealSessionTests(TokenTestBase):
         csrf_after_login = client.cookies["csrftoken"].value
         response = client.post(
             reverse("aist_api:me_token_list_create"),
-            data={"name": "ci-real-session", "scope": ApiTokenScope.READ_WRITE},
+            data={"name": "ci-real-session", "scope": ApiTokenScope.READ_WRITE, "organization_id": organization.id},
             content_type="application/json",
             HTTP_X_CSRFTOKEN=csrf_after_login,
         )
@@ -379,7 +407,7 @@ class TokenMaskingTests(TestCase):
 
 class TokenStorageTests(TokenTestBase):
     def test_secret_is_not_stored_in_plaintext(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(user=self.user, name="t", scope=ApiTokenScope.READ_ONLY)
         secret = raw.rsplit("_", 1)[-1]
         token = AISTApiToken.objects.get(name="t")
         # Stored as a Django password hash (not the plaintext secret).
@@ -394,7 +422,7 @@ class AdminTokenOverviewTests(TokenTestBase):
         return reverse("aist_api:admin_api_token_list")
 
     def test_superuser_sees_users_and_metadata_no_secret(self):
-        AISTApiToken.issue(user=self.user, name="ci", scope=ApiTokenScope.READ_WRITE)
+        self._issue(user=self.user, name="ci", scope=ApiTokenScope.READ_WRITE)
         resp = self._session(self.superuser).get(self._url())
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
@@ -413,7 +441,7 @@ class AdminTokenOverviewTests(TokenTestBase):
     def test_scoped_token_cannot_reach_admin_overview(self):
         # Even a superuser's scoped token must not enumerate everyone: the view
         # excludes ScopedTokenAuthentication, so the token does not authenticate.
-        _t, raw = AISTApiToken.issue(user=self.superuser, name="t", scope=ApiTokenScope.READ_WRITE)
+        _t, raw = self._issue(user=self.superuser, name="t", scope=ApiTokenScope.READ_WRITE)
         resp = self._bearer(raw).get(self._url())
         self.assertIn(resp.status_code, (401, 403))
 
@@ -421,12 +449,8 @@ class AdminTokenOverviewTests(TokenTestBase):
 class MultiOrgTokenTests(TokenTestBase):
 
     """
-    A token authenticates a USER, not a single organization (confirmed: no
-    "organization" concept anywhere in aist/authentication.py). If self.user
-    belongs to two orgs with different roles, one token must correctly reach
-    org-scoped endpoints in BOTH — this is the one angle test_api_tokens.py's
-    own docstring says is out of scope for it and covered elsewhere, except
-    nothing actually exercised it with a real multi-org user before.
+    A token authenticates a user inside exactly one organization. Membership
+    in a second organization must not widen the token's tenant boundary.
     """
 
     def setUp(self):
@@ -448,21 +472,25 @@ class MultiOrgTokenTests(TokenTestBase):
         Product_Type_Member.objects.create(product_type=self.pt_b, user=self.user, role=self.role_reader)
 
     def test_single_token_manages_org_a_but_not_org_b(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="ci", scope=ApiTokenScope.READ_WRITE)
+        _t, raw = self._issue(
+            user=self.user, organization=self.org_a, name="ci", scope=ApiTokenScope.READ_WRITE,
+        )
         client = self._bearer(raw)
         manage_a = client.get(reverse("aist_api:org_member_list_create", kwargs={"org_id": self.org_a.id}))
         manage_b = client.get(reverse("aist_api:org_member_list_create", kwargs={"org_id": self.org_b.id}))
         # Owner of org_a -> can manage members there.
         self.assertEqual(manage_a.status_code, 200)
-        # Reader of org_b -> management gate correctly denies, same token.
+        # Org B is outside this token even though the owning user is a member.
         self.assertEqual(manage_b.status_code, 404)
 
-    def test_single_token_sees_visible_orgs_from_both(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="ci", scope=ApiTokenScope.READ_ONLY)
+    def test_single_token_only_sees_bound_organization(self):
+        _t, raw = self._issue(
+            user=self.user, organization=self.org_a, name="ci", scope=ApiTokenScope.READ_ONLY,
+        )
         resp = self._bearer(raw).get(reverse("aist_api:me"))
         self.assertEqual(resp.status_code, 200)
         org_names = {m["organization_name"] for m in resp.json()["organization_memberships"]}
-        self.assertEqual(org_names, {"Org A", "Org B"})
+        self.assertEqual(org_names, {"Org A"})
 
 
 class TokenReadOnlyDeclarationHonestyTests(TokenTestBase):
@@ -478,6 +506,7 @@ class TokenReadOnlyDeclarationHonestyTests(TokenTestBase):
     def test_finding_export_with_read_only_token_produces_no_side_effect(self):
         sla = SLA_Configuration.objects.create(name="SLA RO")
         pt = Product_Type.objects.create(name="RO PT")
+        organization = Organization.objects.create(name="RO Org", product_type=pt)
         role_reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
         Product_Type_Member.objects.create(product_type=pt, user=self.user, role=role_reader)
         product = Product.objects.create(
@@ -496,7 +525,9 @@ class TokenReadOnlyDeclarationHonestyTests(TokenTestBase):
         before_count = Finding.objects.count()
         before_reviewed = finding.last_reviewed
 
-        _t, raw = AISTApiToken.issue(user=self.user, name="ro", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(
+            user=self.user, organization=organization, name="ro", scope=ApiTokenScope.READ_ONLY,
+        )
         resp = self._bearer(raw).post(reverse("aist_api:finding_export", kwargs={"finding_id": finding.id}), data={})
 
         self.assertEqual(resp.status_code, 200)
@@ -505,7 +536,7 @@ class TokenReadOnlyDeclarationHonestyTests(TokenTestBase):
         self.assertEqual(finding.last_reviewed, before_reviewed, "export must not mutate the finding it reads")
 
     def test_launch_schedule_preview_with_read_only_token_persists_nothing(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="ro2", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(user=self.user, name="ro2", scope=ApiTokenScope.READ_ONLY)
         resp = self._bearer(raw).post(
             reverse("aist_api:launch_schedule_preview"),
             {"cron_expression": "*/5 * * * *", "count": 3}, format="json",
@@ -525,7 +556,8 @@ class TokenCreationLimitTests(TokenTestBase):
         statuses = [
             self._session(self.user).post(
                 reverse("aist_api:me_token_list_create"),
-                {"name": f"tok-{i}", "scope": ApiTokenScope.READ_ONLY}, format="json",
+                {"name": f"tok-{i}", "scope": ApiTokenScope.READ_ONLY, "organization_id": self.token_org.id},
+                format="json",
             ).status_code
             for i in range(30)
         ]
@@ -540,6 +572,11 @@ class TokenNameRaceTests(TransactionTestCase):
     def setUp(self):
         cache.clear()
         self.user = User.objects.create_user("race_token_user", "race_token_user@example.com", "pass")
+        product_type = Product_Type.objects.create(name="Race token PT")
+        self.organization = Organization.objects.create(name="Race token Org", product_type=product_type)
+        Product.objects.create(name="Race token product", description="d", prod_type=product_type)
+        reader_role, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        Product_Type_Member.objects.create(product_type=product_type, user=self.user, role=reader_role)
 
     def test_concurrent_create_with_same_name_never_500s(self):
         barrier = threading.Barrier(2)
@@ -551,7 +588,8 @@ class TokenNameRaceTests(TransactionTestCase):
             client.force_authenticate(user=self.user)
             resp = client.post(
                 reverse("aist_api:me_token_list_create"),
-                {"name": "race-token", "scope": ApiTokenScope.READ_ONLY}, format="json",
+                {"name": "race-token", "scope": ApiTokenScope.READ_ONLY, "organization_id": self.organization.id},
+                format="json",
             )
             results[key] = resp.status_code
 
@@ -600,7 +638,7 @@ class TokenSystemicScopeInvariantTests(TokenTestBase):
         return middleware(request)
 
     def test_every_undeclared_mutating_endpoint_blocks_read_only_token(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="sweep-ro", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(user=self.user, name="sweep-ro", scope=ApiTokenScope.READ_ONLY)
 
         checked = []
         for url_pattern in api_urls.urlpatterns:
@@ -648,7 +686,9 @@ class TokenDestructiveActionTests(TokenTestBase):
         )
 
     def _ro_token(self) -> str:
-        _t, raw = AISTApiToken.issue(user=self.user, name="ro-destructive", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(
+            user=self.user, organization=self.org, name="ro-destructive", scope=ApiTokenScope.READ_ONLY,
+        )
         return raw
 
     def test_read_only_token_cannot_remove_org_member(self):
@@ -676,7 +716,9 @@ class TokenDestructiveActionTests(TokenTestBase):
         self.assertTrue(Product_Member.objects.filter(product=self.product, user=self.target).exists())
 
     def test_read_only_token_cannot_delete_its_own_token(self):
-        other_token, _other_raw = AISTApiToken.issue(user=self.user, name="deletable", scope=ApiTokenScope.READ_WRITE)
+        other_token, _other_raw = self._issue(
+            user=self.user, organization=self.org, name="deletable", scope=ApiTokenScope.READ_WRITE,
+        )
         resp = self._bearer(self._ro_token()).delete(
             reverse("aist_api:me_token_detail", kwargs={"token_id": other_token.id}),
         )
@@ -705,6 +747,7 @@ class TokenCrossResourceDataScopeTests(TokenTestBase):
         self.role_owner, _ = Role.objects.get_or_create(id=Roles.Owner, defaults={"name": "Owner"})
 
         self.pt_a = Product_Type.objects.create(name="Findings Org A")
+        self.org_a = Organization.objects.create(name="Findings Org A", product_type=self.pt_a)
         Product_Type_Member.objects.create(product_type=self.pt_a, user=self.user, role=self.role_owner)
         product_a = Product.objects.create(
             name="FA", description="d", prod_type=self.pt_a, sla_configuration_id=self.sla.id,
@@ -729,7 +772,9 @@ class TokenCrossResourceDataScopeTests(TokenTestBase):
         return Finding.objects.create(test=test, title=title, severity="High", date=timezone.now(), reporter=self.user)
 
     def test_token_and_session_see_identical_finding_titles(self):
-        _t, raw = AISTApiToken.issue(user=self.user, name="scope-check", scope=ApiTokenScope.READ_ONLY)
+        _t, raw = self._issue(
+            user=self.user, organization=self.org_a, name="scope-check", scope=ApiTokenScope.READ_ONLY,
+        )
         token_titles = {f["title"] for f in self._bearer(raw).get(reverse("aist_api:finding_list")).json()["results"]}
         session_titles = {
             f["title"] for f in self._session(self.user).get(reverse("aist_api:finding_list")).json()["results"]

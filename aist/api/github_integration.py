@@ -16,7 +16,6 @@ from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django_github_app.models import Installation
 from dojo.authorization.authorization import (
-    user_has_global_permission,
     user_has_permission_or_403,
 )
 from dojo.authorization.roles_permissions import Permissions
@@ -24,13 +23,11 @@ from dojo.models import DojoMeta, Product
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.projects import _create_initial_script
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.authz import PUBLIC, Action, AISTAPIView, ResourcePolicy
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import (
     AISTProject,
@@ -162,8 +159,8 @@ class GithubProjectLinkRepositoryResponseSerializer(serializers.Serializer):
     repository_full_name = serializers.CharField()
 
 
-class GithubImportOptionsAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class GithubImportOptionsAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=Organization, read=Action.PROJECT_CREATE, write=Action.PROJECT_CREATE)
 
     @extend_schema(
         tags=[AISTApiTag.GITHUB.value],
@@ -171,15 +168,15 @@ class GithubImportOptionsAPI(APIView):
         summary="GitHub import options",
     )
     def get(self, request, *args, **kwargs):
-        organizations = _get_authorized_organizations_for_import(request.user).order_by("name")
+        organizations = self.authorized_queryset().order_by("name")
         serializer = GithubImportOptionsResponseSerializer(
             {"organizations": [{"id": org.id, "name": org.name} for org in organizations]},
         )
         return Response(serializer.data)
 
 
-class GithubImportConnectStartAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class GithubImportConnectStartAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=Organization, read=Action.PROJECT_CREATE, write=Action.PROJECT_CREATE)
 
     @extend_schema(
         tags=[AISTApiTag.GITHUB.value],
@@ -191,7 +188,7 @@ class GithubImportConnectStartAPI(APIView):
         serializer = GithubConnectStartImportSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        org = _get_organization_for_import_or_403(request.user, serializer.validated_data["organization_id"])
+        org = self.resolve(id=serializer.validated_data["organization_id"])
         state = _create_state(
             GithubConnectState(
                 flow="import",
@@ -204,8 +201,9 @@ class GithubImportConnectStartAPI(APIView):
         return Response(response.data)
 
 
-class GithubConnectCallbackAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class GithubConnectCallbackAPI(AISTAPIView):
+    # import action; scopes org/project internally via getters
+    authz = PUBLIC
 
     @extend_schema(
         tags=[AISTApiTag.GITHUB.value],
@@ -249,8 +247,8 @@ class GithubConnectCallbackAPI(APIView):
         raise serializers.ValidationError({"state": "Unsupported flow."})
 
 
-class GithubImportRepositoriesAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class GithubImportRepositoriesAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=Organization, read=Action.PROJECT_CREATE, write=Action.PROJECT_CREATE)
 
     @extend_schema(
         tags=[AISTApiTag.GITHUB.value],
@@ -262,7 +260,7 @@ class GithubImportRepositoriesAPI(APIView):
         serializer = GithubImportRepositoriesQuerySerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
 
-        org = _get_organization_for_import_or_403(request.user, serializer.validated_data["organization_id"])
+        org = self.resolve(id=serializer.validated_data["organization_id"])
         installation_id = serializer.validated_data.get("installation_id")
         if installation_id is None:
             installation_id = cache.get(_import_installation_cache_key(request.user.id, org.id))
@@ -279,8 +277,8 @@ class GithubImportRepositoriesAPI(APIView):
         return Response(response.data)
 
 
-class GithubImportExecuteAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class GithubImportExecuteAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=Organization, read=Action.PROJECT_CREATE, write=Action.PROJECT_CREATE)
 
     @extend_schema(
         tags=[AISTApiTag.GITHUB.value],
@@ -292,7 +290,7 @@ class GithubImportExecuteAPI(APIView):
         serializer = GithubImportExecuteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        org = _get_organization_for_import_or_403(request.user, serializer.validated_data["organization_id"])
+        org = self.resolve(id=serializer.validated_data["organization_id"])
         installation_id = serializer.validated_data["installation_id"]
         requested_repos = serializer.validated_data["repositories"]
 
@@ -325,12 +323,8 @@ class GithubImportExecuteAPI(APIView):
         return Response(GithubImportExecuteResponseSerializer(result).data)
 
 
-class GithubProjectStatusAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+class GithubProjectStatusAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.GITHUB.value],
@@ -338,7 +332,7 @@ class GithubProjectStatusAPI(AuthorizedQuerySetMixin, APIView):
         summary="GitHub status for AIST project",
     )
     def get(self, request, project_id: int, *args, **kwargs):
-        project = self.get_authorized_object(id=project_id)
+        project = self.resolve(id=project_id)
         repo = project.repository
         if not repo or repo.type != ScmType.GITHUB:
             return Response(
@@ -359,12 +353,8 @@ class GithubProjectStatusAPI(AuthorizedQuerySetMixin, APIView):
         )
 
 
-class GithubProjectConnectStartAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+class GithubProjectConnectStartAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.GITHUB.value],
@@ -373,8 +363,7 @@ class GithubProjectConnectStartAPI(AuthorizedQuerySetMixin, APIView):
         summary="Start GitHub connect for existing project",
     )
     def post(self, request, project_id: int, *args, **kwargs):
-        project = self.get_authorized_object(permission=Permissions.Product_Edit, id=project_id)
-        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+        project = self.resolve(id=project_id)
 
         state = _create_state(
             GithubConnectState(
@@ -388,12 +377,8 @@ class GithubProjectConnectStartAPI(AuthorizedQuerySetMixin, APIView):
         return Response(response.data)
 
 
-class GithubProjectRepositoriesAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+class GithubProjectRepositoriesAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.GITHUB.value],
@@ -402,7 +387,7 @@ class GithubProjectRepositoriesAPI(AuthorizedQuerySetMixin, APIView):
         summary="List GitHub repositories for existing project",
     )
     def get(self, request, project_id: int, *args, **kwargs):
-        project = self.get_authorized_object(id=project_id)
+        project = self.resolve(id=project_id)
 
         serializer = GithubProjectRepositoriesQuerySerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
@@ -427,12 +412,8 @@ class GithubProjectRepositoriesAPI(AuthorizedQuerySetMixin, APIView):
         return Response(response.data)
 
 
-class GithubProjectLinkRepositoryAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+class GithubProjectLinkRepositoryAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.GITHUB.value],
@@ -441,8 +422,7 @@ class GithubProjectLinkRepositoryAPI(AuthorizedQuerySetMixin, APIView):
         summary="Link GitHub repository to existing AIST project",
     )
     def post(self, request, project_id: int, *args, **kwargs):
-        project = self.get_authorized_object(permission=Permissions.Product_Edit, id=project_id)
-        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+        project = self.resolve(id=project_id)
 
         serializer = GithubProjectLinkRepositorySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -566,7 +546,7 @@ def _get_organization_for_import_or_403(user, organization_id: int) -> Organizat
     )
 
     if org.product_type_id is None:
-        if not (user.is_superuser or user_has_global_permission(user, Permissions.Product_Type_Add)):
+        if not user.is_superuser:
             raise PermissionDenied(_("Organization is not initialized for imports."))
         org.ensure_product_type()
 
@@ -677,7 +657,6 @@ def _import_github_repository(
                 "compilable": False,
                 "profile": {},
                 "repository": repo_info,
-                "organization": organization,
             },
         )
 
@@ -707,9 +686,6 @@ def _import_github_repository(
                 raise _ImportConflictError(reason)
 
             updates: list[str] = []
-            if aist_project.organization_id is None:
-                aist_project.organization = organization
-                updates.append("organization")
             if aist_project.repository_id != repo_info.id:
                 aist_project.repository = repo_info
                 updates.append("repository")

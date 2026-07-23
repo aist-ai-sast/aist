@@ -7,7 +7,10 @@ class AistConfig(AppConfig):
 
     def ready(self):
         # import modules that register Celery signals
-        from . import celery_signals  # noqa: PLC0415, F401,
+        from . import (  # noqa: PLC0415
+            celery_signals,  # noqa: F401,
+            checks,  # noqa: F401
+        )
         from .monkeypatch import install_deduplication_monkeypatch  # noqa: PLC0415
         from .parser_overrides import (  # noqa: PLC0415
             install_bearer_parser_override,

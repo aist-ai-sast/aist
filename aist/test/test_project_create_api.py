@@ -375,7 +375,6 @@ class AISTProjectScriptScopeAPITests(AISTApiBase):
             supported_languages=[],
             compilable=False,
             profile={},
-            organization=self.project.organization,
         )
         other_script = AISTProjectScript.objects.create(
             project=other_project,

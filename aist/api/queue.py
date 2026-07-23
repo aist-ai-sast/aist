@@ -2,28 +2,27 @@ from __future__ import annotations
 
 from django.db.models import Q
 from django.utils import timezone
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
-from aist.queries import get_authorized_aist_queue_items
+from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.models import PipelineLaunchQueue
+
+# Read = Product_View (Reader+); write (clear/delete) = Product_Edit (Maintainer+).
+_QUEUE_POLICY = ResourcePolicy(
+    resource=PipelineLaunchQueue,
+    read=Action.PRODUCT_READ,
+    write=Action.PROJECT_OPERATE,
+)
 
 
-class PipelineLaunchQueueListAPI(AuthorizedQuerySetMixin, APIView):
+class PipelineLaunchQueueListAPI(AISTAPIView):
 
     """Backend list for UI Queue tab. Supports only_pending and limit."""
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_queue_items,
-        permission=Permissions.Product_View,
-    )
+    authz = _QUEUE_POLICY
 
     class QuerySerializer(serializers.Serializer):
         only_pending = serializers.BooleanField(required=False, default=False)
@@ -45,7 +44,7 @@ class PipelineLaunchQueueListAPI(AuthorizedQuerySetMixin, APIView):
         limit = query_serializer.validated_data["limit"]
 
         qs = (
-            self.get_authorized_queryset()
+            self.authorized_queryset_for_request()
             .select_related("project__product", "schedule", "launch_config", "pipeline")
             .order_by("-created")
         )
@@ -79,15 +78,11 @@ class PipelineLaunchQueueClearSerializer(serializers.Serializer):
     days = serializers.IntegerField(min_value=1, max_value=365)
 
 
-class PipelineLaunchQueueClearDispatchedAPI(AuthorizedQuerySetMixin, APIView):
+class PipelineLaunchQueueClearDispatchedAPI(AISTAPIView):
 
     """Safe maintenance endpoint: delete dispatched queue items older than X days."""
 
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_queue_items,
-        permission=Permissions.Product_View,
-    )
+    authz = _QUEUE_POLICY
 
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_QUEUE.value],
@@ -102,8 +97,9 @@ class PipelineLaunchQueueClearDispatchedAPI(AuthorizedQuerySetMixin, APIView):
 
         cutoff = timezone.now() - timezone.timedelta(days=days)
 
+        # POST → write action → Product_Edit-scoped queryset.
         deleted, _ = (
-            self.get_authorized_queryset(permission=Permissions.Product_Edit)
+            self.authorized_queryset_for_request()
             .filter(dispatched=True)
             .filter(
                 Q(dispatched_at__lt=cutoff)
@@ -114,12 +110,8 @@ class PipelineLaunchQueueClearDispatchedAPI(AuthorizedQuerySetMixin, APIView):
         return Response({"deleted": deleted, "days": days}, status=status.HTTP_200_OK)
 
 
-class PipelineLaunchQueueDetailAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_queue_items,
-        permission=Permissions.Product_View,
-    )
+class PipelineLaunchQueueDetailAPI(AISTAPIView):
+    authz = _QUEUE_POLICY
 
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_QUEUE.value],
@@ -127,7 +119,7 @@ class PipelineLaunchQueueDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
     def delete(self, request, queue_id: int, *args, **kwargs):
-        obj = self.get_authorized_object(permission=Permissions.Product_Edit, id=queue_id)
-        user_has_permission_or_403(request.user, obj.project.product, Permissions.Product_Edit)
+        # DELETE → write action → resolve enforces Product_Edit on the item's product.
+        obj = self.resolve(id=queue_id)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

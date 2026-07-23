@@ -3,26 +3,28 @@ from __future__ import annotations
 from django.core.cache import cache
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.schema import AISTApiTag
+from aist.authz import PUBLIC, AISTAPIView
 from aist.utils.cwe_lookup import fetch_cwe_meta
 
 _CWE_CACHE_TIMEOUT = 60 * 60 * 24  # 24 hours
 
 
-class AISTCweDetailAPI(APIView):
+class AISTCweDetailAPI(AISTAPIView):
 
     """
     Return human-readable metadata for a CWE identifier.
 
     Data is sourced from the cwe2 library (full MITRE database) with fallback
     to the vendor DefectDojo fixture. Results are cached for 24 hours.
+
+    ``authz = PUBLIC``: reference data with no organization-owned resource. The
+    base's default ``IsAuthenticated`` still applies (any signed-in user).
     """
 
-    permission_classes = [IsAuthenticated]
+    authz = PUBLIC
 
     @extend_schema(
         tags=[AISTApiTag.FINDINGS.value],

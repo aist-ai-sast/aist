@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { getRoute } from "../lib/routes";
 import { useManageableOrgs } from "../lib/queries";
-import PermissionGate from "./PermissionGate";
 import { ObjectIcons } from "./ObjectIcons";
 
 type SidebarProps = {
@@ -33,10 +32,9 @@ function NavItem({ to, label, icon, collapsed }: { to: string; label: string; ic
 
 export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   // The Users page manages org membership, gated by org-membership role
-  // (Maintainer/Owner), not the product-type/global role PermissionGate's
-  // "manage_access" checks — that axis is what actually gates Integrations
-  // below. useManageableOrgs() is the same signal the Users page itself uses
-  // to decide whether there's anything to manage.
+  // (Maintainer/Owner). useManageableOrgs() is the same tenant-aware signal
+  // the Users and Integrations pages use to decide whether there is anything
+  // the current user can manage.
   const manageableOrgs = useManageableOrgs();
   const canManageOrgUsers = (manageableOrgs.data?.length ?? 0) > 0;
   const baseLinks = [
@@ -123,14 +121,14 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
             collapsed={collapsed}
           />
         ) : null}
-        <PermissionGate action="manage_access">
+        {canManageOrgUsers ? (
           <NavItem
             to={getRoute("ui_org_integrations_path")}
             label="Integrations"
             icon={ObjectIcons.integrations}
             collapsed={collapsed}
           />
-        </PermissionGate>
+        ) : null}
         {accountLinks.map((link) => (
           <NavItem key={link.to} to={link.to} label={link.label} icon={link.icon} collapsed={collapsed} />
         ))}

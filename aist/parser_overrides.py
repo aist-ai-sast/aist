@@ -396,7 +396,7 @@ class DastReportParser(_SubtypedGenericParserBase):
         data = json.load(filename)
         if not isinstance(data, dict):
             msg = "DAST report root must be a JSON object."
-            raise ValueError(msg)
+            raise TypeError(msg)
         test_internal = GenericJSONParser()._get_test_json(data)
         test_internal.type = scan_type
         return [test_internal]
@@ -408,13 +408,13 @@ class DastReportParser(_SubtypedGenericParserBase):
         filename.seek(0)
         if not isinstance(data, dict):
             msg = "DAST report root must be a JSON object."
-            raise ValueError(msg)
+            raise TypeError(msg)
         metadata = data.get("dast_run_metadata", {})
         if metadata is None:
             metadata = {}
         if not isinstance(metadata, dict):
             msg = "dast_run_metadata must be a JSON object."
-            raise ValueError(msg)
+            raise TypeError(msg)
         source_commits = metadata.get("source_commits", {})
         if source_commits is None:
             source_commits = {}

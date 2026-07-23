@@ -15,11 +15,12 @@ from django.contrib.auth import get_user_model
 from django.http import HttpResponse
 from django.test import TestCase
 from django.test.client import RequestFactory
+from dojo.models import Product_Type
 
 from aist import api_urls
 from aist.api.tokens import AISTAdminApiTokenListAPI
 from aist.authentication import ScopedTokenAuthentication
-from aist.models import AISTApiToken, ApiTokenScope
+from aist.models import AISTApiToken, ApiTokenScope, Organization
 from aist_site.middleware import AistAdminGuardMiddleware
 
 User = get_user_model()
@@ -59,7 +60,11 @@ class DojoApiRejectsScopedTokenTests(TestCase):
         self.factory = RequestFactory()
         self.middleware = AistAdminGuardMiddleware(lambda _request: HttpResponse("ok"))
         user = User.objects.create_user("scoped", "scoped@example.com", "x")
-        _token, self.raw = AISTApiToken.issue(user=user, name="t", scope=ApiTokenScope.READ_WRITE)
+        product_type = Product_Type.objects.create(name="Scoped token coverage PT")
+        organization = Organization.objects.create(name="Scoped token coverage org", product_type=product_type)
+        _token, self.raw = AISTApiToken.issue(
+            user=user, organization=organization, name="t", scope=ApiTokenScope.READ_WRITE,
+        )
 
     def test_no_vendor_api_endpoint_accepts_scoped_token(self):
         from dojo.urls import v2_api  # noqa: PLC0415

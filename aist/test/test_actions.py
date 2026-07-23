@@ -67,8 +67,6 @@ class ActionsTests(TestCase):
             name="Actions Test Org",
             product_type=self.prod_type,
         )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
         self.slack_integration = OrgIntegration.objects.create(
             organization=self.org,
             integration_type="SLACK",

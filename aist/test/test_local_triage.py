@@ -153,6 +153,30 @@ class LocalTriageCompleteAPITests(AISTApiBase):
         self.client.force_login(self.user)
 
     @patch("aist.api.ai.finish_pipeline")
+    def test_rejects_ordinary_authenticated_user(self, mock_finish):
+        ordinary_user = type(self.user).objects.create_user(
+            username="ordinary_local_callback",
+            email="ordinary_local_callback@example.com",
+            password="pass",  # noqa: S106
+        )
+        self.client.force_authenticate(user=ordinary_user)
+        pipeline = AISTPipeline.objects.create(
+            id="local-pipe-ordinary-user",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.WAITING_RESULT_FROM_AI,
+        )
+
+        resp = self.client.post(
+            reverse("aist_api:pipeline_local_triage_complete", kwargs={"pipeline_id": pipeline.id}),
+            data={"status": "success"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 403)
+        mock_finish.assert_not_called()
+
+    @patch("aist.api.ai.finish_pipeline")
     def test_success_callback(self, mock_finish):
         pipeline = AISTPipeline.objects.create(
             id="local-pipe-1",
@@ -383,7 +407,6 @@ class PushLocalTriageTaskTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        from dojo.models import Product_Type  # noqa: PLC0415
 
         from aist.models import (  # noqa: PLC0415
             Organization,
@@ -395,13 +418,12 @@ class PushLocalTriageTaskTests(AISTApiBase):
         # bridge to be invoked, the project's org must have an active
         # CLAUDE_CODE OrgIntegration. Mirrors the setup in
         # ``test_claude_analyze.py``.
-        self.org_prod_type = Product_Type.objects.create(name="Local Triage PT")
+        self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(
             name="Local Triage Org",
             product_type=self.org_prod_type,
         )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
         self.claude_integration = OrgIntegration.objects.create(
             organization=self.org,
             integration_type=OrgIntegrationType.CLAUDE_CODE,

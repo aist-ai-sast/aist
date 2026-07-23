@@ -4,22 +4,17 @@ import json
 
 from django.db import transaction
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404
 from django_filters import rest_framework as django_filters
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.authz import ACTION_PERMISSIONS, INTERNAL_SERVICE, Action, AISTAPIView, ResourcePolicy
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline, AISTStatus
-from aist.queries import get_authorized_aist_pipelines, get_authorized_findings
+from aist.queries import get_authorized_aist_pipelines
 from aist.tasks import push_request_to_ai, push_request_to_local_triage
 from aist.tasks.ai import _resolve_triage_type
 from aist.utils.ai_response import sync_ai_finding_responses
@@ -119,12 +114,8 @@ class AIPipelineCallbackSerializer(serializers.Serializer):
     results = serializers.JSONField(required=False)
 
 
-class AISendRequestAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class AISendRequestAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         request=AISendRequestSerializer,
@@ -132,8 +123,7 @@ class AISendRequestAPI(AuthorizedQuerySetMixin, APIView):
         tags=[AISTApiTag.AI.value],
     )
     def post(self, request, pipeline_id: str):
-        pipeline = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
-        user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
+        pipeline = self.resolve(id=pipeline_id)
         serializer = AISendRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         return send_request_to_ai_for_pipeline(
@@ -143,26 +133,21 @@ class AISendRequestAPI(AuthorizedQuerySetMixin, APIView):
         )
 
 
-class AIDeleteResponseAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class AIDeleteResponseAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         responses={204: OpenApiResponse(description="Deleted")},
         tags=[AISTApiTag.AI.value],
     )
     def delete(self, request, pipeline_id: str, response_id: int):
-        pipeline = self.get_authorized_object(permission=Permissions.Product_Edit, id=pipeline_id)
-        user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
+        pipeline = self.resolve(id=pipeline_id)
         delete_ai_response_for_pipeline(pipeline, response_id)
         return Response(status=204)
 
 
-class AIPipelineCallbackAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
+class AIPipelineCallbackAPI(AISTAPIView):
+    authz = INTERNAL_SERVICE
 
     @extend_schema(
         request=AIPipelineCallbackSerializer,
@@ -170,8 +155,14 @@ class AIPipelineCallbackAPI(AuthorizedQuerySetMixin, APIView):
         tags=[AISTApiTag.AI.value],
     )
     def post(self, request, pipeline_id: str):
-        get_object_or_404(AISTPipeline, id=pipeline_id)
-        response_from_ai = dict(request.data)
+        pipeline = get_authorized_aist_pipelines(
+            ACTION_PERMISSIONS[Action.PRODUCT_READ], user=request.user,
+        ).filter(id=pipeline_id).first()
+        if pipeline is None:
+            return Response({"detail": "Pipeline not found"}, status=404)
+        serializer = AIPipelineCallbackSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        response_from_ai = dict(serializer.validated_data)
 
         errors = response_from_ai.pop("errors", None)
         logger = install_pipeline_logging(pipeline_id)
@@ -208,7 +199,7 @@ class LocalTriageCompleteSerializer(serializers.Serializer):
     detail = serializers.CharField(required=False, allow_blank=True, default="")
 
 
-class LocalTriageCompleteAPI(AuthorizedQuerySetMixin, APIView):
+class LocalTriageCompleteAPI(AISTAPIView):
 
     """
     Callback endpoint for the local triage bridge.
@@ -218,7 +209,7 @@ class LocalTriageCompleteAPI(AuthorizedQuerySetMixin, APIView):
     This endpoint only calls ``finish_pipeline()``.
     """
 
-    permission_classes = [IsAuthenticated]
+    authz = INTERNAL_SERVICE
 
     @extend_schema(
         request=LocalTriageCompleteSerializer,
@@ -226,7 +217,11 @@ class LocalTriageCompleteAPI(AuthorizedQuerySetMixin, APIView):
         tags=[AISTApiTag.AI.value],
     )
     def post(self, request, pipeline_id: str):
-        get_object_or_404(AISTPipeline, id=pipeline_id)
+        pipeline = get_authorized_aist_pipelines(
+            ACTION_PERMISSIONS[Action.PRODUCT_READ], user=request.user,
+        ).filter(id=pipeline_id).first()
+        if pipeline is None:
+            return Response({"detail": "Pipeline not found"}, status=404)
         serializer = LocalTriageCompleteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -291,12 +286,8 @@ class NumberInFilter(django_filters.BaseInFilter, django_filters.NumberFilter):
     pass
 
 
-class AIFindingResponseListAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_pipelines,
-        permission=Permissions.Product_View,
-    )
+class AIFindingResponseListAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     class FilterSet(django_filters.FilterSet):
         project_id = django_filters.NumberFilter(field_name="pipeline__project_id")
@@ -312,7 +303,7 @@ class AIFindingResponseListAPI(AuthorizedQuerySetMixin, APIView):
         tags=[AISTApiTag.AI.value],
     )
     def get(self, request):
-        pipeline_qs = self.get_authorized_queryset()
+        pipeline_qs = self.authorized_queryset()
         qs = (
             AISTAIFindingResponse.objects
             .filter(pipeline__in=pipeline_qs)
@@ -330,10 +321,7 @@ class AIFindingResponseListAPI(AuthorizedQuerySetMixin, APIView):
         if finding_ids:
             unique_finding_ids = list(dict.fromkeys([value for value in finding_ids if value > 0]))
             allowed_finding_ids = set(
-                self.get_authorized_queryset(
-                    getter=get_authorized_findings,
-                    permission=Permissions.Finding_View,
-                )
+                self.authorized_queryset(resource=Finding, action=Action.FINDING_READ)
                 .filter(id__in=unique_finding_ids)
                 .values_list("id", flat=True),
             )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from django.contrib.auth.decorators import login_required
-from django.db.models import Prefetch
 from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -104,7 +103,6 @@ def aist_project_update_view(request: HttpRequest, project_id: int) -> HttpRespo
     - supported_languages: comma-separated string, e.g. "python, c++, java"
     - compilable: "on" / missing (checkbox)
     - profile: JSON string representing an object (optional)
-    - organization: optional organization id (int) or empty for no organization
     """
     project = get_object_or_404(
         get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
@@ -131,32 +129,37 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
     Management screen for AISTProject objects, grouped by Organization.
 
     Notes:
-    - One Organization can have many AISTProject objects.
-    - Projects without an Organization are shown under the "Others" group.
+    - Projects are grouped by the Organization that owns their Product_Type.
+    - Projects whose Product_Type has no Organization are shown under "Others".
     - Only fields that are safe to edit from UI are exposed:
       * supported_languages
       * compilable
       * profile
 
     """
-    # Organizations with their projects prefetched to avoid N+1 queries.
-    project_qs = (
+    projects = list(
         get_authorized_aist_projects(Permissions.Product_View, user=request.user)
-        .select_related("product", "repository")
-        .order_by("product__name", "id")
+        .select_related("product__prod_type__aist_organization", "repository")
+        .order_by("product__name", "id"),
     )
-    organizations = (
+    organizations = list(
         get_authorized_aist_organizations(Permissions.Product_View, user=request.user)
-        .prefetch_related(Prefetch("projects", queryset=project_qs))
-        .order_by("name")
+        .order_by("name"),
     )
+    projects_by_organization = {organization.id: [] for organization in organizations}
+    unassigned_projects = []
+    for project in projects:
+        organization_id = project.organization_id
+        if organization_id in projects_by_organization:
+            projects_by_organization[organization_id].append(project)
+        elif organization_id is None:
+            unassigned_projects.append(project)
+    for organization in organizations:
+        organization.aist_projects = projects_by_organization[organization.id]
     organizations_for_create = get_authorized_aist_organizations(
         Permissions.Product_Type_Add_Product,
         user=request.user,
     ).order_by("name")
-
-    # Projects that are not assigned to any organization -> "Others" section.
-    unassigned_projects = project_qs.filter(organization__isnull=True)
 
     add_breadcrumb(title="AIST Projects", top_level=True, request=request)
     return render(

@@ -54,7 +54,7 @@ class GithubIssuesBackend(WorkItemBackend):
 
         return (
             ScmGithubBinding.objects.filter(
-                scm__project__organization=self.provider.organization,
+                scm__project__product__prod_type__aist_organization=self.provider.organization,
             )
             .select_related("scm")
             .first()

@@ -10,6 +10,7 @@ architectural invariant I1 is enforced by Task 14's meta-test.
 """
 from __future__ import annotations
 
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from dojo.models import Product, Product_Type, SLA_Configuration
 from pydantic import SecretStr
@@ -44,7 +45,6 @@ class ClaudeAuthEnvTests(TestCase):
             supported_languages=["python"],
             compilable=False,
             profile={},
-            organization=self.org,
         )
 
     def _make_integration(self, *, secret: str = "sk-ant-oat01-" + "x" * 30,
@@ -116,12 +116,7 @@ class ClaudeAuthEnvTests(TestCase):
         result = claude_auth_env(self.project)
         self.assertEqual(result, {})
 
-    def test_cross_org_override_falls_back_to_org_default(self):
-        # Defence in depth: even if a malformed ``ProjectIntegrationOverride``
-        # points at another org's CLAUDE_CODE integration, resolve_integration
-        # must reject it and fall back to this org's default. This re-asserts
-        # the existing protection in aist/integrations/resolver.py for the
-        # Claude code path specifically (see plan I-section).
+    def test_cross_org_override_is_rejected_before_secret_resolution(self):
         own = self._make_integration()
         other_org = Organization.objects.create(
             name="Other Org",
@@ -135,11 +130,12 @@ class ClaudeAuthEnvTests(TestCase):
             is_active=True,
             config={"auth_mode": "oauth"},
         )
-        ProjectIntegrationOverride.objects.create(
-            project=self.project,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
-            org_integration=alien,
-        )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ProjectIntegrationOverride.objects.create(
+                project=self.project,
+                integration_type=OrgIntegrationType.CLAUDE_CODE,
+                org_integration=alien,
+            )
 
         result = claude_auth_env(self.project)
 

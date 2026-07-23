@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 
-let mockCanWrite = true;
+let mockCanOperateProject = true;
 
 vi.mock("../lib/queries", () => ({
   useProjects: () => ({ data: [] }),
@@ -19,7 +19,7 @@ vi.mock("../components/PipelineFilterPanel", () => ({
 
 vi.mock("../components/PermissionGate", () => ({
   default: ({ action, children, fallback = null }: { action: string; children: ReactNode; fallback?: ReactNode }) =>
-    action === "write" && mockCanWrite ? children : fallback,
+    action === "operate_project" && mockCanOperateProject ? children : fallback,
 }));
 
 vi.mock("../components/ImportPipelineDialog", () => ({
@@ -39,7 +39,7 @@ function renderPage() {
 
 describe("PipelinesPage — Import pipeline launch button", () => {
   beforeEach(() => {
-    mockCanWrite = true;
+    mockCanOperateProject = true;
     vi.clearAllMocks();
   });
 
@@ -47,13 +47,13 @@ describe("PipelinesPage — Import pipeline launch button", () => {
     cleanup();
   });
 
-  it("shows the button for a user with write access", () => {
+  it("shows the button for a user with project-operation access", () => {
     renderPage();
     expect(screen.getByRole("button", { name: /import pipeline launch/i })).toBeInTheDocument();
   });
 
-  it("hides the button for a user without write access", () => {
-    mockCanWrite = false;
+  it("hides the button for a user without project-operation access", () => {
+    mockCanOperateProject = false;
     renderPage();
     expect(screen.queryByRole("button", { name: /import pipeline launch/i })).not.toBeInTheDocument();
   });

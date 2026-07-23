@@ -25,11 +25,14 @@ function getBestRole(roles: (number | undefined)[]): number | null {
   return valid.reduce((best, current) => (roleRank[current] ?? -1) > (roleRank[best] ?? -1) ? current : best);
 }
 
-function getRoleFromProfile(profile?: UserProfile | null): number | "superuser" | null {
+function getRoleFromProfile(profile?: UserProfile | null, organizationId?: number): number | "superuser" | null {
   if (!profile) return null;
   if (profile.is_superuser) return "superuser";
 
   if (profile.organization_memberships?.length) {
+    if (organizationId !== undefined) {
+      return profile.organization_memberships.find((membership) => membership.organization_id === organizationId)?.role_id ?? null;
+    }
     const best = getBestRole(
       profile.organization_memberships.map((m) => m.role_id ?? undefined),
     );
@@ -51,23 +54,36 @@ function canManageAccess(role: number | "superuser" | null): boolean {
   return role === RoleIds.Maintainer || role === RoleIds.Owner;
 }
 
-export type PermissionAction = "write" | "comment" | "enable" | "export" | "manage_access";
+export type PermissionAction = "write" | "operate_project" | "comment" | "enable" | "manage_access";
 
-export function usePermissions() {
+export function usePermissions(organizationId?: number) {
   const auth = useAuthStatus();
+  const membership = useMemo(() => {
+    const memberships = auth.data?.organization_memberships ?? [];
+    if (organizationId !== undefined) {
+      return memberships.find((item) => item.organization_id === organizationId) ?? null;
+    }
+    return null;
+  }, [auth.data, organizationId]);
   const role = useMemo(() => {
     if (!auth.data) return null;
-    return getRoleFromProfile(auth.data);
-  }, [auth.data]);
+    return getRoleFromProfile(auth.data, organizationId);
+  }, [auth.data, organizationId]);
 
-  const canWrite = useMemo(() => canWriteWithRole(role), [role]);
+  const canWrite = useMemo(
+    () => membership?.can_write_findings ?? canWriteWithRole(role),
+    [membership, role],
+  );
+  const canOperateProject = membership?.can_operate_projects
+    ?? (role === "superuser" || role === RoleIds.Maintainer || role === RoleIds.Owner);
+  const canManage = membership?.can_manage_access ?? canManageAccess(role);
 
   return {
     canWrite,
+    canOperateProject,
     canComment: canWrite,
     canEnable: canWrite,
-    canExport: true,
-    canManageAccess: canManageAccess(role),
+    canManageAccess: canManage,
     isLoading: auth.isLoading,
   };
 }

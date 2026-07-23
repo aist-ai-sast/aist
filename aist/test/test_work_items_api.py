@@ -69,7 +69,6 @@ class WorkItemBaseTestCase(TestCase):
         )
         self.project = AISTProject.objects.create(
             product=self.product,
-            organization=self.org,
             supported_languages=["python"],
             compilable=False,
             profile={},
@@ -240,6 +239,47 @@ class WorkItemProviderCRUDTests(WorkItemBaseTestCase):
 
 
 class WorkItemLinkCRUDTests(WorkItemBaseTestCase):
+
+    def _set_role(self, role_id, name):
+        role, _ = Role.objects.get_or_create(id=role_id, defaults={"name": name})
+        Product_Type_Member.objects.filter(product_type=self.prod_type, user=self.user).update(role=role)
+
+    def test_reader_can_list_but_cannot_create_patch_or_delete_links(self):
+        self._set_role(Roles.Reader, "Reader")
+        self.assertEqual(self.client.get(self._links_url()).status_code, 200)
+        create = self.client.post(
+            self._links_url(),
+            {"external_url": "https://example.com/reader"},
+            format="json",
+        )
+        self.assertEqual(create.status_code, 404)
+        link = WorkItemLink.objects.create(finding=self.finding, external_url="https://example.com/existing")
+        self.assertEqual(
+            self.client.patch(
+                self._link_detail_url(link.pk),
+                {"status_category": WorkItemStatusCategory.DONE},
+                format="json",
+            ).status_code,
+            404,
+        )
+        self.assertEqual(self.client.delete(self._link_detail_url(link.pk)).status_code, 404)
+
+    def test_writer_can_create_patch_and_delete_manual_link(self):
+        self._set_role(Roles.Writer, "Writer")
+        created = self.client.post(
+            self._links_url(),
+            {"external_url": "https://example.com/writer"},
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.data)
+        link_id = created.data["id"]
+        patched = self.client.patch(
+            self._link_detail_url(link_id),
+            {"status_category": WorkItemStatusCategory.DONE},
+            format="json",
+        )
+        self.assertEqual(patched.status_code, 200, patched.data)
+        self.assertEqual(self.client.delete(self._link_detail_url(link_id)).status_code, 204)
 
     def test_list_links_empty(self):
         response = self.client.get(self._links_url())

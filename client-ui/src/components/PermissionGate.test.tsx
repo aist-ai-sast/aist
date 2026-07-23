@@ -16,9 +16,9 @@ afterEach(() => {
 const mockPerms = (over: Partial<ReturnType<typeof usePermissions>>) => {
   (usePermissions as ReturnType<typeof vi.fn>).mockReturnValue({
     canWrite: false,
+    canOperateProject: false,
     canComment: false,
     canEnable: false,
-    canExport: true,
     canManageAccess: false,
     isLoading: false,
     ...over,

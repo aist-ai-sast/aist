@@ -25,7 +25,7 @@ test("reader is clearly restricted to read-only tokens and can revoke their own 
   await openSettings(page, "org_reader");
 
   const tokenSection = page.locator("#tokens");
-  await expect(tokenSection.getByText("You have read-only access everywhere, so only read-only tokens are available.")).toBeVisible();
+  await expect(tokenSection.getByText("You have read-only access in this organization, so only read-only tokens are available.")).toBeVisible();
 
   const scope = tokenSection.getByRole("combobox", { name: "Scope" });
   await scope.click();
@@ -157,7 +157,7 @@ test("reader cannot reach integration management controls by navigating directly
 
   // OrgIntegrationsPage.tsx's actual restricted-access copy — not the generic
   // "Access denied." this assertion previously (and incorrectly) expected.
-  await expect(page.getByText(/need Maintainer or Owner role to manage integrations/i)).toBeVisible();
+  await expect(page.getByText(/need Maintainer or Owner role in an organization to manage integrations/i)).toBeVisible();
   await expect(page.getByRole("button", { name: "Add" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create" })).toHaveCount(0);
 });

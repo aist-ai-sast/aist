@@ -65,7 +65,7 @@ class DastFindingRegressionGuardTests(TestCase):
         self.pipeline = AISTPipeline.objects.create(
             id="dastguard1",
             project=self.project,
-            status=AISTStatus.UPLOADING_RESULTS,
+            status=AISTStatus.FINISHED,
         )
         storage_name = default_storage.save(
             "report_imports/dastguard1.json",

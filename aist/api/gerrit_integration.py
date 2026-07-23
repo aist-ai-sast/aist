@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from django.db import transaction
-from django.shortcuts import get_object_or_404
 from dojo.authorization.authorization import (
     user_has_permission_or_403,
 )
@@ -9,16 +8,16 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.models import DojoMeta, Product
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.projects import _create_initial_script
 from aist.api.schema import AISTApiTag
+from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import (
     AISTProject,
     AISTProjectVersion,
+    Organization,
     OrgIntegration,
     OrgIntegrationType,
     RepositoryInfo,
@@ -26,7 +25,6 @@ from aist.models import (
     ScmType,
     VersionType,
 )
-from aist.queries import get_authorized_aist_organizations
 from aist.tasks.integrations import fetch_gerrit_project_info
 
 
@@ -52,14 +50,14 @@ class ImportGerritResponseSerializer(serializers.Serializer):
     repo_full = serializers.CharField()
 
 
-class ImportProjectFromGerritAPI(APIView):
+class ImportProjectFromGerritAPI(AISTAPIView):
 
     """
     Create Product + RepositoryInfo(GERRIT) + ScmGerritBinding + AISTProject
     from a Gerrit project path.
     """
 
-    permission_classes = [IsAuthenticated]
+    authz = ResourcePolicy(resource=Organization, read=Action.PROJECT_CREATE, write=Action.PROJECT_CREATE)
 
     @extend_schema(
         request=ImportGerritRequestSerializer,
@@ -76,10 +74,7 @@ class ImportProjectFromGerritAPI(APIView):
             return Response({"detail": "project_path is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         organization_id = serializer.validated_data.get("organization_id")
-        organization = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_Type_Add_Product, user=request.user),
-            pk=organization_id,
-        )
+        organization = self.resolve(pk=organization_id)
 
         integration = (
             OrgIntegration.objects.filter(
@@ -155,7 +150,6 @@ class ImportProjectFromGerritAPI(APIView):
                     "compilable": False,
                     "profile": {},
                     "repository": repo_info,
-                    "organization": organization,
                 },
             )
             if project_created:
@@ -174,13 +168,9 @@ class ImportProjectFromGerritAPI(APIView):
                         version=default_branch,
                         defaults={"version_type": VersionType.GIT_BRANCH},
                     )
-            else:
-                if aist_project.organization_id and aist_project.organization_id != organization.id:
-                    msg = "Project is already linked to another organization."
-                    return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)
-                if aist_project.organization_id is None:
-                    aist_project.organization = organization
-                    aist_project.save(update_fields=["organization"])
+            elif aist_project.organization_id and aist_project.organization_id != organization.id:
+                msg = "Project is already linked to another organization."
+                return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)
 
         if serializer.validated_data.get("auto_analyze") and aist_project.repository:
             from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415

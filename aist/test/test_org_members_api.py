@@ -173,7 +173,9 @@ class ManagementGateTests(OrgMembersApiBase):
         self.assertTrue(Product_Member.objects.filter(user=self.reader_a, product=self.proj_a1.product).exists())
 
     def test_list_reports_token_indicator_without_secret(self):
-        AISTApiToken.issue(user=self.reader_a, name="ci", scope=ApiTokenScope.READ_ONLY)
+        AISTApiToken.issue(
+            user=self.reader_a, organization=self.org_a, name="ci", scope=ApiTokenScope.READ_ONLY,
+        )
         resp = self._client(self.owner_a).get(self._members_url(self.org_a))
         row = next(m for m in resp.json() if m["user_id"] == self.reader_a.id)
         self.assertTrue(row["has_token"])
@@ -399,12 +401,8 @@ class InviteTests(OrgMembersApiBase):
         self.assertTrue(Product_Type_Member.objects.filter(product_type=self.pt_a, user=self.owner_b).exists())
 
     @patch(EMAIL_PATCH)
-    def test_invite_endpoint_has_no_rate_limit(self, mock_email):
-        # Known gap, not fixed in this pass: unlike login/set-password, the
-        # invite endpoint has no throttle_classes — a Manage_Members holder
-        # (or their compromised session) can mail-bomb arbitrary external
-        # addresses with no rate limit. Documents current behavior so a
-        # future fix has a red->green test.
+    def test_invite_endpoint_is_rate_limited(self, mock_email):
+        cache.clear()
         client = self._client(self.owner_a)
         statuses = [
             client.post(
@@ -412,10 +410,21 @@ class InviteTests(OrgMembersApiBase):
                 {"email": f"bulk-{i}@example.com", "role_id": Roles.Reader.value},
                 format="json",
             ).status_code
-            for i in range(15)
+            for i in range(25)
         ]
-        self.assertNotIn(429, statuses, "documents: invite endpoint is not yet throttled")
-        self.assertEqual(mock_email.call_count, 15)
+        self.assertIn(429, statuses)
+        self.assertLess(mock_email.call_count, 25)
+
+    @patch(EMAIL_PATCH)
+    def test_api_importer_role_cannot_be_assigned_on_invite(self, mock_email):
+        resp = self._client(self.owner_a).post(
+            self._members_url(self.org_a),
+            {"email": "api-importer@example.com", "role_id": Roles.API_Importer.value},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(User.objects.filter(email="api-importer@example.com").exists())
+        mock_email.assert_not_called()
 
 
 class RoleChangeTests(OrgMembersApiBase):
@@ -456,6 +465,29 @@ class RoleChangeTests(OrgMembersApiBase):
         )
         self.assertEqual(resp.status_code, 400)
 
+    def test_owner_cannot_change_own_role_even_when_another_owner_exists(self):
+        self._member("owner_a2", self.pt_a, self.role_owner)
+        resp = self._client(self.owner_a).patch(
+            self._member_url(self.org_a, self.owner_a),
+            {"role_id": Roles.Maintainer.value}, format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(
+            Product_Type_Member.objects.get(product_type=self.pt_a, user=self.owner_a).role_id,
+            Roles.Owner.value,
+        )
+
+    def test_api_importer_role_cannot_be_assigned_to_member(self):
+        resp = self._client(self.owner_a).patch(
+            self._member_url(self.org_a, self.reader_a),
+            {"role_id": Roles.API_Importer.value}, format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(
+            Product_Type_Member.objects.get(product_type=self.pt_a, user=self.reader_a).role_id,
+            Roles.Reader.value,
+        )
+
     def test_can_demote_owner_when_another_exists(self):
         second = self._member("owner_a2", self.pt_a, self.role_owner)
         resp = self._client(self.owner_a).patch(
@@ -492,10 +524,20 @@ class RoleChangeTests(OrgMembersApiBase):
 class RemoveMemberTests(OrgMembersApiBase):
     def test_remove_full_member_clears_all_access(self):
         Product_Member.objects.create(user=self.reader_a, product=self.proj_a1.product, role=self.role_writer)
+        ProjectAccessDenial.objects.create(user=self.reader_a, project=self.proj_a2)
+        token, _raw = AISTApiToken.issue(
+            user=self.reader_a,
+            organization=self.org_a,
+            name="org-a-token",
+            scope=ApiTokenScope.READ_ONLY,
+        )
         resp = self._client(self.owner_a).delete(self._member_url(self.org_a, self.reader_a))
         self.assertEqual(resp.status_code, 204)
         self.assertFalse(Product_Type_Member.objects.filter(product_type=self.pt_a, user=self.reader_a).exists())
         self.assertFalse(Product_Member.objects.filter(user=self.reader_a, product__prod_type=self.pt_a).exists())
+        self.assertFalse(ProjectAccessDenial.objects.filter(user=self.reader_a, project=self.proj_a2).exists())
+        token.refresh_from_db()
+        self.assertIsNotNone(token.revoked_at)
 
     def test_remove_restricted_member(self):
         # Restricted member = org member (reader_a) + a per-project grant.

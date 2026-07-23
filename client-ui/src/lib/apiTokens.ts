@@ -9,6 +9,8 @@ export type ApiToken = {
   id: number;
   name: string;
   scope: ApiTokenScope;
+  organization_id: number;
+  organization_name: string;
   last4: string;
   created: string;
   last_used_at: string | null;
@@ -20,6 +22,7 @@ export type CreatedApiToken = ApiToken & { token: string };
 export type CreateTokenPayload = {
   name: string;
   scope: ApiTokenScope;
+  organization_id: number;
   expires_at?: string | null;
 };
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import requests
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from dojo.models import Product, Product_Type, SLA_Configuration
 
@@ -44,7 +45,6 @@ class DastEnvTests(TestCase):
             supported_languages=["python"],
             compilable=False,
             profile={},
-            organization=self.org,
         )
 
     def _make_integration(self, *, secret: str = "pub_abc123.secretvaluevaluevalue",  # noqa: S107
@@ -89,11 +89,7 @@ class DastEnvTests(TestCase):
         self._make_integration(is_active=False)
         self.assertEqual(dast_env(self.project), {})
 
-    def test_cross_org_override_falls_back_to_org_default(self):
-        # Defence in depth: even if a malformed ProjectIntegrationOverride points at
-        # another org's DAST integration, resolve_integration must reject it and fall
-        # back to this org's default — re-asserts resolver.py's existing protection
-        # for the DAST path specifically.
+    def test_cross_org_override_is_rejected_before_secret_resolution(self):
         own = self._make_integration()
         other_org = Organization.objects.create(
             name="Other Org",
@@ -107,11 +103,12 @@ class DastEnvTests(TestCase):
             is_active=True,
             config={"gateway_url": "https://alien-gateway.example"},
         )
-        ProjectIntegrationOverride.objects.create(
-            project=self.project,
-            integration_type=OrgIntegrationType.DAST,
-            org_integration=alien,
-        )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ProjectIntegrationOverride.objects.create(
+                project=self.project,
+                integration_type=OrgIntegrationType.DAST,
+                org_integration=alien,
+            )
 
         result = dast_env(self.project)
 

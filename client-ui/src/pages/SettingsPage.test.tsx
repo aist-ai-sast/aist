@@ -62,15 +62,27 @@ describe("SettingsPage — organization membership name is rendered as literal t
       email: "jane.doe@example.com",
       can_edit_profile: false,
       can_edit_username: false,
+      can_create_write_token: false,
+      is_superuser: false,
       organization_memberships: [
-        { organization_id: 1, organization_name: xssName, role_id: 4, role_name: "Owner" },
+        {
+          organization_id: 1,
+          organization_name: xssName,
+          role_id: 4,
+          role_name: "Owner",
+          can_write_findings: true,
+          can_operate_projects: true,
+          can_manage_access: true,
+          can_grant_owner: true,
+        },
       ],
     };
 
     render(<SettingsPage />);
 
-    const nameNode = screen.getByText(xssName);
-    expect(nameNode.textContent).toBe(xssName);
+    const nameNodes = screen.getAllByText(xssName);
+    expect(nameNodes.length).toBeGreaterThan(0);
+    nameNodes.forEach((nameNode) => expect(nameNode.textContent).toBe(xssName));
     expect(document.querySelector("script")).toBeNull();
     expect(document.body.innerHTML).not.toContain("<script>alert(1)</script>");
   });

@@ -497,7 +497,6 @@ class PipelineArgsDastEnvTests(TestCase):
             supported_languages=["python"],
             compilable=False,
             profile={},
-            organization=self.org,
         )
 
     def _make_args(self, project, *, additional_environments=None):

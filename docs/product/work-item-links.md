@@ -20,6 +20,9 @@ state, and encrypted token where required.
 A provider-backed link stores the ticket identifier/key, URL, title, raw status,
 normalized status category, last sync time, and error. A manual link stores a
 URL only and is never fetched.
+The provider must belong to the finding's product-type organization. The
+database rejects a cross-organization link even when it is written outside the
+REST API and prevents later tenant reassignment of the linked finding path.
 
 ## Supported providers
 
@@ -47,6 +50,12 @@ Both the tracker’s raw status and its normalized category remain available on
 the finding. They are engineering context only: ticket state cannot close a
 finding or alter risk acceptance. If the provider requires it, worker requests
 use its organization VPN route.
+
+Readers can view work-item links attached to findings they can access. Creating,
+editing, manually changing status, or deleting a link requires finding-edit
+capability (Writer or above). Managing organization-owned provider credentials
+requires organization member-management capability. These checks are enforced
+by the backend; UI gates only hide controls the current organization cannot use.
 
 ## Implementation references
 

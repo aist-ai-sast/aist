@@ -16,7 +16,6 @@ import {
   type VpnSecretPayload,
   type WorkItemProviderPayload,
 } from "../lib/mutations";
-import PermissionGate from "../components/PermissionGate";
 import {
   useManageableOrgs,
   useOrgIntegrations,
@@ -1472,42 +1471,35 @@ export default function OrgIntegrationsPage() {
     );
   }
 
-  return (
-    <PermissionGate
-      action="manage_access"
-      fallback={(
-        <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-400">
-          You need Maintainer or Owner role to manage integrations.
-        </div>
-      )}
-    >
-      {orgs.length === 0 ? (
-        <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-400">
-          No organization found. Contact your administrator.
-        </div>
-      ) : (
-        <div className="space-y-6">
-          <div>
-            <h1 className="text-2xl font-semibold text-white">Integrations</h1>
-            <p className="mt-1 text-xs text-slate-400">
-              Manage org-level credentials for source control, notifications, and issue trackers.
-            </p>
-          </div>
+  if (orgs.length === 0) {
+    return (
+      <div className="rounded-2xl border border-night-500 bg-night-700 p-6 text-sm text-slate-400">
+        You need Maintainer or Owner role in an organization to manage integrations.
+      </div>
+    );
+  }
 
-          {orgs.map((org) => (
-            <div key={org.id} className="space-y-4">
-              {orgs.length > 1 && (
-                <div className="text-xs uppercase tracking-[0.2em] text-slate-400 pt-2">
-                  {org.name}
-                </div>
-              )}
-              <OrgIntegrationsSection orgId={org.id} />
-              <WorkItemProvidersSection orgId={org.id} />
-              <ProjectOverridesSection orgId={org.id} />
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold text-white">Integrations</h1>
+        <p className="mt-1 text-xs text-slate-400">
+          Manage org-level credentials for source control, notifications, and issue trackers.
+        </p>
+      </div>
+
+      {orgs.map((org) => (
+        <div key={org.id} className="space-y-4">
+          {orgs.length > 1 && (
+            <div className="text-xs uppercase tracking-[0.2em] text-slate-400 pt-2">
+              {org.name}
             </div>
-          ))}
+          )}
+          <OrgIntegrationsSection orgId={org.id} />
+          <WorkItemProvidersSection orgId={org.id} />
+          <ProjectOverridesSection orgId={org.id} />
         </div>
-      )}
-    </PermissionGate>
+      ))}
+    </div>
   );
 }

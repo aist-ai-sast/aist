@@ -281,7 +281,10 @@ export default function PipelinesPage() {
               </span>
             </div>
           </div>
-          <PermissionGate action="write">
+          <PermissionGate
+            action="operate_project"
+            organizationId={projects.find((project) => project.id === selectedProjectId)?.organizationId ?? undefined}
+          >
             <button
               type="button"
               className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium text-night-900 transition hover:bg-brand-500"

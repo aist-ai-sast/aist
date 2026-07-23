@@ -18,14 +18,13 @@ class AISTProjectRegenerateAnalysisAPITests(AISTApiBase):
     def setUp(self):
         super().setUp()
         self.org = Organization.objects.create(name="Regen Org", product_type=self.prod_type)
-        self.project.organization = self.org
         self.project.repository = RepositoryInfo.objects.create(
             type=ScmType.GITEA,
             repo_owner="myorg",
             repo_name="myrepo",
             base_url="http://gitea.internal:3000",
         )
-        self.project.save(update_fields=["organization", "repository"])
+        self.project.save(update_fields=["repository"])
 
     def _url(self, project_id: int) -> str:
         return reverse("aist_api:project_regenerate_analysis", kwargs={"project_id": project_id})

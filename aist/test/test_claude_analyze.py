@@ -3,8 +3,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
-from dojo.models import Product_Type
-
 from aist.api.github_integration import GithubImportExecuteSerializer
 from aist.api.gitlab_integration import ImportGitlabRequestSerializer
 from aist.models import (
@@ -40,13 +38,14 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
         # OrgIntegration. Task 8 makes the auto-analyze flow skip the
         # whole pipeline if no integration is found, so tests that
         # expect bridge calls must wire one up here.
-        self.org_prod_type = Product_Type.objects.create(name="Claude Analyze PT")
+        self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(
             name="Claude Analyze Org",
             product_type=self.org_prod_type,
         )
-        self.project.organization = self.org
-        self.project.save(update_fields=["repository", "organization"])
+        self.project.refresh_from_db()
+        self.project.repository = self.repo_info
+        self.project.save(update_fields=["repository"])
         self.claude_integration = OrgIntegration.objects.create(
             organization=self.org,
             integration_type=OrgIntegrationType.CLAUDE_CODE,

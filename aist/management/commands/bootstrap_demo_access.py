@@ -621,7 +621,6 @@ class Command(BaseCommand):
                     "supported_languages": list(spec.supported_languages),
                     "compilable": spec.compilable,
                     "profile": {"team": "application-security", "environment": "demo"},
-                    "organization": organization,
                 },
             )
             project_updates: list[str] = []
@@ -632,9 +631,6 @@ class Command(BaseCommand):
             if project.compilable != spec.compilable:
                 project.compilable = spec.compilable
                 project_updates.append("compilable")
-            if project.organization_id != organization.id:
-                project.organization = organization
-                project_updates.append("organization")
             if project_updates:
                 project.save(update_fields=project_updates)
 

@@ -39,11 +39,11 @@ class BootstrapDemoAccessCommandTests(TestCase):
 
         projects = AISTProject.objects.filter(
             product__name__in=[spec.product_name for spec in DEMO_PROJECTS],
-        ).select_related("organization", "product", "product__prod_type")
+        ).select_related("product__prod_type__aist_organization")
         self.assertEqual(projects.count(), len(DEMO_PROJECTS))
 
         org_project_counts = Counter(
-            projects.values_list("organization__name", flat=True),
+            projects.values_list("product__prod_type__aist_organization__name", flat=True),
         )
         self.assertTrue(any(count > 1 for count in org_project_counts.values()))
 

@@ -17,6 +17,7 @@ const severityOptions: Array<{ value: FindingSeverity; label: string }> = [
 type Props = {
   finding: Finding;
   permissionProductId?: number;
+  permissionOrganizationId?: number;
   onChanged?: (severity: FindingSeverity) => void;
   isLocked?: boolean;
 };
@@ -24,6 +25,7 @@ type Props = {
 export default function FindingSeverityControl({
   finding,
   permissionProductId,
+  permissionOrganizationId,
   onChanged,
   isLocked = false,
 }: Props) {
@@ -35,7 +37,7 @@ export default function FindingSeverityControl({
   }, [finding.severity]);
 
   return (
-    <PermissionGate action="write">
+    <PermissionGate action="write" organizationId={permissionOrganizationId}>
       <div className="w-56">
         <div className="mb-1 flex items-center gap-1 text-xs text-slate-400">
           <svg

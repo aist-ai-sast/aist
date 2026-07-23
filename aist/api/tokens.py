@@ -4,14 +4,11 @@ Self-service scoped API tokens + a superuser overview.
 - ``/me/tokens/`` lets a user manage their OWN tokens (secret shown once).
 - ``/admin/api-tokens/`` lets a superuser see WHO has tokens, never the secret.
 
-Read-only vs read-write scope is enforced by ``AistTokenScopeMiddleware``. The
-org-scoping half of a token's effective permission is unchanged: it comes from
-the owning user's role via ``aist/queries.py``. A token can only narrow
-capability, never widen it — enforced up front too: creating a ``read_write``
-token requires the user to already hold write access somewhere (see
-``AISTApiTokenCreateSerializer.validate_scope`` /
-``aist.queries.user_has_write_capability``), so a Reader can't even mint a
-token whose scope implies a capability they don't have.
+Read-only vs read-write scope is enforced by ``AistTokenScopeMiddleware``. Each
+token is bound to exactly one organization, and authorization is re-evaluated
+from the owning user's current role inside that organization. A token can only
+narrow capability, never widen it: creating a ``read_write`` token requires
+write access in the selected organization.
 """
 from __future__ import annotations
 
@@ -27,15 +24,21 @@ from rest_framework.authentication import (
     TokenAuthentication,
 )
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.schema import AISTApiTag
-from aist.models import AISTApiToken, ApiTokenScope
-from aist.queries import user_has_write_capability
+from aist.authz import INTERNAL_SERVICE, PUBLIC, AISTAPIView
+from aist.models import AISTApiToken, ApiTokenScope, Organization
+from aist.queries import get_visible_aist_organizations, user_has_write_capability
 
 User = get_user_model()
+
+
+def _tokens_for_request(request):
+    queryset = AISTApiToken.objects.filter(user=request.user)
+    if isinstance(request.auth, AISTApiToken):
+        queryset = queryset.filter(organization=request.auth.organization)
+    return queryset
 
 
 class AISTApiTokenSerializer(serializers.Serializer):
@@ -45,6 +48,8 @@ class AISTApiTokenSerializer(serializers.Serializer):
     id = serializers.IntegerField(read_only=True)
     name = serializers.CharField()
     scope = serializers.CharField()
+    organization_id = serializers.IntegerField()
+    organization_name = serializers.CharField(source="organization.name")
     last4 = serializers.CharField()
     created = serializers.DateTimeField()
     last_used_at = serializers.DateTimeField(allow_null=True)
@@ -55,13 +60,34 @@ class AISTApiTokenCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100)
     scope = serializers.ChoiceField(choices=ApiTokenScope.choices, default=ApiTokenScope.READ_ONLY)
     expires_at = serializers.DateTimeField(required=False, allow_null=True)
+    organization_id = serializers.PrimaryKeyRelatedField(
+        source="organization",
+        queryset=Organization.objects.none(),
+    )
 
-    def validate_name(self, value: str) -> str:
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get("request")
+        if request is not None and request.user.is_authenticated:
+            fields["organization_id"].queryset = get_visible_aist_organizations(user=request.user)
+        return fields
+
+    def validate(self, attrs):
         user = self.context["request"].user
-        if AISTApiToken.objects.filter(user=user, name=value).exists():
-            msg = "You already have a token with this name."
-            raise serializers.ValidationError(msg)
-        return value
+        organization = attrs["organization"]
+        if attrs["scope"] == ApiTokenScope.READ_WRITE and not user_has_write_capability(
+            user,
+            organization=organization,
+        ):
+            msg = "You have no write access in this organization; create a read-only token instead."
+            raise serializers.ValidationError({"scope": msg})
+        if AISTApiToken.objects.filter(
+            user=user,
+            organization=organization,
+            name=attrs["name"],
+        ).exists():
+            raise serializers.ValidationError({"name": "You already have a token with this name for this organization."})
+        return attrs
 
     def validate_expires_at(self, value):
         if value is not None and value <= timezone.now():
@@ -69,16 +95,9 @@ class AISTApiTokenCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(msg)
         return value
 
-    def validate_scope(self, value: str) -> str:
-        user = self.context["request"].user
-        if value == ApiTokenScope.READ_WRITE and not user_has_write_capability(user):
-            msg = "You have no write access anywhere, so a read/write token would be useless — create a read-only token instead."
-            raise serializers.ValidationError(msg)
-        return value
 
-
-class AISTMeTokenListCreateAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class AISTMeTokenListCreateAPI(AISTAPIView):
+    authz = PUBLIC
     # The create response returns the secret exactly once; opt out of response
     # masking so it is not blanked to ****. (The list response carries no secret.)
     disable_response_masking = True
@@ -89,7 +108,7 @@ class AISTMeTokenListCreateAPI(APIView):
         responses={200: AISTApiTokenSerializer(many=True)},
     )
     def get(self, request):
-        tokens = AISTApiToken.objects.filter(user=request.user).order_by("-created")
+        tokens = _tokens_for_request(request).order_by("-created")
         return Response(AISTApiTokenSerializer(tokens, many=True).data)
 
     @extend_schema(
@@ -109,20 +128,21 @@ class AISTMeTokenListCreateAPI(APIView):
             # sequential duplicate gets.
             token, raw = AISTApiToken.issue(
                 user=request.user,
+                organization=serializer.validated_data["organization"],
                 name=serializer.validated_data["name"],
                 scope=serializer.validated_data["scope"],
                 expires_at=serializer.validated_data.get("expires_at"),
             )
         except IntegrityError as exc:
-            msg = "You already have a token with this name."
+            msg = "You already have a token with this name for this organization."
             raise serializers.ValidationError({"name": msg}) from exc
         payload = AISTApiTokenSerializer(token).data
         payload["token"] = raw  # the ONLY time the secret is ever returned
         return Response(payload, status=status.HTTP_201_CREATED)
 
 
-class AISTMeTokenDetailAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class AISTMeTokenDetailAPI(AISTAPIView):
+    authz = PUBLIC
 
     @extend_schema(
         tags=[AISTApiTag.TOKENS.value],
@@ -130,19 +150,19 @@ class AISTMeTokenDetailAPI(APIView):
         responses={204: OpenApiResponse(description="Token revoked")},
     )
     def delete(self, request, token_id: int):
-        token = get_object_or_404(AISTApiToken, pk=token_id, user=request.user)
+        token = get_object_or_404(_tokens_for_request(request), pk=token_id)
         token.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class AISTAdminApiTokenListAPI(APIView):
+class AISTAdminApiTokenListAPI(AISTAPIView):
 
     """Superuser overview of which users hold tokens. Never exposes a secret."""
 
+    authz = INTERNAL_SERVICE
     # Exclude ScopedTokenAuthentication: this enumeration is reachable only via a
     # UI session or the internal service token, never via any scoped PAT.
     authentication_classes = [SessionAuthentication, BasicAuthentication, TokenAuthentication]
-    permission_classes = [IsAuthenticated]
 
     @extend_schema(
         tags=[AISTApiTag.TOKENS.value],
@@ -157,7 +177,7 @@ class AISTAdminApiTokenListAPI(APIView):
         by_user: dict[int, dict] = {}
         tokens = (
             AISTApiToken.objects
-            .select_related("user")
+            .select_related("user", "organization")
             .order_by("user__username", "-created")
         )
         for token in tokens:
@@ -170,6 +190,8 @@ class AISTAdminApiTokenListAPI(APIView):
                 {
                     "name": token.name,
                     "scope": token.scope,
+                    "organization_id": token.organization_id,
+                    "organization_name": token.organization.name,
                     "created": token.created,
                     "last_used_at": token.last_used_at,
                     "expires_at": token.expires_at,

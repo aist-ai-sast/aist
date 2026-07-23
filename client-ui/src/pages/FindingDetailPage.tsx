@@ -204,6 +204,7 @@ export default function FindingDetailPage() {
           <FindingSeverityControl
             finding={finding}
             permissionProductId={aistProject?.productId}
+            permissionOrganizationId={aistProject?.organizationId ?? undefined}
             onChanged={(severity) => {
               setLocalFindingOverride({ severity });
             }}
@@ -211,6 +212,7 @@ export default function FindingDetailPage() {
           <FindingStatusActions
             finding={finding}
             permissionProductId={aistProject?.productId}
+            permissionOrganizationId={aistProject?.organizationId ?? undefined}
             onApplied={(reason) => {
               setLocalFindingOverride({
                 active: false,
@@ -269,6 +271,7 @@ export default function FindingDetailPage() {
         <FindingDetailTabs
           finding={finding}
           permissionProductId={aistProject?.productId}
+          permissionOrganizationId={aistProject?.organizationId ?? undefined}
           aiResponse={aiResponse}
         />
       </section>

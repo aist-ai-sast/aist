@@ -10,6 +10,7 @@ import PermissionGate from "./PermissionGate";
 
 type WorkItemsPanelProps = {
   findingId: number;
+  organizationId?: number;
 };
 
 const STATUS_LABEL: Record<WorkItemStatusCategory, string> = {
@@ -87,7 +88,7 @@ function StatusSelect({
   );
 }
 
-export default function WorkItemsPanel({ findingId }: WorkItemsPanelProps) {
+export default function WorkItemsPanel({ findingId, organizationId }: WorkItemsPanelProps) {
   const toast = useToast();
   const { data: workItems = [], isLoading } = useWorkItems(findingId);
   const createMutation = useCreateWorkItem(findingId);
@@ -162,11 +163,17 @@ export default function WorkItemsPanel({ findingId }: WorkItemsPanelProps) {
                     <span className="font-mono text-slate-300">{wi.externalKey}</span>
                   ) : null}
                   {wi.provider === null ? (
-                    <StatusSelect
-                      value={wi.statusCategory}
-                      onChange={(v) => handleStatusChange(wi.id, v)}
-                      disabled={updateMutation.isPending}
-                    />
+                    <PermissionGate
+                      action="write"
+                      organizationId={organizationId}
+                      fallback={<span className={statusBadgeClass(wi.statusCategory)}>{STATUS_LABEL[wi.statusCategory]}</span>}
+                    >
+                      <StatusSelect
+                        value={wi.statusCategory}
+                        onChange={(v) => handleStatusChange(wi.id, v)}
+                        disabled={updateMutation.isPending}
+                      />
+                    </PermissionGate>
                   ) : (
                     <span
                       className={[
@@ -193,7 +200,7 @@ export default function WorkItemsPanel({ findingId }: WorkItemsPanelProps) {
                   {wi.externalUrl}
                 </a>
               </div>
-              <PermissionGate action="write">
+              <PermissionGate action="write" organizationId={organizationId}>
                 <button
                   type="button"
                   className="aist-icon-button shrink-0 text-slate-400 hover:text-danger-400"
@@ -211,7 +218,7 @@ export default function WorkItemsPanel({ findingId }: WorkItemsPanelProps) {
         </ul>
       )}
 
-      <PermissionGate action="write">
+      <PermissionGate action="write" organizationId={organizationId}>
         {addOpen ? (
           <div className="rounded-lg border border-night-500 bg-night-800/60 p-3 space-y-2">
             <div className="text-xs uppercase tracking-[0.15em] text-slate-400">Link external issue</div>

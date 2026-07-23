@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from django.urls import reverse
-from dojo.models import Product_Type, Product_Type_Member
+from dojo.models import Product_Type
 
 from aist.api.org_integrations import _split_ovpn_pem_blocks
 from aist.integrations import egress
@@ -491,15 +491,9 @@ class OrphanCleanupTests(AISTApiBase):
 class VpnSecretSerializerParseTests(AISTApiBase):
     def setUp(self):
         super().setUp()
-        self.org_pt = Product_Type.objects.create(name="VPN Test PT")
+        self.org_pt = self.prod_type
         self.org = Organization.objects.create(name="VPN Org", product_type=self.org_pt)
-        Product_Type_Member.objects.create(
-            product_type=self.org_pt,
-            user=self.user,
-            role=self.role_maintainer,
-        )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
         self.list_url = reverse("aist_api:org_integration_list_create", kwargs={"org_id": self.org.pk})
 
     def _create_vpn_integration(self, ovpn_content):

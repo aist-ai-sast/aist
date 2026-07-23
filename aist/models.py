@@ -555,7 +555,9 @@ class Organization(models.Model):
 
     """
     Simple organization/group entity for AIST projects.
-    One organization can have many AISTProject objects.
+
+    Project ownership is derived through the organization's Product_Type;
+    AISTProject intentionally has no duplicated organization foreign key.
     """
 
     created = models.DateTimeField(auto_now_add=True, editable=False)
@@ -658,6 +660,19 @@ class OrgIntegration(models.Model):
     def __str__(self) -> str:
         return f"{self.organization.name} / {self.integration_type} / {self.name}"
 
+    def clean(self):
+        super().clean()
+        if self.vpn_integration_id is None:
+            return
+        vpn = self.vpn_integration
+        errors = {}
+        if vpn.integration_type != OrgIntegrationType.VPN:
+            errors["vpn_integration"] = "The selected integration is not a VPN integration."
+        elif vpn.organization_id != self.organization_id:
+            errors["vpn_integration"] = "VPN integration must belong to the same organization."
+        if errors:
+            raise ValidationError(errors)
+
     @contextmanager
     def scoped_session(self, execution_id: str):
         """
@@ -737,17 +752,25 @@ class AISTProject(models.Model):
         null=True,
         blank=True,
     )
-    organization = models.ForeignKey(
-        Organization,
-        on_delete=models.PROTECT,
-        related_name="projects",
-        null=True,
-        blank=True,
-    )
     ai_default_filter = models.JSONField(null=True, blank=True, default=None)
 
     def __str__(self) -> str:
         return self.product.name
+
+    @property
+    def organization(self) -> Organization | None:
+        """Return the sole organization that owns this project's Product_Type."""
+        if self.product_id is None:
+            return None
+        try:
+            return self.product.prod_type.aist_organization
+        except Organization.DoesNotExist:
+            return None
+
+    @property
+    def organization_id(self) -> int | None:
+        organization = self.organization
+        return organization.pk if organization is not None else None
 
     def get_excluded_paths(self) -> list[str]:
         return ProjectProfile.from_dict(self.profile).get_excluded_paths()
@@ -819,6 +842,19 @@ class ProjectIntegrationOverride(models.Model):
 
     def __str__(self) -> str:
         return f"{self.project} / {self.integration_type}"
+
+    def clean(self):
+        super().clean()
+        if self.org_integration_id is None:
+            return
+        integration = self.org_integration
+        errors = {}
+        if integration.organization_id != self.project.organization_id:
+            errors["org_integration"] = "Integration belongs to a different organization."
+        if integration.integration_type != self.integration_type:
+            errors["org_integration"] = "Integration type must match the override type."
+        if errors:
+            raise ValidationError(errors)
 
 
 class AISTProjectScript(models.Model):
@@ -1653,6 +1689,19 @@ class WorkItemProvider(models.Model):
     def __str__(self) -> str:
         return f"{self.get_provider_type_display()} - {self.name}"
 
+    def clean(self):
+        super().clean()
+        if self.vpn_integration_id is None:
+            return
+        vpn = self.vpn_integration
+        errors = {}
+        if vpn.integration_type != OrgIntegrationType.VPN:
+            errors["vpn_integration"] = "The selected integration is not a VPN integration."
+        elif vpn.organization_id != self.organization_id:
+            errors["vpn_integration"] = "VPN integration must belong to the same organization."
+        if errors:
+            raise ValidationError(errors)
+
 
 class WorkItemStatusCategory(models.TextChoices):
     OPEN = "OPEN", "Open"
@@ -1729,6 +1778,27 @@ class WorkItemLink(models.Model):
         label = self.external_key or self.external_url
         return f"WorkItemLink({label})"
 
+    def clean(self):
+        super().clean()
+        if self.provider_id is None or self.finding_id is None:
+            return
+        product_type_id = (
+            Finding.objects
+            .filter(pk=self.finding_id)
+            .values_list("test__engagement__product__prod_type_id", flat=True)
+            .first()
+        )
+        finding_organization_id = (
+            Organization.objects
+            .filter(product_type_id=product_type_id)
+            .values_list("id", flat=True)
+            .first()
+        )
+        if finding_organization_id != self.provider.organization_id:
+            raise ValidationError({
+                "provider": "Provider must belong to the finding's organization.",
+            })
+
 
 class AISTFindingAnnotation(models.Model):
 
@@ -1771,7 +1841,7 @@ AIST_TOKEN_PREFIX = "aistpat_"  # noqa: S105  (not a secret — a scheme marker)
 class AISTApiToken(models.Model):
 
     """
-    A user-scoped personal access token for the AIST client API.
+    A user-owned, single-organization personal access token for the AIST client API.
 
     The model OWNS its secret lifecycle (RAII): ``issue()`` generates the token
     and stores only a Django-hashed digest of the secret (via
@@ -1789,6 +1859,11 @@ class AISTApiToken(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="aist_api_tokens",
+    )
+    organization = models.ForeignKey(
+        "Organization",
+        on_delete=models.CASCADE,
+        related_name="api_tokens",
     )
     name = models.CharField(max_length=100)
     scope = models.CharField(
@@ -1809,21 +1884,34 @@ class AISTApiToken(models.Model):
 
     class Meta:
         verbose_name = "AIST API token"
-        unique_together = (("user", "name"),)
+        unique_together = (("user", "organization", "name"),)
         indexes = [
             models.Index(fields=["user"], name="aist_api_token_user_idx"),
+            models.Index(fields=["organization"], name="aist_api_token_org_idx"),
         ]
 
     def __str__(self) -> str:
-        return f"AISTApiToken(user={self.user_id}, name={self.name!r}, scope={self.scope})"
+        return (
+            f"AISTApiToken(user={self.user_id}, organization={self.organization_id}, "
+            f"name={self.name!r}, scope={self.scope})"
+        )
 
     @classmethod
-    def issue(cls, *, user, name: str, scope: str, expires_at=None) -> tuple[AISTApiToken, str]:
+    def issue(
+        cls,
+        *,
+        user,
+        organization: Organization,
+        name: str,
+        scope: str,
+        expires_at=None,
+    ) -> tuple[AISTApiToken, str]:
         """Create a token and return (instance, raw_secret_token). Raw is available only here."""
         public_id = get_random_string(16)
         secret = get_random_string(40)
         token = cls.objects.create(
             user=user,
+            organization=organization,
             name=name,
             scope=scope,
             public_id=public_id,

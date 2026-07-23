@@ -18,6 +18,7 @@ import AiFixPanel from "./AiFixPanel";
 type FindingDetailTabsProps = {
   finding: Finding;
   permissionProductId?: number;
+  permissionOrganizationId?: number;
   aiResponse?: AIResponse | null;
   embedded?: boolean;
   selectedTags?: string[];
@@ -193,6 +194,7 @@ function FindingReferences({ value }: { value: string }) {
 export default function FindingDetailTabs({
   finding,
   permissionProductId,
+  permissionOrganizationId,
   aiResponse,
   embedded = false,
   selectedTags = [],
@@ -493,7 +495,7 @@ export default function FindingDetailTabs({
 
       {tab === "notes" ? (
         <div className="mt-4 space-y-3">
-          <PermissionGate action="comment">
+          <PermissionGate action="comment" organizationId={permissionOrganizationId}>
             <div className="space-y-2">
               <textarea
                 className="w-full rounded-xl border border-night-500 bg-night-900 px-3 py-2 text-xs text-slate-200 outline-none focus-visible:outline-none focus-visible:ring-0 focus-visible:border-brand-600"
@@ -612,7 +614,7 @@ export default function FindingDetailTabs({
 
       {tab === "work_items" ? (
         <div className="mt-4">
-          <WorkItemsPanel findingId={finding.id} />
+          <WorkItemsPanel findingId={finding.id} organizationId={permissionOrganizationId} />
         </div>
       ) : null}
     </div>

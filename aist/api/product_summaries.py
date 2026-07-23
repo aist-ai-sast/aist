@@ -6,15 +6,13 @@ from django.db.models import Count, DateTimeField, OuterRef, Q, Subquery
 from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.common import API_SEVERITY_VALUES, compute_risk_score, empty_severity_counts
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
-from aist.models import AISTPipeline
-from aist.queries import get_authorized_aist_projects, get_authorized_findings
+from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.models import AISTPipeline, AISTProject
+from aist.queries import get_authorized_findings
 
 
 class AISTProductSummaryRowSerializer(serializers.Serializer):
@@ -32,12 +30,9 @@ class AISTProductSummaryRowSerializer(serializers.Serializer):
     risk_score = serializers.JSONField()
 
 
-class AISTProductSummaryAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+class AISTProductSummaryAPI(AISTAPIView):
+    # Read-only summary; write action is a fail-secure default (GET only).
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.PRODUCTS.value],
@@ -46,7 +41,7 @@ class AISTProductSummaryAPI(AuthorizedQuerySetMixin, APIView):
     )
     def get(self, request, *args, **kwargs) -> Response:
         projects = (
-            self.get_authorized_queryset()
+            self.authorized_queryset_for_request()
             .select_related("product")
             .prefetch_related("product__tags")
             .order_by("product__name")
@@ -54,9 +49,8 @@ class AISTProductSummaryAPI(AuthorizedQuerySetMixin, APIView):
 
         product_ids = [project.product_id for project in projects]
 
-        findings = self.get_authorized_queryset(
-            getter=get_authorized_findings,
-            permission=Permissions.Finding_View,
+        findings = get_authorized_findings(
+            Permissions.Finding_View, user=request.user,
         ).filter(
             test__engagement__product_id__in=product_ids,
         )

@@ -126,7 +126,6 @@ class OrganizationCreateAPITests(TestCase):
         )
         AISTProject.objects.create(
             product=product,
-            organization=visible_org,
             supported_languages=["python"],
             compilable=False,
             profile={},

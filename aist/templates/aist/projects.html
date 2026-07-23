@@ -158,14 +158,14 @@
                         <tr class="active">
                             <td colspan="8">
                                 <strong>{{ org.name }}</strong>
-                                {% with org.projects.count as cnt %}
+                                {% with org.aist_projects|length as cnt %}
                                     <span class="text-muted small">
                                         ({{ cnt }} project{{ cnt|pluralize }})
                                     </span>
                                 {% endwith %}
                             </td>
                         </tr>
-                        {% for p in org.projects.all %}
+                        {% for p in org.aist_projects %}
                             <tr data-project-id="{{ p.id }}"
                                 data-project-name="{{ p.product.name|default_if_none:'' }}"
                                 data-project-active-script-id="{{ p.active_script.id }}"
@@ -766,21 +766,6 @@
                         </div>
 
                         <div class="form-group">
-                            <label>Organization</label>
-                            <select class="form-control"
-                                    id="ap-organization"
-                                    name="organization">
-                                <option value="">No organization</option>
-                                {% for org in organizations %}
-                                    <option value="{{ org.id }}">{{ org.name }}</option>
-                                {% endfor %}
-                            </select>
-                            <p class="help-block">
-                                Optional organization used to group projects.
-                            </p>
-                        </div>
-
-                        <div class="form-group">
                             <label for="ap-supported-languages">Supported languages</label>
                             <input type="text"
                                    class="form-control"
@@ -1122,7 +1107,6 @@
 
             var fieldId = document.getElementById("ap-project-id");
             var fieldProduct = document.getElementById("ap-product-name");
-            var fieldOrganization = document.getElementById("ap-organization");
             var fieldLangs = document.getElementById("ap-supported-languages");
             var fieldCompilable = document.getElementById("ap-compilable");
             var fieldProfile = document.getElementById("ap-profile");
@@ -1326,7 +1310,6 @@
                 var name = row.getAttribute("data-project-name") || "";
                 var langs = row.getAttribute("data-project-langs") || "";
                 var compilable = row.getAttribute("data-project-compilable") === "true";
-                var orgId = row.getAttribute("data-project-org-id") || "";
                 var repoType = row.getAttribute("data-project-repo-type") || "";
                 var repoBaseUrl = row.getAttribute("data-project-repo-base-url") || "";
 
@@ -1364,10 +1347,6 @@
                 fieldProduct.value = name;
                 fieldLangs.value = langs;
                 fieldCompilable.checked = compilable;
-
-                if (fieldOrganization) {
-                    fieldOrganization.value = orgId || "";
-                }
 
                 if (fieldProfile) {
                     fieldProfile.value = profilePretty || "";

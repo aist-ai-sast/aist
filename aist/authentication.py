@@ -82,6 +82,9 @@ class ScopedTokenAuthentication(BaseAuthentication):
         if not token.user.is_active:
             msg = "User account is disabled."
             raise AuthenticationFailed(msg)
+        # The authenticated User instance is request-local. Every authorization
+        # getter reads this marker and intersects its result with the token's org.
+        token.user._aist_token_organization_id = token.organization_id
         self._touch_last_used(token)
         return token.user, token
 

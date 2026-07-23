@@ -7,18 +7,15 @@ Views are intentionally thin: each resolves + authorizes the organization
 """
 from __future__ import annotations
 
-from django.shortcuts import get_object_or_404
-from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
-from rest_framework.views import APIView
 
 from aist.api.schema import AISTApiTag
+from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.members.service import OrganizationMembershipService
-from aist.queries import get_authorized_aist_organizations
+from aist.models import Organization
 
 # ---------------------------------------------------------------------------
 # Serializers
@@ -71,22 +68,19 @@ class AISTMemberRoleSerializer(serializers.Serializer):
 # ---------------------------------------------------------------------------
 
 
-class _OrgMembersBaseAPI(APIView):
+class _OrgMembersBaseAPI(AISTAPIView):
 
     """
     Resolves the managed organization and builds the membership service.
 
-    ``get_authorized_aist_organizations(Product_Type_Manage_Members, ...)`` is
-    the single management gate: an org the actor cannot manage yields 404.
+    The declared organization policy is the single management gate: an org the
+    actor cannot manage yields 404.
     """
 
-    permission_classes = [IsAuthenticated]
+    authz = ResourcePolicy(resource=Organization, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
     def _service(self, request, org_id: int) -> OrganizationMembershipService:
-        organization = get_object_or_404(
-            get_authorized_aist_organizations(Permissions.Product_Type_Manage_Members, user=request.user),
-            pk=org_id,
-        )
+        organization = self.resolve(pk=org_id)
         return OrganizationMembershipService(organization, request.user)
 
 

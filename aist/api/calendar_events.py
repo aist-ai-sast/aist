@@ -14,9 +14,7 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.calendar_domain import (
     CALENDAR_EVENT_TYPES,
@@ -29,6 +27,7 @@ from aist.api.calendar_domain import (
 from aist.api.common import CommaSeparatedListField, TimezoneNameField
 from aist.api.finding_event_stream import FindingEventStream
 from aist.api.schema import AISTApiTag
+from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.launch_data import PipelineLaunchData
 from aist.queries import (
     get_authorized_aist_launch_schedules,
@@ -502,8 +501,9 @@ class CalendarEventDetailQuerySerializer(serializers.Serializer):
         return attrs
 
 
-class AISTCalendarEventsAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class AISTCalendarEventsAPI(AISTAPIView):
+    # Read-only aggregation; scopes findings internally via the repository/getters.
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.CALENDAR.value],
@@ -549,8 +549,8 @@ class AISTCalendarEventsAPI(APIView):
         )
 
 
-class AISTCalendarEventDetailAPI(APIView):
-    permission_classes = [IsAuthenticated]
+class AISTCalendarEventDetailAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.CALENDAR.value],

@@ -19,8 +19,6 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from dojo.models import Product_Type
-
 from aist.models import (
     AISTPipeline,
     AISTProjectVersion,
@@ -74,13 +72,12 @@ class PipelineClaudeAuthEnvTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        self.org_prod_type = Product_Type.objects.create(name="Pipeline Claude PT")
+        self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(
             name="Pipeline Claude Org",
             product_type=self.org_prod_type,
         )
-        self.project.organization = self.org
-        self.project.save(update_fields=["organization"])
+        self.project.refresh_from_db()
         self.branch = AISTProjectVersion.objects.create(
             project=self.project,
             version_type=VersionType.GIT_BRANCH,

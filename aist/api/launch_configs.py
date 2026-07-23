@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 from django.db import transaction
-from django.shortcuts import get_object_or_404
 from django_filters import rest_framework as django_filters
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiExample, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.pipelines import PipelineResponseSerializer
-from aist.api.query import AuthorizedQuerySetMixin, AuthorizedQuerysetSpec
 from aist.api.schema import AISTApiTag
+from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.models import (
     AISTLaunchConfigAction,
     AISTProject,
@@ -23,11 +18,6 @@ from aist.models import (
     AISTStatus,
 )
 from aist.pipeline_args import PipelineArguments
-from aist.queries import (
-    get_authorized_aist_launch_config_actions,
-    get_authorized_aist_launch_configs,
-    get_authorized_aist_projects,
-)
 from aist.tasks import run_sast_pipeline
 from aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline
 
@@ -258,12 +248,8 @@ def create_launch_config_for_project(
         )
 
 
-class ProjectLaunchConfigListCreateAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+class ProjectLaunchConfigListCreateAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_CONFIGS.value],
@@ -271,7 +257,7 @@ class ProjectLaunchConfigListCreateAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: LaunchConfigSerializer(many=True)},
     )
     def get(self, request, project_id: int, *args, **kwargs):
-        project = self.get_authorized_object(id=project_id)
+        project = self.resolve(id=project_id)
         qs = AISTProjectLaunchConfig.objects.filter(project=project).order_by("-updated")
         return Response(LaunchConfigSerializer(qs, many=True).data)
 
@@ -327,8 +313,7 @@ class ProjectLaunchConfigListCreateAPI(AuthorizedQuerySetMixin, APIView):
         ],
     )
     def post(self, request, project_id: int, *args, **kwargs):
-        project = self.get_authorized_object(permission=Permissions.Product_Edit, id=project_id)
-        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+        project = self.resolve(id=project_id)
 
         s = LaunchConfigCreateRequestSerializer(data=request.data)
         s.is_valid(raise_exception=True)
@@ -344,12 +329,8 @@ class ProjectLaunchConfigListCreateAPI(AuthorizedQuerySetMixin, APIView):
         return Response(LaunchConfigSerializer(obj).data, status=status.HTTP_201_CREATED)
 
 
-class ProjectLaunchConfigDetailAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_launch_configs,
-        permission=Permissions.Product_View,
-    )
+class ProjectLaunchConfigDetailAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProjectLaunchConfig, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_CONFIGS.value],
@@ -357,7 +338,7 @@ class ProjectLaunchConfigDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: LaunchConfigSerializer, 404: OpenApiResponse(description="Not found")},
     )
     def get(self, request, project_id: int, config_id: int, *args, **kwargs):
-        obj = self.get_authorized_object(id=config_id, project_id=project_id)
+        obj = self.resolve(id=config_id, project_id=project_id)
         return Response(LaunchConfigSerializer(obj).data)
 
     @extend_schema(
@@ -366,8 +347,7 @@ class ProjectLaunchConfigDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
     def delete(self, request, project_id: int, config_id: int, *args, **kwargs):
-        obj = self.get_authorized_object(permission=Permissions.Product_Edit, id=config_id, project_id=project_id)
-        user_has_permission_or_403(request.user, obj.project.product, Permissions.Product_Edit)
+        obj = self.resolve(id=config_id, project_id=project_id)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -378,8 +358,7 @@ class ProjectLaunchConfigDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: LaunchConfigSerializer, 404: OpenApiResponse(description="Not found")},
     )
     def patch(self, request, project_id: int, config_id: int, *args, **kwargs):
-        obj = self.get_authorized_object(permission=Permissions.Product_Edit, id=config_id, project_id=project_id)
-        user_has_permission_or_403(request.user, obj.project.product, Permissions.Product_Edit)
+        obj = self.resolve(id=config_id, project_id=project_id)
         s = LaunchConfigUpdateRequestSerializer(data=request.data, partial=True)
         s.is_valid(raise_exception=True)
         data = s.validated_data
@@ -406,12 +385,8 @@ class ProjectLaunchConfigDetailAPI(AuthorizedQuerySetMixin, APIView):
         return Response(LaunchConfigSerializer(obj).data)
 
 
-class ProjectLaunchConfigStartAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_projects,
-        permission=Permissions.Product_View,
-    )
+class ProjectLaunchConfigStartAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_CONFIGS.value],
@@ -474,11 +449,9 @@ class ProjectLaunchConfigStartAPI(AuthorizedQuerySetMixin, APIView):
         ],
     )
     def post(self, request, project_id: int, config_id: int, *args, **kwargs):
-        project = self.get_authorized_object(permission=Permissions.Product_Edit, id=project_id)
-        user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
-        cfg = self.get_authorized_object(
-            getter=get_authorized_aist_launch_configs,
-            permission=Permissions.Product_Edit,
+        project = self.resolve(id=project_id)
+        cfg = self.resolve(
+            resource=AISTProjectLaunchConfig,
             id=config_id,
             project=project,
         )
@@ -504,8 +477,8 @@ class ProjectLaunchConfigStartAPI(AuthorizedQuerySetMixin, APIView):
         if not pv_id:
             return Response({"project_version": "No versions found for project"}, status=status.HTTP_400_BAD_REQUEST)
 
-        project_version = get_object_or_404(
-            AISTProjectVersion,
+        project_version = self.resolve(
+            resource=AISTProjectVersion,
             pk=pv_id,
             project=project,
         )
@@ -533,12 +506,8 @@ class ProjectLaunchConfigStartAPI(AuthorizedQuerySetMixin, APIView):
         return Response(out.data, status=status.HTTP_201_CREATED)
 
 
-class ProjectLaunchConfigActionListCreateAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_launch_configs,
-        permission=Permissions.Product_View,
-    )
+class ProjectLaunchConfigActionListCreateAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProjectLaunchConfig, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_CONFIGS.value],
@@ -546,7 +515,7 @@ class ProjectLaunchConfigActionListCreateAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: LaunchConfigActionSerializer(many=True)},
     )
     def get(self, request, project_id: int, config_id: int, *args, **kwargs):
-        cfg = self.get_authorized_object(id=config_id, project_id=project_id)
+        cfg = self.resolve(id=config_id, project_id=project_id)
         qs = AISTLaunchConfigAction.objects.filter(launch_config=cfg).order_by("-updated")
         return Response(LaunchConfigActionSerializer(qs, many=True).data)
 
@@ -557,8 +526,7 @@ class ProjectLaunchConfigActionListCreateAPI(AuthorizedQuerySetMixin, APIView):
         responses={201: LaunchConfigActionSerializer},
     )
     def post(self, request, project_id: int, config_id: int, *args, **kwargs):
-        cfg = self.get_authorized_object(permission=Permissions.Product_Edit, id=config_id, project_id=project_id)
-        user_has_permission_or_403(request.user, cfg.project.product, Permissions.Product_Edit)
+        cfg = self.resolve(id=config_id, project_id=project_id)
         action_type_serializer = BaseActionCreateSerializer(data=request.data)
         action_type_serializer.is_valid(raise_exception=True)
         action_type = action_type_serializer.validated_data["action_type"]
@@ -578,12 +546,8 @@ class ProjectLaunchConfigActionListCreateAPI(AuthorizedQuerySetMixin, APIView):
         return Response(LaunchConfigActionSerializer(obj).data, status=status.HTTP_201_CREATED)
 
 
-class ProjectLaunchConfigActionDetailAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_launch_config_actions,
-        permission=Permissions.Product_View,
-    )
+class ProjectLaunchConfigActionDetailAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTLaunchConfigAction, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_CONFIGS.value],
@@ -591,7 +555,7 @@ class ProjectLaunchConfigActionDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: LaunchConfigActionSerializer, 404: OpenApiResponse(description="Not found")},
     )
     def get(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
-        obj = self.get_authorized_object(
+        obj = self.resolve(
             id=action_id,
             launch_config_id=config_id,
             launch_config__project_id=project_id,
@@ -605,13 +569,11 @@ class ProjectLaunchConfigActionDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={200: LaunchConfigActionSerializer, 404: OpenApiResponse(description="Not found")},
     )
     def patch(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
-        obj = self.get_authorized_object(
-            permission=Permissions.Product_Edit,
+        obj = self.resolve(
             id=action_id,
             launch_config_id=config_id,
             launch_config__project_id=project_id,
         )
-        user_has_permission_or_403(request.user, obj.launch_config.project.product, Permissions.Product_Edit)
         s = LaunchConfigActionUpdateSerializer(data=request.data, partial=True)
         s.is_valid(raise_exception=True)
         data = s.validated_data
@@ -642,26 +604,22 @@ class ProjectLaunchConfigActionDetailAPI(AuthorizedQuerySetMixin, APIView):
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
     def delete(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
-        obj = self.get_authorized_object(
-            permission=Permissions.Product_Edit,
+        obj = self.resolve(
             id=action_id,
             launch_config_id=config_id,
             launch_config__project_id=project_id,
         )
-        user_has_permission_or_403(request.user, obj.launch_config.project.product, Permissions.Product_Edit)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class LaunchConfigDashboardListAPI(AuthorizedQuerySetMixin, APIView):
-    permission_classes = [IsAuthenticated]
-    authorized_queryset = AuthorizedQuerysetSpec(
-        getter=get_authorized_aist_launch_configs,
-        permission=Permissions.Product_View,
-    )
+class LaunchConfigDashboardListAPI(AISTAPIView):
+    authz = ResourcePolicy(resource=AISTProjectLaunchConfig, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     class FilterSet(django_filters.FilterSet):
-        organization_id = django_filters.NumberFilter(field_name="project__organization_id")
+        organization_id = django_filters.NumberFilter(
+            field_name="project__product__prod_type__aist_organization_id",
+        )
         project_id = django_filters.NumberFilter(field_name="project_id")
         is_default = django_filters.BooleanFilter(field_name="is_default")
 
@@ -677,8 +635,8 @@ class LaunchConfigDashboardListAPI(AuthorizedQuerySetMixin, APIView):
         filterset = self.FilterSet(
             data=request.query_params,
             queryset=(
-                self.get_authorized_queryset()
-                .select_related("project__product", "project__organization")
+                self.authorized_queryset()
+                .select_related("project__product__prod_type__aist_organization")
                 .prefetch_related("actions")
                 .order_by("-updated")
             ),
@@ -696,13 +654,11 @@ class LaunchConfigDashboardListAPI(AuthorizedQuerySetMixin, APIView):
         responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
     )
     def delete(self, request, project_id: int, config_id: int, action_id: int, *args, **kwargs):
-        obj = self.get_authorized_object(
-            getter=get_authorized_aist_launch_config_actions,
-            permission=Permissions.Product_Edit,
+        obj = self.resolve(
+            resource=AISTLaunchConfigAction,
             id=action_id,
             launch_config_id=config_id,
             launch_config__project_id=project_id,
         )
-        user_has_permission_or_403(request.user, obj.launch_config.project.product, Permissions.Product_Edit)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

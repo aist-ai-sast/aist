@@ -111,16 +111,12 @@ def import_scm_project(req: ScmImportRequest) -> tuple[AISTProject, str]:
                 "compilable": False,
                 "profile": {},
                 "repository": repo_info,
-                "organization": req.organization,
             },
         )
         if not project_created:
             if aist_project.organization_id and aist_project.organization_id != req.organization.id:
                 msg = "Project is already linked to another organization."
                 raise ScmImportConflictError(msg)
-            if aist_project.organization_id is None:
-                aist_project.organization = req.organization
-                aist_project.save(update_fields=["organization"])
 
         # Reassign the binding's credentials only once the org-conflict check
         # above has passed. Doing this earlier would let one org's import

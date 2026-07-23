@@ -66,7 +66,7 @@ class DastFindingViewFieldsTests(TestCase):
         self.pipeline = AISTPipeline.objects.create(
             id="dastview1",
             project=self.project,
-            status=AISTStatus.UPLOADING_RESULTS,
+            status=AISTStatus.FINISHED,
         )
         storage_name = default_storage.save(
             "report_imports/dastview1.json",

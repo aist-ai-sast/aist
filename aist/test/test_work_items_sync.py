@@ -86,7 +86,7 @@ class SyncLinkTests(TestCase):
             name="Sync Product", description="", prod_type=self.prod_type, sla_configuration_id=self.sla.id,
         )
         self.project = AISTProject.objects.create(
-            product=self.product, organization=self.org, supported_languages=[], compilable=False, profile={},
+            product=self.product, supported_languages=[], compilable=False, profile={},
         )
         test_type = Test_Type.objects.create(name="Sync test type")
         self.engagement = Engagement.objects.create(
@@ -210,7 +210,7 @@ class SyncProviderTests(TestCase):
             name="SProv Product", description="", prod_type=self.prod_type, sla_configuration_id=self.sla.id,
         )
         self.project = AISTProject.objects.create(
-            product=self.product, organization=self.org, supported_languages=[], compilable=False, profile={},
+            product=self.product, supported_languages=[], compilable=False, profile={},
         )
         test_type = Test_Type.objects.create(name="SProv test type")
         self.engagement = Engagement.objects.create(
@@ -307,7 +307,7 @@ class ValidateAndSyncAPITests(TestCase):
             name="VS Product", description="", prod_type=self.prod_type, sla_configuration_id=self.sla.id,
         )
         AISTProject.objects.create(
-            product=self.product, organization=self.org, supported_languages=[], compilable=False, profile={},
+            product=self.product, supported_languages=[], compilable=False, profile={},
         )
         self.provider = WorkItemProvider.objects.create(
             organization=self.org,
