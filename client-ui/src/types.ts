@@ -166,7 +166,9 @@ export type ProductSummary = {
 
 export type PipelineSummary = {
   id: string;
+  executionType: "SAST" | "DAST" | "MANUAL_IMPORT";
   status: string;
+  dastOutcomeCode?: import("./lib/dastNarrative").DastOutcomeCode | null;
   projectId: number;
   productId: number;
   productName: string;

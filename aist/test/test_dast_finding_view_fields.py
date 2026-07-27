@@ -5,6 +5,7 @@ cvssv3) for a finding imported from a manual DAST report.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 
 from django.contrib.auth import get_user_model
@@ -12,10 +13,23 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.test import Client, TestCase
 from django.urls import reverse
+from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Finding, Product, Product_Type, Product_Type_Member, Role
+from dojo.models import Finding, Product, Product_Type, Product_Type_Member, Role, SLA_Configuration
 
-from aist.models import AISTPipeline, AISTProject, AISTStatus, RepositoryInfo, ScmType
+from aist.models import (
+    AISTPipeline,
+    AISTProject,
+    AISTStatus,
+    DastProjectBinding,
+    DastTarget,
+    Organization,
+    OrgIntegration,
+    OrgIntegrationType,
+    PipelineExecutionType,
+    RepositoryInfo,
+    ScmType,
+)
 from aist.parser_overrides import DAST_SCAN_TYPE
 from aist.tasks.report_import import import_report
 
@@ -44,6 +58,30 @@ def _report_payload() -> dict:
                 "endpoints": ["https://api.example.com/v1/subscriptions/123"],
             },
         ],
+        "dast_run_metadata": {
+            "run_id": "run-dastview1",
+            "target": "cloud-app",
+            "stand": "qa-1",
+            "source_commits": {"backend": SHA},
+        },
+    }
+
+
+def _terminal_payload() -> dict:
+    return {
+        "contract_version": "2.0",
+        "run_id": "run-dastview1",
+        "status": "succeeded",
+        "selection": {"stand_id": "qa-1", "relation": "exact", "distance": 0},
+        "trigger_resolution": {
+            "type": "GIT_HASH",
+            "ref": SHA,
+            "resolved_commit": SHA,
+            "resolved_at": "2026-07-26T10:00:00Z",
+        },
+        "dast_run_metadata": {"source_commits": {"backend": SHA}},
+        "report": _report_payload(),
+        "audit": {"correlation_id": "manual-dastview1", "source_verified": True},
     }
 
 
@@ -54,7 +92,13 @@ class DastFindingViewFieldsTests(TestCase):
         role_maintainer, _ = Role.objects.get_or_create(id=Roles.Maintainer, defaults={"name": "Maintainer"})
         Product_Type_Member.objects.create(product_type=prod_type, user=self.user, role=role_maintainer)
 
-        product = Product.objects.create(name="Dast Finding View Product", description="desc", prod_type=prod_type)
+        organization = Organization.objects.create(name="Dast Finding View Org", product_type=prod_type)
+        product = Product.objects.create(
+            name="Dast Finding View Product",
+            description="desc",
+            prod_type=prod_type,
+            sla_configuration=SLA_Configuration.objects.create(name="Dast Finding View SLA"),
+        )
         repository = RepositoryInfo.objects.create(type=ScmType.GITHUB, repo_owner="acme", repo_name="cloud_portal")
         self.project = AISTProject.objects.create(
             product=product,
@@ -63,14 +107,42 @@ class DastFindingViewFieldsTests(TestCase):
             profile={},
             repository=repository,
         )
+        integration = OrgIntegration.objects.create(
+            organization=organization,
+            integration_type=OrgIntegrationType.DAST,
+            name="Dast Finding View Integration",
+            is_active=True,
+        )
+        target = DastTarget.objects.create(
+            integration=integration,
+            provider_id="cloud-app",
+            display_name="Cloud app",
+            contract_revision="2.0",
+            capability_revision="sha256:dast-view-capability",
+            schema_digest="sha256:dast-view-schema",
+            parameter_schema={"type": "object", "additionalProperties": False},
+            provider_defaults={},
+            repository_keys=["backend"],
+            autonomous_ready=True,
+            last_seen_at=timezone.now(),
+        )
+        binding = DastProjectBinding.objects.create(
+            project=self.project,
+            target=target,
+            source_repo_key="backend",
+            enabled=True,
+        )
         self.pipeline = AISTPipeline.objects.create(
             id="dastview1",
             project=self.project,
+            execution_type=PipelineExecutionType.MANUAL_IMPORT,
             status=AISTStatus.FINISHED,
+            launch_data={"source": "manual_import", "dast_binding_id": binding.pk},
         )
+        report_bytes = json.dumps(_terminal_payload()).encode()
         storage_name = default_storage.save(
             "report_imports/dastview1.json",
-            ContentFile(json.dumps(_report_payload()).encode()),
+            ContentFile(report_bytes),
         )
         import_report(
             pipeline_id=self.pipeline.id,
@@ -78,9 +150,10 @@ class DastFindingViewFieldsTests(TestCase):
             project_id=self.project.id,
             uploader_id=self.user.id,
             scan_type=DAST_SCAN_TYPE,
-            commit_hash=SHA,
+            commit_hash="",
             filename="generic-aist-report.json",
-            sha256="deadbeef",
+            sha256=hashlib.sha256(report_bytes).hexdigest(),
+            binding_id=binding.pk,
         )
         self.finding = Finding.objects.get(test__aist_pipelines=self.pipeline)
 

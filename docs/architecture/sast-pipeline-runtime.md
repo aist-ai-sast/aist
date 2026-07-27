@@ -1,42 +1,47 @@
-# SAST Pipeline Runtime
+# SAST pipeline runtime
 
-The SAST runtime is the execution component behind an AIST pipeline run. Its
-job is to turn one selected project version into analyzer reports that the
-platform can import. It is not the API that starts the run and it is not the
-finding review workflow.
+The SAST runtime turns one selected project version into analyzer reports that
+AIST can import. It owns the isolated workspace and analyzer containers for one
+run; it does not own launch authorization, finding review, or AI disposition.
 
 ![SAST runtime responsibilities](../assets/sast-pipeline-runtime.svg)
 
-## Per-run workspace
+## Create one run workspace
 
-The pipeline worker creates a run-specific build path and output directory.
-The output directory is additionally partitioned by pipeline identifier, so
-concurrent runs do not write to the same report location. The worker supplies
-the selected project version, resolved run parameters, and launch environment
-to the pipeline package.
+The pipeline worker creates an execution-specific workspace and output
+directory. It supplies the selected source version and resolved run parameters
+to the SAST runtime. Output is partitioned by pipeline so concurrent runs do not
+write to the same report location.
 
-## Builder and analyzer containers
+## Build and analyze
 
-The pipeline package prepares the source workspace and generates a
-per-pipeline analyzer configuration from the enabled languages, time class, and
-selected analyzers. It runs the builder and configured analyzers as Docker
-containers. Container names include the pipeline identifier, which lets the
-runtime terminate containers belonging to a failed or completed execution.
+The builder prepares source and dependencies in a container selected for the
+project. Analyzer containers then use the prepared workspace and the
+per-pipeline analyzer selection derived from languages, time class, and launch
+configuration.
 
-For a pipeline configured with a project VPN integration, the worker starts an
-execution-specific VPN sidecar and runs the builder container in that sidecar's
-network namespace. Analyzer containers mount the builder's volumes but do not
-inherit its network namespace. In particular, the `sast-dast` connector
-currently calls its remote gateway directly. The sidecar lifetime and
-interactive-source route are documented separately in the VPN data-flow page.
+When source acquisition needs a project VPN, the builder joins the
+execution-specific VPN sidecar. Analyzer containers consume the prepared
+workspace and do not automatically inherit that private network path.
 
-## Report hand-off
+## Hand reports back to AIST
 
-Analyzers write reports into the run's output location. The platform then
-imports those reports, records the affected tests on the pipeline, and either
-finishes an empty result or starts the deduplication and enrichment stage. The
-runtime itself does not decide the final finding disposition or AI verdict.
+Analyzers write reports to the run output directory. The platform importer
+validates each supported report, records its tests on the pipeline, and creates
+or updates findings for the selected project version.
+
+The SAST runtime finishes after report hand-off and container cleanup. The AIST
+control plane then owns deduplication, enrichment, regression detection, review,
+and AI triage.
+
+## Failure and cleanup
+
+Containers and temporary paths are scoped to one pipeline. On completion,
+cancellation, or handled failure, the runtime stops the containers it started
+and returns a bounded outcome to the worker. Durable cancellation and recovery
+remain platform responsibilities because they must survive a runtime or worker
+restart.
 
 See [pipeline execution](../product/pipeline-execution.md) for the user-visible
-pipeline states and [finding review](../product/finding-review.md) for the
-records created from imported reports.
+lifecycle and [VPN-routed operations](../data-flows/vpn-routed-operations.md)
+for the conditional network path.

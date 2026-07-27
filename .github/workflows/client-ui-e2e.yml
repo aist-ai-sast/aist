@@ -61,8 +61,8 @@ jobs:
         run: mkdir -p "$ACME_WEBROOT_HOST" "$NGINX_SSL_HOST_DIR"
         working-directory: .
 
-      - name: Start database and cache
-        run: docker compose $COMPOSE_FILES up --no-deps -d postgres valkey
+      - name: Start database, cache, and email service
+        run: docker compose $COMPOSE_FILES up --no-deps -d postgres valkey mailhog
         working-directory: .
 
       - name: Initialize app
@@ -87,10 +87,10 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: client-ui/package.json
+          cache-dependency-path: client-ui/package-lock.json
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Install Playwright browser
         run: npx playwright install chromium

@@ -12,6 +12,7 @@ class AISTAIResponseSourceEnumTests(AISTApiBase):
         self.pipeline = AISTPipeline.objects.create(
             id="pipe-source-enum",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
 

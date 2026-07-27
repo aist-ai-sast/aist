@@ -3,7 +3,10 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 
-from aist.models import LaunchSchedule, PipelineLaunchQueue
+from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
+from aist.models import (
+    LaunchSchedule,
+)
 
 logger = logging.getLogger("aist")
 
@@ -56,15 +59,26 @@ def process_launch_schedules(async_user=None):
         # Resolve config
         config = sched.launch_config
 
-        # Enqueue one item per due schedule tick (project-only)
-        PipelineLaunchQueue.objects.create(
-            project=project,
-            schedule=sched,
-            launch_config=config,
-        )
+        # Enqueue one item per due schedule tick (project-only).
+        try:
+            enqueue_pipeline_launch(
+                project=project,
+                principal=LaunchPrincipal.for_schedule(organization=project.organization),
+                raw_params={},
+                schedule=sched,
+                launch_config=config,
+                client_request_key=f"schedule:{sched.pk}:{due_time.isoformat()}",
+            )
+        except LaunchEnqueueError:
+            logger.exception(
+                "LaunchSchedule[%s] could not freeze a valid launch request for due_time=%s.",
+                sched.id,
+                due_time,
+            )
+            continue
 
         logger.info(
-            "LaunchSchedule[%s] enqueued PipelineLaunchQueue for project=%s launch_config=%s next_time=%s now=%s",
+            "LaunchSchedule[%s] enqueued PipelineLaunchRequest for project=%s launch_config=%s next_time=%s now=%s",
             sched.id,
             project.id,
             config.id,

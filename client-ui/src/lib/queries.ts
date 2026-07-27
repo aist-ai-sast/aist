@@ -107,8 +107,15 @@ type ProjectMetaApi = {
 
 type PipelineApi = {
   id: string;
+  execution_type: "SAST" | "DAST" | "MANUAL_IMPORT";
   status: string;
   run_task_id: string | null;
+  external_run_id: string | null;
+  external_log_cursor: number;
+  external_execution_outcome: "" | "RUNNING" | "STOP_PENDING" | "TERMINAL" | "CANCELLED_BEFORE_START" | "UNREACHABLE";
+  dast_outcome_code: import("./dastNarrative").DastOutcomeCode | null;
+  external_execution_deadline: string | null;
+  external_cancel_requested_at: string | null;
   response_from_ai: unknown;
   created: string;
   updated: string;
@@ -133,7 +140,9 @@ type AIFindingResponseApi = {
 
 type PipelineSummaryApi = {
   id: string;
+  execution_type: "SAST" | "DAST" | "MANUAL_IMPORT";
   status: string;
+  dast_outcome_code?: import("./dastNarrative").DastOutcomeCode | null;
   project_id: number;
   product_id: number;
   product_name: string;
@@ -606,7 +615,9 @@ export function usePipelineSummaries(filters: PipelineSummaryFilters) {
       return {
         items: normalizeList(payload).map((item): PipelineSummary => ({
           id: item.id,
+          executionType: item.execution_type,
           status: item.status,
+          dastOutcomeCode: item.dast_outcome_code ?? null,
           projectId: item.project_id,
           productId: item.product_id,
           productName: item.product_name,
@@ -1026,6 +1037,15 @@ export type OrgIntegration = {
   is_active: boolean;
   created: string;
   updated: string;
+  dast_state?: {
+    validation_state: string;
+    validation_error_code: string;
+    contract_version: string;
+    validated_at: string | null;
+    capabilities_etag: string;
+    capabilities_synced_at: string | null;
+    sync_error_code: string;
+  } | null;
 };
 
 export type ProjectIntegrationOverride = {
@@ -1051,8 +1071,68 @@ export function useProjectIntegrationOverrides(projectId?: number) {
   });
 }
 
+export type DastTarget = {
+  id: number;
+  provider_id: string;
+  display_name: string;
+  contract_revision: string;
+  capability_revision: string;
+  schema_digest: string;
+  parameter_schema: Record<string, unknown>;
+  provider_defaults: Record<string, unknown>;
+  repository_keys: string[];
+  autonomous_ready: boolean;
+  is_available: boolean;
+  last_seen_at: string;
+};
+
+export type DastProjectBinding = {
+  id: number;
+  project: number;
+  target: DastTarget;
+  source_repo_key: string;
+  enabled: boolean;
+  parameter_snapshot: Record<string, unknown>;
+  autonomous_enabled: boolean;
+  readiness: {
+    ready: boolean;
+    issues: Array<{ code: string; detail: string }>;
+    checked_at: string;
+  };
+  created: string;
+  updated: string;
+};
+
+export function useOrganizationDastTargets(orgId?: number) {
+  return useQuery({
+    queryKey: ["dast-targets", orgId],
+    queryFn: async () => {
+      if (!orgId) return [] as DastTarget[];
+      const payload = await fetchJson<DastTarget[] | { results?: DastTarget[] }>(
+        getRoute("organization_dast_target_catalog_url", { org_id: orgId }),
+      );
+      return Array.isArray(payload) ? payload : (payload.results ?? []);
+    },
+    enabled: Boolean(orgId),
+  });
+}
+
+export function useProjectDastBindings(projectId?: number) {
+  return useQuery({
+    queryKey: ["dast-bindings", projectId],
+    queryFn: async () => {
+      if (!projectId) return [] as DastProjectBinding[];
+      const payload = await fetchJson<DastProjectBinding[] | { results?: DastProjectBinding[] }>(
+        getRoute("project_dast_bindings_url", { project_id: projectId }),
+      );
+      return Array.isArray(payload) ? payload : (payload.results ?? []);
+    },
+    enabled: Boolean(projectId),
+  });
+}
+
 export type ValidationTaskStatus = {
-  state: "PENDING" | "STARTED" | "SUCCESS" | "FAILURE";
+  state: "PENDING" | "STARTED" | "VALIDATING" | "READY" | "INVALID" | "SUCCESS" | "FAILURE";
   valid: boolean | null;
   detail: string;
 };
@@ -1070,7 +1150,7 @@ export function useValidationStatus(integrationId: number | null, taskId: string
     enabled: Boolean(integrationId && taskId),
     refetchInterval: (query) => {
       const s = query.state.data?.state;
-      if (s === "SUCCESS" || s === "FAILURE") return false;
+      if (s === "SUCCESS" || s === "FAILURE" || s === "READY" || s === "INVALID") return false;
       return 2000;
     },
   });

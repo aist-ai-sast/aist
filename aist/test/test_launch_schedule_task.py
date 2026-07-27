@@ -7,18 +7,38 @@ from unittest.mock import patch
 
 from django.utils import timezone
 
-from aist.models import AISTProjectLaunchConfig, LaunchSchedule, PipelineLaunchQueue
+from aist.integrations.dast_config import DastTargetSnapshot
+from aist.models import (
+    AISTProjectLaunchConfig,
+    DastProjectBinding,
+    LaunchSchedule,
+    Organization,
+    OrgIntegration,
+    OrgIntegrationType,
+    PipelineExecutionType,
+    PipelineLaunchRequest,
+    PipelineLaunchRequestState,
+)
+from aist.services.dast_targets import refresh_dast_targets
 from aist.tasks.launch_schedule import process_launch_schedules
 from aist.test.test_api import AISTApiBase
+from aist.test.test_dast_target_models import _integration_config, _target_wire
 
 
 class ProcessLaunchSchedulesTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.organization = Organization.objects.create(
+            name="Schedule task organization",
+            product_type=self.prod_type,
+        )
+
     def _mk_config_and_schedule(
         self,
         *,
         enabled: bool = True,
         cron_expression: str = "*/5 * * * *",
-        max_concurrent_per_worker: int = 0,
+        max_concurrent_runs: int = 0,
         last_run_at=None,
     ):
         cfg = AISTProjectLaunchConfig.objects.create(
@@ -30,18 +50,52 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
         sched = LaunchSchedule.objects.create(
             cron_expression=cron_expression,
             enabled=enabled,
-            max_concurrent_per_worker=max_concurrent_per_worker,
+            max_concurrent_runs=max_concurrent_runs,
             launch_config=cfg,
             last_run_at=last_run_at,
         )
         return cfg, sched
+
+    def _mk_dast_config_and_schedule(self):
+        integration = OrgIntegration.objects.create(
+            organization=self.organization,
+            integration_type=OrgIntegrationType.DAST,
+            name="Scheduled DAST",
+            config=_integration_config("scheduled-dast"),
+            is_active=True,
+        )
+        target = refresh_dast_targets(
+            integration,
+            [DastTargetSnapshot.from_snapshot(_target_wire("scheduled-api"))],
+            seen_at=timezone.now(),
+        )[0]
+        binding = DastProjectBinding.objects.create(
+            project=self.project,
+            target=target,
+            source_repo_key="scheduled-api",
+            parameter_snapshot={"depth": "light"},
+        )
+        config = AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            name="Scheduled DAST config",
+            execution_type=PipelineExecutionType.DAST,
+            dast_binding=binding,
+            params={"depth": "light"},
+        )
+        schedule = LaunchSchedule.objects.create(
+            cron_expression="*/5 * * * *",
+            enabled=True,
+            max_concurrent_runs=1,
+            launch_config=config,
+        )
+        return binding, config, schedule
 
     def test_disabled_schedule_skips(self):
         _, sched = self._mk_config_and_schedule(enabled=False)
 
         process_launch_schedules()
 
-        self.assertEqual(PipelineLaunchQueue.objects.count(), 0)
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 0)
         sched.refresh_from_db()
         self.assertIsNone(sched.last_run_at)
 
@@ -51,7 +105,7 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
 
         process_launch_schedules()
 
-        self.assertEqual(PipelineLaunchQueue.objects.count(), 0)
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 0)
         sched.refresh_from_db()
         self.assertIsNone(sched.last_run_at)
         mock_logger.exception.assert_called()  # ensures exception branch executed
@@ -68,7 +122,7 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
         with patch.object(LaunchSchedule, "get_next_run_time", return_value=due_time):
             process_launch_schedules()
 
-        self.assertEqual(PipelineLaunchQueue.objects.count(), 0)
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 0)
 
     def test_due_enqueues_queue_item_and_updates_last_run_at(self):
         cfg, sched = self._mk_config_and_schedule()
@@ -82,8 +136,8 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
         ):
             process_launch_schedules()
 
-        self.assertEqual(PipelineLaunchQueue.objects.count(), 1)
-        item = PipelineLaunchQueue.objects.get()
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 1)
+        item = PipelineLaunchRequest.objects.get()
         self.assertEqual(item.project_id, self.project.id)
         self.assertEqual(item.schedule_id, sched.id)
         self.assertEqual(item.launch_config_id, cfg.id)
@@ -91,6 +145,47 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
 
         sched.refresh_from_db()
         self.assertEqual(sched.last_run_at, now)
+
+    def test_due_dast_schedule_freezes_its_exact_binding_and_replays_one_tick(self):
+        binding, config, schedule = self._mk_dast_config_and_schedule()
+        now = timezone.now()
+        due_time = now - timedelta(minutes=5)
+
+        with (
+            patch("aist.tasks.launch_schedule.timezone.now", return_value=now),
+            patch.object(LaunchSchedule, "get_next_run_time", return_value=due_time),
+        ):
+            process_launch_schedules()
+            LaunchSchedule.objects.filter(pk=schedule.pk).update(last_run_at=None)
+            process_launch_schedules()
+
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 1)
+        request = PipelineLaunchRequest.objects.get()
+        self.assertEqual(request.execution_type, PipelineExecutionType.DAST)
+        self.assertEqual(request.dast_binding_id, binding.pk)
+        self.assertEqual(request.launch_config_id, config.pk)
+        self.assertEqual(request.schedule_id, schedule.pk)
+        self.assertEqual(request.params_snapshot, {"depth": "light"})
+        self.assertEqual(request.capability_snapshot["id"], "scheduled-api")
+
+    def test_overlapping_dast_schedule_ticks_leave_one_pending_request(self):
+        _binding, _config, schedule = self._mk_dast_config_and_schedule()
+        now = timezone.now()
+        first_due_time = now - timedelta(minutes=10)
+        second_due_time = now - timedelta(minutes=5)
+
+        with patch("aist.tasks.launch_schedule.timezone.now", return_value=now):
+            with patch.object(LaunchSchedule, "get_next_run_time", return_value=first_due_time):
+                process_launch_schedules()
+            LaunchSchedule.objects.filter(pk=schedule.pk).update(last_run_at=None)
+            with patch.object(LaunchSchedule, "get_next_run_time", return_value=second_due_time):
+                process_launch_schedules()
+
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 2)
+        pending = PipelineLaunchRequest.objects.get(state=PipelineLaunchRequestState.PENDING)
+        superseded = PipelineLaunchRequest.objects.get(state=PipelineLaunchRequestState.SUPERSEDED)
+        self.assertEqual(superseded.superseded_by_id, pending.pk)
+        self.assertEqual(superseded.coalesce_key, pending.coalesce_key)
 
     def test_naive_last_run_at_is_handled(self):
         """Ensure naive last_run_at is handled without crashing comparisons."""
@@ -113,4 +208,4 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
             process_launch_schedules()
 
         # last_run_at (12:00) >= due_time (11:55) => skip
-        self.assertEqual(PipelineLaunchQueue.objects.count(), 0)
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 0)

@@ -1,41 +1,35 @@
-# Pipeline Actions
+# Pipeline actions
 
-Pipeline actions are reusable operations attached to a project's launch
-configuration. Each action runs when its configured pipeline status is reached.
+A pipeline action performs a configured delivery operation when a pipeline
+reaches a selected status. Actions belong to a saved launch configuration so
+the same notification behavior can be reused across its runs.
 
 ![Pipeline action trigger and execution](../assets/pipeline-actions.svg)
 
-## Configuration and trigger
+## Configure an action
 
-An action belongs to a launch configuration and records its type, non-secret
-settings, and `trigger_status`. The trigger can be any defined pipeline status.
-When a run is created, its launch configuration is captured in pipeline data.
+An action selects:
 
-## Execution lifecycle
+- the pipeline status that triggers it;
+- a handler such as Slack, email, or write-log;
+- handler-specific, non-secret options such as channels, recipients, title, or
+  summary format.
 
-1. A pipeline reaches a new status.
-2. The status signal selects actions whose trigger matches that status.
-3. The pipeline records `pending`, resolves a handler, then records
-   `performed` or `failed` with its error.
+Credentials remain in the organization integration and are resolved when the
+action runs. They are not copied into the launch configuration.
 
-The action/run/status key prevents duplicate execution. A missing handler is a
-visible failed action, not a silent omission.
+## What happens at the trigger
 
-## Current and future handlers
+1. The pipeline reaches the configured status.
+2. AIST selects the matching actions captured for that run.
+3. Each handler attempts its delivery and records success or failure on the
+   pipeline.
 
-[Slack](../integrations/slack.md), email, and write-log are current handlers.
-Slack/email resolve their organization integrations at execution time;
-recipients, channels and summary options remain on the action. An AI CSV
-requires the report to exist at the triggering status. New handler types
-reuse this trigger model.
+The same action is not performed twice for the same pipeline and status. A
+missing handler or failed delivery remains visible as an action failure; it does
+not silently disappear and does not undo successful delivery by another action.
 
-One-off actions can also live directly in one pipeline’s launch data. Their
-generated ID is marked done after the matching status is processed.
-
-## Implementation references
-
-- [Action record](../../aist/models.py:1563)
-- [Status-triggered execution](../../aist/celery_signals.py:236)
-
-An action records its result on the pipeline. It does not change source version,
+An action reports a pipeline event. It does not change the source version,
 finding disposition, risk acceptance, or work-item status.
+
+See [Slack integration](../integrations/slack.md) for Slack-specific setup.

@@ -159,7 +159,13 @@ AIST_CHANGE_PASSWORD_THROTTLE_RATE = env("DD_AIST_CHANGE_PASSWORD_THROTTLE_RATE"
 # many imports one user can fire per hour. One shared scope covers the read-only preview
 # and confirmed import endpoints.
 AIST_PIPELINE_IMPORT_THROTTLE_RATE = env("DD_AIST_PIPELINE_IMPORT_THROTTLE_RATE", default="20/hour")  # noqa: F405
+# Writing a DAST connection, validating it, or synchronizing its catalog each reaches out to a
+# tenant-supplied gateway URL. Without a bound, an organization admin could loop a cheap write
+# (toggling is_active is enough) and turn this installation into a traffic source aimed at that
+# host. Scheduling already debounces bursts; this bounds the sustained rate.
+AIST_DAST_GATEWAY_PROBE_THROTTLE_RATE = env("DD_AIST_DAST_GATEWAY_PROBE_THROTTLE_RATE", default="60/hour")  # noqa: F405
 REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {}).update({  # noqa: F405
+    "aist_dast_gateway_probe": AIST_DAST_GATEWAY_PROBE_THROTTLE_RATE,
     "aist_auth_login": AIST_AUTH_LOGIN_THROTTLE_RATE,
     "aist_auth_set_password": AIST_AUTH_SET_PASSWORD_THROTTLE_RATE,
     "aist_invite_email": AIST_INVITE_EMAIL_THROTTLE_RATE,
@@ -190,6 +196,7 @@ LOGIN_EXEMPT_URLS += (  # noqa: F405
 )
 
 CELERY_TASK_IGNORE_RESULT = False
+AIST_PIPELINE_DISPATCH_BATCH_SIZE = env.int("AIST_PIPELINE_DISPATCH_BATCH_SIZE", default=50)  # noqa: F405
 
 # Add AIST Celery schedules.
 CELERY_BEAT_SCHEDULE.update(  # noqa: F405
@@ -206,11 +213,19 @@ CELERY_BEAT_SCHEDULE.update(  # noqa: F405
         "aist-dispatch-queued": {
             "task": "aist.tasks.pipeline_dispatcher.dispatch_queued_pipelines",
             "schedule": timedelta(minutes=1),
+            "kwargs": {"batch_size": AIST_PIPELINE_DISPATCH_BATCH_SIZE},
         },
         "aist-reconcile-orphans-safety-net": {
             "task": "aist.tasks.reconciliation.reconcile_recent_orphans",
             "schedule": timedelta(minutes=10),
             "kwargs": {"hours": 24, "batch_size": 200, "dry_run": False},
+        },
+        # Launch readiness rejects a DAST binding once its catalog passes the 24h freshness
+        # window, so the catalog has to be refreshed by something other than an operator
+        # remembering to press a button. The task itself decides which integrations are due.
+        "aist-refresh-dast-capability-catalogs": {
+            "task": "aist.tasks.validate.refresh_dast_capability_catalogs",
+            "schedule": timedelta(hours=1),
         },
         "aist-sync-work-item-providers": {
             "task": "aist.tasks.work_items.sync_all_work_item_providers",

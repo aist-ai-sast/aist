@@ -100,7 +100,7 @@ run_unit_tests() {
     "$NODE_IMAGE" \
     bash -lc '
       set -euo pipefail
-      npm install --no-audit --no-fund
+      npm ci --no-audit --no-fund
       npm run test
     '
 }
@@ -126,8 +126,9 @@ run_e2e_tests() {
   export DD_DATABASE_PASSWORD=${DD_DATABASE_PASSWORD:-aist}
   export DD_TEST_DATABASE_NAME=${DD_TEST_DATABASE_NAME:-test_aist}
   export DD_TEST_DATABASE_URL=${DD_TEST_DATABASE_URL:-postgresql://$DD_DATABASE_USER:$DD_DATABASE_PASSWORD@postgres:5432/$DD_TEST_DATABASE_NAME}
+  export DD_DATABASE_HOST_PORT=${DD_DATABASE_HOST_PORT:-55432}
   export DD_HTTP_PORT=${DD_HTTP_PORT:-8080}
-  export DD_TLS_PORT=${DD_TLS_PORT:-8443}
+  export DD_TLS_PORT=${DD_TLS_PORT:-9443}
   export GENERATE_TLS_CERTIFICATE=${GENERATE_TLS_CERTIFICATE:-false}
   export USE_TLS=${USE_TLS:-false}
   export DD_ALLOWED_HOSTS=${DD_ALLOWED_HOSTS:-localhost,127.0.0.1,host.docker.internal,nginx,[::1]}
@@ -216,7 +217,7 @@ run_e2e_tests() {
     "$PLAYWRIGHT_IMAGE" \
     bash -lc '
       set -euo pipefail
-      npm install --no-audit --no-fund
+      npm ci --no-audit --no-fund
       npx playwright install chromium
       npm run test:e2e
     '

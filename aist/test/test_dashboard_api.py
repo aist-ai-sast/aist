@@ -27,7 +27,9 @@ from aist.models import (
     AISTAIFindingResponse,
     AISTPipeline,
     AISTProject,
+    AISTProjectVersion,
     AISTStatus,
+    VersionType,
     WorkItemLink,
     WorkItemStatusCategory,
 )
@@ -62,6 +64,11 @@ class DashboardSummaryViewTests(TestCase):
             supported_languages=["python"],
             compilable=False,
             profile={},
+        )
+        self.pv = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="main",
         )
 
         self.test_type = Test_Type.objects.create(name="Dashboard test type")
@@ -326,6 +333,7 @@ class DashboardSummaryViewTests(TestCase):
         AISTPipeline.objects.create(
             id="dashboard-pipe-finished",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
             created=now - timedelta(minutes=80),
         )
@@ -333,6 +341,7 @@ class DashboardSummaryViewTests(TestCase):
         AISTPipeline.objects.create(
             id="dashboard-pipe-warn",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED_WITH_WARNINGS,
             created=now - timedelta(minutes=70),
         )
@@ -352,6 +361,7 @@ class DashboardSummaryViewTests(TestCase):
         pipeline = AISTPipeline.objects.create(
             id="dashboard-pipe-ai",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
         AISTAIFindingResponse.objects.create(

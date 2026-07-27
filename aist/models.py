@@ -6,6 +6,7 @@ import io
 import logging
 import shutil
 import tarfile
+import uuid
 import zipfile
 from contextlib import contextmanager, suppress
 from datetime import datetime as dt
@@ -27,6 +28,17 @@ from django_github_app.models import Installation
 from dojo.models import Finding, Product, Product_Type, Test
 from encrypted_model_fields.fields import EncryptedCharField
 
+from aist.execution.launch_request import (
+    LaunchRequestSnapshotError,
+    LaunchRequestSnapshots,
+    validated_secret_free_json,
+)
+from aist.integrations.dast_config import (
+    DastBindingParameters,
+    DastConfigError,
+    DastIntegrationConfig,
+    DastTargetSnapshot,
+)
 from aist.profile import ProjectProfile
 
 _repo_part_validator = RegexValidator(
@@ -655,6 +667,11 @@ class OrgIntegration(models.Model):
                 condition=models.Q(integration_type="CLAUDE_CODE", is_active=True),
                 name="one_active_claude_integration_per_org",
             ),
+            models.UniqueConstraint(
+                fields=["organization"],
+                condition=models.Q(integration_type="DAST", is_active=True),
+                name="one_active_dast_integration_per_org",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -662,16 +679,29 @@ class OrgIntegration(models.Model):
 
     def clean(self):
         super().clean()
+        errors = {}
+        if self.integration_type == OrgIntegrationType.DAST:
+            try:
+                DastIntegrationConfig.from_snapshot(self.config or {})
+            except DastConfigError as exc:
+                errors["config"] = str(exc)
         if self.vpn_integration_id is None:
+            if errors:
+                raise ValidationError(errors)
             return
         vpn = self.vpn_integration
-        errors = {}
         if vpn.integration_type != OrgIntegrationType.VPN:
             errors["vpn_integration"] = "The selected integration is not a VPN integration."
         elif vpn.organization_id != self.organization_id:
             errors["vpn_integration"] = "VPN integration must belong to the same organization."
         if errors:
             raise ValidationError(errors)
+
+    def get_dast_config(self) -> DastIntegrationConfig:
+        if self.integration_type != OrgIntegrationType.DAST:
+            msg = "DAST config requested for a non-DAST integration."
+            raise DastConfigError(msg)
+        return DastIntegrationConfig.from_snapshot(self.config or {})
 
     @contextmanager
     def scoped_session(self, execution_id: str):
@@ -691,11 +721,201 @@ class OrgIntegration(models.Model):
             ResolvedIntegration(integration=vpn, config=dict(vpn.config or {}))
             if (vpn and getattr(vpn, "is_active", False)) else None
         )
-        with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_, proxy_url):
-            session = _requests.Session()
+        with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_, proxy_url), _requests.Session() as session:
             if proxy_url:
                 session.proxies.update({"http": proxy_url, "https": proxy_url})
             yield session
+
+
+class DastOnboardingBundleUse(models.Model):
+
+    """
+    Marks a versioned DAST onboarding bundle as consumed.
+
+    ``integrator_public_id`` identifies one bundle export from the gateway role, not the
+    gateway installation itself — re-onboarding after this record exists requires a fresh
+    bundle (``dast_gateway_rotate_token: true``), not replaying the old one. Kept even if
+    the ``org_integration`` it produced is later deleted, so the same bundle file cannot
+    be replayed against a different organization either.
+    """
+
+    integrator_public_id = models.CharField(max_length=255, unique=True)
+    org_integration = models.ForeignKey(
+        OrgIntegration,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="onboarding_bundle_uses",
+    )
+    used_at = models.DateTimeField(default=timezone.now)
+
+    def __str__(self) -> str:
+        return f"DastOnboardingBundleUse(integrator_public_id={self.integrator_public_id})"
+
+
+class DastIntegrationValidationState(models.TextChoices):
+    UNVALIDATED = "UNVALIDATED", "Unvalidated"
+    PENDING_VALIDATION = "PENDING_VALIDATION", "Pending validation"
+    VALIDATING = "VALIDATING", "Validating"
+    READY = "READY", "Ready"
+    INVALID = "INVALID", "Invalid"
+
+
+class DastIntegrationState(models.Model):
+    integration = models.OneToOneField(
+        OrgIntegration,
+        on_delete=models.CASCADE,
+        related_name="dast_state",
+    )
+    validation_state = models.CharField(
+        max_length=24,
+        choices=DastIntegrationValidationState.choices,
+        default=DastIntegrationValidationState.UNVALIDATED,
+    )
+    validated_at = models.DateTimeField(null=True, blank=True)
+    validation_error_code = models.CharField(max_length=64, blank=True, default="")
+    validation_generation = models.PositiveBigIntegerField(default=0)
+    validation_task_id = models.CharField(max_length=255, blank=True, default="")
+    validation_claimed_at = models.DateTimeField(null=True, blank=True)
+    contract_version = models.CharField(max_length=32, blank=True, default="")
+    capabilities_etag = models.CharField(max_length=255, blank=True, default="")
+    capabilities_synced_at = models.DateTimeField(null=True, blank=True)
+    sync_error_code = models.CharField(max_length=64, blank=True, default="")
+    sync_generation = models.PositiveBigIntegerField(default=0)
+    sync_task_id = models.CharField(max_length=255, blank=True, default="")
+    sync_claimed_at = models.DateTimeField(null=True, blank=True)
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"DAST state[{self.integration_id}] {self.validation_state}"
+
+    def clean(self):
+        super().clean()
+        if self.integration_id and self.integration.integration_type != OrgIntegrationType.DAST:
+            raise ValidationError({"integration": "DAST integration state requires a DAST integration."})
+
+
+class DastTarget(models.Model):
+    integration = models.ForeignKey(
+        OrgIntegration,
+        on_delete=models.PROTECT,
+        related_name="dast_targets",
+    )
+    provider_id = models.CharField(max_length=255)
+    display_name = models.CharField(max_length=255)
+    contract_revision = models.CharField(max_length=64)
+    capability_revision = models.CharField(max_length=96)
+    schema_digest = models.CharField(max_length=96)
+    parameter_schema = models.JSONField(default=dict)
+    provider_defaults = models.JSONField(default=dict)
+    repository_keys = models.JSONField(default=list)
+    autonomous_ready = models.BooleanField(default=False)
+    is_available = models.BooleanField(default=True)
+    last_seen_at = models.DateTimeField()
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["integration", "provider_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["integration", "provider_id"],
+                name="uniq_dast_target_provider_per_integration",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"DAST target[{self.integration_id}:{self.provider_id}]"
+
+    def get_snapshot(self) -> DastTargetSnapshot:
+        return DastTargetSnapshot.from_snapshot({
+            "id": self.provider_id,
+            "display_name": self.display_name,
+            "contract_revision": self.contract_revision,
+            "capability_revision": self.capability_revision,
+            "schema_digest": self.schema_digest,
+            "parameter_schema": self.parameter_schema,
+            "defaults": self.provider_defaults,
+            "repository_keys": self.repository_keys,
+            "autonomous_ready": self.autonomous_ready,
+        })
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.integration_id and self.integration.integration_type != OrgIntegrationType.DAST:
+            errors["integration"] = "DAST targets require a DAST integration."
+        if self.pk:
+            original_integration_id = type(self).objects.filter(pk=self.pk).values_list(
+                "integration_id",
+                flat=True,
+            ).first()
+            if original_integration_id is not None and original_integration_id != self.integration_id:
+                errors["integration"] = "A discovered DAST target cannot be moved to another integration."
+        try:
+            self.get_snapshot()
+        except DastConfigError as exc:
+            errors["parameter_schema"] = str(exc)
+        if errors:
+            raise ValidationError(errors)
+
+
+class DastProjectBinding(models.Model):
+    project = models.ForeignKey(
+        "AISTProject",
+        on_delete=models.CASCADE,
+        related_name="dast_bindings",
+    )
+    target = models.ForeignKey(
+        DastTarget,
+        on_delete=models.PROTECT,
+        related_name="project_bindings",
+    )
+    source_repo_key = models.CharField(max_length=128)
+    enabled = models.BooleanField(default=True)
+    parameter_snapshot = models.JSONField(default=dict, blank=True)
+    autonomous_enabled = models.BooleanField(default=False)
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["project", "target"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "target"],
+                name="uniq_dast_binding_project_target",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"DAST binding[{self.project_id}:{self.target_id}]"
+
+    def get_parameters(self) -> DastBindingParameters:
+        return DastBindingParameters.from_snapshot(
+            self.parameter_snapshot,
+            target=self.target.get_snapshot(),
+        )
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.target_id:
+            integration = self.target.integration
+            if integration.integration_type != OrgIntegrationType.DAST:
+                errors["target"] = "Binding target must belong to a DAST integration."
+            elif not integration.is_active:
+                errors["target"] = "Binding target must belong to the active DAST integration."
+            elif self.project_id and self.project.organization_id != integration.organization_id:
+                errors["target"] = "Binding project and DAST target must belong to the same organization."
+            if self.source_repo_key not in self.target.get_snapshot().repository_keys:
+                errors["source_repo_key"] = "Source repository key is not advertised by the DAST target."
+            try:
+                self.get_parameters()
+            except DastConfigError as exc:
+                errors["parameter_snapshot"] = str(exc)
+        if errors:
+            raise ValidationError(errors)
 
 
 class OrgIntegrationVPNSecret(models.Model):
@@ -1166,6 +1386,20 @@ class AISTProjectVersion(models.Model):
         return root
 
 
+class PipelineExecutionType(models.TextChoices):
+    SAST = "SAST", "SAST"
+    DAST = "DAST", "DAST"
+    MANUAL_IMPORT = "MANUAL_IMPORT", "Manual report import"
+
+
+class DastExecutionOutcome(models.TextChoices):
+    RUNNING = "RUNNING", "Running"
+    STOP_PENDING = "STOP_PENDING", "Remote stop pending"
+    TERMINAL = "TERMINAL", "Provider terminal"
+    CANCELLED_BEFORE_START = "CANCELLED_BEFORE_START", "Cancelled before provider start"
+    UNREACHABLE = "UNREACHABLE", "Provider unreachable"
+
+
 class AISTPipeline(models.Model):
     created = models.DateTimeField(default=timezone.now, editable=False)
     updated = models.DateTimeField(auto_now=True)
@@ -1181,6 +1415,31 @@ class AISTPipeline(models.Model):
         db_index=True,
         null=True, blank=True,
     )
+    trigger_project_version = models.ForeignKey(
+        AISTProjectVersion,
+        on_delete=models.PROTECT,
+        related_name="triggered_pipelines",
+        db_index=True,
+        null=True,
+        blank=True,
+        help_text="Source version that triggered a DAST run; its effective version may be resolved later.",
+    )
+    execution_type = models.CharField(
+        max_length=24,
+        choices=PipelineExecutionType.choices,
+        default=PipelineExecutionType.SAST,
+        db_index=True,
+    )
+    external_run_id = models.CharField(max_length=255, null=True, blank=True)
+    external_log_cursor = models.PositiveBigIntegerField(default=0)
+    external_execution_outcome = models.CharField(
+        max_length=32,
+        choices=DastExecutionOutcome.choices,
+        blank=True,
+        default="",
+    )
+    external_execution_deadline = models.DateTimeField(null=True, blank=True)
+    external_cancel_requested_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=64, choices=AISTStatus.choices, default=AISTStatus.FINISHED)
 
     tests = models.ManyToManyField(Test, related_name="aist_pipelines", blank=True)
@@ -1200,9 +1459,72 @@ class AISTPipeline(models.Model):
 
     class Meta:
         ordering = ("-created",)
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        execution_type=PipelineExecutionType.SAST,
+                        project_version__isnull=False,
+                        trigger_project_version__isnull=True,
+                    )
+                    | models.Q(
+                        execution_type=PipelineExecutionType.DAST,
+                        trigger_project_version__isnull=False,
+                    )
+                    | models.Q(
+                        execution_type=PipelineExecutionType.MANUAL_IMPORT,
+                        trigger_project_version__isnull=True,
+                    )
+                ),
+                name="aist_pipeline_execution_source_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(execution_type=PipelineExecutionType.DAST)
+                    | models.Q(
+                        external_run_id__isnull=True,
+                        external_log_cursor=0,
+                        external_execution_outcome="",
+                        external_execution_deadline__isnull=True,
+                        external_cancel_requested_at__isnull=True,
+                    )
+                ),
+                name="aist_pipeline_dast_control_fields_valid",
+            ),
+        ]
 
     def __str__(self) -> str:
-        return f"SASTPipeline[{self.id}] {self.status}"
+        return f"{self.execution_type}Pipeline[{self.id}] {self.status}"
+
+    def clean(self):
+        errors = {}
+        if self.project_version_id and self.project_version.project_id != self.project_id:
+            errors["project_version"] = "Effective version must belong to the pipeline project."
+        if self.trigger_project_version_id and self.trigger_project_version.project_id != self.project_id:
+            errors["trigger_project_version"] = "Trigger version must belong to the pipeline project."
+
+        if self.execution_type == PipelineExecutionType.SAST:
+            if not self.project_version_id:
+                errors["project_version"] = "SAST pipelines require an effective project version."
+            if self.trigger_project_version_id:
+                errors["trigger_project_version"] = "SAST pipelines cannot have a DAST trigger version."
+        elif self.execution_type == PipelineExecutionType.DAST:
+            if not self.trigger_project_version_id:
+                errors["trigger_project_version"] = "DAST pipelines require a trigger project version."
+        elif self.execution_type == PipelineExecutionType.MANUAL_IMPORT and self.trigger_project_version_id:
+            errors["trigger_project_version"] = "Manual imports cannot have a DAST trigger version."
+
+        if self.execution_type != PipelineExecutionType.DAST and (
+            self.external_run_id is not None
+            or self.external_log_cursor != 0
+            or self.external_execution_outcome
+            or self.external_execution_deadline is not None
+            or self.external_cancel_requested_at is not None
+        ):
+            errors["external_execution_outcome"] = "External DAST control fields require a DAST pipeline."
+
+        if errors:
+            raise ValidationError(errors)
 
 
 class AISTTestMeta(models.Model):
@@ -1443,9 +1765,9 @@ class LaunchSchedule(models.Model):
     )
     enabled = models.BooleanField(default=True)
 
-    max_concurrent_per_worker = models.PositiveIntegerField(
+    max_concurrent_runs = models.PositiveIntegerField(
         default=1,
-        help_text="Maximum number of concurrent pipeline runs per worker for this schedule.",
+        help_text="Maximum number of concurrent pipeline runs this schedule's own resource slot allows.",
     )
 
     launch_config = models.OneToOneField(
@@ -1528,15 +1850,70 @@ class LaunchSchedule(models.Model):
         return out
 
 
-class PipelineLaunchQueue(models.Model):
+class PipelineLaunchOrigin(models.TextChoices):
+    MANUAL = "MANUAL", "Manual"
+    SCHEDULE = "SCHEDULE", "Schedule"
+    SCM_WEBHOOK = "SCM_WEBHOOK", "SCM webhook"
+    RECONCILER = "RECONCILER", "Reconciler"
+
+
+class PipelineLaunchAuthorityKind(models.TextChoices):
+    USER = "USER", "User session"
+    PAT = "PAT", "AIST personal access token"
+    SCHEDULE = "SCHEDULE", "Stored schedule authority"
+    SCM_WEBHOOK = "SCM_WEBHOOK", "Verified SCM webhook"
+    RECONCILER = "RECONCILER", "Existing request reconciliation"
+
+
+class PipelineLaunchRequestState(models.TextChoices):
+    PENDING = "PENDING", "Pending"
+    CLAIMED = "CLAIMED", "Claimed"
+    PLANNED = "PLANNED", "Planned"
+    PUBLISHED = "PUBLISHED", "Published"
+    DISPATCHED = "DISPATCHED", "Dispatched"
+    SUPERSEDED = "SUPERSEDED", "Superseded"
+    FAILED = "FAILED", "Failed"
+    EXPIRED = "EXPIRED", "Expired"
+    CANCELLED = "CANCELLED", "Cancelled"
+
+
+class PipelineLaunchRequest(models.Model):
 
     """
-    Queued pipeline launch request. Items are created by LaunchSchedule when a cron triggers,
-    and later dispatched by the pipeline dispatcher respecting concurrency limits.
+    Durable launch request and broker outbox shared by every execution type.
+
+    Dynamic parameter and capability values are frozen at enqueue time. Credentials are
+    referenced only by their public database record and never copied into JSON snapshots.
     """
 
     created = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated = models.DateTimeField(auto_now=True)
+    origin = models.CharField(
+        max_length=24,
+        choices=PipelineLaunchOrigin.choices,
+        default=PipelineLaunchOrigin.SCHEDULE,
+    )
+    execution_type = models.CharField(
+        max_length=24,
+        choices=PipelineExecutionType.choices,
+        default=PipelineExecutionType.SAST,
+        db_index=True,
+    )
     project = models.ForeignKey(AISTProject, on_delete=models.CASCADE)
+    dast_binding = models.ForeignKey(
+        "DastProjectBinding",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="launch_requests",
+    )
+    trigger_project_version = models.ForeignKey(
+        AISTProjectVersion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="launch_requests",
+    )
     schedule = models.ForeignKey(
         LaunchSchedule,
         on_delete=models.SET_NULL,
@@ -1548,24 +1925,227 @@ class PipelineLaunchQueue(models.Model):
         on_delete=models.CASCADE,
         null=True,
         blank=True,
-        related_name="launch_queue_items",
+        related_name="launch_requests",
         help_text="Launch config used to build pipeline_args snapshot.",
     )
-    dispatched = models.BooleanField(default=False, db_index=True)
     dispatched_at = models.DateTimeField(null=True, blank=True)
-    pipeline = models.ForeignKey(
+    requester = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pipeline_launch_requests",
+    )
+    api_token = models.ForeignKey(
+        "AISTApiToken",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pipeline_launch_requests",
+        help_text="Public PAT record used for authority revalidation; never stores the token secret.",
+    )
+    authority_kind = models.CharField(
+        max_length=24,
+        choices=PipelineLaunchAuthorityKind.choices,
+        default=PipelineLaunchAuthorityKind.SCHEDULE,
+    )
+    params_snapshot = models.JSONField(default=dict, blank=True)
+    capability_snapshot = models.JSONField(default=dict, blank=True)
+    initial_launch_data_snapshot = models.JSONField(
+        default=dict,
+        blank=True,
+        editable=False,
+        help_text="Secret-free pipeline launch metadata frozen by the authorized producer.",
+    )
+    state = models.CharField(
+        max_length=24,
+        choices=PipelineLaunchRequestState.choices,
+        default=PipelineLaunchRequestState.PENDING,
+        db_index=True,
+    )
+    coalesce_key = models.CharField(max_length=128, null=True, blank=True, db_index=True)
+    superseded_by = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="superseded_requests",
+    )
+    priority = models.SmallIntegerField(default=0)
+    not_before = models.DateTimeField(default=timezone.now, db_index=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    capacity_retry_count = models.PositiveIntegerField(default=0)
+    claim_owner = models.CharField(max_length=255, null=True, blank=True)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    task_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    task_name = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        editable=False,
+        help_text="Trusted Celery task selected by the launch adapter during planning.",
+    )
+    task_args_snapshot = models.JSONField(
+        default=list,
+        blank=True,
+        editable=False,
+        help_text="Secret-free JSON task arguments frozen before broker publication.",
+    )
+    client_request_key_hash = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        unique=True,
+        editable=False,
+        help_text="Server-namespaced digest of an optional producer idempotency key.",
+    )
+    failure_code = models.CharField(max_length=64, blank=True, default="")
+    failure_detail = models.TextField(blank=True, default="")
+    pipeline = models.OneToOneField(
         "AISTPipeline",
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="launch_queue_item",
+        related_name="launch_request",
     )
 
     class Meta:
         ordering = ["created"]
+        indexes = [
+            models.Index(
+                fields=["state", "not_before", "priority"],
+                name="aist_launch_req_dispatch_idx",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        state=PipelineLaunchRequestState.SUPERSEDED,
+                        superseded_by__isnull=False,
+                    )
+                    | (
+                        ~models.Q(state=PipelineLaunchRequestState.SUPERSEDED)
+                        & models.Q(superseded_by__isnull=True)
+                    )
+                ),
+                name="aist_launch_request_supersede_link_valid",
+            ),
+        ]
 
     def __str__(self):
-        return f"LaunchQueue(project={self.project_id}, dispatched={self.dispatched})"
+        return f"LaunchRequest(project={self.project_id}, type={self.execution_type}, state={self.state})"
+
+    @property
+    def dispatched(self) -> bool:
+        """Compatibility value returned by the existing SAST queue API."""
+        return self.state == PipelineLaunchRequestState.DISPATCHED
+
+    def get_snapshots(self) -> LaunchRequestSnapshots:
+        return LaunchRequestSnapshots.from_values(
+            params=self.params_snapshot,
+            capability=self.capability_snapshot,
+        )
+
+    def get_initial_launch_data_snapshot(self) -> dict:
+        error_message = "initial_launch_data_snapshot must be a JSON object."
+        value = validated_secret_free_json(
+            self.initial_launch_data_snapshot,
+            label="initial_launch_data_snapshot",
+        )
+        if not isinstance(value, dict):
+            raise LaunchRequestSnapshotError(error_message)
+        return value
+
+    def clean(self):
+        errors: dict[str, str] = {}
+        try:
+            self.get_snapshots()
+        except LaunchRequestSnapshotError as exc:
+            errors["params_snapshot"] = str(exc)
+        try:
+            self.get_initial_launch_data_snapshot()
+        except LaunchRequestSnapshotError as exc:
+            errors["initial_launch_data_snapshot"] = str(exc)
+
+        if self.launch_config_id and self.launch_config.project_id != self.project_id:
+            errors["launch_config"] = "Launch config must belong to the request project."
+        elif self.launch_config_id and self.launch_config.execution_type != self.execution_type:
+            errors["execution_type"] = "Request execution type must match its launch config."
+        elif self.launch_config_id and self.launch_config.dast_binding_id != self.dast_binding_id:
+            errors["dast_binding"] = "Request DAST binding must match its launch config."
+        if self.schedule_id and self.schedule.launch_config_id != self.launch_config_id:
+            errors["schedule"] = "Schedule must belong to the request launch config."
+        if self.trigger_project_version_id and self.trigger_project_version.project_id != self.project_id:
+            errors["trigger_project_version"] = "Trigger version must belong to the request project."
+        if self.dast_binding_id and self.dast_binding.project_id != self.project_id:
+            errors["dast_binding"] = "DAST binding must belong to the request project."
+        if self.superseded_by_id and self.superseded_by.project_id != self.project_id:
+            errors["superseded_by"] = "Superseding request must belong to the same project."
+        if self.superseded_by_id and self.superseded_by_id == self.pk:
+            errors["superseded_by"] = "A launch request cannot supersede itself."
+        if self.api_token_id and self.api_token.organization_id != self.project.organization_id:
+            errors["api_token"] = "PAT record must belong to the request organization."  # noqa: S105
+
+        if self.authority_kind == PipelineLaunchAuthorityKind.PAT and not self.api_token_id:
+            errors["api_token"] = "PAT authority requires a public PAT record."  # noqa: S105
+        if self.api_token_id and self.authority_kind != PipelineLaunchAuthorityKind.PAT:
+            errors["authority_kind"] = "A PAT record is valid only for PAT authority."
+        if self.created and self.expires_at and self.expires_at <= self.created:
+            errors["expires_at"] = "Expiry must be later than request creation."
+
+        if errors:
+            raise ValidationError(errors)
+
+
+class PipelineExecutionLease(models.Model):
+
+    """Database-backed ownership of one bounded external execution resource slot."""
+
+    resource_key = models.CharField(max_length=255)
+    slot = models.PositiveSmallIntegerField()
+    request = models.ForeignKey(
+        PipelineLaunchRequest,
+        on_delete=models.CASCADE,
+        related_name="execution_leases",
+    )
+    pipeline = models.ForeignKey(
+        AISTPipeline,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="execution_leases",
+    )
+    acquired_at = models.DateTimeField(default=timezone.now)
+    heartbeat_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField(db_index=True)
+    released_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        ordering = ["resource_key", "slot", "acquired_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["resource_key", "slot"],
+                condition=models.Q(released_at__isnull=True),
+                name="uniq_active_execution_lease_slot",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"ExecutionLease(resource={self.resource_key}, slot={self.slot}, request={self.request_id})"
+
+    def clean(self):
+        errors: dict[str, str] = {}
+        if not self.resource_key.strip():
+            errors["resource_key"] = "Resource key must not be empty."
+        if self.expires_at <= self.acquired_at:
+            errors["expires_at"] = "Lease expiry must be later than acquisition."
+        if self.heartbeat_at < self.acquired_at:
+            errors["heartbeat_at"] = "Heartbeat cannot predate acquisition."
+        if self.pipeline_id and self.pipeline.project_id != self.request.project_id:
+            errors["pipeline"] = "Lease pipeline and launch request must belong to the same project."
+        if errors:
+            raise ValidationError(errors)
 
 
 class AISTProjectLaunchConfig(models.Model):
@@ -1579,6 +2159,22 @@ class AISTProjectLaunchConfig(models.Model):
     """
 
     project = models.ForeignKey(AISTProject, on_delete=models.CASCADE, related_name="launch_configs")
+    execution_type = models.CharField(
+        max_length=24,
+        choices=(
+            (PipelineExecutionType.SAST, "SAST"),
+            (PipelineExecutionType.DAST, "DAST"),
+        ),
+        default=PipelineExecutionType.SAST,
+        db_index=True,
+    )
+    dast_binding = models.ForeignKey(
+        DastProjectBinding,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="launch_configs",
+    )
 
     name = models.CharField(max_length=128)
     description = models.TextField(blank=True, default="")
@@ -1594,10 +2190,49 @@ class AISTProjectLaunchConfig(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["project", "name"], name="uniq_aist_launch_cfg_name_per_project"),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(execution_type=PipelineExecutionType.SAST, dast_binding__isnull=True)
+                    | models.Q(execution_type=PipelineExecutionType.DAST, dast_binding__isnull=False)
+                ),
+                name="aist_launch_config_execution_target_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(execution_type=PipelineExecutionType.SAST)
+                    | ~models.Q(params__has_key="analyzers")
+                ),
+                name="aist_dast_launch_config_no_analyzers",
+            ),
         ]
 
     def __str__(self) -> str:
         return f"{self.project_id}:{self.name}"
+
+    def get_launch_schedule(self) -> LaunchSchedule | None:
+        try:
+            return self.launch_schedule
+        except LaunchSchedule.DoesNotExist:
+            return None
+
+    def clean(self):
+        errors: dict[str, str] = {}
+        if self.execution_type == PipelineExecutionType.SAST:
+            if self.dast_binding_id:
+                errors["dast_binding"] = "SAST launch config cannot select a DAST binding."
+        elif self.execution_type == PipelineExecutionType.DAST:
+            if not self.dast_binding_id:
+                errors["dast_binding"] = "DAST launch config requires an explicit binding."
+            elif self.dast_binding.project_id != self.project_id:
+                errors["dast_binding"] = "DAST binding must belong to the launch config project."
+            elif not self.dast_binding.enabled:
+                errors["dast_binding"] = "DAST binding must be enabled."
+            if "analyzers" in self.params:
+                errors["params"] = "DAST launch config cannot contain SAST analyzers."
+        else:
+            errors["execution_type"] = "Launch configs support only SAST or DAST execution."
+        if errors:
+            raise ValidationError(errors)
 
 
 class AISTLaunchConfigAction(models.Model):

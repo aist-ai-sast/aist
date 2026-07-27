@@ -2,9 +2,8 @@
 Tests for the generic report-import API endpoints (auth, org-scope, multipart, async),
 exercised with a DAST report as the concrete example scan_type. ``validate/`` is the
 endpoint that actually calls a parser and can reject bad *content* synchronously;
-``import/`` (confirm) only gates ``scan_type``/``commit_hash`` shape — a malformed report
-body now surfaces as a failed pipeline, not a 400, since format validation is the
-registered parser's job at real-import time (see test_dast_import_task.py).
+DAST preview and confirm both require an explicit binding and a complete v2 terminal
+artifact. The worker reparses the persisted artifact before finalization.
 """
 from __future__ import annotations
 
@@ -18,10 +17,23 @@ from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
+from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Product, Product_Type, Product_Type_Member, Role
+from dojo.models import Product, Product_Type, Product_Type_Member, Role, SLA_Configuration
 
-from aist.models import AISTPipeline, AISTProject, AISTStatus, RepositoryInfo, ScmType
+from aist.models import (
+    AISTPipeline,
+    AISTProject,
+    AISTStatus,
+    DastProjectBinding,
+    DastTarget,
+    Organization,
+    OrgIntegration,
+    OrgIntegrationType,
+    PipelineExecutionType,
+    RepositoryInfo,
+    ScmType,
+)
 from aist.parser_overrides import DAST_SCAN_TYPE
 
 SHA = "fd5b25aa1234567890abcdef1234567890abcdef"
@@ -36,12 +48,32 @@ def _report_payload(*, missing_description: bool = False) -> dict:
     }
     if not missing_description:
         finding["description"] = "redacted description"
-    return {
+    report = {
         "name": "DAST",
         "type": DAST_SCAN_TYPE,
-        "version": "v1",
+        "version": "backend@fd5b25aa1234",
         "findings": [finding],
-        "dast_run_metadata": {"run_id": "run-123", "source_commits": {"cloud_portal": SHA}},
+        "dast_run_metadata": {
+            "run_id": "run-123",
+            "target": "cloud-app",
+            "stand": "qa-1",
+            "source_commits": {"backend": SHA},
+        },
+    }
+    return {
+        "contract_version": "2.0",
+        "run_id": "run-123",
+        "status": "succeeded",
+        "selection": {"stand_id": "qa-1", "relation": "exact", "distance": 0},
+        "trigger_resolution": {
+            "type": "GIT_HASH",
+            "ref": SHA,
+            "resolved_commit": SHA,
+            "resolved_at": "2026-07-26T10:00:00Z",
+        },
+        "dast_run_metadata": {"source_commits": {"backend": SHA}},
+        "report": report,
+        "audit": {"correlation_id": "provider-pipeline-123", "source_verified": True},
     }
 
 
@@ -55,11 +87,18 @@ class PipelineImportAPITests(TestCase):
         # so a prior test's requests could push this test straight to a spurious 429.
         cache.clear()
         self.user = get_user_model().objects.create_user(username="report-import-user", password="pass")  # noqa: S106
+        self.sla = SLA_Configuration.objects.create(name="Report Import SLA")
         self.prod_type = Product_Type.objects.create(name="Report Import PT")
+        self.organization = Organization.objects.create(name="Report Import Org", product_type=self.prod_type)
         role_maintainer, _ = Role.objects.get_or_create(id=Roles.Maintainer, defaults={"name": "Maintainer"})
         Product_Type_Member.objects.create(product_type=self.prod_type, user=self.user, role=role_maintainer)
 
-        self.product = Product.objects.create(name="Report Import Product", description="desc", prod_type=self.prod_type)
+        self.product = Product.objects.create(
+            name="Report Import Product",
+            description="desc",
+            prod_type=self.prod_type,
+            sla_configuration=self.sla,
+        )
         repository = RepositoryInfo.objects.create(type=ScmType.GITHUB, repo_owner="acme", repo_name="cloud_portal")
         self.project = AISTProject.objects.create(
             product=self.product,
@@ -67,6 +106,31 @@ class PipelineImportAPITests(TestCase):
             compilable=False,
             profile={},
             repository=repository,
+        )
+        integration = OrgIntegration.objects.create(
+            organization=self.organization,
+            integration_type=OrgIntegrationType.DAST,
+            name="Report Import DAST",
+            is_active=True,
+        )
+        target = DastTarget.objects.create(
+            integration=integration,
+            provider_id="cloud-app",
+            display_name="Cloud app",
+            contract_revision="2.0",
+            capability_revision="sha256:import-capability",
+            schema_digest="sha256:import-schema",
+            parameter_schema={"type": "object", "additionalProperties": False},
+            provider_defaults={},
+            repository_keys=["backend"],
+            autonomous_ready=True,
+            last_seen_at=timezone.now(),
+        )
+        self.binding = DastProjectBinding.objects.create(
+            project=self.project,
+            target=target,
+            source_repo_key="backend",
+            enabled=True,
         )
 
         self.client.force_login(self.user)
@@ -85,14 +149,19 @@ class PipelineImportAPITests(TestCase):
         anon = Client()
         for url, extra in (
             (self._validate_url(), {"scan_type": DAST_SCAN_TYPE}),
-            (self._import_url(), {"scan_type": DAST_SCAN_TYPE, "commit_hash": SHA}),
+            (self._import_url(), {"scan_type": DAST_SCAN_TYPE, "binding_id": self.binding.id}),
         ):
             response = anon.post(url, {"file": _upload(_report_payload()), "project_id": self.project.id, **extra})
             self.assertIn(response.status_code, {401, 403})
 
     def test_denies_user_without_project_access(self):
         other_pt = Product_Type.objects.create(name="Other PT")
-        other_product = Product.objects.create(name="Other Product", description="desc", prod_type=other_pt)
+        other_product = Product.objects.create(
+            name="Other Product",
+            description="desc",
+            prod_type=other_pt,
+            sla_configuration=self.sla,
+        )
         other_repo = RepositoryInfo.objects.create(type=ScmType.GITHUB, repo_owner="acme", repo_name="other")
         other_project = AISTProject.objects.create(
             product=other_product,
@@ -107,22 +176,27 @@ class PipelineImportAPITests(TestCase):
                 "file": _upload(_report_payload()),
                 "project_id": other_project.id,
                 "scan_type": DAST_SCAN_TYPE,
-                "commit_hash": SHA,
+                "binding_id": self.binding.id,
             },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("project_id", response.data)
         self.assertFalse(AISTPipeline.objects.filter(project=other_project).exists())
 
-    def test_validate_returns_preview_with_detected_commit_hash(self):
+    def test_validate_returns_preview_with_actual_source_commit(self):
         response = self.client.post(
             self._validate_url(),
-            {"file": _upload(_report_payload()), "project_id": self.project.id, "scan_type": DAST_SCAN_TYPE},
+            {
+                "file": _upload(_report_payload()),
+                "project_id": self.project.id,
+                "scan_type": DAST_SCAN_TYPE,
+                "binding_id": self.binding.id,
+            },
         )
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(response.data["findings_count"], 1)
         self.assertEqual(response.data["severity_breakdown"], {"High": 1})
-        self.assertEqual(response.data["detected_commit_hash"], SHA)
+        self.assertEqual(response.data["actual_source_commit"], SHA)
 
     def test_validate_rejects_malformed_finding_without_re_reading_the_file_elsewhere(self):
         response = self.client.post(
@@ -131,10 +205,11 @@ class PipelineImportAPITests(TestCase):
                 "file": _upload(_report_payload(missing_description=True)),
                 "project_id": self.project.id,
                 "scan_type": DAST_SCAN_TYPE,
+                "binding_id": self.binding.id,
             },
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("description", str(response.data))
+        self.assertIn("finding schema", str(response.data))
 
     def test_validate_rejects_unregistered_scan_type(self):
         response = self.client.post(
@@ -146,7 +221,12 @@ class PipelineImportAPITests(TestCase):
     def test_validate_rejects_non_object_report_root(self):
         response = self.client.post(
             self._validate_url(),
-            {"file": _upload([]), "project_id": self.project.id, "scan_type": DAST_SCAN_TYPE},
+            {
+                "file": _upload([]),
+                "project_id": self.project.id,
+                "scan_type": DAST_SCAN_TYPE,
+                "binding_id": self.binding.id,
+            },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("JSON object", str(response.data))
@@ -156,7 +236,12 @@ class PipelineImportAPITests(TestCase):
         payload["dast_run_metadata"]["source_commits"] = []
         response = self.client.post(
             self._validate_url(),
-            {"file": _upload(payload), "project_id": self.project.id, "scan_type": DAST_SCAN_TYPE},
+            {
+                "file": _upload(payload),
+                "project_id": self.project.id,
+                "scan_type": DAST_SCAN_TYPE,
+                "binding_id": self.binding.id,
+            },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("source_commits", str(response.data))
@@ -165,7 +250,12 @@ class PipelineImportAPITests(TestCase):
         before = set(default_storage.listdir("report_imports")[1]) if default_storage.exists("report_imports") else set()
         self.client.post(
             self._validate_url(),
-            {"file": _upload(_report_payload()), "project_id": self.project.id, "scan_type": DAST_SCAN_TYPE},
+            {
+                "file": _upload(_report_payload()),
+                "project_id": self.project.id,
+                "scan_type": DAST_SCAN_TYPE,
+                "binding_id": self.binding.id,
+            },
         )
         after = set(default_storage.listdir("report_imports")[1]) if default_storage.exists("report_imports") else set()
         self.assertEqual(before, after)
@@ -180,7 +270,7 @@ class PipelineImportAPITests(TestCase):
                 "file": _upload(_report_payload()),
                 "project_id": self.project.id,
                 "scan_type": DAST_SCAN_TYPE,
-                "commit_hash": SHA,
+                "binding_id": self.binding.id,
             },
         )
         self.assertEqual(response.status_code, 202, response.content)
@@ -189,11 +279,13 @@ class PipelineImportAPITests(TestCase):
 
         pipeline = AISTPipeline.objects.get(id=response.data["pipeline_id"])
         self.assertEqual(pipeline.project_id, self.project.id)
+        self.assertEqual(pipeline.execution_type, PipelineExecutionType.MANUAL_IMPORT)
         self.assertEqual(pipeline.status, AISTStatus.FINISHED)
         mock_apply_async.assert_called_once()
         task_args = mock_apply_async.call_args.kwargs["args"]
         self.assertEqual(mock_apply_async.call_args.kwargs["task_id"], "celery-task-id")
         self.assertEqual(task_args[7], hashlib.sha256(json.dumps(_report_payload()).encode()).hexdigest())
+        self.assertEqual(task_args[8], self.binding.id)
         self.addCleanup(default_storage.delete, task_args[1])
 
         status_response = self.client.get(
@@ -219,7 +311,7 @@ class PipelineImportAPITests(TestCase):
                 "file": _upload(_report_payload()),
                 "project_id": self.project.id,
                 "scan_type": DAST_SCAN_TYPE,
-                "commit_hash": SHA,
+                "binding_id": self.binding.id,
             },
         )
         self.assertEqual(response.status_code, 500)
@@ -235,13 +327,22 @@ class PipelineImportAPITests(TestCase):
 
     def test_import_with_project_lacking_repository_returns_400_and_creates_no_pipeline(self):
         no_repo_product = Product.objects.create(
-            name="Report Import Product (no repo)", description="desc", prod_type=self.prod_type,
+            name="Report Import Product (no repo)",
+            description="desc",
+            prod_type=self.prod_type,
+            sla_configuration=self.sla,
         )
         no_repo_project = AISTProject.objects.create(
             product=no_repo_product,
             supported_languages=[],
             compilable=False,
             profile={},
+        )
+        no_repo_binding = DastProjectBinding.objects.create(
+            project=no_repo_project,
+            target=self.binding.target,
+            source_repo_key="backend",
+            enabled=True,
         )
         before = AISTPipeline.objects.filter(project=no_repo_project).count()
         response = self.client.post(
@@ -250,7 +351,7 @@ class PipelineImportAPITests(TestCase):
                 "file": _upload(_report_payload()),
                 "project_id": no_repo_project.id,
                 "scan_type": DAST_SCAN_TYPE,
-                "commit_hash": SHA,
+                "binding_id": no_repo_binding.id,
             },
         )
         self.assertEqual(response.status_code, 400)
@@ -260,7 +361,7 @@ class PipelineImportAPITests(TestCase):
         # Both import endpoints carry a shared ScopedRateThrottle ("aist_pipeline_import",
         # 20/hour default) — this is an abusable action (fans out to DefaultImporter +
         # Celery, creates DB rows and a storage write per call) with no other limit.
-        # Omitting commit_hash 400s fast, before any import work happens, so this stays cheap.
+        # Omitting binding_id 400s fast, before any import work happens, so this stays cheap.
         statuses = [
             self.client.post(
                 self._import_url(),

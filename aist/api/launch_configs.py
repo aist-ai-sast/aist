@@ -2,30 +2,51 @@ from __future__ import annotations
 
 from django.db import transaction
 from django_filters import rest_framework as django_filters
-from drf_spectacular.utils import OpenApiExample, OpenApiResponse, extend_schema
+from dojo.authorization.roles_permissions import Permissions
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.response import Response
 
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
-from aist.api.pipelines import PipelineResponseSerializer
+from aist.api.launch_requests import (
+    LaunchRequestResponseSerializer,
+    launch_principal_token,
+    launch_request_headers,
+    launch_request_response,
+)
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
+from aist.integrations.dast_config import DastBindingParameters, DastConfigError
+from aist.integrations.dast_readiness import check_dast_binding_readiness
 from aist.models import (
     AISTLaunchConfigAction,
     AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectVersion,
     AISTStatus,
+    DastProjectBinding,
+    PipelineExecutionType,
 )
 from aist.pipeline_args import PipelineArguments
-from aist.tasks import run_sast_pipeline
-from aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline
+from aist.queries import get_authorized_aist_project_versions
 
 
 class LaunchConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = AISTProjectLaunchConfig
-        fields = ["id", "project", "name", "description", "params", "is_default", "created", "updated"]
+        fields = [
+            "id",
+            "project",
+            "execution_type",
+            "dast_binding",
+            "name",
+            "description",
+            "params",
+            "is_default",
+            "created",
+            "updated",
+        ]
         read_only_fields = ["id", "project", "created", "updated"]
 
 
@@ -34,6 +55,50 @@ class LaunchConfigCreateRequestSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True, default="")
     is_default = serializers.BooleanField(required=False, default=False)
     params = serializers.JSONField(required=True)
+    execution_type = serializers.ChoiceField(
+        choices=(PipelineExecutionType.SAST, PipelineExecutionType.DAST),
+        default=PipelineExecutionType.SAST,
+    )
+    dast_binding_id = serializers.PrimaryKeyRelatedField(
+        source="dast_binding",
+        queryset=DastProjectBinding.objects.none(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
+
+    def to_internal_value(self, data):
+        unknown = set(data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(dict.fromkeys(sorted(unknown), "Unknown field."))
+        return super().to_internal_value(data)
+
+    def get_fields(self):
+        fields = super().get_fields()
+        project = self.context.get("project")
+        if project is not None:
+            fields["dast_binding_id"].queryset = project.dast_bindings.select_related("target")
+        return fields
+
+    def validate(self, attrs):
+        execution_type = attrs["execution_type"]
+        binding = attrs.get("dast_binding")
+        if execution_type == PipelineExecutionType.SAST:
+            if binding is not None:
+                raise serializers.ValidationError({"dast_binding_id": "SAST launch config cannot select a DAST binding."})
+            return attrs
+        if binding is None:
+            raise serializers.ValidationError({"dast_binding_id": "DAST launch config requires an explicit binding."})
+        if not binding.enabled:
+            raise serializers.ValidationError({"dast_binding_id": "DAST binding must be enabled."})
+        try:
+            attrs["params"] = DastBindingParameters.from_snapshot(
+                attrs["params"],
+                target=binding.target.get_snapshot(),
+            ).to_snapshot()
+        except DastConfigError as exc:
+            raise serializers.ValidationError({"params": str(exc)}) from exc
+        return attrs
 
 
 class LaunchConfigUpdateRequestSerializer(serializers.ModelSerializer):
@@ -41,12 +106,26 @@ class LaunchConfigUpdateRequestSerializer(serializers.ModelSerializer):
         model = AISTProjectLaunchConfig
         fields = ["name", "description", "is_default", "params"]
 
+    def to_internal_value(self, data):
+        unknown = set(data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(dict.fromkeys(sorted(unknown), "Unknown field."))
+        return super().to_internal_value(data)
+
     def validate_params(self, value):
         if value is None:
             return value
         if not isinstance(value, dict):
             msg = "params must be a JSON object"
             raise serializers.ValidationError(msg)
+        if self.instance is not None and self.instance.execution_type == PipelineExecutionType.DAST:
+            try:
+                return DastBindingParameters.from_snapshot(
+                    value,
+                    target=self.instance.dast_binding.target.get_snapshot(),
+                ).to_snapshot()
+            except DastConfigError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
         return value
 
 
@@ -55,12 +134,46 @@ class LaunchConfigStartRequestSerializer(serializers.Serializer):
     """All runtime options must live in `params` (PipelineArguments-like dict)."""
 
     params = serializers.JSONField(required=False, default=dict)
+    project_version_id = serializers.PrimaryKeyRelatedField(
+        queryset=AISTProjectVersion.objects.none(),
+        required=False,
+        write_only=True,
+    )
+
+    def to_internal_value(self, data):
+        unknown = set(data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(dict.fromkeys(sorted(unknown), "Unknown field."))
+        return super().to_internal_value(data)
+
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get("request")
+        project = self.context.get("project")
+        if request is not None and project is not None:
+            fields["project_version_id"].queryset = get_authorized_aist_project_versions(
+                Permissions.Product_Edit,
+                user=request.user,
+            ).filter(project=project)
+        return fields
 
     def validate_params(self, value):
         if not isinstance(value, dict):
             msg = "params must be a JSON object"
             raise serializers.ValidationError(msg)
         return value
+
+    def validate(self, attrs):
+        config = self.context.get("config")
+        if (
+            config is not None
+            and config.execution_type == PipelineExecutionType.DAST
+            and attrs.get("project_version_id") is None
+        ):
+            raise serializers.ValidationError(
+                {"project_version_id": "DAST launches require a source project version."},
+            )
+        return attrs
 
 
 class LaunchConfigActionSerializer(serializers.ModelSerializer):
@@ -108,6 +221,8 @@ class LaunchConfigDashboardSerializer(serializers.ModelSerializer):
             "product_name",
             "organization_id",
             "organization_name",
+            "execution_type",
+            "dast_binding",
             "name",
             "description",
             "params",
@@ -228,24 +343,42 @@ def create_launch_config_for_project(
     description: str,
     is_default: bool,
     raw_params: dict,
+    execution_type: str = PipelineExecutionType.SAST,
+    dast_binding: DastProjectBinding | None = None,
 ) -> AISTProjectLaunchConfig:
     """
     Shared create logic for BOTH API and UI.
     SSOT for params validation/defaulting: PipelineArguments.normalize_params.
     """
-    normalized = PipelineArguments.normalize_params(project=project, raw_params=raw_params)
+    if execution_type == PipelineExecutionType.SAST:
+        normalized = PipelineArguments.normalize_params(project=project, raw_params=raw_params)
+    elif execution_type == PipelineExecutionType.DAST and dast_binding is not None:
+        try:
+            normalized = DastBindingParameters.from_snapshot(
+                raw_params,
+                target=dast_binding.target.get_snapshot(),
+            ).to_snapshot()
+        except DastConfigError as exc:
+            raise serializers.ValidationError({"params": str(exc)}) from exc
+    else:
+        raise serializers.ValidationError({"dast_binding_id": "DAST launch config requires an explicit binding."})
 
     with transaction.atomic():
         if is_default:
             AISTProjectLaunchConfig.objects.filter(project=project, is_default=True).update(is_default=False)
 
-        return AISTProjectLaunchConfig.objects.create(
+        launch_config = AISTProjectLaunchConfig(
             project=project,
+            execution_type=execution_type,
+            dast_binding=dast_binding,
             name=name,
             description=description or "",
             params=normalized,
             is_default=is_default,
         )
+        launch_config.full_clean()
+        launch_config.save()
+        return launch_config
 
 
 class ProjectLaunchConfigListCreateAPI(AISTAPIView):
@@ -315,7 +448,7 @@ class ProjectLaunchConfigListCreateAPI(AISTAPIView):
     def post(self, request, project_id: int, *args, **kwargs):
         project = self.resolve(id=project_id)
 
-        s = LaunchConfigCreateRequestSerializer(data=request.data)
+        s = LaunchConfigCreateRequestSerializer(data=request.data, context={"project": project})
         s.is_valid(raise_exception=True)
 
         obj = create_launch_config_for_project(
@@ -324,6 +457,8 @@ class ProjectLaunchConfigListCreateAPI(AISTAPIView):
             description=s.validated_data.get("description", ""),
             is_default=bool(s.validated_data.get("is_default", False)),
             raw_params=s.validated_data["params"],
+            execution_type=s.validated_data["execution_type"],
+            dast_binding=s.validated_data.get("dast_binding"),
         )
 
         return Response(LaunchConfigSerializer(obj).data, status=status.HTTP_201_CREATED)
@@ -359,7 +494,7 @@ class ProjectLaunchConfigDetailAPI(AISTAPIView):
     )
     def patch(self, request, project_id: int, config_id: int, *args, **kwargs):
         obj = self.resolve(id=config_id, project_id=project_id)
-        s = LaunchConfigUpdateRequestSerializer(data=request.data, partial=True)
+        s = LaunchConfigUpdateRequestSerializer(instance=obj, data=request.data, partial=True)
         s.is_valid(raise_exception=True)
         data = s.validated_data
 
@@ -377,42 +512,56 @@ class ProjectLaunchConfigDetailAPI(AISTAPIView):
             if "description" in data:
                 obj.description = data["description"] or ""
             if "params" in data:
-                normalized = PipelineArguments.normalize_params(project=obj.project, raw_params=data["params"])
+                normalized = data["params"]
+                if obj.execution_type == PipelineExecutionType.SAST:
+                    normalized = PipelineArguments.normalize_params(project=obj.project, raw_params=normalized)
                 obj.params = normalized
 
+            obj.full_clean()
             obj.save()
 
         return Response(LaunchConfigSerializer(obj).data)
 
 
 class ProjectLaunchConfigStartAPI(AISTAPIView):
-    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
+    authz = ResourcePolicy(
+        resource=AISTProjectLaunchConfig,
+        read=Action.PRODUCT_READ,
+        write=Action.PROJECT_OPERATE,
+    )
 
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_CONFIGS.value],
-        summary="Start pipeline using launch config",
+        summary="Queue pipeline launch using launch config",
         request=LaunchConfigStartRequestSerializer,
+        parameters=[
+            OpenApiParameter(
+                name="Idempotency-Key",
+                type=str,
+                location=OpenApiParameter.HEADER,
+                required=False,
+            ),
+        ],
         responses={
-            201: OpenApiResponse(PipelineResponseSerializer, description="Pipeline created"),
+            202: OpenApiResponse(LaunchRequestResponseSerializer, description="Launch request queued"),
             404: OpenApiResponse(description="Not found"),
-            405: OpenApiResponse(description="There is already a running pipeline for this project version"),
             400: OpenApiResponse(description="Bad request"),
         },
         examples=[
             OpenApiExample(
                 "Start using saved config only (no overrides)",
                 description=(
-                        "Starts pipeline using launch config params as-is. "
+                        "Queues a launch using the saved config params as-is. "
                         "Body may be empty or `{}`; `params` defaults to `{}`."
                 ),
                 value={},
                 request_only=True,
             ),
             OpenApiExample(
-                "Start with params overrides",
+                "Queue with params overrides",
                 description=(
                         "Provide partial PipelineArguments-like fields inside `params` to override saved config. "
-                        "All validation/defaulting happens in PipelineArguments.normalize_params."
+                        "All validation/defaulting happens before the durable request is stored."
                 ),
                 value={
                     "params": {
@@ -431,7 +580,7 @@ class ProjectLaunchConfigStartAPI(AISTAPIView):
                 request_only=True,
             ),
             OpenApiExample(
-                "Start on latest project version (no explicit project_version)",
+                "Queue on latest project version (no explicit project_version)",
                 description=(
                         "If `project_version` is omitted, normalize_params should pick the latest available version "
                 ),
@@ -449,61 +598,59 @@ class ProjectLaunchConfigStartAPI(AISTAPIView):
         ],
     )
     def post(self, request, project_id: int, config_id: int, *args, **kwargs):
-        project = self.resolve(id=project_id)
-        cfg = self.resolve(
-            resource=AISTProjectLaunchConfig,
-            id=config_id,
-            project=project,
-        )
+        cfg = self.resolve(id=config_id, project_id=project_id)
+        project = cfg.project
+        if cfg.execution_type == PipelineExecutionType.DAST:
+            readiness = check_dast_binding_readiness(cfg.dast_binding)
+            if not readiness.ready:
+                return Response(
+                    {"readiness": readiness.to_snapshot()},
+                    status=status.HTTP_409_CONFLICT,
+                )
+        elif cfg.execution_type != PipelineExecutionType.SAST:
+            return Response(
+                {"execution_type": "Unsupported pipeline execution type."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
-        s = LaunchConfigStartRequestSerializer(data=request.data or {})
+        s = LaunchConfigStartRequestSerializer(
+            data=request.data or {},
+            context={"request": request, "project": project, "config": cfg},
+        )
         s.is_valid(raise_exception=True)
 
         req_params = s.validated_data.get("params") or {}
-        if req_params and not isinstance(req_params, dict):
-            return Response({"params": "params must be an object"}, status=status.HTTP_400_BAD_REQUEST)
+        project_version = s.validated_data.get("project_version_id")
+        if project_version is not None and cfg.execution_type == PipelineExecutionType.SAST:
+            req_params = {**req_params, "project_version": project_version.as_dict()}
 
-        # Start with saved preset params and allow request to override any of them.
-        # All fields must be PipelineArguments-like and validated in one place.
-        raw = dict(cfg.params or {})
-        raw.update(req_params)
-
-        # Normalize + validate + fill defaults (including project_version) in ONE place
-        params = PipelineArguments.normalize_params(project=project, raw_params=raw)
-
-        # project_version must exist after normalization (may be {})
-        pv_dict = params.get("project_version") or {}
-        pv_id = pv_dict.get("id")
-        if not pv_id:
-            return Response({"project_version": "No versions found for project"}, status=status.HTTP_400_BAD_REQUEST)
-
-        project_version = self.resolve(
-            resource=AISTProjectVersion,
-            pk=pv_id,
-            project=project,
+        organization = project.organization
+        if organization is None:
+            return Response(
+                {"organization": "Project does not belong to an AIST organization."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        principal = LaunchPrincipal.for_user(
+            organization=organization,
+            requester=request.user,
+            api_token=launch_principal_token(request),
         )
-
-        if has_unfinished_pipeline(project_version):
-            return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
-
-        with transaction.atomic():
-            p = create_pipeline_object(project, project_version, None)
-
-        params["launch_config_id"] = cfg.id
-        async_result = run_sast_pipeline.delay(p.id, params)
-        p.run_task_id = async_result.id
-        p.save(update_fields=["run_task_id"])
-
-        out = PipelineResponseSerializer(
-            {
-                "id": p.id,
-                "status": p.status,
-                "response_from_ai": p.response_from_ai,
-                "created": p.created,
-                "updated": p.updated,
-            },
-        )
-        return Response(out.data, status=status.HTTP_201_CREATED)
+        try:
+            launch_request = enqueue_pipeline_launch(
+                project=project,
+                principal=principal,
+                raw_params=req_params,
+                launch_config=cfg,
+                trigger_project_version=(
+                    project_version
+                    if cfg.execution_type == PipelineExecutionType.DAST
+                    else None
+                ),
+                client_request_key=launch_request_headers(request).get("client_request_key"),
+            ).request
+        except LaunchEnqueueError as exc:
+            raise serializers.ValidationError({"detail": str(exc)}) from exc
+        return Response(launch_request_response(launch_request), status=status.HTTP_202_ACCEPTED)
 
 
 class ProjectLaunchConfigActionListCreateAPI(AISTAPIView):

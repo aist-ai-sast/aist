@@ -12,6 +12,15 @@ const importMutateAsync = vi.fn();
 let validatePending = false;
 let importPending = false;
 let pipelineStatus: { status: string; run_task_id: string | null } | undefined;
+let projectBindings = [
+  {
+    id: 11,
+    project: 1,
+    target: { display_name: "Cloud app" },
+    source_repo_key: "backend",
+    enabled: true,
+  },
+];
 
 vi.mock("../lib/queries", () => ({
   useProjects: () => ({
@@ -20,6 +29,7 @@ vi.mock("../lib/queries", () => ({
       { id: 2, productId: 2, name: "other-project", organizationId: 1, organizationName: "Acme" },
     ],
   }),
+  useProjectDastBindings: () => ({ data: projectBindings, isLoading: false }),
   usePipelineStatus: () => ({ data: pipelineStatus }),
 }));
 
@@ -39,8 +49,10 @@ function reportFile(name = "generic-aist-report.json") {
 // The project field is the app's Radix-based SelectField — button/listbox-driven:
 // open it with a click, then click the option (see ProjectAccessEditor.test.tsx).
 async function selectProjectAndUploadFile(name = "generic-aist-report.json") {
-  fireEvent.click(screen.getByRole("combobox"));
+  fireEvent.click(screen.getAllByRole("combobox")[0]);
   fireEvent.click(screen.getByRole("option", { name: "cloud_portal" }));
+  fireEvent.click(screen.getAllByRole("combobox")[1]);
+  fireEvent.click(screen.getByRole("option", { name: "Cloud app · backend" }));
   const input = document.querySelector('input[type="file"]') as HTMLInputElement;
   const file = reportFile(name);
   fireEvent.change(input, { target: { files: [file] } });
@@ -53,6 +65,15 @@ describe("ImportPipelineDialog", () => {
     validatePending = false;
     importPending = false;
     pipelineStatus = undefined;
+    projectBindings = [
+      {
+        id: 11,
+        project: 1,
+        target: { display_name: "Cloud app" },
+        source_repo_key: "backend",
+        enabled: true,
+      },
+    ];
   });
 
   afterEach(() => {
@@ -64,54 +85,53 @@ describe("ImportPipelineDialog", () => {
       findings_count: 3,
       severity_breakdown: { High: 1, Medium: 1, Low: 1 },
       name: "DAST",
-      version: "v1",
-      detected_commit_hash: "fd5b25aa1234567890abcdef1234567890abcdef",
+      version: "backend@fd5b25aa1234",
+      actual_source_commit: "fd5b25aa1234567890abcdef1234567890abcdef",
     });
     render(<ImportPipelineDialog open onClose={vi.fn()} />);
 
     await selectProjectAndUploadFile();
 
     expect(validateMutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ projectId: 1, scanType: "DAST Autonomous Scan" }),
+      expect.objectContaining({ projectId: 1, bindingId: 11, scanType: "DAST Autonomous Scan" }),
     );
     expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText("High: 1")).toBeInTheDocument();
-    expect(screen.getByText(/DAST v1/)).toBeInTheDocument();
+    expect(screen.getByText(/DAST backend@fd5b25aa1234/)).toBeInTheDocument();
   });
 
-  it("pre-fills the commit SHA from the backend's detected_commit_hash and enables Create pipeline", async () => {
+  it("shows the authoritative source commit read-only and enables Create pipeline", async () => {
     validateMutateAsync.mockResolvedValue({
       findings_count: 1,
       severity_breakdown: { High: 1 },
       name: "DAST",
-      version: "v1",
-      detected_commit_hash: "fd5b25aa1234567890abcdef1234567890abcdef",
+      version: "backend@fd5b25aa1234",
+      actual_source_commit: "fd5b25aa1234567890abcdef1234567890abcdef",
     });
     render(<ImportPipelineDialog open onClose={vi.fn()} />);
 
     await selectProjectAndUploadFile();
 
-    const commitInput = screen.getByLabelText(/commit sha/i) as HTMLInputElement;
-    expect(commitInput.value).toBe("fd5b25aa1234567890abcdef1234567890abcdef");
-    expect(screen.getByText(/auto-detected from the report/i)).toBeInTheDocument();
+    expect(screen.getByText("fd5b25aa1234567890abcdef1234567890abcdef")).toBeInTheDocument();
+    expect(screen.getByText(/cannot be overridden/i)).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /create pipeline/i })).not.toBeDisabled();
   });
 
-  it("leaves the commit SHA blank and disables Create pipeline when nothing was detected", async () => {
+  it("disables Create pipeline when the validated report has no authoritative source commit", async () => {
     validateMutateAsync.mockResolvedValue({
       findings_count: 1,
       severity_breakdown: { High: 1 },
       name: "DAST",
-      version: "v1",
-      detected_commit_hash: null,
+      version: "backend@fd5b25aa1234",
+      actual_source_commit: null,
     });
     render(<ImportPipelineDialog open onClose={vi.fn()} />);
 
     await selectProjectAndUploadFile();
 
-    const commitInput = screen.getByLabelText(/commit sha/i) as HTMLInputElement;
-    expect(commitInput.value).toBe("");
-    expect(screen.getByText(/enter the scanned commit manually/i)).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /create pipeline/i })).toBeDisabled();
   });
 
@@ -126,28 +146,27 @@ describe("ImportPipelineDialog", () => {
     expect(screen.queryByRole("button", { name: /create pipeline/i })).not.toBeInTheDocument();
   });
 
-  it("submits the same File object again on confirm, alongside the edited commit hash", async () => {
+  it("submits the same File object and explicit binding without a commit override", async () => {
     validateMutateAsync.mockResolvedValue({
       findings_count: 1,
       severity_breakdown: { High: 1 },
       name: "DAST",
-      version: "v1",
-      detected_commit_hash: "fd5b25aa1234567890abcdef1234567890abcdef",
+      version: "backend@fd5b25aa1234",
+      actual_source_commit: "fd5b25aa1234567890abcdef1234567890abcdef",
     });
     importMutateAsync.mockResolvedValue({ pipeline_id: "abcd1234", run_task_id: "task-1" });
     render(<ImportPipelineDialog open onClose={vi.fn()} />);
 
     await selectProjectAndUploadFile();
 
-    const commitInput = screen.getByLabelText(/commit sha/i);
-    fireEvent.change(commitInput, { target: { value: "deadbeef" } });
     fireEvent.click(screen.getByRole("button", { name: /create pipeline/i }));
 
     await waitFor(() => expect(importMutateAsync).toHaveBeenCalled());
     const call = importMutateAsync.mock.calls[0][0];
     expect(call.projectId).toBe(1);
+    expect(call.bindingId).toBe(11);
     expect(call.scanType).toBe("DAST Autonomous Scan");
-    expect(call.commitHash).toBe("deadbeef");
+    expect(call).not.toHaveProperty("commitHash");
     expect(call.file).toBeInstanceOf(File);
   });
 
@@ -156,13 +175,15 @@ describe("ImportPipelineDialog", () => {
       findings_count: 2,
       severity_breakdown: { High: 2 },
       name: "DAST",
-      version: "v1",
-      detected_commit_hash: null,
+      version: "backend@fd5b25aa1234",
+      actual_source_commit: null,
     });
     render(<ImportPipelineDialog open onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getAllByRole("combobox")[0]);
     fireEvent.click(screen.getByRole("option", { name: "cloud_portal" }));
+    fireEvent.click(screen.getAllByRole("combobox")[1]);
+    fireEvent.click(screen.getByRole("option", { name: "Cloud app · backend" }));
 
     const dropZone = screen.getByRole("button", { name: /drop a report file here/i });
     const file = reportFile("dropped-report.json");
@@ -173,7 +194,7 @@ describe("ImportPipelineDialog", () => {
 
     expect(dropEvent.defaultPrevented).toBe(true);
     await waitFor(() => expect(validateMutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ projectId: 1, scanType: "DAST Autonomous Scan" }),
+      expect.objectContaining({ projectId: 1, bindingId: 11, scanType: "DAST Autonomous Scan" }),
     ));
     await waitFor(() => expect(screen.getByText("dropped-report.json")).toBeInTheDocument());
   });
@@ -189,11 +210,13 @@ describe("ImportPipelineDialog", () => {
     expect(dragOverEvent.defaultPrevented).toBe(true);
   });
 
-  it("opens the file picker on click once a project is selected", () => {
+  it("opens the file picker on click once a project and binding are selected", () => {
     render(<ImportPipelineDialog open onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getAllByRole("combobox")[0]);
     fireEvent.click(screen.getByRole("option", { name: "cloud_portal" }));
+    fireEvent.click(screen.getAllByRole("combobox")[1]);
+    fireEvent.click(screen.getByRole("option", { name: "Cloud app · backend" }));
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     const clickSpy = vi.spyOn(input, "click");
@@ -214,13 +237,25 @@ describe("ImportPipelineDialog", () => {
     expect(clickSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps upload disabled when the project has no enabled DAST binding", () => {
+    projectBindings = [];
+    render(<ImportPipelineDialog open onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getAllByRole("combobox")[0]);
+    fireEvent.click(screen.getByRole("option", { name: "cloud_portal" }));
+
+    expect(screen.getByText(/no enabled DAST target binding/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("combobox")[1]).toBeDisabled();
+    expect(screen.getByRole("button", { name: /drop a report file here/i })).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("waits for run_task_id to clear before treating FINISHED as terminal", async () => {
     validateMutateAsync.mockResolvedValue({
       findings_count: 1,
       severity_breakdown: { High: 1 },
       name: "DAST",
-      version: "v1",
-      detected_commit_hash: "fd5b25aa1234567890abcdef1234567890abcdef",
+      version: "backend@fd5b25aa1234",
+      actual_source_commit: "fd5b25aa1234567890abcdef1234567890abcdef",
     });
     importMutateAsync.mockResolvedValue({ pipeline_id: "abcd1234", run_task_id: "task-1" });
     const onClose = vi.fn();

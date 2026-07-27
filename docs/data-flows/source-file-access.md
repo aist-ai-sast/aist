@@ -15,10 +15,10 @@ repository binding, or organization by request parameter.
 
 ## Read an uploaded archive
 
-For a `FILE_HASH` version, AIST extracts the stored archive on first file
-request and resolves the requested relative path beneath that extraction root.
-If the version has no archive or the path does not identify a file in that
-archive, the endpoint returns not found.
+For a `FILE_HASH` version, AIST extracts the stored archive on the first file
+request and reads the requested file from that extracted version. If the
+version has no archive or the requested file is unavailable, the endpoint
+returns not found.
 
 ## Fetch a Git version
 

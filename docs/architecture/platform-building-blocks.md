@@ -1,55 +1,71 @@
-# Platform Building Blocks
+# Platform building blocks
 
-This page assigns responsibility inside AIST. It is not a request trace: use a
-product or data-flow page when the question is how one operation progresses.
+AIST separates interactive product requests, durable coordination, background
+work, and execution runtimes. This page explains what each block owns and how
+the blocks depend on one another. For the deployment topology, see
+[runtime deployment](runtime-deployment.md).
 
 ![AIST platform building blocks](../assets/platform-building-blocks.svg)
 
-## User-facing application
+## Experience and control plane
 
-The React client provides the project, pipeline, finding, integration,
-membership, and work-item screens. The Django application provides the REST
-API and server-rendered AIST views. Both entry points enforce the same
-authenticated user and organization-scoped authorisation model described in
-[tenant isolation and access](../security/tenant-isolation-and-access.md).
+The React client is the main product interface. It presents organizations,
+projects, launch configuration, pipelines, findings, integrations, and
+remediation work without owning authorization or workflow state.
 
-## Durable application state
+The Django application is the control plane behind both the client and the
+public API. It authenticates the principal, resolves organization and project
+scope, validates input, reads or changes durable state, and enqueues work that
+must run outside the request. The same server-side authorization model applies
+regardless of which client initiated the request.
 
-PostgreSQL holds the AIST domain records: organizations, projects and source
-versions, pipeline runs, findings, verdicts, integrations, work-item links,
-and action results. It is the durable state used by both the web application
-and workers. Valkey is the Celery broker; it carries work between the
-application, beat scheduler, and workers rather than acting as the source of
-record for AIST data.
+## Durable coordination
 
-## Background execution
+PostgreSQL is the product source of truth. It stores tenant configuration,
+projects and source versions, launch requests, pipeline history, findings,
+review decisions, integrations, and external work-item state. Web processes and
+workers coordinate through these records rather than through process memory.
 
-Celery Beat schedules recurring work. Celery workers execute queued operations
-such as source-control discovery, validation, pipeline execution and
-post-processing, AI triage, integration checks, and work-item synchronisation.
-Workers update durable state and pipeline status as each operation progresses.
+Valkey is the Celery transport. It carries task delivery between producers and
+workers, but it does not replace the durable launch or pipeline records in
+PostgreSQL. A broker retry or duplicate delivery therefore does not define the
+product outcome on its own.
 
-## Scan execution
+## Background work
 
-The SAST pipeline package is invoked by the pipeline worker. It prepares the
-project workspace, runs configured analyzers in Docker containers, and hands
-their reports back to the platform importer. This is intentionally separated
-from the interactive web process because it creates execution-specific
-workspaces and containers.
+Celery Beat produces recurring work such as schedule evaluation, synchronization,
+and cleanup. Celery workers consume queued operations and update the same
+PostgreSQL records that the control plane exposes to users.
 
-## Local AI bridge
+Workers own operations that may be slow, retried, or dependent on external
+systems: repository discovery, source acquisition, pipeline execution, report
+processing, AI triage, integration validation, and work-item synchronization.
 
-The optional local triage bridge is a separate runtime service reached through
-a Unix socket shared with the worker. It is used by local AI-triage and
-agent-bridge analyzer modes. Its operation-level behaviour belongs to
-[AI triage](../product/ai-triage.md) and the corresponding data-flow page.
+## Execution boundaries
 
-## Key models
+A worker delegates the execution-specific portion of a run to one of three
+boundaries:
 
-The durable state above is implemented in `aist/models.py`. The models an
-agent touches most often: `Organization` (tenant root), `AISTProject` and
-`AISTProjectVersion` (a project and its source versions), `AISTPipeline` (one
-scan run), `ProcessedFinding` (a deduplicated finding), and
-`AISTAIFindingResponse` (an AI triage verdict). Org-scoping and permission
-resolution for these models is described in
-[tenant isolation and access](../security/tenant-isolation-and-access.md).
+- the SAST runtime prepares an isolated workspace and starts builder and
+  analyzer containers;
+- a standalone connector communicates with an external execution provider such
+  as DAST without joining the SAST analyzer fan-out;
+- the local AI bridge starts an isolated CLI operation and is reached through a
+  Unix socket shared with the worker.
+
+These runtimes produce reports or verdicts; they do not own tenant access,
+pipeline admission, finding disposition, or review history. Results return to
+the control plane through the platform import or callback boundary and become
+durable product state.
+
+## Reading the relationships
+
+An interactive request normally travels through the client and Django control
+plane. Django reads or changes PostgreSQL and may enqueue work in Valkey.
+Recurring work begins with Celery Beat. Workers consume the task, re-resolve the
+durable records they need, invoke the selected execution boundary, and persist
+the outcome back to PostgreSQL.
+
+The sequence inside one pipeline is described in
+[pipeline execution](../product/pipeline-execution.md). The SAST-specific
+runtime is described in [SAST pipeline runtime](sast-pipeline-runtime.md).

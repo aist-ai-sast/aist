@@ -1,24 +1,29 @@
 """
-Integration tests for the generic manual-report-import Celery task, exercised end-to-end
-with a DAST report (the one format currently wired into client-ui). The task itself is
-format-blind: it takes ``scan_type``/``commit_hash`` as plain parameters, so these tests
-also cover the full real import path through ``DastReportParser``
-(``aist/parser_overrides.py``).
+Integration tests for the manual-report-import Celery task's strict DAST branch. These
+cover persisted-artifact verification and the shared DAST finalization path.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.test import TestCase
-from dojo.models import Product, Product_Type
+from django.utils import timezone
+from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.models import (
     AISTPipeline,
     AISTProject,
     AISTStatus,
+    DastProjectBinding,
+    DastTarget,
+    Organization,
+    OrgIntegration,
+    OrgIntegrationType,
+    PipelineExecutionType,
     RepositoryInfo,
     ScmType,
     VersionType,
@@ -30,10 +35,10 @@ SHA = "fd5b25aa1234567890abcdef1234567890abcdef"
 
 
 def _report_payload() -> dict:
-    return {
+    report = {
         "name": "DAST",
         "type": "DAST Autonomous Scan",
-        "version": "v1",
+        "version": "backend@fd5b25aa1234",
         "findings": [
             {
                 "title": "Cross-tenant BOLA on subscription keys",
@@ -46,13 +51,40 @@ def _report_payload() -> dict:
                 "endpoints": ["https://api.example.com/v1/subscriptions/123"],
             },
         ],
+        "dast_run_metadata": {
+            "run_id": "run-123",
+            "target": "cloud-app",
+            "stand": "qa-1",
+            "source_commits": {"backend": SHA},
+        },
+    }
+    return {
+        "contract_version": "2.0",
+        "run_id": "run-123",
+        "status": "succeeded",
+        "selection": {"stand_id": "qa-1", "relation": "exact", "distance": 0},
+        "trigger_resolution": {
+            "type": "GIT_HASH",
+            "ref": SHA,
+            "resolved_commit": SHA,
+            "resolved_at": "2026-07-26T10:00:00Z",
+        },
+        "dast_run_metadata": {"source_commits": {"backend": SHA}},
+        "report": report,
+        "audit": {"correlation_id": "provider-pipeline-123", "source_verified": True},
     }
 
 
 class ImportReportTaskTests(TestCase):
     def setUp(self):
         prod_type = Product_Type.objects.create(name="Report Import Task PT")
-        product = Product.objects.create(name="Report Import Task Product", description="desc", prod_type=prod_type)
+        organization = Organization.objects.create(name="Report Import Task Org", product_type=prod_type)
+        product = Product.objects.create(
+            name="Report Import Task Product",
+            description="desc",
+            prod_type=prod_type,
+            sla_configuration=SLA_Configuration.objects.create(name="Report Import Task SLA"),
+        )
         repository = RepositoryInfo.objects.create(
             type=ScmType.GITHUB,
             repo_owner="acme",
@@ -65,26 +97,58 @@ class ImportReportTaskTests(TestCase):
             profile={},
             repository=repository,
         )
+        integration = OrgIntegration.objects.create(
+            organization=organization,
+            integration_type=OrgIntegrationType.DAST,
+            name="Report Import Task DAST",
+            is_active=True,
+        )
+        target = DastTarget.objects.create(
+            integration=integration,
+            provider_id="cloud-app",
+            display_name="Cloud app",
+            contract_revision="2.0",
+            capability_revision="sha256:task-capability",
+            schema_digest="sha256:task-schema",
+            parameter_schema={"type": "object", "additionalProperties": False},
+            provider_defaults={},
+            repository_keys=["backend"],
+            autonomous_ready=True,
+            last_seen_at=timezone.now(),
+        )
+        self.binding = DastProjectBinding.objects.create(
+            project=self.project,
+            target=target,
+            source_repo_key="backend",
+            enabled=True,
+        )
         self.uploader = get_user_model().objects.create_user(username="report-importer")
         self.pipeline = AISTPipeline.objects.create(
             id="importtest1",
             project=self.project,
+            execution_type=PipelineExecutionType.MANUAL_IMPORT,
             status=AISTStatus.FINISHED,
+            launch_data={
+                "source": "manual_import",
+                "scan_type": DAST_SCAN_TYPE,
+                "uploader_id": self.uploader.id,
+                "filename": "generic-aist-report.json",
+                "dast_binding_id": self.binding.id,
+            },
         )
+        self.report_bytes = json.dumps(_report_payload()).encode()
+        self.report_sha256 = hashlib.sha256(self.report_bytes).hexdigest()
         self.storage_name = default_storage.save(
             "report_imports/importtest1.json",
-            ContentFile(json.dumps(_report_payload()).encode()),
+            ContentFile(self.report_bytes),
         )
 
-    def test_import_attaches_findings_and_hands_off_to_deduplication(self):
-        # Mirrors run_sast_pipeline: when there are findings, the task defers to
-        # postprocess_findings, which leaves the pipeline in
-        # WAITING_DEDUPLICATION_TO_FINISH until the (separately scheduled)
-        # watch_deduplication task later calls finish_pipeline. That handoff runs
-        # via transaction.on_commit, which TestCase's per-test transaction never
-        # fires — so the terminal FINISHED state is out of scope here and is
-        # covered by the no-findings path below instead.
-        import_report(
+    def test_import_report_accepts_async_user_contract_and_deletes_temp_file(self):
+        # The shared finalizer leaves the pipeline at UPLOADING_RESULTS until its
+        # transaction.on_commit hand-off advances it to deduplication. TestCase's
+        # outer transaction deliberately does not execute that callback; the
+        # callback behavior is covered by test_dast_finalization.
+        import_report.run(
             pipeline_id=self.pipeline.id,
             storage_name=self.storage_name,
             project_id=self.project.id,
@@ -92,11 +156,13 @@ class ImportReportTaskTests(TestCase):
             scan_type=DAST_SCAN_TYPE,
             commit_hash=SHA,
             filename="generic-aist-report.json",
-            sha256="deadbeef",
+            sha256=self.report_sha256,
+            binding_id=self.binding.id,
+            async_user=self.uploader,
         )
 
         pipeline = AISTPipeline.objects.get(id=self.pipeline.id)
-        self.assertEqual(pipeline.status, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
+        self.assertEqual(pipeline.status, AISTStatus.UPLOADING_RESULTS)
         self.assertIsNotNone(pipeline.project_version)
         self.assertEqual(pipeline.project_version.version, SHA)
         self.assertEqual(pipeline.project_version.version_type, VersionType.GIT_HASH)
@@ -107,49 +173,14 @@ class ImportReportTaskTests(TestCase):
         self.assertEqual(pipeline.launch_data.get("scan_type"), DAST_SCAN_TYPE)
         self.assertEqual(pipeline.launch_data.get("uploader_id"), self.uploader.id)
         self.assertEqual(pipeline.launch_data.get("filename"), "generic-aist-report.json")
-        self.assertEqual(pipeline.launch_data.get("sha256"), "deadbeef")
+        self.assertIn("dast_finalization", pipeline.launch_data)
 
         test_obj = pipeline.tests.first()
         self.assertEqual(test_obj.test_type.name, "DAST Autonomous Scan")
-
-    def test_temp_file_is_deleted_after_import(self):
-        import_report(
-            pipeline_id=self.pipeline.id,
-            storage_name=self.storage_name,
-            project_id=self.project.id,
-            uploader_id=self.uploader.id,
-            scan_type=DAST_SCAN_TYPE,
-            commit_hash=SHA,
-            filename="generic-aist-report.json",
-            sha256="deadbeef",
-        )
         self.assertFalse(default_storage.exists(self.storage_name))
-
-    def test_duplicate_delivery_during_active_import_preserves_owner_upload(self):
-        self.pipeline.status = AISTStatus.UPLOADING_RESULTS
-        self.pipeline.launch_data = {"source": "manual_import", "sha256": "deadbeef"}
-        self.pipeline.save(update_fields=["status", "launch_data"])
-        self.addCleanup(default_storage.delete, self.storage_name)
-
-        import_report(
-            pipeline_id=self.pipeline.id,
-            storage_name=self.storage_name,
-            project_id=self.project.id,
-            uploader_id=self.uploader.id,
-            scan_type=DAST_SCAN_TYPE,
-            commit_hash=SHA,
-            filename="generic-aist-report.json",
-            sha256="deadbeef",
-        )
-
-        self.assertTrue(default_storage.exists(self.storage_name))
-        self.assertEqual(self.pipeline.tests.count(), 0)
 
     def test_duplicate_delivery_after_completed_import_is_idempotent(self):
-        self.pipeline.launch_data = {"source": "manual_import", "sha256": "deadbeef"}
-        self.pipeline.save(update_fields=["launch_data"])
-
-        import_report(
+        import_report.run(
             pipeline_id=self.pipeline.id,
             storage_name=self.storage_name,
             project_id=self.project.id,
@@ -157,8 +188,27 @@ class ImportReportTaskTests(TestCase):
             scan_type=DAST_SCAN_TYPE,
             commit_hash=SHA,
             filename="generic-aist-report.json",
-            sha256="deadbeef",
+            sha256=self.report_sha256,
+            binding_id=self.binding.id,
+        )
+        first_test_id = self.pipeline.tests.values_list("id", flat=True).get()
+        duplicate_storage = default_storage.save(
+            "report_imports/importtest1-duplicate.json",
+            ContentFile(self.report_bytes),
         )
 
-        self.assertFalse(default_storage.exists(self.storage_name))
-        self.assertEqual(self.pipeline.tests.count(), 0)
+        import_report.run(
+            pipeline_id=self.pipeline.id,
+            storage_name=duplicate_storage,
+            project_id=self.project.id,
+            uploader_id=self.uploader.id,
+            scan_type=DAST_SCAN_TYPE,
+            commit_hash="",
+            filename="generic-aist-report.json",
+            sha256=self.report_sha256,
+            binding_id=self.binding.id,
+        )
+
+        self.assertFalse(default_storage.exists(duplicate_storage))
+        self.assertEqual(self.pipeline.tests.count(), 1)
+        self.assertEqual(self.pipeline.tests.values_list("id", flat=True).get(), first_test_id)

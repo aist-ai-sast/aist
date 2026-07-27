@@ -3,12 +3,27 @@ from __future__ import annotations
 import json
 
 from django.urls import reverse
+from rest_framework.test import APIClient
 
-from aist.models import AISTProjectLaunchConfig, LaunchSchedule
+from aist.models import (
+    AISTApiToken,
+    AISTProjectLaunchConfig,
+    ApiTokenScope,
+    LaunchSchedule,
+    Organization,
+    PipelineLaunchRequest,
+)
 from aist.test.test_api import AISTApiBase
 
 
 class LaunchSchedulesAPITests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.organization = Organization.objects.create(
+            name="Launch schedules API organization",
+            product_type=self.prod_type,
+        )
+
     def _json(self, resp):
         return json.loads(resp.content.decode("utf-8") or "{}")
 
@@ -21,49 +36,104 @@ class LaunchSchedulesAPITests(AISTApiBase):
             is_default=True,
         )
 
-    def test_upsert_creates_and_updates(self):
-        cfg = self._create_config()
-        url = reverse("aist_api:project_launch_schedule_upsert", kwargs={"project_id": self.project.id})
+    def _schedule_url(self, config):
+        return reverse(
+            "aist_api:launch_config_schedule",
+            kwargs={"project_id": config.project_id, "config_id": config.pk},
+        )
 
-        resp = self.client.post(
-            url,
+    def test_config_scoped_put_supports_two_configs_without_conflict(self):
+        first_config = self._create_config()
+        second_config = AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            name="Second preset",
+            params={"project_version": {"id": self.pv.id}, "log_level": "DEBUG"},
+        )
+
+        first = self.client.put(
+            self._schedule_url(first_config),
             data={
                 "cron_expression": "*/5 * * * *",
                 "enabled": True,
-                "max_concurrent_per_worker": 2,
-                "launch_config_id": cfg.id,
+                "max_concurrent_runs": 2,
             },
             format="json",
         )
-        self.assertEqual(resp.status_code, 201)
-        data = self._json(resp)
-        self.assertTrue(data["created"])
-
-        resp2 = self.client.post(
-            url,
+        second = self.client.put(
+            self._schedule_url(second_config),
+            data={
+                "cron_expression": "15 * * * *",
+                "enabled": True,
+                "max_concurrent_runs": 1,
+            },
+            format="json",
+        )
+        updated = self.client.put(
+            self._schedule_url(first_config),
             data={
                 "cron_expression": "*/10 * * * *",
                 "enabled": False,
-                "max_concurrent_per_worker": 3,
-                "launch_config_id": cfg.id,
+                "max_concurrent_runs": 3,
             },
             format="json",
         )
-        self.assertEqual(resp2.status_code, 201)
-        data2 = self._json(resp2)
-        self.assertFalse(data2["created"])
+        patched = self.client.patch(
+            self._schedule_url(first_config),
+            data={"enabled": True},
+            format="json",
+        )
+        retrieved = self.client.get(self._schedule_url(first_config))
 
-        sched = LaunchSchedule.objects.get(launch_config=cfg)
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(patched.status_code, 200)
+        self.assertEqual(retrieved.status_code, 200)
+        self.assertTrue(retrieved.data["enabled"])
+        self.assertEqual(LaunchSchedule.objects.count(), 2)
+        sched = LaunchSchedule.objects.get(launch_config=first_config)
         self.assertEqual(sched.cron_expression, "*/10 * * * *")
-        self.assertFalse(sched.enabled)
-        self.assertEqual(sched.max_concurrent_per_worker, 3)
+        self.assertTrue(sched.enabled)
+        self.assertEqual(sched.max_concurrent_runs, 3)
+
+    def test_config_scoped_crud_rejects_cross_org_and_read_only_pat_writes(self):
+        own_config = self._create_config()
+        Organization.objects.create(
+            name="Foreign schedule organization",
+            product_type=self.other_prod_type,
+        )
+        foreign_config = AISTProjectLaunchConfig.objects.create(
+            project=self.other_project,
+            name="Foreign preset",
+            params={"project_version": {"id": self.other_pv.id}},
+        )
+        payload = {
+            "cron_expression": "*/5 * * * *",
+            "enabled": True,
+            "max_concurrent_runs": 1,
+        }
+
+        cross_org = self.client.put(self._schedule_url(foreign_config), payload, format="json")
+        _token, raw = AISTApiToken.issue(
+            user=self.user,
+            organization=self.organization,
+            name="schedule-read-only",
+            scope=ApiTokenScope.READ_ONLY,
+        )
+        token_client = APIClient()
+        token_client.credentials(HTTP_AUTHORIZATION=f"Bearer {raw}")
+        read_only = token_client.put(self._schedule_url(own_config), payload, format="json")
+
+        self.assertEqual(cross_org.status_code, 404)
+        self.assertEqual(read_only.status_code, 403)
+        self.assertFalse(LaunchSchedule.objects.exists())
 
     def test_list_and_detail(self):
         cfg = self._create_config()
         sched = LaunchSchedule.objects.create(
             cron_expression="*/5 * * * *",
             enabled=True,
-            max_concurrent_per_worker=1,
+            max_concurrent_runs=1,
             launch_config=cfg,
         )
 
@@ -92,7 +162,7 @@ class LaunchSchedulesAPITests(AISTApiBase):
         LaunchSchedule.objects.create(
             cron_expression="*/5 * * * *",
             enabled=True,
-            max_concurrent_per_worker=1,
+            max_concurrent_runs=1,
             launch_config=cfg,
         )
         url = reverse("aist_api:launch_schedule_bulk_disable")
@@ -106,7 +176,7 @@ class LaunchSchedulesAPITests(AISTApiBase):
         sched = LaunchSchedule.objects.create(
             cron_expression="*/5 * * * *",
             enabled=True,
-            max_concurrent_per_worker=1,
+            max_concurrent_runs=1,
             launch_config=cfg,
         )
         url = reverse("aist_api:launch_schedule_run_once", kwargs={"launch_schedule_id": sched.id})
@@ -116,29 +186,45 @@ class LaunchSchedulesAPITests(AISTApiBase):
         self.assertTrue(data["ok"])
         self.assertEqual(data["queue_item"]["schedule_id"], sched.id)
 
+    def test_run_once_idempotency_key_replays_same_queue_item(self):
+        cfg = self._create_config()
+        sched = LaunchSchedule.objects.create(
+            cron_expression="*/5 * * * *",
+            enabled=True,
+            max_concurrent_runs=1,
+            launch_config=cfg,
+        )
+        url = reverse("aist_api:launch_schedule_run_once", kwargs={"launch_schedule_id": sched.id})
+
+        first = self.client.post(url, HTTP_IDEMPOTENCY_KEY="run-once-42")
+        replay = self.client.post(url, HTTP_IDEMPOTENCY_KEY="run-once-42")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(first.data["queue_item"]["id"], replay.data["queue_item"]["id"])
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 1)
+
     def test_delete_schedule(self):
         cfg = self._create_config()
         sched = LaunchSchedule.objects.create(
             cron_expression="*/5 * * * *",
             enabled=True,
-            max_concurrent_per_worker=1,
+            max_concurrent_runs=1,
             launch_config=cfg,
         )
-        url = reverse("aist_api:launch_schedule_detail", kwargs={"launch_schedule_id": sched.id})
+        url = self._schedule_url(cfg)
         resp = self.client.delete(url)
         self.assertEqual(resp.status_code, 204)
         self.assertFalse(LaunchSchedule.objects.filter(id=sched.id).exists())
 
     def test_upsert_rejects_invalid_cron(self):
         cfg = self._create_config()
-        url = reverse("aist_api:project_launch_schedule_upsert", kwargs={"project_id": self.project.id})
-        resp = self.client.post(
-            url,
+        resp = self.client.put(
+            self._schedule_url(cfg),
             data={
                 "cron_expression": "not a cron",
                 "enabled": True,
-                "max_concurrent_per_worker": 1,
-                "launch_config_id": cfg.id,
+                "max_concurrent_runs": 1,
             },
             format="json",
         )
@@ -146,27 +232,26 @@ class LaunchSchedulesAPITests(AISTApiBase):
 
     def test_upsert_rejects_invalid_limit(self):
         cfg = self._create_config()
-        url = reverse("aist_api:project_launch_schedule_upsert", kwargs={"project_id": self.project.id})
-        resp = self.client.post(
-            url,
+        resp = self.client.put(
+            self._schedule_url(cfg),
             data={
                 "cron_expression": "*/5 * * * *",
                 "enabled": True,
-                "max_concurrent_per_worker": 0,
-                "launch_config_id": cfg.id,
+                "max_concurrent_runs": 0,
             },
             format="json",
         )
         self.assertEqual(resp.status_code, 400)
 
-    def test_upsert_rejects_missing_launch_config(self):
-        url = reverse("aist_api:project_launch_schedule_upsert", kwargs={"project_id": self.project.id})
-        resp = self.client.post(
-            url,
+    def test_upsert_rejects_body_launch_config_override(self):
+        cfg = self._create_config()
+        resp = self.client.put(
+            self._schedule_url(cfg),
             data={
                 "cron_expression": "*/5 * * * *",
                 "enabled": True,
-                "max_concurrent_per_worker": 1,
+                "max_concurrent_runs": 1,
+                "launch_config_id": 999999,
             },
             format="json",
         )

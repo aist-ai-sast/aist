@@ -1,488 +1,364 @@
-# aist/test/test_pipeline_dispatcher.py
-from __future__ import annotations
-
 import uuid
-from types import SimpleNamespace
-from unittest.mock import patch
+from datetime import timedelta
+from unittest.mock import Mock, patch
 
 from django.utils import timezone
 
+from aist.execution.adapters import LaunchAdapterRegistry
+from aist.execution.claiming import ClaimResult, claim_next_launch_request, revalidate_claimed_authority
+from aist.execution.contracts import PipelineTaskName
+from aist.execution.dispatching import (
+    LaunchAcceptance,
+    LaunchDispatchError,
+    LaunchPlanningResult,
+    LaunchPlanningStatus,
+    LaunchPublishCommand,
+    accept_published_launch,
+    plan_claimed_launch,
+    prepare_launch_publish,
+)
+from aist.execution.enqueue import LaunchPrincipal, enqueue_pipeline_launch
+from aist.execution.sast import SastPipelineLaunchAdapter
 from aist.models import (
     AISTPipeline,
     AISTProjectLaunchConfig,
-    AISTProjectVersion,
     AISTStatus,
     LaunchSchedule,
-    PipelineLaunchQueue,
-    VersionType,
+    Organization,
+    PipelineExecutionLease,
+    PipelineLaunchRequestState,
+    PullRequest,
+    RepositoryInfo,
+    ScmType,
 )
-from aist.tasks.pipeline_dispatcher import dispatch_queued_pipelines
+from aist.tasks import pipeline_dispatcher
 from aist.test.test_api import AISTApiBase
 from aist.utils.pipeline import set_pipeline_status
 
 
-def _fake_current_app(active_map):
-    # current_app.control.inspect().active() -> active_map
-    inspect = SimpleNamespace(active=lambda: active_map)
-    control = SimpleNamespace(inspect=lambda: inspect)
-    return SimpleNamespace(control=control)
+class GenericPipelineDispatcherTests(AISTApiBase):
 
+    def setUp(self):
+        super().setUp()
+        self.organization = Organization.objects.create(
+            name=f"Dispatcher org {uuid.uuid4().hex}",
+            product_type=self.prod_type,
+        )
+        self.publisher = Mock()
+        self.publisher.apply_async.return_value = Mock(id="ignored-broker-id")
 
-class DispatchQueuedPipelinesTests(AISTApiBase):
-    def _mk_cfg_sched_and_queue(self, *, enabled=True, limit=1, dispatched=False, with_schedule=True):
-        cfg = AISTProjectLaunchConfig.objects.create(
+    def _enqueue(self, *, log_level="INFO", capacity=1, enabled=True):
+        config = AISTProjectLaunchConfig.objects.create(
             project=self.project,
-            name=f"Preset-{uuid.uuid4().hex}",
-            params={"project_version": {"id": self.pv.id}, "log_level": "INFO"},
-            is_default=True,
+            name=f"Dispatcher config {uuid.uuid4().hex}",
+            params={
+                "project_version": {"id": self.pv.pk},
+                "log_level": log_level,
+            },
         )
-        sched = None
-        if with_schedule:
-            sched = LaunchSchedule.objects.create(
-                cron_expression="*/5 * * * *",
-                enabled=enabled,
-                max_concurrent_per_worker=limit,
-                launch_config=cfg,
-            )
-
-        q = PipelineLaunchQueue.objects.create(
-            project=self.project,
-            schedule=sched,
-            launch_config=cfg,
-            dispatched=dispatched,
-        )
-        return cfg, sched, q
-
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    def test_skips_items_without_schedule_or_disabled(
-        self, mock_norm, mock_create_pipeline, mock_run_task, mock_current_app,
-    ):
-        # queue without schedule
-        self._mk_cfg_sched_and_queue(with_schedule=False)
-        # queue with disabled schedule
-        self._mk_cfg_sched_and_queue(with_schedule=True, enabled=False)
-
-        mock_current_app.control.inspect.return_value.active.return_value = {"w1": []}
-
-        dispatch_queued_pipelines()
-
-        self.assertEqual(AISTPipeline.objects.count(), 0)
-        self.assertEqual(PipelineLaunchQueue.objects.filter(dispatched=True).count(), 0)
-        mock_norm.assert_not_called()
-        mock_create_pipeline.assert_not_called()
-        mock_run_task.delay.assert_not_called()
-
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    def test_limit_zero_dispatches_all_fifo(
-        self, mock_norm, mock_create_pipeline, mock_run_task, mock_current_app,
-    ):
-        _, _sched, q1 = self._mk_cfg_sched_and_queue(limit=1)
-        _, _, q2 = self._mk_cfg_sched_and_queue(limit=1)
-        pv2 = AISTProjectVersion.objects.create(
-            project=self.project,
-            version_type=VersionType.GIT_BRANCH,
-            version=f"main-{uuid.uuid4().hex[:6]}",
-        )
-
-        mock_current_app.control.inspect.return_value.active.return_value = {"w1": [], "w2": []}
-
-        # Use different project_version values to avoid unfinished-pipeline guard collisions.
-        mock_norm.side_effect = [
-            {"project_version": {"id": self.pv.id}},
-            {"project_version": {"id": pv2.id}},
-        ]
-        mock_run_task.delay.return_value = SimpleNamespace(id="celery-1")
-
-        def _mk_pipeline(project, pv, _):
-            return AISTPipeline.objects.create(
-                id=f"pipe-{timezone.now().timestamp()}",
-                project=project,
-                project_version=pv,
-                status="SAST_LAUNCHED",
-            )
-
-        mock_create_pipeline.side_effect = _mk_pipeline
-
-        dispatch_queued_pipelines()
-
-        self.assertEqual(PipelineLaunchQueue.objects.filter(dispatched=True).count(), 2)
-        self.assertEqual(AISTPipeline.objects.count(), 2)
-
-        # FIFO: q1 should be dispatched before q2 (created/order_by("created"))
-        q1.refresh_from_db()
-        q2.refresh_from_db()
-        self.assertTrue(q1.dispatched)
-        self.assertTrue(q2.dispatched)
-        self.assertIsNotNone(q1.dispatched_at)
-        self.assertIsNotNone(q2.dispatched_at)
-
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    @patch("aist.tasks.pipeline_dispatcher.logger")
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    def test_limit_with_empty_worker_inspection_does_not_block(
-        self, mock_norm, mock_create_pipeline, mock_run_task, mock_logger, mock_current_app,
-    ):
-        # limit > 0, but inspect.active() returned None/{} => running_per_worker is empty
-        _, _sched, q = self._mk_cfg_sched_and_queue(limit=2)
-
-        mock_current_app.control.inspect.return_value.active.return_value = None
-
-        mock_norm.return_value = {"project_version": {"id": self.pv.id}}
-        mock_run_task.delay.return_value = SimpleNamespace(id="celery-x")
-
-        mock_create_pipeline.side_effect = lambda project, pv, _: AISTPipeline.objects.create(
-            id="pipe-x",
-            project=project,
-            project_version=pv,
-            status="SAST_LAUNCHED",
-        )
-
-        dispatch_queued_pipelines()
-
-        q.refresh_from_db()
-        self.assertTrue(q.dispatched)
-        mock_logger.warning.assert_called()
-
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    def test_limit_blocks_when_all_workers_at_capacity_stops_cycle(
-        self, mock_norm, mock_create_pipeline, mock_run_task, mock_current_app,
-    ):
-        # limit=1, and both workers already have 1 active task -> dispatcher should stop and not dispatch
-        self._mk_cfg_sched_and_queue(limit=1)
-        self._mk_cfg_sched_and_queue(limit=1)
-
-        active_map = {
-            "w1": [{"name": "aist.tasks.pipeline.run_sast_pipeline"}],
-            "w2": [{"name": "aist.tasks.pipeline.run_sast_pipeline"}],
-        }
-        mock_current_app.control.inspect.return_value.active.return_value = active_map
-
-        dispatch_queued_pipelines()
-
-        self.assertEqual(PipelineLaunchQueue.objects.filter(dispatched=True).count(), 0)
-        mock_norm.assert_not_called()
-        mock_create_pipeline.assert_not_called()
-        mock_run_task.delay.assert_not_called()
-
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    @patch("aist.tasks.pipeline_dispatcher.logger")
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    def test_params_build_failure_keeps_item_undispatched_and_continues(
-        self, mock_norm, mock_create_pipeline, mock_run_task, mock_logger, mock_current_app,
-    ):
-        # First item fails normalization, second should still dispatch
-        _, _, q1 = self._mk_cfg_sched_and_queue(limit=1)
-        _, _, q2 = self._mk_cfg_sched_and_queue(limit=1)
-
-        mock_current_app.control.inspect.return_value.active.return_value = {"w1": []}
-
-        def _norm_side_effect(*args, **kwargs):
-            # first call fails, second succeeds
-            if not hasattr(_norm_side_effect, "called"):
-                _norm_side_effect.called = True
-                msg = "boom"
-                raise ValueError(msg)
-            return {"project_version": {"id": self.pv.id}}
-
-        mock_norm.side_effect = _norm_side_effect
-        mock_run_task.delay.return_value = SimpleNamespace(id="celery-ok")
-        mock_create_pipeline.side_effect = lambda project, pv, _: AISTPipeline.objects.create(
-            id=f"pipe-{timezone.now().timestamp()}",
-            project=project,
-            project_version=pv,
-            status="SAST_LAUNCHED",
-        )
-
-        dispatch_queued_pipelines()
-
-        q1.refresh_from_db()
-        q2.refresh_from_db()
-        self.assertFalse(q1.dispatched)
-        self.assertTrue(q2.dispatched)
-        mock_logger.exception.assert_called()
-
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    def test_success_updates_pipeline_task_id_and_queue_links(
-        self, mock_norm, mock_create_pipeline, mock_run_task, mock_current_app,
-    ):
-        _cfg, _sched, q = self._mk_cfg_sched_and_queue(limit=1)
-
-        mock_current_app.control.inspect.return_value.active.return_value = {"w1": []}
-
-        mock_norm.return_value = {"project_version": {"id": self.pv.id}}
-        mock_run_task.delay.return_value = SimpleNamespace(id="celery-777")
-
-        mock_create_pipeline.side_effect = lambda project, pv, _: AISTPipeline.objects.create(
-            id="pipe-777",
-            project=project,
-            project_version=pv,
-            status="SAST_LAUNCHED",
-        )
-
-        dispatch_queued_pipelines()
-
-        pipeline = AISTPipeline.objects.get(id="pipe-777")
-        pipeline.refresh_from_db()
-        self.assertEqual(pipeline.run_task_id, "celery-777")
-
-        q.refresh_from_db()
-        self.assertTrue(q.dispatched)
-        self.assertIsNotNone(q.dispatched_at)
-        self.assertEqual(q.pipeline_id, pipeline.id)
-
-
-class DispatchQueueCapacityTests(AISTApiBase):
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    def test_two_items_same_time_limit_one_second_starts_after_first_finishes(
-        self,
-        mock_current_app,
-        mock_normalize,
-        mock_create_pipeline,
-        mock_run_task,
-    ):
-        # schedule limit=1 => only one pipeline can run per worker
-        cfg = AISTProjectLaunchConfig.objects.create(
-            project=self.project,
-            name=f"Preset-{uuid.uuid4().hex}",
-            params={"project_version": {"id": self.pv.id}},
-            is_default=True,
-        )
-        sched = LaunchSchedule.objects.create(
+        schedule = LaunchSchedule.objects.create(
+            launch_config=config,
             cron_expression="*/5 * * * *",
-            enabled=True,
-            max_concurrent_per_worker=1,
-            launch_config=cfg,
+            enabled=enabled,
+            max_concurrent_runs=capacity,
         )
-
-        q1 = PipelineLaunchQueue.objects.create(project=self.project, schedule=sched, launch_config=cfg)
-        q2 = PipelineLaunchQueue.objects.create(project=self.project, schedule=sched, launch_config=cfg)
-        pv2 = AISTProjectVersion.objects.create(
+        return enqueue_pipeline_launch(
             project=self.project,
-            version_type=VersionType.GIT_BRANCH,
-            version=f"main-{uuid.uuid4().hex[:6]}",
+            principal=LaunchPrincipal.for_schedule(organization=self.organization),
+            raw_params={},
+            launch_config=config,
+            schedule=schedule,
+        ).request
+
+    def _dispatch(self, *, batch_size=None):
+        with patch.dict(
+            pipeline_dispatcher._PUBLISH_TASKS,
+            {PipelineTaskName.RUN_SAST_PIPELINE.value: self.publisher},
+            clear=True,
+        ):
+            pipeline_dispatcher.dispatch_queued_pipelines(batch_size=batch_size)
+
+    def test_claim_plan_lease_and_publish_use_one_stable_outbox_identity(self):
+        request = self._enqueue()
+
+        self._dispatch()
+
+        request.refresh_from_db()
+        self.assertEqual(request.state, PipelineLaunchRequestState.PUBLISHED)
+        self.assertEqual(request.pipeline_id, request.task_id.hex)
+        self.assertEqual(request.pipeline.run_task_id, str(request.task_id))
+        self.assertEqual(request.task_name, PipelineTaskName.RUN_SAST_PIPELINE.value)
+        self.assertEqual(request.task_args_snapshot[0]["launch_config_id"], request.launch_config_id)
+        lease = PipelineExecutionLease.objects.get(request=request)
+        self.assertEqual(lease.pipeline_id, request.pipeline_id)
+        self.publisher.apply_async.assert_called_once_with(
+            args=(request.pipeline_id, *request.task_args_snapshot),
+            task_id=str(request.task_id),
         )
 
-        mock_normalize.side_effect = [
-            {"project_version": {"id": self.pv.id}},
-            {"project_version": {"id": pv2.id}},
-        ]
-        mock_run_task.delay.side_effect = [SimpleNamespace(id="celery-1"), SimpleNamespace(id="celery-2")]
-
-        # create_pipeline_object should return a saved pipeline (or at least an object with an id)
-        def mk_pipe(*args, **kwargs):
-            return AISTPipeline.objects.create(
-                id=f"pipe-{timezone.now().timestamp()}",
-                project=self.project,
-                project_version=self.pv,
-                status="SAST_LAUNCHED",
-            )
-
-        mock_create_pipeline.side_effect = mk_pipe
-
-        # First call: worker is busy => no capacity => dispatch should do nothing
-        # Second call: worker is free => dispatch should take first queue item
-        active_1 = {"w1": [{"name": "aist.tasks.pipeline.run_sast_pipeline"}]}
-        active_2 = {"w1": []}
-
-        inspect = SimpleNamespace(active=lambda: active_1)
-        mock_current_app.control.inspect.return_value = inspect
-
-        dispatch_queued_pipelines()
-        self.assertEqual(PipelineLaunchQueue.objects.filter(dispatched=True).count(), 0)
-
-        # "first finished" => next tick has empty active list
-        inspect.active = lambda: active_2
-
-        dispatch_queued_pipelines()
-        self.assertEqual(PipelineLaunchQueue.objects.filter(dispatched=True).count(), 1)
-
-        # one more tick should dispatch the second
-        dispatch_queued_pipelines()
-        self.assertEqual(PipelineLaunchQueue.objects.filter(dispatched=True).count(), 2)
-
-        # FIFO: q1 should be dispatched first
-        q1.refresh_from_db()
-        q2.refresh_from_db()
-        self.assertTrue(q1.dispatched)
-        self.assertTrue(q2.dispatched)
-        self.assertLessEqual(q1.dispatched_at, q2.dispatched_at)
-
-
-class DispatchUnfinishedPipelineGuardTests(AISTApiBase):
-
-    """
-    Dispatcher must skip queue items when an unfinished pipeline already exists
-    for the same project_version, to prevent duplicate concurrent runs.
-    """
-
-    def _mk_queue_item(self):
-        cfg = AISTProjectLaunchConfig.objects.create(
+    def test_scm_webhook_request_preserves_validated_pull_request_link(self):
+        repository = RepositoryInfo.objects.create(
+            type=ScmType.GITHUB,
+            repo_owner="dispatcher-owner",
+            repo_name="dispatcher-repo",
+            base_url="https://github.com",
+        )
+        self.project.repository = repository
+        self.project.save(update_fields=["repository"])
+        pull_request = PullRequest.objects.create(
+            project_version=self.pv,
+            repository=repository,
+            pr_number=17,
+        )
+        request = enqueue_pipeline_launch(
             project=self.project,
-            name=f"cfg-{uuid.uuid4().hex}",
-            params={"project_version": {"id": self.pv.id}, "log_level": "INFO"},
-            is_default=True,
+            principal=LaunchPrincipal.for_scm_webhook(organization=self.organization),
+            raw_params={"project_version": self.pv.as_dict(), "pr_launch": True},
+            client_request_key="github-pr-17",
+            initial_launch_data={"pull_request_id": pull_request.pk},
+        ).request
+
+        self._dispatch()
+
+        request.refresh_from_db()
+        self.assertEqual(request.state, PipelineLaunchRequestState.PUBLISHED)
+        self.assertEqual(request.pipeline.pull_request, pull_request)
+
+    def test_worker_accepts_first_delivery_and_duplicate_is_noop(self):
+        request = self._enqueue()
+        self._dispatch()
+        request.refresh_from_db()
+
+        first = accept_published_launch(
+            pipeline_id=request.pipeline_id,
+            task_id=str(request.task_id),
         )
-        sched = LaunchSchedule.objects.create(
-            cron_expression="*/5 * * * *",
-            enabled=True,
-            max_concurrent_per_worker=1,
-            launch_config=cfg,
-        )
-        return PipelineLaunchQueue.objects.create(
-            project=self.project,
-            schedule=sched,
-            launch_config=cfg,
+        duplicate = accept_published_launch(
+            pipeline_id=request.pipeline_id,
+            task_id=str(request.task_id),
         )
 
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    @patch("aist.tasks.pipeline_dispatcher.logger")
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    def test_skips_when_unfinished_pipeline_exists_for_project_version(
-        self, mock_norm, mock_create_pipeline, mock_run_task, mock_logger, mock_current_app,
-    ):
-        # Create an in-progress pipeline for this project_version
+        request.refresh_from_db()
+        self.assertEqual(first, LaunchAcceptance.ACCEPTED)
+        self.assertEqual(duplicate, LaunchAcceptance.DUPLICATE)
+        self.assertEqual(request.state, PipelineLaunchRequestState.DISPATCHED)
+        self.assertIsNotNone(request.dispatched_at)
+
+    def test_wrong_broker_task_id_is_rejected_without_state_change(self):
+        request = self._enqueue()
+        self._dispatch()
+        request.refresh_from_db()
+
+        result = accept_published_launch(
+            pipeline_id=request.pipeline_id,
+            task_id="forged-task-id",
+        )
+
+        request.refresh_from_db()
+        self.assertEqual(result, LaunchAcceptance.REJECTED)
+        self.assertEqual(request.state, PipelineLaunchRequestState.PUBLISHED)
+
+    def test_pipeline_without_launch_request_is_rejected_without_legacy_fallback(self):
+        pipeline = AISTPipeline.objects.create(
+            id="unmanaged-sast",
+            project=self.project,
+            project_version=self.pv,
+        )
+
+        self.assertEqual(
+            accept_published_launch(pipeline_id=pipeline.pk, task_id="legacy-task"),
+            LaunchAcceptance.REJECTED,
+        )
+
+    def test_crash_after_planning_is_republished_without_second_pipeline(self):
+        request = self._enqueue()
+        claim = claim_next_launch_request(claim_owner="crashed-dispatcher")
+        self.assertTrue(revalidate_claimed_authority(
+            request_id=claim.request_id,
+            claim_owner=claim.claim_owner,
+        ))
+        result = plan_claimed_launch(
+            request_id=claim.request_id,
+            claim_owner=claim.claim_owner,
+            adapter_registry=LaunchAdapterRegistry(SastPipelineLaunchAdapter()),
+        )
+        self.assertEqual(result.status, LaunchPlanningStatus.READY)
+        request.refresh_from_db()
+        self.assertEqual(request.state, PipelineLaunchRequestState.PLANNED)
+
+        self._dispatch()
+
+        request.refresh_from_db()
+        self.assertEqual(request.state, PipelineLaunchRequestState.PUBLISHED)
+        self.assertEqual(AISTPipeline.objects.filter(launch_request=request).count(), 1)
+        self.publisher.apply_async.assert_called_once_with(
+            args=(request.pipeline_id, *request.task_args_snapshot),
+            task_id=str(request.task_id),
+        )
+
+    def test_ambiguous_publish_is_retried_with_same_pipeline_and_task_id(self):
+        request = self._enqueue()
+        self.publisher.apply_async.side_effect = RuntimeError("broker acknowledgement lost")
+        self._dispatch()
+        request.refresh_from_db()
+        first_pipeline_id = request.pipeline_id
+        first_task_id = str(request.task_id)
+        self.assertEqual(request.state, PipelineLaunchRequestState.PUBLISHED)
+
+        self.publisher.apply_async.reset_mock()
+        self.publisher.apply_async.side_effect = None
+        self._dispatch()
+
+        request.refresh_from_db()
+        self.assertEqual(request.pipeline_id, first_pipeline_id)
+        self.assertEqual(str(request.task_id), first_task_id)
+        self.assertEqual(AISTPipeline.objects.filter(launch_request=request).count(), 1)
+        self.publisher.apply_async.assert_called_once_with(
+            args=(first_pipeline_id, *request.task_args_snapshot),
+            task_id=first_task_id,
+        )
+
+    def test_busy_resource_keeps_next_request_pending_without_tight_loop(self):
+        first = self._enqueue(log_level="INFO", capacity=1)
+        second = self._enqueue(log_level="DEBUG", capacity=1)
+        dispatch_time = timezone.now()
+
+        with patch("aist.execution.dispatching.timezone.now", return_value=dispatch_time):
+            self._dispatch()
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.state, PipelineLaunchRequestState.PUBLISHED)
+        self.assertEqual(second.state, PipelineLaunchRequestState.PENDING)
+        self.assertIsNone(second.claim_owner)
+        self.assertEqual(second.capacity_retry_count, 1)
+        self.assertGreaterEqual(second.not_before, dispatch_time + timedelta(seconds=15))
+        self.assertLessEqual(second.not_before, dispatch_time + timedelta(seconds=30))
+        self.assertEqual(PipelineExecutionLease.objects.filter(released_at__isnull=True).count(), 1)
+
+        self.publisher.apply_async.reset_mock()
+        self._dispatch()
+
+        second.refresh_from_db()
+        self.assertEqual(second.capacity_retry_count, 1)
+        self.assertIsNone(second.pipeline_id)
+        self.publisher.apply_async.assert_called_once_with(
+            args=(first.pipeline_id, *first.task_args_snapshot),
+            task_id=str(first.task_id),
+        )
+
+    def test_dispatcher_batch_is_bounded_and_busy_dast_does_not_block_sast(self):
+        claims = (
+            ClaimResult(request_id=101, claim_owner="dispatcher"),
+            ClaimResult(request_id=102, claim_owner="dispatcher"),
+            ClaimResult(request_id=103, claim_owner="dispatcher"),
+        )
+        publish_command = LaunchPublishCommand(
+            request_id=102,
+            pipeline_id="sast-after-busy-dast",
+            task_name=PipelineTaskName.RUN_SAST_PIPELINE.value,
+            task_id="sast-task",
+            task_args=({},),
+        )
+        with (
+            patch.object(pipeline_dispatcher, "claim_next_launch_request", side_effect=claims) as claim,
+            patch.object(pipeline_dispatcher, "revalidate_claimed_authority", return_value=True),
+            patch.object(
+                pipeline_dispatcher,
+                "plan_claimed_launch",
+                side_effect=(
+                    LaunchPlanningResult(status=LaunchPlanningStatus.BUSY, request_id=101),
+                    LaunchPlanningResult(status=LaunchPlanningStatus.READY, request_id=102),
+                ),
+            ) as plan,
+            patch.object(pipeline_dispatcher, "prepare_launch_publish", return_value=publish_command),
+            patch.object(pipeline_dispatcher, "_publish") as publish,
+        ):
+            pipeline_dispatcher.dispatch_queued_pipelines(batch_size=2)
+
+        self.assertEqual(claim.call_count, 2)
+        self.assertEqual(plan.call_count, 2)
+        publish.assert_called_once_with(publish_command)
+
+    def test_dispatcher_rejects_unbounded_batch_configuration(self):
+        for batch_size in (0, 201, True, "50"):
+            with self.subTest(batch_size=batch_size), self.assertRaises(ValueError):
+                pipeline_dispatcher.dispatch_queued_pipelines(batch_size=batch_size)
+
+    def test_request_past_max_age_expires_without_creating_pipeline(self):
+        request = self._enqueue()
+        dispatch_time = timezone.now()
+        type(request).objects.filter(pk=request.pk).update(expires_at=dispatch_time)
+
+        with patch("aist.execution.claiming.timezone.now", return_value=dispatch_time):
+            self._dispatch()
+
+        request.refresh_from_db()
+        self.assertEqual(request.state, PipelineLaunchRequestState.EXPIRED)
+        self.assertEqual(request.failure_code, "LAUNCH_MAX_AGE_EXCEEDED")
+        self.assertIsNone(request.pipeline_id)
+        self.assertFalse(PipelineExecutionLease.objects.filter(request=request).exists())
+        self.publisher.apply_async.assert_not_called()
+
+    def test_existing_unfinished_version_restores_pending_and_releases_temporary_lease(self):
+        request = self._enqueue()
         AISTPipeline.objects.create(
-            id="existing-pipe",
+            id="already-running",
             project=self.project,
             project_version=self.pv,
             status=AISTStatus.SAST_LAUNCHED,
         )
-        q = self._mk_queue_item()
-        mock_current_app.control.inspect.return_value.active.return_value = {"w1": []}
-        mock_norm.return_value = {"project_version": {"id": self.pv.id}}
 
-        dispatch_queued_pipelines()
+        self._dispatch()
 
-        q.refresh_from_db()
-        self.assertFalse(q.dispatched)
-        mock_create_pipeline.assert_not_called()
-        mock_run_task.delay.assert_not_called()
-        mock_logger.info.assert_called()
+        request.refresh_from_db()
+        self.assertEqual(request.state, PipelineLaunchRequestState.PENDING)
+        self.assertIsNone(request.pipeline_id)
+        self.assertFalse(PipelineExecutionLease.objects.filter(released_at__isnull=True).exists())
+        self.publisher.apply_async.assert_not_called()
 
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    def test_dispatches_when_existing_pipeline_is_finished(
-        self, mock_norm, mock_create_pipeline, mock_run_task, mock_current_app,
-    ):
-        # Finished pipeline must NOT block dispatching
-        AISTPipeline.objects.create(
-            id="done-pipe",
-            project=self.project,
-            project_version=self.pv,
-            status=AISTStatus.FINISHED,
+    def test_disabled_schedule_fails_authority_before_pipeline_creation(self):
+        request = self._enqueue(enabled=False)
+
+        self._dispatch()
+
+        request.refresh_from_db()
+        self.assertEqual(request.state, PipelineLaunchRequestState.FAILED)
+        self.assertEqual(request.failure_code, "AUTHORITY_REVOKED")
+        self.assertIsNone(request.pipeline_id)
+        self.publisher.apply_async.assert_not_called()
+
+    def test_prepare_publish_rejects_non_outbox_state(self):
+        request = self._enqueue()
+
+        with self.assertRaises(LaunchDispatchError):
+            prepare_launch_publish(request_id=request.pk)
+
+    def test_terminal_pipeline_releases_its_execution_lease(self):
+        request = self._enqueue()
+        self._dispatch()
+        request.refresh_from_db()
+        accept_published_launch(
+            pipeline_id=request.pipeline_id,
+            task_id=str(request.task_id),
         )
-        q = self._mk_queue_item()
-        mock_current_app.control.inspect.return_value.active.return_value = {"w1": []}
-        mock_norm.return_value = {"project_version": {"id": self.pv.id}}
-        mock_run_task.delay.return_value = SimpleNamespace(id="celery-new")
-        mock_create_pipeline.side_effect = lambda project, pv, _: AISTPipeline.objects.create(
-            id=f"new-pipe-{uuid.uuid4().hex[:6]}",
-            project=project,
-            project_version=pv,
-            status=AISTStatus.SAST_LAUNCHED,
-        )
+        pipeline = request.pipeline
+        set_pipeline_status(pipeline, AISTStatus.SAST_LAUNCHED)
+        set_pipeline_status(pipeline, AISTStatus.FINISHED)
 
-        dispatch_queued_pipelines()
-
-        q.refresh_from_db()
-        self.assertTrue(q.dispatched)
-
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    def test_completed_finished_pipeline_without_run_task_id_does_not_block(
-        self, mock_norm, mock_create_pipeline, mock_run_task, mock_current_app,
-    ):
-        """
-        Regression: a completed FINISHED pipeline with run_task_id cleared (normal
-        state after set_pipeline_status reaches terminal) must not block a new dispatch.
-        """
-        AISTPipeline.objects.create(
-            id="completed-pipe",
-            project=self.project,
-            project_version=self.pv,
-            status=AISTStatus.FINISHED,
-            run_task_id=None,  # cleared on completion by set_pipeline_status
-        )
-
-        q = self._mk_queue_item()
-        mock_current_app.control.inspect.return_value.active.return_value = {"w1": []}
-        mock_norm.return_value = {"project_version": {"id": self.pv.id}}
-        mock_run_task.delay.return_value = SimpleNamespace(id="celery-new")
-        mock_create_pipeline.side_effect = lambda project, pv, _: AISTPipeline.objects.create(
-            id=f"new-pipe-{uuid.uuid4().hex[:6]}",
-            project=project,
-            project_version=pv,
-            status=AISTStatus.FINISHED,
-        )
-
-        dispatch_queued_pipelines()
-
-        q.refresh_from_db()
-        self.assertTrue(q.dispatched, "Completed pipeline (run_task_id=None) must not block dispatch")
-
-    @patch("aist.tasks.pipeline_dispatcher.current_app")
-    @patch("aist.tasks.pipeline_dispatcher.logger")
-    @patch("aist.tasks.pipeline_dispatcher.run_sast_pipeline")
-    @patch("aist.tasks.pipeline_dispatcher.create_pipeline_object")
-    @patch("aist.tasks.pipeline_dispatcher.PipelineArguments.normalize_params")
-    def test_race_window_guard_blocks_when_run_task_id_set_but_celery_not_started(
-        self, mock_norm, mock_create_pipeline, mock_run_task, mock_logger, mock_current_app,
-    ):
-        """
-        Race-window guard: a FINISHED pipeline with run_task_id set means the dispatcher
-        just sent it to Celery but Celery hasn't picked it up yet. Must block duplicate.
-        """
-        AISTPipeline.objects.create(
-            id="in-flight-pipe",
-            project=self.project,
-            project_version=self.pv,
-            status=AISTStatus.FINISHED,
-            run_task_id="celery-task-in-flight",
-        )
-
-        q = self._mk_queue_item()
-        mock_current_app.control.inspect.return_value.active.return_value = {"w1": []}
-        mock_norm.return_value = {"project_version": {"id": self.pv.id}}
-
-        dispatch_queued_pipelines()
-
-        q.refresh_from_db()
-        self.assertFalse(q.dispatched, "In-flight pipeline (run_task_id set) must block duplicate dispatch")
-        mock_create_pipeline.assert_not_called()
-        mock_run_task.delay.assert_not_called()
-        mock_logger.info.assert_called()
+        self.assertIsNotNone(PipelineExecutionLease.objects.get(request=request).released_at)
 
 
 class SetPipelineStatusRunTaskIdTests(AISTApiBase):
 
-    """set_pipeline_status must clear run_task_id when transitioning to a terminal status."""
+    def setUp(self):
+        super().setUp()
+        Organization.objects.create(
+            name=f"Pipeline status org {uuid.uuid4().hex}",
+            product_type=self.prod_type,
+        )
 
-    def _mk_pipeline(self, status, run_task_id=None):
+    def _pipeline(self, *, status, run_task_id=None):
         return AISTPipeline.objects.create(
             id=uuid.uuid4().hex[:8],
             project=self.project,
@@ -491,22 +367,18 @@ class SetPipelineStatusRunTaskIdTests(AISTApiBase):
             run_task_id=run_task_id,
         )
 
-    def test_clears_run_task_id_on_transition_to_finished(self):
-        pipeline = self._mk_pipeline(AISTStatus.SAST_LAUNCHED, run_task_id="task-abc")
+    def test_terminal_status_clears_run_task_id(self):
+        pipeline = self._pipeline(status=AISTStatus.SAST_LAUNCHED, run_task_id="task-abc")
+
         set_pipeline_status(pipeline, AISTStatus.FINISHED)
+
         pipeline.refresh_from_db()
         self.assertIsNone(pipeline.run_task_id)
-        self.assertEqual(pipeline.status, AISTStatus.FINISHED)
 
-    def test_clears_run_task_id_on_transition_to_finished_with_warnings(self):
-        pipeline = self._mk_pipeline(AISTStatus.SAST_LAUNCHED, run_task_id="task-xyz")
-        set_pipeline_status(pipeline, AISTStatus.FINISHED_WITH_WARNINGS)
-        pipeline.refresh_from_db()
-        self.assertIsNone(pipeline.run_task_id)
-        self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
+    def test_non_terminal_status_keeps_run_task_id(self):
+        pipeline = self._pipeline(status=AISTStatus.FINISHED, run_task_id="task-abc")
 
-    def test_does_not_clear_run_task_id_on_non_terminal_transition(self):
-        pipeline = self._mk_pipeline(AISTStatus.FINISHED, run_task_id="task-abc")
         set_pipeline_status(pipeline, AISTStatus.SAST_LAUNCHED)
+
         pipeline.refresh_from_db()
         self.assertEqual(pipeline.run_task_id, "task-abc")

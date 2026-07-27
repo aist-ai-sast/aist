@@ -370,6 +370,66 @@ export function useDeleteProjectIntegrationOverride(projectId: number) {
   });
 }
 
+export type DastBindingPayload = {
+  target_id: number;
+  capability_revision: string;
+  schema_digest: string;
+  source_repo_key: string;
+  enabled: boolean;
+  parameter_snapshot: Record<string, unknown>;
+  autonomous_enabled: boolean;
+};
+
+export function useUpsertDastProjectBinding(projectId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: DastBindingPayload) =>
+      fetchJson(getRoute("project_dast_bindings_url", { project_id: projectId }), {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["dast-bindings", projectId] });
+    },
+  });
+}
+
+export function useDeleteDastProjectBinding(projectId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (bindingId: number) =>
+      fetchJson(getRoute("dast_binding_detail_url", { binding_id: bindingId }), { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["dast-bindings", projectId] });
+    },
+  });
+}
+
+export function useCreateDastLaunchConfig(projectId: number) {
+  return useMutation({
+    mutationFn: ({
+      bindingId,
+      name,
+      params,
+    }: {
+      bindingId: number;
+      name: string;
+      params: Record<string, unknown>;
+    }) =>
+      fetchJson(getRoute("project_launch_configs_url", { project_id: projectId }), {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          description: "",
+          execution_type: "DAST",
+          dast_binding_id: bindingId,
+          params,
+          is_default: false,
+        }),
+      }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Work item link mutations
 // ---------------------------------------------------------------------------
@@ -445,6 +505,72 @@ export type OrgIntegrationPayload = {
   is_active?: boolean;
 };
 
+export type DastOnboardingBundle = {
+  bundle_version: 1;
+  gateway_url: string;
+  ca_bundle: string;
+  contract_major: 2;
+  integrator_public_id: string;
+  server_fingerprint: string;
+  token: string;
+};
+
+export type DastOnboardingPayload = {
+  name?: string;
+  vpn_integration_id?: number | null;
+  bundle: DastOnboardingBundle;
+};
+
+export function useImportDastIntegration(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: DastOnboardingPayload) =>
+      fetchJson(getRoute("dast_integration_import_url", { org_id: orgId }), {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] }),
+  });
+}
+
+export function useUpdateDastIntegrationOnboarding(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ integrationId, payload }: { integrationId: number; payload: DastOnboardingPayload }) =>
+      fetchJson(getRoute("dast_integration_onboarding_url", { integration_id: integrationId }), {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] }),
+  });
+}
+
+export function useSyncDastCapabilities(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (integrationId: number) =>
+      fetchJson(getRoute("dast_integration_sync_capabilities_url", { integration_id: integrationId }), {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
+      queryClient.invalidateQueries({ queryKey: ["dast-targets", orgId] });
+    },
+  });
+}
+
+export function useRotateDastIntegrationToken(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ integrationId, token }: { integrationId: number; token: string }) =>
+      fetchJson(getRoute("dast_integration_rotate_token_url", { integration_id: integrationId }), {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] }),
+  });
+}
+
 export function useCreateOrgIntegration(orgId: number) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -489,7 +615,7 @@ export type ImportPipelinePreview = {
   severity_breakdown: Record<string, number>;
   name: string | null;
   version: string | null;
-  detected_commit_hash: string | null;
+  actual_source_commit: string | null;
 };
 
 /**
@@ -499,10 +625,21 @@ export type ImportPipelinePreview = {
  */
 export function useValidateImportPipeline() {
   return useMutation({
-    mutationFn: ({ file, projectId, scanType }: { file: File; projectId: number; scanType: string }) => {
+    mutationFn: ({
+      file,
+      projectId,
+      bindingId,
+      scanType,
+    }: {
+      file: File;
+      projectId: number;
+      bindingId: number;
+      scanType: string;
+    }) => {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("project_id", String(projectId));
+      formData.append("binding_id", String(bindingId));
       formData.append("scan_type", scanType);
       return postFormData<ImportPipelinePreview>(getRoute("pipelines_import_validate_url"), formData);
     },
@@ -517,19 +654,19 @@ export function useImportPipeline() {
     mutationFn: ({
       file,
       projectId,
+      bindingId,
       scanType,
-      commitHash,
     }: {
       file: File;
       projectId: number;
+      bindingId: number;
       scanType: string;
-      commitHash: string;
     }) => {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("project_id", String(projectId));
+      formData.append("binding_id", String(bindingId));
       formData.append("scan_type", scanType);
-      formData.append("commit_hash", commitHash);
       return postFormData<ImportPipelineResponse>(getRoute("pipelines_import_url"), formData);
     },
     onSuccess: () => {

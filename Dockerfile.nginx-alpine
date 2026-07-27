@@ -5,6 +5,11 @@
 # Dockerfile.django-alpine to use the caching mechanism of Docker.
 
 # Ref: https://devguide.python.org/#branchstatus
+FROM node:22-alpine@sha256:e4bf2a82ad0a4037d28035ae71529873c069b13eb0455466ae0bc13363826e34 AS client-build
+WORKDIR /app/client-ui
+COPY client-ui/ ./
+RUN npm ci --no-audit --no-fund && npm run build
+
 FROM python:3.13.11-alpine3.22@sha256:ab45bd32143151fe060d48218b91df43a289166e72ec7877823b1c972580bed3 AS base
 FROM base AS build
 WORKDIR /app
@@ -63,11 +68,7 @@ RUN \
   rm -f vendor/defectdojo/.git && \
   cd vendor/defectdojo/components && \
   yarn
-COPY client-ui/ ./client-ui/
-RUN \
-  cd client-ui && \
-  npm install --no-package-lock && \
-  npm run build
+COPY --from=client-build /app/client-ui/dist/ ./client-ui/dist/
 COPY manage.py ./
 COPY aist/ ./aist/
 COPY aist_site/ ./aist_site/

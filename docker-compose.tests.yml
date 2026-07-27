@@ -31,11 +31,6 @@ services:
   celeryworker: !reset
   initializer: !reset
   postgres:
-    ports:
-      - target: ${DD_DATABASE_PORT:-5432}
-        published: ${DD_DATABASE_PORT:-5432}
-        protocol: tcp
-        mode: host
     environment:
       POSTGRES_DB: ${DD_TEST_DATABASE_NAME:-test_defectdojo}
     volumes:

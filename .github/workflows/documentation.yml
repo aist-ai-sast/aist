@@ -1,0 +1,83 @@
+name: Documentation quality
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+  push:
+    paths:
+      - ".github/workflows/documentation.yml"
+      - ".markdownlint-cli2.yaml"
+      - ".claude/agents/aist-architecture-docs-maintainer.md"
+      - ".codex/skills/security-architecture-maintainer/**"
+      - "AGENTS.md"
+      - "README.md"
+      - "SECURITY.md"
+      - "aist/test/test_dast_architecture_docs.py"
+      - "docs/**"
+  pull_request:
+    paths:
+      - ".github/workflows/documentation.yml"
+      - ".markdownlint-cli2.yaml"
+      - ".claude/agents/aist-architecture-docs-maintainer.md"
+      - ".codex/skills/security-architecture-maintainer/**"
+      - "AGENTS.md"
+      - "README.md"
+      - "SECURITY.md"
+      - "aist/test/test_dast_architecture_docs.py"
+      - "docs/**"
+
+permissions:
+  contents: read
+
+jobs:
+  markdown:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Check Markdown structure
+        uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd # v23.2.0
+        with:
+          globs: |
+            README.md
+            SECURITY.md
+            docs/**/*.md
+
+  local-links:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Check local links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: >-
+            --offline
+            --no-progress
+            --exclude-path docs/plans
+            --root-dir .
+            README.md SECURITY.md 'docs/**/*.md'
+          fail: true
+          lycheeVersion: v0.24.1
+
+  external-links:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Check external links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: >-
+            --no-progress
+            --exclude-path docs/plans
+            --root-dir .
+            README.md SECURITY.md 'docs/**/*.md'
+          fail: true
+          lycheeVersion: v0.24.1
+          token: ${{ secrets.GITHUB_TOKEN }}

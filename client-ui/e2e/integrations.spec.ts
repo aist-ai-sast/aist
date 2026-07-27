@@ -209,3 +209,142 @@ test("maintainer can create a VPN integration and link it to a work item provide
   await orgSection.getByRole("button", { name: "Delete" }).first().click();
   await expect(page.getByText("Integration deleted.")).toBeVisible();
 });
+
+test("DAST onboarding imports a strict bundle without retaining the token", async ({ page }) => {
+  const suffix = Date.now();
+  const integrationName = `E2E DAST ${suffix}`;
+  const token = `e2e-public.${suffix}.one-time-token`;
+  const bundle = {
+    bundle_version: 1,
+    gateway_url: `https://dast-${suffix}.example.com`,
+    ca_bundle: "",
+    contract_major: 2,
+    integrator_public_id: `e2e-${suffix}`,
+    server_fingerprint: `sha256:e2e-${suffix}`,
+    token,
+  };
+  const orgSection = page.locator("section").filter({ hasText: "Org Integrations" }).first();
+  let integrationId: number | undefined;
+
+  try {
+    await page.goto("/integrations");
+    await expect(page.getByRole("heading", { name: "Integrations" })).toBeVisible({ timeout: 30_000 });
+    await orgSection.getByRole("button", { name: "Add" }).click();
+    await openSelectOption(orgSection.getByText("Type").locator("..").getByRole("combobox"), "DAST");
+    await orgSection.getByPlaceholder("e.g. Production").fill(integrationName);
+    await orgSection.getByRole("button", { name: "Show" }).first().click();
+    await orgSection.getByPlaceholder(/bundle_version/).fill(JSON.stringify(bundle));
+    await orgSection.getByRole("button", { name: "Load bundle" }).click();
+
+    const [response] = await Promise.all([
+      page.waitForResponse((item) => item.url().includes("/dast-integration/") && item.request().method() === "POST"),
+      orgSection.getByRole("button", { name: "Create" }).click(),
+    ]);
+    expect(response.status(), await response.text()).toBe(201);
+    integrationId = ((await response.json()) as { id: number }).id;
+
+    await expect(page.getByText("DAST onboarding bundle imported.")).toBeVisible();
+    await expect(orgSection).toContainText(integrationName);
+    await expect(orgSection).toContainText("VALIDATING");
+    await expect(orgSection).toContainText(bundle.server_fingerprint);
+    const fieldValues = await page.locator("input, textarea").evaluateAll(
+      (elements) => elements.map((element) => (element as HTMLInputElement).value),
+    );
+    expect(fieldValues).not.toContain(token);
+    await expect(page.getByText(token, { exact: false })).toHaveCount(0);
+  } finally {
+    if (integrationId) {
+      await page.request.delete(`/api/v2/aist/integrations/${integrationId}/`);
+    }
+  }
+});
+
+test("DAST binding form follows provider JSON Schema and sends the complete revision-pinned object", async ({ page }) => {
+  const target = {
+    id: 501,
+    provider_id: "e2e-web",
+    display_name: "E2E Web Target",
+    contract_revision: "2.0",
+    capability_revision: "cap-e2e-8",
+    schema_digest: "schema-e2e-8",
+    parameter_schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["scan_mode", "label", "rate_limit", "advanced"],
+      properties: {
+        scan_mode: { type: "string", title: "Scan mode", enum: ["quick", "deep"] },
+        label: { type: "string", title: "Run label" },
+        rate_limit: { type: "number", title: "Rate limit", minimum: 1 },
+        advanced: { type: "boolean", title: "Advanced" },
+      },
+      if: { properties: { advanced: { const: true } } },
+      then: {
+        required: ["note"],
+        properties: { note: { type: "string", title: "Advanced note" } },
+      },
+    },
+    provider_defaults: { scan_mode: "quick", label: "baseline", rate_limit: 2, advanced: false },
+    repository_keys: ["source"],
+    autonomous_ready: true,
+    is_available: true,
+    last_seen_at: "2026-07-25T00:00:00Z",
+  };
+  let savedPayload: Record<string, unknown> | undefined;
+  let savedBinding: Record<string, unknown> | undefined;
+
+  await page.route(/\/api\/v2\/aist\/organizations\/\d+\/dast-targets\//, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([target]) });
+  });
+  await page.route(/\/api\/v2\/aist\/projects\/\d+\/dast-bindings\//, async (route) => {
+    if (route.request().method() === "POST") {
+      savedPayload = route.request().postDataJSON() as Record<string, unknown>;
+      savedBinding = {
+        id: 701,
+        project: Number(route.request().url().match(/projects\/(\d+)/)?.[1]),
+        target,
+        source_repo_key: savedPayload.source_repo_key,
+        enabled: savedPayload.enabled,
+        parameter_snapshot: savedPayload.parameter_snapshot,
+        autonomous_enabled: savedPayload.autonomous_enabled,
+        readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
+        created: "2026-07-25T00:00:00Z",
+        updated: "2026-07-25T00:00:00Z",
+      };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(savedBinding) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(savedBinding ? [savedBinding] : []) });
+  });
+
+  await page.goto("/integrations");
+  await expect(page.getByRole("heading", { name: "Integrations" })).toBeVisible({ timeout: 30_000 });
+  const bindingSection = page.locator("section").filter({ hasText: "DAST Target Bindings" }).first();
+  await selectFirstOption(bindingSection.getByRole("combobox").first());
+  await bindingSection.getByRole("button", { name: "Add" }).click();
+
+  await bindingSection.getByLabel("Scan mode").selectOption("deep");
+  await bindingSection.getByLabel("Run label").fill("release candidate");
+  await bindingSection.getByLabel("Rate limit").fill("4");
+  await bindingSection.getByLabel("Advanced").check();
+  await expect(bindingSection.getByLabel("Advanced note")).toBeVisible();
+  await bindingSection.getByLabel("Advanced note").fill("authenticated routes");
+  await bindingSection.getByRole("button", { name: "Save binding" }).click();
+
+  await expect(page.getByText("DAST binding created.")).toBeVisible();
+  expect(savedPayload).toEqual({
+    target_id: 501,
+    capability_revision: "cap-e2e-8",
+    schema_digest: "schema-e2e-8",
+    source_repo_key: "source",
+    enabled: true,
+    parameter_snapshot: {
+      scan_mode: "deep",
+      label: "release candidate",
+      rate_limit: 4,
+      advanced: true,
+      note: "authenticated routes",
+    },
+    autonomous_enabled: false,
+  });
+  await expect(bindingSection.getByText("E2E Web Target")).toBeVisible();
+});

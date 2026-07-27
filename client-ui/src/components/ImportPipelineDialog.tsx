@@ -5,7 +5,7 @@ import { toUserMessage } from "../lib/api";
 import { severityBadgeClass } from "../lib/badgeStyles";
 import { useImportPipeline, useValidateImportPipeline } from "../lib/mutations";
 import type { ImportPipelinePreview } from "../lib/mutations";
-import { usePipelineStatus, useProjects } from "../lib/queries";
+import { usePipelineStatus, useProjectDastBindings, useProjects } from "../lib/queries";
 import type { Severity } from "../types";
 import Modal from "./Modal";
 import SelectField from "./SelectField";
@@ -32,10 +32,14 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
   const [preview, setPreview] = useState<ImportPipelinePreview | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string>("");
-  const [commitHash, setCommitHash] = useState<string>("");
+  const [bindingId, setBindingId] = useState<string>("");
   const [pipelineId, setPipelineId] = useState<string | null>(null);
 
   const { data: projects = [] } = useProjects();
+  const { data: projectBindings = [], isLoading: bindingsLoading } = useProjectDastBindings(
+    projectId ? Number(projectId) : undefined,
+  );
+  const enabledBindings = projectBindings.filter((binding) => binding.enabled);
   const validateMutation = useValidateImportPipeline();
   const importMutation = useImportPipeline();
   const statusQuery = usePipelineStatus(state === "progress" ? pipelineId : null);
@@ -61,8 +65,25 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
     setPreview(null);
     setProblem(null);
     setProjectId("");
-    setCommitHash("");
+    setBindingId("");
     setPipelineId(null);
+  }
+
+  function handleProjectChange(value: string) {
+    setProjectId(value);
+    setBindingId("");
+    setFile(null);
+    setPreview(null);
+    setProblem(null);
+    setState("upload");
+  }
+
+  function handleBindingChange(value: string) {
+    setBindingId(value);
+    setFile(null);
+    setPreview(null);
+    setProblem(null);
+    setState("upload");
   }
 
   function handleClose() {
@@ -73,8 +94,8 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
 
   async function handleFile(selected: File) {
     setFile(selected);
-    if (!projectId) {
-      setProblem("Select a target project before choosing a file.");
+    if (!projectId || !bindingId) {
+      setProblem("Select a target project and DAST target before choosing a file.");
       setState("invalid");
       return;
     }
@@ -82,10 +103,10 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
       const result = await validateMutation.mutateAsync({
         file: selected,
         projectId: Number(projectId),
+        bindingId: Number(bindingId),
         scanType: SCAN_TYPE,
       });
       setPreview(result);
-      setCommitHash(result.detected_commit_hash ?? "");
       setProblem(null);
       setState("valid");
     } catch (err) {
@@ -96,13 +117,13 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
   }
 
   async function handleImport() {
-    if (!file || !projectId || !commitHash) return;
+    if (!file || !projectId || !bindingId || !preview?.actual_source_commit) return;
     try {
       const result = await importMutation.mutateAsync({
         file,
         projectId: Number(projectId),
+        bindingId: Number(bindingId),
         scanType: SCAN_TYPE,
-        commitHash,
       });
       setPipelineId(result.pipeline_id);
       setState("progress");
@@ -112,7 +133,7 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
     }
   }
 
-  const isUploadDisabled = !projectId || validateMutation.isPending;
+  const isUploadDisabled = !projectId || !bindingId || validateMutation.isPending;
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: (acceptedFiles) => {
       const dropped = acceptedFiles[0];
@@ -133,10 +154,26 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
             <SelectField
               label="Target project"
               value={projectId}
-              onChange={setProjectId}
+              onChange={handleProjectChange}
               options={projects.map((project) => ({ value: String(project.id), label: project.name }))}
               placeholder="Select the project this report applies to"
             />
+            <SelectField
+              label="DAST target"
+              value={bindingId}
+              onChange={handleBindingChange}
+              options={enabledBindings.map((binding) => ({
+                value: String(binding.id),
+                label: `${binding.target.display_name} · ${binding.source_repo_key}`,
+              }))}
+              placeholder={bindingsLoading ? "Loading DAST targets…" : "Select the bound DAST target"}
+              disabled={!projectId || bindingsLoading || enabledBindings.length === 0}
+            />
+            {projectId && !bindingsLoading && enabledBindings.length === 0 ? (
+              <p className="text-xs text-amber-300">
+                This project has no enabled DAST target binding. Configure one in Integrations before importing.
+              </p>
+            ) : null}
             <div
               {...getRootProps({ role: "button", "aria-disabled": isUploadDisabled })}
               className={[
@@ -200,21 +237,15 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
               ))}
             </div>
 
-            <label className="flex flex-col gap-1 text-xs text-slate-400">
-              Commit SHA
-              <input
-                type="text"
-                value={commitHash}
-                onChange={(event) => setCommitHash(event.target.value)}
-                placeholder="Commit this report scanned"
-                className="rounded-lg border border-night-500 bg-night-800 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-brand-600 focus:outline-none"
-              />
-              {preview.detected_commit_hash ? (
-                <span className="text-[11px] text-slate-500">Auto-detected from the report — you can override it.</span>
-              ) : (
-                <span className="text-[11px] text-slate-500">Enter the scanned commit manually.</span>
-              )}
-            </label>
+            <div className="flex flex-col gap-1 text-xs text-slate-400">
+              <span>Actual source commit</span>
+              <code className="break-all rounded-lg border border-night-500 bg-night-800 px-3 py-2 text-sm text-slate-100">
+                {preview.actual_source_commit || "—"}
+              </code>
+              <span className="text-[11px] text-slate-500">
+                Verified from the signed DAST result for the selected binding; it cannot be overridden.
+              </span>
+            </div>
 
             <div className="flex justify-end gap-2">
               <button
@@ -226,7 +257,7 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
               </button>
               <button
                 type="button"
-                disabled={!commitHash || importMutation.isPending}
+                disabled={!preview.actual_source_commit || importMutation.isPending}
                 className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium text-night-900 transition disabled:cursor-not-allowed disabled:opacity-50 hover:bg-brand-500"
                 onClick={handleImport}
               >

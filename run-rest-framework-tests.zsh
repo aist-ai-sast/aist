@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 export COMPOSE_FILE="${ROOT_DIR}/docker-compose.yml:${ROOT_DIR}/docker-compose.tests.yml"
+export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-aist_rf_tests}
 export DEFECT_DOJO_OS=${DEFECT_DOJO_OS:-debian}
 export DJANGO_VERSION=${DJANGO_VERSION:-debian}
 export DD_DATABASE_USER=defectdojo

@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="690" viewBox="0 0 1500 690" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="560" viewBox="0 0 1500 560" role="img" aria-labelledby="title desc">
   <title id="title">AIST pipeline execution</title>
-  <desc id="desc">A direct or configuration-based launch creates a pipeline immediately. A scheduled or one-time launch enters the durable launch queue and is dispatched when capacity permits. A manual DAST report upload creates a pipeline and sends the stored report to its registered parser. Every pipeline then imports results and either finishes without findings or prepares findings for review.</desc>
+  <desc id="desc">Direct, configured, scheduled, and webhook starts enter one durable admission path. An admitted pipeline runs SAST or DAST, imports results, and either finishes or prepares findings for review. Manual report import joins at the import stage.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0 0L10 3.5 0 7z" fill="#52616b"/></marker>
     <style>.zone{fill:#f7f9fb;stroke:#d4dce3;stroke-width:1.5}.box{stroke-width:2}.head{font:700 18px Arial;fill:#17212b;text-anchor:middle}.body{font:14px Arial;fill:#52616b;text-anchor:middle}.label{font:700 15px Arial;fill:#52616b}.line{stroke:#52616b;stroke-width:2.5;fill:none;marker-end:url(#arrow)}.edge{font:13px Arial;fill:#52616b}.chip{fill:#ffffff;fill-opacity:.9;stroke:#d4dce3;stroke-width:1}</style>
@@ -13,73 +13,49 @@
     <symbol id="ico-copy" viewBox="0 0 24 24"><path fill="none" stroke="#9e751d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 9h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1"/></symbol>
     <symbol id="ico-sparkle" viewBox="0 0 24 24"><path fill="none" stroke="#4d9874" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 2l1.5 6.5L20 10l-6.5 1.5L12 18l-1.5-6.5L4 10l6.5-1.5z"/></symbol>
   </defs>
-  <rect width="1500" height="690" fill="#fff"/>
+  <rect width="1500" height="560" fill="#fff"/>
   <text x="48" y="44" font-family="Arial" font-size="26" font-weight="700" fill="#17212b">Pipeline execution</text>
-  <text x="48" y="70" font-family="Arial" font-size="15" fill="#52616b">Scheduled work has a durable waiting stage; every started run follows the same execution and result-processing path.</text>
+  <text x="48" y="70" font-family="Arial" font-size="15" fill="#52616b">Every start uses one admission path; manual report import joins when results enter AIST.</text>
 
-  <rect class="zone" x="35" y="105" width="375" height="535" rx="18"/>
-  <text class="label" x="55" y="135">CREATE A RUN</text>
-  <rect class="box" x="70" y="175" width="185" height="76" rx="11" fill="#edf5ff" stroke="#52616b"/>
-  <text class="head" x="162" y="205">Direct start</text><text class="body" x="162" y="228">project version</text>
-  <rect class="box" x="70" y="295" width="185" height="76" rx="11" fill="#edf5ff" stroke="#52616b"/>
-  <text class="head" x="162" y="325">Saved launch config</text><text class="body" x="162" y="348">reusable parameters</text>
-  <rect class="box" x="70" y="430" width="135" height="76" rx="11" fill="#f4efff" stroke="#7d69aa"/>
-  <text class="head" x="137" y="460">Schedule</text><text class="body" x="137" y="483">or run once</text>
-  <rect class="box" x="235" y="430" width="140" height="76" rx="11" fill="#fff8e8" stroke="#9e751d"/>
-  <text class="head" x="305" y="460">Launch queue</text>
-  <circle cx="279" cy="478" r="10" class="chip"/><use href="#ico-postgresql" x="272" y="471" width="14" height="14" aria-hidden="true"/>
-  <text class="body" x="297" y="483" style="text-anchor:start">PostgreSQL</text>
-  <rect class="box" x="235" y="545" width="140" height="66" rx="11" fill="#fff8e8" stroke="#9e751d"/>
-  <text class="head" x="305" y="572">Dispatcher</text><text class="body" x="305" y="594">capacity check</text>
+  <rect class="box" x="40" y="180" width="190" height="180" rx="14" fill="#edf5ff" stroke="#52616b"/>
+  <text class="head" x="135" y="215">Start</text>
+  <text class="body" x="135" y="250">direct</text><text class="body" x="135" y="278">saved configuration</text>
+  <text class="body" x="135" y="306">schedule</text><text class="body" x="135" y="334">SCM webhook</text>
 
-  <rect class="box" x="70" y="530" width="135" height="90" rx="11" fill="#edf5ff" stroke="#52616b"/>
-  <use href="#ico-upload" x="128" y="541" width="18" height="18"/>
-  <text class="head" x="137" y="580">Manual import</text><text class="body" x="137" y="602">DAST report</text>
+  <rect class="box" x="275" y="205" width="180" height="130" rx="14" fill="#fff8e8" stroke="#9e751d"/>
+  <text class="head" x="365" y="245">Launch request</text>
+  <text class="body" x="365" y="276">durable waiting state</text><text class="body" x="365" y="300">cancel or supersede</text>
 
-  <rect class="zone" x="455" y="105" width="330" height="535" rx="18"/>
-  <text class="label" x="475" y="135">STARTED RUN</text>
-  <rect class="box" x="505" y="285" width="230" height="88" rx="11" fill="#f4efff" stroke="#7d69aa"/>
-  <text class="head" x="620" y="318">AISTPipeline</text><text class="body" x="620" y="342">project + version + progress</text>
-  <circle cx="718" cy="300" r="10" class="chip"/><use href="#ico-refresh" x="711" y="293" width="14" height="14"/>
+  <rect class="box" x="500" y="205" width="180" height="130" rx="14" fill="#fff8e8" stroke="#9e751d"/>
+  <text class="head" x="590" y="245">Admit</text>
+  <text class="body" x="590" y="276">authority · readiness</text><text class="body" x="590" y="300">capacity · dispatch</text>
 
-  <rect class="zone" x="830" y="105" width="635" height="535" rx="18"/>
-  <text class="label" x="850" y="135">EXECUTE AND PREPARE RESULTS</text>
-  <rect class="box" x="875" y="205" width="165" height="78" rx="11" fill="#f4efff" stroke="#7d69aa"/>
-  <text class="head" x="957" y="235">Worker</text><text class="body" x="957" y="258">one run task</text>
-  <circle cx="1023" cy="220" r="10" class="chip"/><use href="#ico-play" x="1016" y="213" width="14" height="14"/>
-  <rect class="box" x="1060" y="205" width="160" height="78" rx="11" fill="#fff8e8" stroke="#9e751d"/>
-  <text class="head" x="1140" y="235">SAST runner</text><text class="body" x="1140" y="258">workspace + analyzers</text>
-  <rect class="box" x="1270" y="205" width="130" height="78" rx="11" fill="#eaf8f1" stroke="#4d9874"/>
-  <text class="head" x="1335" y="235">Import</text><text class="body" x="1335" y="258">tests + findings</text>
-  <circle cx="1383" cy="220" r="10" class="chip"/><use href="#ico-download" x="1376" y="213" width="14" height="14"/>
-  <rect class="box" x="1280" y="385" width="165" height="78" rx="11" fill="#eaf8f1" stroke="#4d9874"/>
-  <text class="head" x="1362" y="415">Finished</text><text class="body" x="1362" y="438">no findings</text>
-  <circle cx="1428" cy="400" r="10" class="chip"/><use href="#ico-check-circle" x="1421" y="393" width="14" height="14"/>
-  <rect class="box" x="900" y="490" width="175" height="78" rx="11" fill="#fff8e8" stroke="#9e751d"/>
-  <text class="head" x="987" y="520">Deduplicate</text><text class="body" x="987" y="543">and clean duplicates</text>
-  <circle cx="1058" cy="505" r="10" class="chip"/><use href="#ico-copy" x="1051" y="498" width="14" height="14"/>
-  <rect class="box" x="1120" y="490" width="175" height="78" rx="11" fill="#eaf8f1" stroke="#4d9874"/>
-  <text class="head" x="1207" y="520">Enrich</text><text class="body" x="1207" y="543">links + line hashes</text>
-  <circle cx="1278" cy="505" r="10" class="chip"/><use href="#ico-sparkle" x="1271" y="498" width="14" height="14"/>
-  <rect class="box" x="1335" y="490" width="95" height="78" rx="11" fill="#f4efff" stroke="#7d69aa"/>
-  <text class="head" x="1382" y="520">Review</text><text class="body" x="1382" y="543">or AI</text>
+  <rect class="box" x="725" y="205" width="180" height="130" rx="14" fill="#f4efff" stroke="#7d69aa"/>
+  <text class="head" x="815" y="245">Pipeline</text>
+  <text class="body" x="815" y="276">project · version</text><text class="body" x="815" y="300">progress · outcome</text>
 
-  <path class="line" d="M255 213H450V305H505"/>
-  <path class="line" d="M255 333H450V342H505"/>
-  <path class="line" d="M205 468H235"/>
-  <path class="line" d="M305 506V545"/>
-  <path class="line" d="M375 578H430V360H505"/>
-  <path class="line" d="M205 575H225V630H450V366H505"/>
-  <path class="line" d="M735 329H815V244H875"/>
-  <path class="line" d="M1040 244H1060"/>
-  <path class="line" d="M1220 244H1270"/>
-  <path class="line" d="M1335 283V385"/>
-  <text class="edge" x="1294" y="340">no findings</text>
-  <path class="line" d="M1270 283V440H987V490"/>
-  <text class="edge" x="1085" y="423">findings</text>
-  <path class="line" d="M1075 529H1120"/>
-  <path class="line" d="M1295 529H1335"/>
-  <path class="line" d="M735 355H800V662H1450V244H1400"/>
-  <text class="edge" x="815" y="653">manual import → registered parser</text>
-  <text x="875" y="612" font-family="Arial" font-size="13" fill="#52616b">A failure in an active stage ends the run as Finished with warnings; the run remains in history.</text>
+  <rect class="box" x="950" y="125" width="170" height="105" rx="14" fill="#fff8e8" stroke="#9e751d"/>
+  <text class="head" x="1035" y="165">SAST</text><text class="body" x="1035" y="193">workspace + analyzers</text>
+  <rect class="box" x="950" y="290" width="170" height="105" rx="14" fill="#eaf3f7" stroke="#3f7d92"/>
+  <text class="head" x="1035" y="330">DAST</text><text class="body" x="1035" y="358">external gateway</text>
+
+  <rect class="box" x="1160" y="205" width="160" height="130" rx="14" fill="#eaf8f1" stroke="#4d9874"/>
+  <text class="head" x="1240" y="245">Import</text>
+  <text class="body" x="1240" y="276">validate result</text><text class="body" x="1240" y="300">tests + findings</text>
+
+  <rect class="box" x="1350" y="125" width="120" height="105" rx="14" fill="#eaf8f1" stroke="#4d9874"/>
+  <text class="head" x="1410" y="165">Finish</text><text class="body" x="1410" y="193">no findings</text>
+  <rect class="box" x="1350" y="290" width="120" height="105" rx="14" fill="#f4efff" stroke="#7d69aa"/>
+  <text class="head" x="1410" y="330">Prepare</text><text class="body" x="1410" y="358">review or AI</text>
+
+  <rect class="box" x="950" y="445" width="170" height="75" rx="14" fill="#edf5ff" stroke="#52616b"/>
+  <text class="head" x="1035" y="475">Import pipeline</text><text class="body" x="1035" y="500">manual validated report</text>
+
+  <path class="line" d="M230 270H275"/><path class="line" d="M455 270H500"/><path class="line" d="M680 270H725"/>
+  <path class="line" d="M905 250C925 230 930 178 950 178"/><path class="line" d="M905 290C925 310 930 343 950 343"/>
+  <path class="line" d="M1120 178C1140 178 1140 245 1160 245"/><path class="line" d="M1120 343C1140 343 1140 295 1160 295"/>
+  <path class="line" d="M1320 245C1335 220 1335 178 1350 178"/><path class="line" d="M1320 295C1335 315 1335 343 1350 343"/>
+  <path class="line" d="M1035 445V420H1240V335"/>
+  <text class="edge" x="1270" y="165">empty result</text><text class="edge" x="1270" y="370">findings</text>
+  <text x="48" y="535" font-family="Arial" font-size="13" fill="#52616b">Failures remain visible on the pipeline as a terminal outcome; they do not erase the run history.</text>
 </svg>

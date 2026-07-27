@@ -14,7 +14,7 @@ class AISTApiTag(StrEnum):
     GITEA = "gitea"
     INTEGRATIONS = "integrations"
     LAUNCH_CONFIGS = "launch configs"
-    LAUNCH_QUEUE = "launch queue"
+    LAUNCH_REQUESTS = "launch requests"
     LAUNCH_SCHEDULES = "launch schedules"
     MEMBERS = "members"
     ORGANIZATIONS = "organizations"

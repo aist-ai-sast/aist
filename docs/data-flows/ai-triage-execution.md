@@ -1,46 +1,41 @@
-# AI Triage Execution
+# AI triage execution
 
-AI triage begins only after imported findings reach the AI confirmation stage.
-Findings are selected automatically from the recorded launch rules or manually
-by an authorized user. The pipeline records the transition to `PUSH_TO_AI` and
-sends the selected identifiers through the independently configured execution
-backend. A completed verdict is stored as an AIST AI finding response.
+AI triage begins after imported findings are ready for review. AIST first
+selects a set of findings, then sends that same set through the configured
+execution backend. Selection and backend choice are independent decisions.
 
 ![AI triage execution flow](../assets/ai-triage-execution.svg)
 
-## Select the findings once
+## Select findings
 
-Manual triage validates the selected finding identifiers against the pipeline
-and its current state. Automatic triage uses the launch-data filter snapshot,
-the resolved execution backend, and active findings from the pipeline's tests.
-Findings already carrying an analyzer-produced AI response are excluded from
-post-import selection. A selection of zero findings finishes the pipeline
-without an AI request.
+Automatic selection applies the rules captured when the pipeline was launched.
+Manual selection lets an authorized reviewer choose findings from the pipeline.
+Findings that already contain an analyzer-produced AI verdict are excluded from
+post-import automatic selection.
 
-## Webhook triage
+If no findings remain after selection, the pipeline completes without creating
+an AI request.
 
-Webhook mode sends the project summary, selected finding identifiers, pipeline
-identifier, and callback URL to the configured n8n webhook. The request is
-made outside the database transaction. After an accepted request, the pipeline
-is changed to `WAITING_RESULT_FROM_AI`; the callback persists the responses.
-A request failure finishes the pipeline with warnings.
+## Execute through the selected backend
 
-## Local triage
+Webhook mode sends project context, the selected finding identifiers, the
+pipeline identity, and a callback address to the configured n8n webhook. The
+accepted callback persists the resulting AI responses. A failed request leaves
+the pipeline with a visible degraded outcome.
 
-Local mode first obtains the active Claude integration credentials for the
-project. If none is available, it finishes with warnings without contacting the
-bridge. Otherwise the worker sends an asynchronous request over the shared Unix
-socket to the local triage bridge, which runs the configured triage skill
-against the resolved source path. The skill writes AIST AI finding responses;
-the local callback finalises the pipeline. If the bridge reports an error after
-responses already exist, the callback retains those responses and completes
-without a degraded final state.
+Local mode resolves the project's Claude integration and source path, then asks
+the local AI bridge to start an isolated CLI operation through the shared Unix
+socket. Missing credentials or a rejected bridge request becomes a visible
+pipeline failure rather than an unauthenticated fallback.
 
-## Durable outcome
+## Persist the verdict
 
-Each response is associated with a pipeline and finding and stores the verdict
-and related triage fields. The [finding review](../product/finding-review.md)
-page explains how a reviewer uses the resulting verdict. A `False Positive`
-verdict automatically closes and marks the finding as false positive in the
-normal callback flow. `True Positive` and `Uncertain` findings remain active.
-Reviewers retain the normal controls to change the resulting disposition.
+Each response is associated with the originating pipeline and finding. A false
+positive verdict closes and marks the finding false positive in the normal
+callback flow. True positive and uncertain findings remain active for human
+review.
+
+The AI response does not remove reviewer authority. An authorized reviewer can
+later change the finding disposition according to the normal review workflow.
+See [AI triage](../product/ai-triage.md) and
+[finding review](../product/finding-review.md).

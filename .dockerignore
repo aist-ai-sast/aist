@@ -2,6 +2,7 @@
 vendor/defectdojo/.git
 .gitignore
 *.md
+!README.md
+!SECURITY.md
 client-ui/node_modules
-client-ui/package-lock.json
 client-ui/test-results

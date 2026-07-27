@@ -260,6 +260,7 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
         pipeline = AISTPipeline.objects.create(
             id="recompute-pipeline-filter",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
         pipeline.tests.add(test_in_pipeline)

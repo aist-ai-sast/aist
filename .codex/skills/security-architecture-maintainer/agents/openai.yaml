@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIST Documentation Maintainer"
+  short_description: "Audit and maintain coherent AIST reader documentation"
+  default_prompt: "Use $security-architecture-maintainer to audit or update one coherent AIST reader-documentation area around a single reader question."

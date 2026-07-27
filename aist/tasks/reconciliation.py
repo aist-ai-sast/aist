@@ -9,6 +9,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
+from aist.execution.reconciliation import reconcile_launch_requests
 from aist.models import AISTPipeline, AISTStatus
 from aist.utils.reconciliation import reconcile_pipeline_orphans, reconcile_recent_pipelines
 
@@ -149,7 +150,13 @@ def reconcile_recent_orphans_task(
     dry_run: bool = False,
     async_user=None,
 ) -> dict:
-    result = reconcile_recent_pipelines(hours=hours, batch_size=batch_size, dry_run=dry_run)
+    launch_request_stats = (
+        {"dry_run": True}
+        if dry_run
+        else reconcile_launch_requests(batch_size=batch_size)
+    )
+    result = {"launch_requests": launch_request_stats}
+    result.update(reconcile_recent_pipelines(hours=hours, batch_size=batch_size, dry_run=dry_run))
     result["recovered_stuck_dedup"] = _recover_stuck_dedup_pipelines(dry_run=dry_run)
     result["recovered_stuck_enrich"] = _recover_stuck_enrich_pipelines(dry_run=dry_run)
     return result

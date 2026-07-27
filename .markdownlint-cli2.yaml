@@ -1,0 +1,23 @@
+config:
+  default: false
+  MD001: true
+  MD003:
+    style: atx
+  MD009: true
+  MD010: true
+  MD018: true
+  MD019: true
+  MD023: true
+  MD025: true
+  MD028: true
+  MD037: true
+  MD038: true
+  MD039: true
+  MD040: true
+  MD042: true
+  MD047: true
+  MD051: true
+  MD053: true
+
+ignores:
+  - "docs/plans/**"

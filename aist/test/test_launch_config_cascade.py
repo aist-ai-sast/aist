@@ -1,7 +1,7 @@
 from django.test import TestCase
 from dojo.models import Product, Product_Type, SLA_Configuration
 
-from aist.models import AISTProject, AISTProjectLaunchConfig, LaunchSchedule, PipelineLaunchQueue
+from aist.models import AISTProject, AISTProjectLaunchConfig, LaunchSchedule, PipelineLaunchRequest
 
 
 class LaunchConfigCascadeTests(TestCase):
@@ -30,9 +30,9 @@ class LaunchConfigCascadeTests(TestCase):
             launch_config=self.launch_config,
             cron_expression="0 1 * * *",
             enabled=True,
-            max_concurrent_per_worker=1,
+            max_concurrent_runs=1,
         )
-        self.queue = PipelineLaunchQueue.objects.create(
+        self.queue = PipelineLaunchRequest.objects.create(
             project=self.project,
             schedule=self.schedule,
             launch_config=self.launch_config,
@@ -42,7 +42,7 @@ class LaunchConfigCascadeTests(TestCase):
         self.launch_config.delete()
 
         self.assertFalse(LaunchSchedule.objects.filter(id=self.schedule.id).exists())
-        self.assertFalse(PipelineLaunchQueue.objects.filter(id=self.queue.id).exists())
+        self.assertFalse(PipelineLaunchRequest.objects.filter(id=self.queue.id).exists())
 
     def test_delete_project_cascades_launch_configs(self):
         self.project.delete()

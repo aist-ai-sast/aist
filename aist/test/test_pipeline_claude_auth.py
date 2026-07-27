@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from aist.execution.dispatching import LaunchAcceptance
 from aist.models import (
     AISTPipeline,
     AISTProjectVersion,
@@ -72,6 +73,12 @@ class PipelineClaudeAuthEnvTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
+        acceptance = patch(
+            "aist.tasks.pipeline.accept_published_launch",
+            return_value=LaunchAcceptance.ACCEPTED,
+        )
+        acceptance.start()
+        self.addCleanup(acceptance.stop)
         self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(
             name="Pipeline Claude Org",

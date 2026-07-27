@@ -215,6 +215,25 @@ class AISTAIViewsTests(AISTApiBase):
         self.assertIn("{project_id}", template)
         self.assertIn("{config_id}", template)
 
+    def test_launching_dashboard_queue_renders_all_launch_request_states(self):
+        """
+        H17 regression: the queue tab must render a distinct badge for every
+        PipelineLaunchRequestState member, not the old compat `dispatched` boolean that
+        collapsed FAILED/EXPIRED/CANCELLED/etc. into the same "Pending" bucket as PENDING.
+        """
+        url = reverse("aist:launching_dashboard")
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode("utf-8")
+
+        for state in ("PENDING", "CLAIMED", "PLANNED", "PUBLISHED", "DISPATCHED", "SUPERSEDED", "FAILED", "EXPIRED", "CANCELLED"):
+            self.assertIn(state, body)
+
+        self.assertIn("Only pending", body)
+        self.assertNotIn("dispatched=false", body)
+        self.assertIn("Origin", body)
+        self.assertIn("Type", body)
+
     def test_export_ai_results_requires_ai_response(self):
         pipeline = AISTPipeline.objects.create(
             id="pipe-export-1",

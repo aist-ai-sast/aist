@@ -27,6 +27,7 @@ class ApplyAiResponseArtifactTests(AISTApiBase):
         self.pipeline = AISTPipeline.objects.create(
             id="pipe-artifact-sync",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
         engagement = Engagement.objects.create(

@@ -68,6 +68,7 @@ class ClaudeFullSecurityE2ETests(AISTApiBase):
         self.pipeline = AISTPipeline.objects.create(
             id="pipe-full-e2e",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.UPLOADING_RESULTS,
         )
 

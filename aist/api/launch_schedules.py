@@ -10,11 +10,21 @@ from django_filters import rest_framework as django_filters
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_field
 from rest_framework import serializers, status
+from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 
 from aist.api.schema import AISTApiTag
 from aist.authz import PUBLIC, Action, AISTAPIView, ResourcePolicy
-from aist.models import AISTProject, AISTProjectLaunchConfig, LaunchSchedule, PipelineLaunchQueue
+from aist.execution.enqueue import (
+    LaunchIdempotencyConflictError,
+    LaunchPrincipal,
+    enqueue_pipeline_launch,
+)
+from aist.models import (
+    AISTApiToken,
+    AISTProjectLaunchConfig,
+    LaunchSchedule,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,12 +38,16 @@ LAUNCH_SCHEDULE_API_CHOICES = LaunchScheduleApiChoices(
         "-id",
         "enabled",
         "-enabled",
-        "max_concurrent_per_worker",
-        "-max_concurrent_per_worker",
+        "max_concurrent_runs",
+        "-max_concurrent_runs",
         "next_tick",
         "-next_tick",
     ],
 )
+
+
+class LaunchRunOnceHeadersSerializer(serializers.Serializer):
+    client_request_key = serializers.CharField(required=False, allow_blank=False, max_length=255)
 
 
 def _coerce_strict_bool(raw: str) -> bool:
@@ -72,7 +86,7 @@ class LaunchScheduleSerializer(serializers.ModelSerializer):
             "id",
             "cron_expression",
             "enabled",
-            "max_concurrent_per_worker",
+            "max_concurrent_runs",
             "last_run_at",
 
             "project_id",
@@ -196,41 +210,20 @@ class LaunchScheduleSerializer(serializers.ModelSerializer):
         return timezone.now()
 
 
-class LaunchSchedulePatchSerializer(serializers.Serializer):
-    enabled = serializers.BooleanField(required=False)
-
-    def to_internal_value(self, data):
-        unknown = set(data) - set(self.fields)
-        if unknown:
-            raise serializers.ValidationError(
-                {"detail": f"Only fields {sorted(self.fields)} can be patched."},
-            )
-        return super().to_internal_value(data)
-
-
-class LaunchScheduleUpsertSerializer(serializers.ModelSerializer):
-    # incoming field (so we don't require nested object)
-    launch_config_id = serializers.PrimaryKeyRelatedField(
-        source="launch_config",
-        queryset=AISTProjectLaunchConfig.objects.none(),
-        write_only=True,
-    )
-
+class LaunchConfigScheduleWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = LaunchSchedule
         fields = [
             "cron_expression",
             "enabled",
-            "max_concurrent_per_worker",
-            "launch_config_id",
+            "max_concurrent_runs",
         ]
 
-    def get_fields(self):
-        fields = super().get_fields()
-        project: AISTProject | None = self.context.get("project")
-        if project is not None:
-            fields["launch_config_id"].queryset = AISTProjectLaunchConfig.objects.filter(project=project)
-        return fields
+    def to_internal_value(self, data):
+        unknown = set(data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(dict.fromkeys(sorted(unknown), "Unknown field."))
+        return super().to_internal_value(data)
 
     def validate_cron_expression(self, v: str) -> str:
         v = (v or "").strip()
@@ -246,77 +239,99 @@ class LaunchScheduleUpsertSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(msg) from exc
         return v
 
-    def validate_max_concurrent_per_worker(self, v: int) -> int:
+    def validate_max_concurrent_runs(self, v: int) -> int:
         # keep exactly the same constraints as before
         if v is None:
-            msg = "max_concurrent_per_worker is required."
+            msg = "max_concurrent_runs is required."
             raise serializers.ValidationError(msg)
         if v < 1:
-            msg = "max_concurrent_per_worker must be >= 1."
+            msg = "max_concurrent_runs must be >= 1."
             raise serializers.ValidationError(msg)
         if v > 8:
-            msg = "max_concurrent_per_worker must be <= 8."
+            msg = "max_concurrent_runs must be <= 8."
             raise serializers.ValidationError(msg)
         return v
 
-    def validate(self, attrs: dict) -> dict:
-        project: AISTProject | None = self.context.get("project")
-        if project is None:
-            msg = "Internal error: project is missing in serializer context."
-            raise serializers.ValidationError(msg)
-        return attrs
 
+class LaunchConfigScheduleAPI(AISTAPIView):
+    authz = ResourcePolicy(
+        resource=AISTProjectLaunchConfig,
+        read=Action.PRODUCT_READ,
+        write=Action.PROJECT_OPERATE,
+    )
 
-class ProjectLaunchScheduleUpsertAPI(AISTAPIView):
-    authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
+    def _resolve_config(self, *, project_id: int, config_id: int) -> AISTProjectLaunchConfig:
+        return self.resolve(id=config_id, project_id=project_id)
+
+    @staticmethod
+    def _schedule(config: AISTProjectLaunchConfig) -> LaunchSchedule:
+        try:
+            return config.launch_schedule
+        except LaunchSchedule.DoesNotExist as exc:
+            msg = "Launch schedule not found for this launch configuration."
+            raise NotFound(msg) from exc
 
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
-        summary="Create or update launch schedule for project",
-        request=LaunchScheduleUpsertSerializer,
-        responses={201: OpenApiResponse(description="Schedule created or updated")},
+        summary="Get the launch schedule for a launch configuration",
+        responses={200: LaunchScheduleSerializer, 404: OpenApiResponse(description="Not found")},
     )
-    def post(self, request, project_id: int, *args, **kwargs):
-        project = self.resolve(id=project_id)
+    def get(self, request, project_id: int, config_id: int, *args, **kwargs):
+        config = self._resolve_config(project_id=project_id, config_id=config_id)
+        return Response(LaunchScheduleSerializer(self._schedule(config)).data)
 
-        s = LaunchScheduleUpsertSerializer(data=request.data, context={"project": project})
-        s.is_valid(raise_exception=True)
-
-        cron_expression = s.validated_data["cron_expression"]
-        enabled = s.validated_data.get("enabled", True)
-        max_concurrent = s.validated_data["max_concurrent_per_worker"]
-        launch_config = s.validated_data["launch_config"]
-
+    @extend_schema(
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
+        summary="Create or replace the launch schedule for a launch configuration",
+        request=LaunchConfigScheduleWriteSerializer,
+        responses={
+            200: LaunchScheduleSerializer,
+            201: LaunchScheduleSerializer,
+            404: OpenApiResponse(description="Not found"),
+        },
+    )
+    def put(self, request, project_id: int, config_id: int, *args, **kwargs):
+        config = self._resolve_config(project_id=project_id, config_id=config_id)
+        serializer = LaunchConfigScheduleWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         with transaction.atomic():
-            existing = (
-                LaunchSchedule.objects.select_for_update()
-                .select_related("launch_config", "launch_config__project")
-                .filter(launch_config__project=project)
-                .first()
+            locked_config = (
+                self.authorized_queryset_for_request()
+                .select_for_update()
+                .get(pk=config.pk, project_id=project_id)
             )
-
-            if existing is None:
-                obj = LaunchSchedule.objects.create(
-                    cron_expression=cron_expression,
-                    enabled=enabled,
-                    max_concurrent_per_worker=max_concurrent,
-                    launch_config=launch_config,
-                )
-                created = True
-            else:
-                existing.cron_expression = cron_expression
-                existing.enabled = enabled
-                existing.max_concurrent_per_worker = max_concurrent
-                if existing.launch_config_id != launch_config.id:
-                    existing.launch_config = launch_config
-                existing.save()
-                obj = existing
-                created = False
-
+            obj, created = LaunchSchedule.objects.update_or_create(
+                launch_config=locked_config,
+                defaults=serializer.validated_data,
+            )
         return Response(
-            {"ok": True, "created": created, "schedule": LaunchScheduleSerializer(obj).data},
-            status=status.HTTP_201_CREATED,
+            LaunchScheduleSerializer(obj).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
+
+    @extend_schema(
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
+        summary="Partially update the launch schedule for a launch configuration",
+        request=LaunchConfigScheduleWriteSerializer,
+        responses={200: LaunchScheduleSerializer, 404: OpenApiResponse(description="Not found")},
+    )
+    def patch(self, request, project_id: int, config_id: int, *args, **kwargs):
+        config = self._resolve_config(project_id=project_id, config_id=config_id)
+        schedule = self._schedule(config)
+        serializer = LaunchConfigScheduleWriteSerializer(schedule, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(LaunchScheduleSerializer(schedule).data)
+
+    @extend_schema(
+        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
+        summary="Delete the launch schedule for a launch configuration",
+        responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
+    )
+    def delete(self, request, project_id: int, config_id: int, *args, **kwargs):
+        config = self._resolve_config(project_id=project_id, config_id=config_id)
+        self._schedule(config).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class LaunchScheduleListAPI(AISTAPIView):
@@ -411,36 +426,6 @@ class LaunchScheduleDetailAPI(AISTAPIView):
         obj = self.resolve(id=launch_schedule_id)
         return Response(LaunchScheduleSerializer(obj).data, status=status.HTTP_200_OK)
 
-    @extend_schema(
-        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
-        summary="Delete launch schedule by id",
-        responses={204: OpenApiResponse(description="Deleted"), 404: OpenApiResponse(description="Not found")},
-    )
-    def delete(self, request, launch_schedule_id: int, *args, **kwargs):
-        obj = self.resolve(id=launch_schedule_id)
-        obj.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-    @extend_schema(
-        tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
-        summary="Partially update launch schedule",
-        responses={200: LaunchScheduleSerializer, 400: OpenApiResponse(description="Validation error")},
-    )
-    def patch(self, request, launch_schedule_id: int):
-        """
-        Partial update for LaunchSchedule.
-        Currently used by UI to toggle 'enabled' without resending the full schedule payload.
-        """
-        obj = self.resolve(id=launch_schedule_id)
-
-        serializer = LaunchSchedulePatchSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        if "enabled" in serializer.validated_data:
-            obj.enabled = serializer.validated_data["enabled"]
-            obj.save(update_fields=["enabled"])
-
-        return Response(LaunchScheduleSerializer(obj).data, status=status.HTTP_200_OK)
-
 
 class LaunchSchedulePreviewSerializer(serializers.Serializer):
     cron_expression = serializers.CharField()
@@ -484,7 +469,7 @@ class LaunchSchedulePreviewAPI(AISTAPIView):
         cron_expression = s.validated_data["cron_expression"]
         count = s.validated_data["count"]
 
-        tmp = LaunchSchedule(cron_expression=cron_expression, enabled=True, max_concurrent_per_worker=1)
+        tmp = LaunchSchedule(cron_expression=cron_expression, enabled=True, max_concurrent_runs=1)
         runs = tmp.preview_next_runs(count=count, now=timezone.now())
         return Response(
             {"cron_expression": cron_expression, "count": count, "runs": runs},
@@ -538,7 +523,7 @@ class LaunchScheduleRunOnceAPI(AISTAPIView):
 
     """
     UI helper: enqueue a single run for this schedule (does not touch cron/last_run_at).
-    Creates PipelineLaunchQueue item and returns it.
+    Creates a PipelineLaunchRequest and returns its legacy queue representation.
     """
 
     serializer_class = serializers.Serializer
@@ -547,7 +532,20 @@ class LaunchScheduleRunOnceAPI(AISTAPIView):
     @extend_schema(
         tags=[AISTApiTag.LAUNCH_SCHEDULES.value],
         summary="Enqueue one run for a schedule",
-        responses={200: OpenApiResponse(description="Enqueued queue item"), 404: OpenApiResponse(description="Not found")},
+        parameters=[
+            OpenApiParameter(
+                name="Idempotency-Key",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.HEADER,
+                required=False,
+                description="Optional producer key for idempotent launch request creation.",
+            ),
+        ],
+        responses={
+            200: OpenApiResponse(description="Enqueued queue item"),
+            404: OpenApiResponse(description="Not found"),
+            409: OpenApiResponse(description="Idempotency key conflict"),
+        },
     )
     def post(self, request, launch_schedule_id: int, *args, **kwargs):
         obj = self.resolve(id=launch_schedule_id)
@@ -555,12 +553,27 @@ class LaunchScheduleRunOnceAPI(AISTAPIView):
         # Use launch_config snapshot. Project is derived from launch_config.project :contentReference[oaicite:6]{index=6}
         project = obj.launch_config.project
 
-        with transaction.atomic():
-            q = PipelineLaunchQueue.objects.create(
+        token = request.auth if isinstance(request.auth, AISTApiToken) else None
+        principal = LaunchPrincipal.for_user(
+            organization=project.organization,
+            requester=request.user,
+            api_token=token,
+        )
+        key_serializer = LaunchRunOnceHeadersSerializer(data={
+            "client_request_key": request.headers.get("Idempotency-Key"),
+        } if request.headers.get("Idempotency-Key") is not None else {})
+        key_serializer.is_valid(raise_exception=True)
+        try:
+            q = enqueue_pipeline_launch(
                 project=project,
+                principal=principal,
+                raw_params={},
                 schedule=obj,
                 launch_config=obj.launch_config,
-            )
+                client_request_key=key_serializer.validated_data.get("client_request_key"),
+            ).request
+        except LaunchIdempotencyConflictError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
 
         project_name = getattr(getattr(project, "product", None), "name", str(project.id))
         return Response(

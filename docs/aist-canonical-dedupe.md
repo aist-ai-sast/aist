@@ -1,78 +1,49 @@
-# Canonical Deduplication
+# Canonical deduplication
 
-Canonical deduplication compares scanner findings that point to the same source
-location in the same product. It either links a finding to a duplicate root,
-marks it as a review candidate, or leaves it unchanged.
+Canonical deduplication correlates findings from different analyzers when they
+describe the same issue at the same source location in one product. It can link
+a finding to an existing duplicate root, mark it as a review candidate, or
+leave it unchanged.
 
 ![Canonical deduplication decision flow](assets/aist-canonical-dedupe.svg)
 
-## Strategy
-- Keep UI-friendly titles, but make dedupe inputs stable.
-- Use cross-scanner canonical matching with a strict hard gate: same normalized `file_path` and `line`.
-- The current duplicate/candidate thresholds are configurable through
-  `AIST_CANONICAL_AUTO_DUPLICATE_THRESHOLD` and
-  `AIST_CANONICAL_CANDIDATE_MIN_SCORE`.
+## Establish comparable findings
 
-## Family Mapping
-| Family | Typical Patterns | CWE fallback |
-| --- | --- | --- |
-| `private_key` | `private key`, `rsa key` | `321` |
-| `aws_key` | `aws key`, `access key`, `AKIA...` | `798` |
-| `hardcoded_secret` | `hardcoded secret/password/token` | `798` |
-| `ssl_verification` | `ssl verify`, `no verify`, `tls verify` | `295` |
-| `weak_hash` | `md5`, `sha1`, `weak hash` | `327` |
-| `path_traversal` | `path traversal`, `directory traversal` | `22` |
-| `open_redirect` | `open redirect`, `javascript/OR` | `601` |
-| `xss_dom` | `xss`, `dom xss`, `cross site scripting` | `79` |
-| `eval_dynamic_code` | `eval`, `dynamic code` | `95` |
-| `command_injection` | `command injection`, `os command` | `78` |
-| `sql_injection` | `sql injection`, `sqli` | `89` |
-| `postmessage_origin` | `postmessage`, `origin check` | `346` |
+The first gate requires the same normalized file path and line. Findings that
+do not provide both values are not eligible for canonical matching and follow
+the configured fallback deduplication behavior.
 
-## Scoring
-- `+3` same non-zero CWE
-- `+3` same canonical family
-- `+2` same normalized rule
-- `+1` same component name or version
+Eligible findings are compared only within one product. Canonical matching
+never correlates findings owned by different clients.
 
-Decision uses the configured thresholds. A score at or above the auto threshold
-becomes a duplicate; a positive lower score at or above the candidate threshold
-becomes a candidate. A candidate is not a duplicate unless candidate application
-is explicitly enabled.
+## Score the evidence
 
-## Runtime Dedupe Config
-Findings without a normalized path and line are ineligible for canonical
-matching and can use the configured fallback deduplication path.
+The score combines independent signals:
 
-## Management Command
-- Command: `recompute_aist_duplicates`
-- Modes:
-  - `--dry-run`
-  - `--apply`
-- Filters:
-  - `--pipeline-id`
-  - `--product-id`
-  - `--since YYYY-MM-DD`
-  - `--limit`
-  - `--clear-existing-aist-duplicate-tags`
+| Signal | Score |
+|---|---:|
+| Same non-zero CWE | +3 |
+| Same canonical vulnerability family | +3 |
+| Same normalized analyzer rule | +2 |
+| Same component name or version | +1 |
 
-### Examples
-```bash
-python3 manage.py recompute_aist_duplicates --dry-run --product-id 12 --since 2026-01-01
-```
+Canonical families normalize common descriptions such as hardcoded secrets,
+weak hashing, path traversal, cross-site scripting, command injection, and SQL
+injection. This lets two tools use different titles without making the title
+itself the durable identity.
 
-```bash
-python3 manage.py recompute_aist_duplicates --apply --pipeline-id 5ae48a36
-```
+## Apply the decision
 
-## Boundaries and limitations
-- The hard gate requires both path and line.
-- Matching is grouped within one product; findings from different clients are
-  never compared by canonical deduplication.
-- Candidate tagging does not mutate duplicate links unless explicitly applied.
+The accumulated score is compared with two configured thresholds. A score at or
+above the automatic threshold links the finding as a duplicate. A lower
+positive score at or above the candidate threshold records a review candidate.
+Candidate status alone does not change duplicate links unless candidate
+application is explicitly enabled.
 
-## Implementation references
+The thresholds allow deployments to choose between conservative automatic
+linking and a larger human-review queue without changing the matching signals.
 
-- [Signature and score calculation](../aist/dedupe/canonical.py)
-- [Decision application and fallback](../aist/dedupe/custom.py)
-- [Recompute command](../aist/management/commands/recompute_aist_duplicates.py)
+## Recompute existing findings
+
+Operators can evaluate or apply the same decision to existing findings with the
+[canonical deduplication recompute runbook](runbooks/canonical-deduplication-recompute.md).

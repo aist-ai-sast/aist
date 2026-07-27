@@ -55,5 +55,5 @@
  <path d="M740 300L820 300" class="l"/>
 
  <text x="50" y="412" class="s">Organization configuration is resolved per project: a project selects an integration, overrides its non-secret settings, or disables it.</text>
- <text x="50" y="432" class="s">Project-specific rules can reduce or deny access; they can never elevate a user beyond the organization-level role.</text>
+ <text x="50" y="432" class="s">Full-member overrides only narrow access. Restricted-member grants define access and role for each selected project.</text>
 </svg>

@@ -1,53 +1,30 @@
 # Gerrit integration
 
-Import projects from a Gerrit server and use them like GitLab/GitHub sources
-(clone for pipelines and Claude analysis, raw-file viewing, default-branch
-resolution). Gerrit is wired as an SCM provider through the same
-`RepositoryInfo` binding mechanism as GitLab/GitHub — see `ScmGerritBinding` in
-`aist/models.py`.
+The Gerrit SCM integration imports repositories and supplies source for
+pipelines and file viewing.
 
-## Credentials
+## Configure Gerrit
 
-Gerrit uses **HTTP credentials** (not OAuth / not a GitHub App):
+Create a Gerrit organization integration with:
 
-- **Username** — the Gerrit account's HTTP username. Stored in
-  `OrgIntegration.config["username"]` (required; enforced by the serializer).
-- **HTTP password** — generated in Gerrit under *Settings → HTTP Credentials*.
-  Stored encrypted in `OrgIntegration.secret`.
-- **Base URL** — the Gerrit server root, e.g. `https://gerrit.example.com`.
-  Stored in `OrgIntegration.config["base_url"]`.
+- the Gerrit server base URL;
+- the account's HTTP username;
+- the HTTP password generated under **Settings → HTTP Credentials**;
+- an optional organization VPN for a private Gerrit server.
 
-Authenticated REST and clone use the `/a/` path prefix
-(`https://user:password@host/a/<project>`). Manage these credentials on the
-`/integrations` page (React `OrgIntegrationsPage`) — type **Gerrit**.
+The password is stored encrypted. AIST uses Gerrit's authenticated REST and
+clone paths for validation, repository discovery, and source acquisition.
 
-## Project names
+## Import repositories
 
-Gerrit projects are slash-paths (e.g. `platform/build/soong`) with no
-owner/repo split. On import the path is split by the **last** `/` into
-`RepositoryInfo.repo_owner` / `repo_name`, so `repo_full` reconstructs the full
-path. Single-segment projects (e.g. `All-Projects`) get an empty `repo_owner`;
-the binding falls back to `repo_name` so the clone URL has no stray slash.
+1. Validate the Gerrit integration.
+2. On the Projects page, select **Import from Gerrit**.
+3. Choose the organization and list accessible projects.
+4. Select the projects to import.
 
-## Languages
+Gerrit project names may contain nested path segments. Gerrit does not provide
+language statistics through the API used by AIST, so assign supported languages
+on the imported project before relying on automatic analyzer selection.
 
-Gerrit's REST API exposes no language statistics, so imported projects start
-with **empty** `supported_languages`. Assign languages afterwards via the
-project edit form; they drive analyzer selection at pipeline time.
-
-## VPN
-
-Listing and metadata fetch run in a Celery worker through
-`OrgIntegration.scoped_session(...)`, which routes traffic through the VPN
-sidecar **only when** a `vpn_integration` is attached — otherwise a direct
-session is used. Gerrit therefore works both behind a VPN and without one, the
-same way as self-hosted GitLab.
-
-## Import flow
-
-1. `/integrations` — create a **Gerrit** `OrgIntegration` (base URL + username +
-   HTTP password).
-2. Projects page → **Import from Gerrit** → pick the organization → **List
-   projects** (calls `gerrit_projects_list` → `fetch_gerrit_projects`) → select
-   projects → **Import selected** (`import_project_from_gerrit` →
-   `fetch_gerrit_project_info`).
+Private validation, discovery, and source acquisition use the VPN selected on
+the Gerrit integration.

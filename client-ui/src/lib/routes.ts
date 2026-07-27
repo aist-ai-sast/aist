@@ -66,6 +66,14 @@ type RouteMap = {
   org_integration_detail_url: string;
   org_integration_validate_url: string;
   org_integration_validate_status_url: string;
+  dast_integration_import_url: string;
+  dast_integration_onboarding_url: string;
+  dast_integration_rotate_token_url: string;
+  organization_dast_target_catalog_url: string;
+  dast_integration_sync_capabilities_url: string;
+  project_dast_bindings_url: string;
+  dast_binding_detail_url: string;
+  project_launch_configs_url: string;
   project_integration_overrides_url: string;
   project_integration_override_detail_url: string;
 };

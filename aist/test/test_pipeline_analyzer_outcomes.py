@@ -9,6 +9,7 @@ from unittest.mock import patch
 from django.utils import timezone
 from dojo.models import Engagement, Finding, Test, Test_Type
 
+from aist.execution.dispatching import LaunchAcceptance
 from aist.models import AISTPipeline, AISTStatus
 from aist.tasks.pipeline import run_sast_pipeline
 from aist.test.test_api import AISTApiBase
@@ -31,6 +32,15 @@ def _dummy_script_path_context():
 
 
 class AnalyzerOutcomesPipelineTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        acceptance = patch(
+            "aist.tasks.pipeline.accept_published_launch",
+            return_value=LaunchAcceptance.ACCEPTED,
+        )
+        acceptance.start()
+        self.addCleanup(acceptance.stop)
+
     def _pipeline_params(self, *, output_dir: str) -> SimpleNamespace:
         descriptor = {
             "id": self.pv.id,

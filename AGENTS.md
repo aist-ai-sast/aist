@@ -67,9 +67,10 @@ def get_queryset(self):
 
 - Never use `.all()` without org filter on org-owned models.
 - Org hierarchy: User → OrgMembership → Organization → ProductType → Product → AISTProject → AISTPipeline → Finding.
-  Cross-org access is absolutely prohibited even through nested lookups. Full model
-  (full vs. restricted member, per-project overrides can only narrow — never elevate — the
-  org-level role) is in
+  Cross-org access is absolutely prohibited even through nested lookups. For full members,
+  project overrides can only narrow the organization role. Restricted members receive no
+  project access from the baseline membership; each explicit project grant defines the role
+  for that project and may therefore be Writer or Maintainer. The full model is in
   [tenant isolation and access](docs/security/tenant-isolation-and-access.md).
 - In `context_extractor_service`: all file access must validate path against project root.
   No `..` traversal, no absolute paths outside allowed directory.
@@ -87,14 +88,13 @@ def get_queryset(self):
 - [ ] File paths in `context_extractor_service` validated against project root.
 - [ ] No hardcoded tokens or passwords outside test fixtures.
 - [ ] Docker configs: no privileged mode, no host network without justification.
-- [ ] Touching API tokens or per-org token scope? Known open gap: tokens are user-scoped,
-      not org-scoped — one token authenticates a user across every org they belong to. See
-      [tenant isolation and access](docs/security/tenant-isolation-and-access.md#api-tokens).
-      Do not assume a token is bound to one organization.
-- [ ] Touching `aist/api/files.py` local-file serving? Known open gap: `_return_local_file`
-      resolves `root / subpath` but does not compare the resolved path against `root` before
-      opening it (unlike archive extraction, which does). See the
-      [threat register](docs/security/threat-register.md#untrusted-source-and-file-paths).
+- [ ] Touching API tokens? Preserve the token's organization binding and intersect it with
+      the owner's current role, project restrictions, expiry, and method scope. See
+      [access control and roles](docs/security/access-control-and-roles.md#aist-personal-access-tokens).
+- [ ] Touching local-file serving? Resolve the requested path, verify that it remains under
+      the authorized project root, and cover traversal and symlink cases with tests. Report
+      any suspected vulnerability privately according to [SECURITY.md](SECURITY.md); do not
+      describe an exploitable, unpatched path in public documentation.
 
 ## REST API patterns
 
@@ -172,5 +172,4 @@ To invoke a skill, read its SKILL.md and follow the instructions exactly.
 | `/aist-plan` | Create atomic implementation plan before starting a feature | `.codex/skills/aist-plan/SKILL.md` |
 | `/aist-debug` | Systematic root-cause debugging for aist/, Celery, dedup, pipeline | `.codex/skills/aist-debug/SKILL.md` |
 | `/aist-jira-description` | Generate grouped Jira ticket descriptions from pipeline findings | `.codex/skills/aist-jira-description/SKILL.md` |
-| `/security-architecture-documenter` | Draft concise, verified product, architecture, and security documentation | `.codex/skills/security-architecture-documenter/SKILL.md` |
 | `/security-architecture-maintainer` | Update architecture documentation and threat models from an affected diff | `.codex/skills/security-architecture-maintainer/SKILL.md` |

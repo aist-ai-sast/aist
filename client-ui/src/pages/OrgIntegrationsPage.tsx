@@ -4,7 +4,10 @@ import { toUserMessage } from "../lib/api";
 import {
   useCreateOrgIntegration,
   useDeleteOrgIntegration,
+  useImportDastIntegration,
+  useUpdateDastIntegrationOnboarding,
   useUpdateOrgIntegration,
+  useSyncDastCapabilities,
   useValidateOrgIntegration,
   useCreateWorkItemProvider,
   useDeleteWorkItemProvider,
@@ -13,6 +16,7 @@ import {
   useSetProjectIntegrationOverride,
   useDeleteProjectIntegrationOverride,
   type OrgIntegrationPayload,
+  type DastOnboardingBundle,
   type VpnSecretPayload,
   type WorkItemProviderPayload,
 } from "../lib/mutations";
@@ -33,7 +37,9 @@ import SelectField from "../components/SelectField";
 import TextInput from "../components/TextInput";
 import SecretTextareaField from "../components/SecretTextareaField";
 import PasswordField from "../components/PasswordField";
-import { PROVIDER_ICON_PATHS } from "../lib/providerIcons";
+import PermissionGate from "../components/PermissionGate";
+import { TYPE_LABELS, TypeBadge, SectionCard, AddButton } from "../components/OrgIntegrationUI";
+import DastBindingsSection from "../components/DastBindingsSection";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -53,90 +59,15 @@ const ORG_INTEGRATION_TYPES: IntegrationType[] = [
   "DAST",
 ];
 
-const TYPE_LABELS: Record<string, string> = {
-  GITLAB: "GitLab",
-  GITHUB: "GitHub",
-  GERRIT: "Gerrit",
-  GITEA: "Gitea",
-  SLACK: "Slack",
-  EMAIL: "Email",
-  VPN: "VPN",
-  CLAUDE_CODE: "Claude Code",
-  DAST: "DAST",
-  JIRA: "Jira",
-  YOUTRACK: "YouTrack",
-  LINEAR: "Linear",
-  AZURE_DEVOPS: "Azure DevOps",
-  GENERIC: "Generic",
-};
-
 // Self-hosted SCM providers commonly sit behind a VPN — GitHub is always
 // hosted, so it's excluded here.
-const SELF_HOSTED_SCM_TYPES: IntegrationType[] = ["GITLAB", "GERRIT", "GITEA"];
-
-const TYPE_BADGE_CLASSES: Record<string, string> = {
-  GITLAB: "border-orange-500/40 bg-orange-500/10 text-orange-300",
-  GITHUB: "border-slate-400/40 bg-slate-400/10 text-slate-300",
-  GERRIT: "border-red-500/40 bg-red-500/10 text-red-300",
-  GITEA: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-  SLACK: "border-green-500/40 bg-green-500/10 text-green-300",
-  EMAIL: "border-brand-500/40 bg-brand-500/10 text-brand-300",
-  JIRA: "border-blue-500/40 bg-blue-500/10 text-blue-300",
-  YOUTRACK: "border-purple-500/40 bg-purple-500/10 text-purple-300",
-  LINEAR: "border-indigo-500/40 bg-indigo-500/10 text-indigo-300",
-  AZURE_DEVOPS: "border-cyan-500/40 bg-cyan-500/10 text-cyan-300",
-  GENERIC: "border-slate-400/30 bg-slate-400/10 text-slate-400",
-  VPN: "border-slate-400/40 bg-slate-400/10 text-slate-300",
-  CLAUDE_CODE: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-  DAST: "border-rose-500/40 bg-rose-500/10 text-rose-300",
-};
-
-
-function ProviderIcon({ type }: { type: string }) {
-  const d = PROVIDER_ICON_PATHS[type];
-  if (!d) return null;
-  return (
-    <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0" aria-hidden="true">
-      <path fill="currentColor" d={d} />
-    </svg>
-  );
-}
-
-function TypeBadge({ type }: { type: string }) {
-  const cls = TYPE_BADGE_CLASSES[type] ?? TYPE_BADGE_CLASSES.GENERIC;
-  return (
-    <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${cls}`}>
-      <ProviderIcon type={type} />
-      {TYPE_LABELS[type] ?? type}
-    </span>
-  );
-}
+const SELF_HOSTED_SCM_TYPES: IntegrationType[] = ["GITLAB", "GERRIT", "GITEA", "DAST"];
 
 function LockIcon() {
   return (
     <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
       <path fill="currentColor" d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2Zm-6 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4Zm3.1-9H8.9V6a3.1 3.1 0 0 1 6.2 0v2Z" />
     </svg>
-  );
-}
-
-function SectionCard({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="aist-card border-night-500/80 p-0">
-      <div className="border-b border-night-500/70 px-5 py-4">
-        <div className="text-xs uppercase tracking-[0.2em] text-slate-300">{title}</div>
-        {description && <p className="mt-0.5 text-xs text-slate-500">{description}</p>}
-      </div>
-      <div className="px-5 py-4 space-y-3">{children}</div>
-    </section>
   );
 }
 
@@ -154,8 +85,13 @@ function ResourceRow({
   onEdit,
   onDelete,
   onValidate,
+  onSynchronize,
   isPendingDelete,
   isPendingValidate,
+  isPendingSynchronize,
+  organizationId,
+  statusLabel,
+  fingerprint,
 }: {
   typeKey: string;
   name: string;
@@ -166,13 +102,20 @@ function ResourceRow({
   onEdit: () => void;
   onDelete: () => void;
   onValidate: () => void;
+  onSynchronize?: () => void;
   isPendingDelete: boolean;
   isPendingValidate: boolean;
+  isPendingSynchronize?: boolean;
+  organizationId: number;
+  statusLabel?: string;
+  fingerprint?: string;
 }) {
   return (
     <div className="flex items-center gap-3 rounded-2xl border border-night-500/80 bg-night-800/75 px-4 py-3">
       <TypeBadge type={typeKey} />
       <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-100">{name}</span>
+      {statusLabel && <span className="text-[10px] uppercase tracking-wide text-slate-400">{statusLabel}</span>}
+      {fingerprint && <span className="max-w-40 truncate font-mono text-[10px] text-slate-500" title={fingerprint}>{fingerprint}</span>}
       <div className="flex shrink-0 items-center gap-1.5 text-[11px]">
         {vpnName && (
           <span className="flex items-center gap-1 rounded-full border border-slate-500/30 bg-slate-500/10 px-2 py-0.5 text-[10px] text-slate-400">
@@ -198,6 +141,7 @@ function ResourceRow({
           </span>
         )}
       </div>
+      <PermissionGate action="manage_access" organizationId={organizationId}>
       <div className="flex shrink-0 gap-1">
         <button
           className="aist-icon-button border-night-400/60 bg-night-700/60 text-slate-300 text-[11px] px-2.5 py-1.5"
@@ -222,6 +166,19 @@ function ResourceRow({
             </>
           )}
         </button>
+        {onSynchronize && (
+          <button
+            className="aist-icon-button border-night-400/60 bg-night-700/60 text-slate-300 text-[11px] px-2.5 py-1.5"
+            disabled={isPendingSynchronize}
+            onClick={onSynchronize}
+            title="Refresh the target catalog from the provider"
+          >
+            <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5${isPendingSynchronize ? " animate-spin" : ""}`} aria-hidden="true">
+              <path fill="currentColor" d="M12 6V3L8 7l4 4V8a4 4 0 1 1-4 4H6a6 6 0 1 0 6-6Z" />
+            </svg>
+            {isPendingSynchronize ? "Synchronizing…" : "Synchronize"}
+          </button>
+        )}
         <button
           className="aist-icon-button border-night-400/60 bg-night-700/60 text-slate-300 text-[11px] px-2.5 py-1.5"
           onClick={onEdit}
@@ -244,21 +201,8 @@ function ResourceRow({
           Delete
         </button>
       </div>
+      </PermissionGate>
     </div>
-  );
-}
-
-function AddButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      className="aist-icon-button border-brand-500/50 bg-brand-500/15 text-brand-100 hover:border-brand-400/70 hover:bg-brand-500/25"
-      onClick={onClick}
-    >
-      <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-        <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2Z" />
-      </svg>
-      Add
-    </button>
   );
 }
 
@@ -422,19 +366,45 @@ function OrgIntegrationConfigFields({
   }
   if (type === "DAST") {
     return (
-      <label className="text-xs text-slate-400 sm:col-span-2">
-        Gateway URL
-        <TextInput
-          className="mt-1"
-          placeholder="https://dast-gateway.internal"
-          value={config.gateway_url ?? ""}
-          onChange={(e) => onChange("gateway_url", e.target.value)}
-        />
-        <p className="mt-1 text-[11px] text-slate-500">
-          Base URL of the DAST integration gateway. The integrator token below authenticates
-          against it.
-        </p>
-      </label>
+      <>
+        <label className="text-xs text-slate-400 sm:col-span-2">
+          Gateway URL
+          <TextInput
+            className="mt-1"
+            placeholder="https://dast-gateway.internal"
+            value={config.gateway_url ?? ""}
+            onChange={(e) => onChange("gateway_url", e.target.value)}
+          />
+        </label>
+        <label className="text-xs text-slate-400">
+          Integrator ID
+          <TextInput
+            className="mt-1"
+            placeholder="pub_aist"
+            value={config.integrator_public_id ?? ""}
+            onChange={(e) => onChange("integrator_public_id", e.target.value)}
+          />
+        </label>
+        <label className="text-xs text-slate-400">
+          Server fingerprint
+          <TextInput
+            className="mt-1 font-mono"
+            placeholder="sha256:..."
+            value={config.server_fingerprint ?? ""}
+            onChange={(e) => onChange("server_fingerprint", e.target.value)}
+          />
+        </label>
+        <label className="text-xs text-slate-400 sm:col-span-2">
+          Public CA bundle <span className="text-slate-500">(blank uses system trust)</span>
+          <SecretTextareaField
+            className="mt-1"
+            rows={4}
+            placeholder="-----BEGIN CERTIFICATE-----"
+            value={config.ca_bundle ?? ""}
+            onChange={(e) => onChange("ca_bundle", e.target.value)}
+          />
+        </label>
+      </>
     );
   }
   if (type === "CLAUDE_CODE") {
@@ -678,6 +648,8 @@ function OrgIntegrationForm({
   const toast = useToast();
   const createIntegration = useCreateOrgIntegration(orgId);
   const updateIntegration = useUpdateOrgIntegration(orgId);
+  const importDastIntegration = useImportDastIntegration(orgId);
+  const updateDastIntegration = useUpdateDastIntegrationOnboarding(orgId);
   const { data: orgIntegrations } = useOrgIntegrations(orgId);
   const vpnOptions = (orgIntegrations ?? []).filter((i) => i.integration_type === "VPN" && i.is_active);
 
@@ -694,8 +666,10 @@ function OrgIntegrationForm({
         }
       : EMPTY_ORG_FORM,
   );
+  const [dastBundleJson, setDastBundleJson] = useState("");
 
   useEffect(() => {
+    setDastBundleJson("");
     setForm(
       editing
         ? {
@@ -711,7 +685,64 @@ function OrgIntegrationForm({
     );
   }, [editing]);
 
+  function loadDastBundle() {
+    try {
+      const bundle = JSON.parse(dastBundleJson) as DastOnboardingBundle;
+      if (bundle.bundle_version !== 1 || bundle.contract_major !== 2) {
+        throw new Error("Only bundle_version 1 with contract_major 2 is supported.");
+      }
+      setForm((previous) => ({
+        ...previous,
+        integration_type: "DAST",
+        secret: bundle.token,
+        config: {
+          gateway_url: bundle.gateway_url,
+          ca_bundle: bundle.ca_bundle,
+          integrator_public_id: bundle.integrator_public_id,
+          server_fingerprint: bundle.server_fingerprint,
+        },
+      }));
+    } catch (error) {
+      toast.push(`Bundle parse failed: ${toUserMessage(error)}`, "error");
+    }
+  }
+
   async function handleSave() {
+    if (form.integration_type === "DAST") {
+      const bundle: DastOnboardingBundle = {
+        bundle_version: 1,
+        gateway_url: form.config.gateway_url?.trim() ?? "",
+        ca_bundle: form.config.ca_bundle?.trim() ?? "",
+        contract_major: 2,
+        integrator_public_id: form.config.integrator_public_id?.trim() ?? "",
+        server_fingerprint: form.config.server_fingerprint?.trim() ?? "",
+        token: form.secret,
+      };
+      try {
+        if (editing) {
+          await updateDastIntegration.mutateAsync({
+            integrationId: editing.id,
+            payload: { name: form.name.trim(), vpn_integration_id: form.vpn_integration, bundle },
+          });
+          toast.push("DAST integration updated.", "success");
+        } else {
+          await importDastIntegration.mutateAsync({
+            name: form.name.trim(),
+            vpn_integration_id: form.vpn_integration,
+            bundle,
+          });
+          toast.push("DAST onboarding bundle imported.", "success");
+        }
+        setForm((previous) => ({ ...previous, secret: "" }));
+        setDastBundleJson("");
+        importDastIntegration.reset();
+        updateDastIntegration.reset();
+        onDone();
+      } catch (error) {
+        toast.push(toUserMessage(error), "error");
+      }
+      return;
+    }
     const config: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(form.config)) {
       if (v?.trim()) config[k] = v.trim();
@@ -753,7 +784,11 @@ function OrgIntegrationForm({
     }
   }
 
-  const isPending = createIntegration.isPending || updateIntegration.isPending;
+  const isPending =
+    createIntegration.isPending ||
+    updateIntegration.isPending ||
+    importDastIntegration.isPending ||
+    updateDastIntegration.isPending;
 
   return (
     <div className="rounded-2xl border border-night-500/80 bg-night-700/60 p-4 space-y-3">
@@ -795,6 +830,24 @@ function OrgIntegrationForm({
           />
         ) : (
           <>
+            {form.integration_type === "DAST" && (
+              <div className="sm:col-span-2 rounded-xl border border-night-500/60 bg-night-800/50 p-3">
+                <div className="text-xs font-medium text-slate-300">Import onboarding bundle</div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Paste the protected JSON emitted by the DAST deployment, or enter the same fields manually below.
+                </p>
+                <SecretTextareaField
+                  className="mt-2"
+                  rows={5}
+                  value={dastBundleJson}
+                  onChange={(event) => setDastBundleJson(event.target.value)}
+                  placeholder='{"bundle_version":1,"gateway_url":"https://..."}'
+                />
+                <button type="button" className="aist-icon-button mt-2" onClick={loadDastBundle}>
+                  Load bundle
+                </button>
+              </div>
+            )}
             <OrgIntegrationConfigFields
               type={form.integration_type}
               config={form.config}
@@ -808,7 +861,9 @@ function OrgIntegrationForm({
                     ? "Integrator Token"
                     : "Access Token"}
                 {form.integration_type === "GITHUB" && <span className="text-slate-500"> (optional)</span>}
-                {editing?.has_secret && <span className="ml-1 text-slate-500">(leave blank to keep existing)</span>}
+                {editing?.has_secret && form.integration_type !== "DAST" && (
+                  <span className="ml-1 text-slate-500">(leave blank to keep existing)</span>
+                )}
                 <PasswordField
                   className="mt-1"
                   placeholder={editing?.has_secret ? "••••••••••••••••" : ""}
@@ -855,6 +910,11 @@ function OrgIntegrationForm({
         isPending={isPending}
         disabled={
           !form.name.trim() ||
+          (form.integration_type === "DAST" &&
+            (!form.config.gateway_url?.trim() ||
+              !form.config.integrator_public_id?.trim() ||
+              !form.config.server_fingerprint?.trim() ||
+              !form.secret)) ||
           (form.integration_type === "EMAIL" && !form.config.from_email?.trim()) ||
           (form.integration_type === "SLACK" && !form.config.default_channel?.trim())
         }
@@ -873,6 +933,7 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
   const integrationsQuery = useOrgIntegrations(orgId);
   const deleteIntegration = useDeleteOrgIntegration(orgId);
   const validateIntegration = useValidateOrgIntegration();
+  const syncCapabilities = useSyncDastCapabilities(orgId);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [validatingState, setValidatingState] = useState<{ integrationId: number; taskId: string } | null>(null);
@@ -889,7 +950,7 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
   useEffect(() => {
     if (!validatingState) return;
     const s = validationStatus.data?.state;
-    if (s === "SUCCESS" || s === "FAILURE") {
+    if (s === "SUCCESS" || s === "FAILURE" || s === "READY" || s === "INVALID") {
       const data = validationStatus.data!;
       toast.push(
         data.valid
@@ -927,6 +988,15 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
     try {
       const { task_id } = await validateIntegration.mutateAsync(integration.id);
       setValidatingState({ integrationId: integration.id, taskId: task_id });
+    } catch (error) {
+      toast.push(toUserMessage(error), "error");
+    }
+  }
+
+  async function handleSynchronize(integration: OrgIntegration) {
+    try {
+      await syncCapabilities.mutateAsync(integration.id);
+      toast.push("DAST target catalog refresh started.", "success");
     } catch (error) {
       toast.push(toUserMessage(error), "error");
     }
@@ -970,10 +1040,29 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
             onEdit={() => { setEditingId(integration.id); setShowForm(false); }}
             onDelete={() => handleDelete(integration)}
             onValidate={() => handleValidate(integration)}
+            onSynchronize={
+              integration.integration_type === "DAST" && integration.dast_state?.validation_state === "READY"
+                ? () => handleSynchronize(integration)
+                : undefined
+            }
             isPendingDelete={deleteIntegration.isPending}
             isPendingValidate={
               (validateIntegration.isPending && validateIntegration.variables === integration.id) ||
               validatingState?.integrationId === integration.id
+            }
+            isPendingSynchronize={
+              syncCapabilities.isPending && syncCapabilities.variables === integration.id
+            }
+            organizationId={orgId}
+            statusLabel={
+              integration.integration_type === "DAST"
+                ? integration.dast_state?.validation_state.replaceAll("_", " ")
+                : undefined
+            }
+            fingerprint={
+              integration.integration_type === "DAST"
+                ? String(integration.config.server_fingerprint ?? "")
+                : undefined
             }
           />
         ),
@@ -981,7 +1070,9 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
       {showForm && !editingId ? (
         <OrgIntegrationForm orgId={orgId} editing={null} onDone={handleDone} />
       ) : !editingId ? (
-        <AddButton onClick={() => setShowForm(true)} />
+        <PermissionGate action="manage_access" organizationId={orgId}>
+          <AddButton onClick={() => setShowForm(true)} />
+        </PermissionGate>
       ) : null}
     </SectionCard>
   );
@@ -1300,13 +1391,16 @@ function WorkItemProvidersSection({ orgId }: { orgId: number }) {
               (validateProvider.isPending && validateProvider.variables === provider.id) ||
               validatingProviderState?.providerId === provider.id
             }
+            organizationId={orgId}
           />
         ),
       )}
       {showForm && !editingId ? (
         <WorkItemProviderForm orgId={orgId} editing={null} onDone={handleDone} />
       ) : !editingId ? (
-        <AddButton onClick={() => setShowForm(true)} />
+        <PermissionGate action="manage_access" organizationId={orgId}>
+          <AddButton onClick={() => setShowForm(true)} />
+        </PermissionGate>
       ) : null}
     </SectionCard>
   );
@@ -1498,6 +1592,7 @@ export default function OrgIntegrationsPage() {
           <OrgIntegrationsSection orgId={org.id} />
           <WorkItemProvidersSection orgId={org.id} />
           <ProjectOverridesSection orgId={org.id} />
+          <DastBindingsSection orgId={org.id} />
         </div>
       ))}
     </div>

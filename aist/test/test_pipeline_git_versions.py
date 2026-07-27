@@ -7,6 +7,7 @@ from unittest.mock import patch
 from django.utils import timezone
 from dojo.models import Engagement, Finding, Test, Test_Type
 
+from aist.execution.dispatching import LaunchAcceptance
 from aist.models import AISTPipeline, AISTProjectVersion, VersionType
 from aist.tasks.pipeline import run_sast_pipeline
 from aist.test.test_api import AISTApiBase
@@ -26,6 +27,15 @@ def _dummy_script_path_context():
 
 
 class PipelineGitVersionResolutionTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        acceptance = patch(
+            "aist.tasks.pipeline.accept_published_launch",
+            return_value=LaunchAcceptance.ACCEPTED,
+        )
+        acceptance.start()
+        self.addCleanup(acceptance.stop)
+
     def test_launch_fails_when_pipeline_and_params_project_version_mismatch(self):
         version_a = AISTProjectVersion.objects.create(
             project=self.project,

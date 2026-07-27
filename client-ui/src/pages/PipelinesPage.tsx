@@ -10,6 +10,7 @@ import PageErrorState from "../components/PageErrorState";
 import PermissionGate from "../components/PermissionGate";
 import ImportPipelineDialog, { ImportUploadIcon } from "../components/ImportPipelineDialog";
 import { pipelineStatusBadgeClass } from "../lib/badgeStyles";
+import { dastOutcomeNarrative } from "../lib/dastNarrative";
 
 const statusOptions = [
   { value: "all", label: "All statuses" },
@@ -75,6 +76,7 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
   if (!pipeline) {
     return <div className="text-sm text-slate-400">Select a pipeline to view details.</div>;
   }
+  const dastOutcome = dastOutcomeNarrative(pipeline.dastOutcomeCode);
   return (
     <div className="space-y-4 text-xs text-slate-300">
       <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Pipeline Detail</div>
@@ -110,6 +112,22 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
           </div>
         </div>
       </div>
+
+      {pipeline.executionType === "DAST" && dastOutcome ? (
+        <div
+          className={[
+            "rounded-xl border px-4 py-3",
+            dastOutcome.tone === "success"
+              ? "border-emerald-400/30 bg-emerald-400/10"
+              : dastOutcome.tone === "warning"
+                ? "border-amber-400/30 bg-amber-400/10"
+                : "border-night-500 bg-night-900",
+          ].join(" ")}
+        >
+          <div className="font-semibold text-slate-100">{dastOutcome.title}</div>
+          <div className="mt-1 text-slate-300">{dastOutcome.detail}</div>
+        </div>
+      ) : null}
 
       <div>
         <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Actions</div>

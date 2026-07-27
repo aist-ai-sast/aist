@@ -72,6 +72,22 @@ jobs:
         env:
           DJANGO_VERSION: ${{ matrix.os }}
 
+      - name: DAST mock end-to-end acceptance
+        if: matrix.suite == 'aist' && matrix.os == 'debian'
+        timeout-minutes: 5
+        run: >-
+          docker compose $COMPOSE_FILES run --rm --no-deps
+          --entrypoint /bin/bash uwsgi -lc
+          '. /secret-file-loader.sh;
+          . /reach_database.sh;
+          cd /app;
+          unset DD_DATABASE_URL DD_CELERY_BROKER_URL;
+          wait_for_database_to_be_reachable;
+          python3 manage.py test aist.test.test_dast_mock_end_to_end
+          -v 2 --keepdb --no-input'
+        env:
+          DJANGO_VERSION: ${{ matrix.os }}
+
       - name: Logs
         if: failure()
         run: docker compose $COMPOSE_FILES logs --tail="2500" uwsgi

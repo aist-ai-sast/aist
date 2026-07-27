@@ -10,7 +10,7 @@ FROM python:3.13.11-slim-trixie@sha256:1f3781f578e17958f55ada96c0a827bf279a11e10
 FROM node:22-alpine@sha256:e4bf2a82ad0a4037d28035ae71529873c069b13eb0455466ae0bc13363826e34 AS client-build
 WORKDIR /app/client-ui
 COPY client-ui/ ./
-RUN npm install --no-package-lock && npm run build
+RUN npm ci --no-audit --no-fund && npm run build
 
 FROM base AS build
 WORKDIR /app
@@ -188,3 +188,9 @@ USER ${uid}
 
 FROM development AS django-unittests
 COPY --chown=${uid}:${gid} vendor/defectdojo/ ./vendor/defectdojo/
+COPY --chown=${uid}:${gid} docs/ ./docs/
+COPY --chown=${uid}:${gid} README.md ./README.md
+COPY --chown=${uid}:${gid} SECURITY.md ./SECURITY.md
+COPY --chown=${uid}:${gid} docker-compose.yml ./docker-compose.yml
+COPY --chown=${uid}:${gid} scripts/deploy-prod.sh ./scripts/deploy-prod.sh
+COPY --chown=${uid}:${gid} scripts/dast-staging-canary.py ./scripts/dast-staging-canary.py

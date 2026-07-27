@@ -12,6 +12,14 @@ from aist.api.account import (
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.calendar_events import AISTCalendarEventDetailAPI, AISTCalendarEventsAPI
 from aist.api.cwe import AISTCweDetailAPI
+from aist.api.dast_targets import (
+    DastIntegrationCapabilitySyncAPI,
+    DastProjectBindingSerializer,
+    DastTargetSerializer,
+    OrganizationDastTargetCatalogAPI,
+    ProjectDastBindingDetailAPI,
+    ProjectDastBindingListCreateAPI,
+)
 from aist.api.files import ProjectVersionFileBlobAPI, ProjectVersionPrewarmAPI
 from aist.api.findings import (
     AISTFindingBulkStatusAPI,
@@ -52,6 +60,8 @@ from aist.api.launch_configs import (
     create_launch_config_for_project,
 )
 from aist.api.launch_schedules import (
+    LaunchConfigScheduleAPI,
+    LaunchConfigScheduleWriteSerializer,
     LaunchScheduleBulkDisableAPI,
     LaunchScheduleBulkDisableSerializer,
     LaunchScheduleDetailAPI,
@@ -60,8 +70,6 @@ from aist.api.launch_schedules import (
     LaunchSchedulePreviewSerializer,
     LaunchScheduleRunOnceAPI,
     LaunchScheduleSerializer,
-    LaunchScheduleUpsertSerializer,
-    ProjectLaunchScheduleUpsertAPI,
 )
 from aist.api.members import (
     AISTOrgMemberDetailAPI,
@@ -72,6 +80,10 @@ from aist.api.members import (
     AISTOrgMemberResetPasswordAPI,
 )
 from aist.api.org_integrations import (
+    DastIntegrationDisableAPI,
+    DastIntegrationOnboardingDetailAPI,
+    DastIntegrationTokenRotateAPI,
+    OrganizationDastIntegrationImportAPI,
     OrgIntegrationDetailAPI,
     OrgIntegrationListCreateAPI,
     OrgIntegrationSerializer,
@@ -104,10 +116,11 @@ from aist.api.projects import (
     AISTProjectSerializer,
 )
 from aist.api.queue import (
-    PipelineLaunchQueueClearDispatchedAPI,
-    PipelineLaunchQueueClearSerializer,
-    PipelineLaunchQueueDetailAPI,
-    PipelineLaunchQueueListAPI,
+    PipelineLaunchRequestCancelAPI,
+    PipelineLaunchRequestClearDispatchedAPI,
+    PipelineLaunchRequestClearSerializer,
+    PipelineLaunchRequestDetailAPI,
+    PipelineLaunchRequestListAPI,
 )
 from aist.api.tests_engagements import (
     AISTEngagementDetailAPI,
@@ -169,6 +182,12 @@ __all__ = [
     "AISTProjectVersionCreateSerializer",
     "AISTSetPasswordAPI",
     "AISTTestDetailAPI",
+    "DastIntegrationCapabilitySyncAPI",
+    "DastIntegrationDisableAPI",
+    "DastIntegrationOnboardingDetailAPI",
+    "DastIntegrationTokenRotateAPI",
+    "DastProjectBindingSerializer",
+    "DastTargetSerializer",
     "EmailActionCreateSerializer",
     "FindingWorkItemDetailAPI",
     "FindingWorkItemListCreateAPI",
@@ -185,6 +204,8 @@ __all__ = [
     "LaunchConfigActionSerializer",
     "LaunchConfigCreateRequestSerializer",
     "LaunchConfigDashboardListAPI",
+    "LaunchConfigScheduleAPI",
+    "LaunchConfigScheduleWriteSerializer",
     "LaunchConfigSerializer",
     "LaunchConfigStartRequestSerializer",
     "LaunchScheduleBulkDisableAPI",
@@ -195,22 +216,26 @@ __all__ = [
     "LaunchSchedulePreviewSerializer",
     "LaunchScheduleRunOnceAPI",
     "LaunchScheduleSerializer",
-    "LaunchScheduleUpsertSerializer",
     "OrgIntegrationDetailAPI",
     "OrgIntegrationListCreateAPI",
     "OrgIntegrationSerializer",
     "OrgIntegrationValidateAPI",
     "OrgIntegrationValidateStatusAPI",
     "OrganizationCreateAPI",
+    "OrganizationDastIntegrationImportAPI",
+    "OrganizationDastTargetCatalogAPI",
     "PipelineAPI",
-    "PipelineLaunchQueueClearDispatchedAPI",
-    "PipelineLaunchQueueClearSerializer",
-    "PipelineLaunchQueueDetailAPI",
-    "PipelineLaunchQueueListAPI",
+    "PipelineLaunchRequestCancelAPI",
+    "PipelineLaunchRequestClearDispatchedAPI",
+    "PipelineLaunchRequestClearSerializer",
+    "PipelineLaunchRequestDetailAPI",
+    "PipelineLaunchRequestListAPI",
     "PipelineListAPI",
     "PipelineResponseSerializer",
     "PipelineStartAPI",
     "PipelineStartRequestSerializer",
+    "ProjectDastBindingDetailAPI",
+    "ProjectDastBindingListCreateAPI",
     "ProjectIntegrationOverrideAPI",
     "ProjectIntegrationOverrideDetailAPI",
     "ProjectIntegrationOverrideSerializer",
@@ -219,7 +244,6 @@ __all__ = [
     "ProjectLaunchConfigDetailAPI",
     "ProjectLaunchConfigListCreateAPI",
     "ProjectLaunchConfigStartAPI",
-    "ProjectLaunchScheduleUpsertAPI",
     "ProjectVersionCreateAPI",
     "ProjectVersionFileBlobAPI",
     "ProjectVersionPrewarmAPI",

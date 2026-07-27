@@ -1,63 +1,50 @@
-# Work-Item Links
+# Work-item links
 
-A work-item link connects one AIST finding to a remediation ticket in
-![](../assets/icons/jira.svg) Jira, ![](../assets/icons/youtrack.svg) YouTrack,
-![](../assets/icons/github.svg) GitHub Issues, ![](../assets/icons/gitlab.svg) GitLab Issues,
-![](../assets/icons/linear.svg) Linear, ![](../assets/icons/azure-devops.svg) Azure DevOps,
-or to a manual URL.
+A work-item link connects one AIST finding to a remediation ticket or a manual
+URL. It gives reviewers delivery context without allowing the external ticket
+to change the finding's security disposition.
 
-![Work-item link status synchronisation](../assets/work-item-links.svg)
+![Work-item link status synchronization](../assets/work-item-links.svg)
 
-## Link model
+## Link and provider ownership
 
-A provider is an organization-owned connection to
-![](../assets/icons/jira.svg) Jira, ![](../assets/icons/youtrack.svg) YouTrack,
-![](../assets/icons/github.svg) GitHub, ![](../assets/icons/gitlab.svg) GitLab,
-![](../assets/icons/linear.svg) Linear, ![](../assets/icons/azure-devops.svg) Azure DevOps,
-or a Generic tracker. It holds its base URL, non-secret settings, active/sync
-state, and encrypted token where required.
+A provider is an organization-owned connection to an external tracker. It holds
+the provider type, base URL, non-secret settings, active and synchronization
+state, and an encrypted token when the provider requires one.
 
-A provider-backed link stores the ticket identifier/key, URL, title, raw status,
-normalized status category, last sync time, and error. A manual link stores a
-URL only and is never fetched.
-The provider must belong to the finding's product-type organization. The
-database rejects a cross-organization link even when it is written outside the
-REST API and prevents later tenant reassignment of the linked finding path.
+A provider-backed link stores the external ticket identity, URL, title, raw
+status, normalized status category, last refresh time, and any refresh error. A
+manual link stores a URL and is never fetched. The provider and finding must
+belong to the same organization.
 
 ## Supported providers
 
-- [Jira](../integrations/jira.md), [GitHub](../integrations/github.md), and
-  [GitLab](../integrations/gitlab.md) have an implemented sync backend and
-  refresh status automatically.
-- [YouTrack](../integrations/youtrack.md), [Linear](../integrations/linear.md),
-  and [Azure DevOps](../integrations/azure-devops.md) can be created and
-  linked today, but have no sync backend yet — they behave like a manual link
-  until one is implemented.
+| Provider | Create link | Automatic status refresh |
+|---|:---:|:---:|
+| Jira | Yes | Yes |
+| GitHub Issues | Yes | Yes |
+| GitLab Issues | Yes | Yes |
+| YouTrack | Yes | No; link-only |
+| Linear | Yes | No; link-only |
+| Azure DevOps | Yes | No; link-only |
+| Generic or manual URL | Yes | No |
 
-## Status refresh lifecycle
+The provider pages describe credentials and provider-specific status mapping.
+A link-only provider does not need a separate synchronization backend to retain
+the URL and manually entered context.
 
-1. Creating a provider-backed link queues an immediate single-link refresh.
-2. Celery Beat also schedules refreshes for active providers with sync enabled.
-3. A worker fetches every provider ticket independently and updates its link.
-4. It stores the current status, title, URL, timestamp, or `sync_error`.
+## Status refresh
 
-Inactive providers, disabled sync, and provider types without a backend are
-skipped. A failed ticket remains visible and never blocks its siblings.
+Creating a synchronized provider link queues its first refresh. Recurring work
+then refreshes links for active providers with synchronization enabled. Each
+ticket is processed independently, so one provider error or missing ticket does
+not block its siblings.
 
-## What the reviewer sees
+The finding displays both the provider's status and AIST's normalized category.
+Ticket state is informational: closing a ticket cannot close the finding,
+accept its risk, or override a reviewer decision. A provider that requires
+private connectivity uses its configured organization VPN route.
 
-Both the tracker’s raw status and its normalized category remain available on
-the finding. They are engineering context only: ticket state cannot close a
-finding or alter risk acceptance. If the provider requires it, worker requests
-use its organization VPN route.
-
-Readers can view work-item links attached to findings they can access. Creating,
-editing, manually changing status, or deleting a link requires finding-edit
-capability (Writer or above). Managing organization-owned provider credentials
-requires organization member-management capability. These checks are enforced
-by the backend; UI gates only hide controls the current organization cannot use.
-
-## Implementation references
-
-- [Provider and link records](../../aist/models.py:1598)
-- [Single-link and provider refresh](../../aist/work_items/sync.py:71)
+Readers can view links on findings they may access. Creating, changing, or
+removing a link requires finding-edit permission. Managing provider credentials
+requires organization-management permission.

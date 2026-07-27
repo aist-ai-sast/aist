@@ -1,61 +1,68 @@
-# AIST Documentation
+# AIST documentation
 
-This is the entrypoint to the AIST project reference. Choose the question you
-need to answer, then follow the linked workflow or architecture page.
+This index routes each reader question to one canonical page. Product and
+architecture pages explain stable behavior. Integration pages help configure an
+external system. Runbooks contain commands, diagnostics, and recovery.
 
-![Documentation map](assets/documentation-map.svg)
+![AIST documentation map](assets/documentation-map.svg)
 
-## Use AIST
+## Start here
 
+- [AIST and DAST product architecture](product-architecture/README.md) — what
+  the two products own and how they interact
+- [Platform building blocks](architecture/platform-building-blocks.md) — how
+  the AIST application is divided internally
+- [Access control and roles](security/access-control-and-roles.md) — who can see
+  and change organization- and project-owned data
+
+## Understand the product
+
+- [Organization and membership](product/organization.md)
 - [Project and source onboarding](product/project-and-source-onboarding.md)
-- [Organization](product/organization.md)
 - [Pipeline execution](product/pipeline-execution.md)
+- [Scheduled pipeline launches](product/scheduled-pipeline-launches.md)
 - [Finding review](product/finding-review.md)
 - [AI triage](product/ai-triage.md)
 - [Work-item links](product/work-item-links.md)
 - [Pipeline actions](product/pipeline-actions.md)
-- [Scheduled pipeline launches](product/scheduled-pipeline-launches.md)
 - [Canonical deduplication](aist-canonical-dedupe.md)
 
 ## Configure an integration
 
-Integration pages document one external system's credentials, quirks, and
-setup flow. Product pages above describe the general mechanism (import a
-repository, link a work item, run an action); these pages cover the
-provider-specific detail.
+- Source control: [GitHub](integrations/github.md),
+  [GitLab](integrations/gitlab.md), [Gerrit](integrations/gerrit.md), and
+  [Gitea](integrations/gitea.md)
+- Work items: [Jira](integrations/jira.md),
+  [GitHub Issues](integrations/github.md), [GitLab Issues](integrations/gitlab.md),
+  [YouTrack](integrations/youtrack.md), [Linear](integrations/linear.md), and
+  [Azure DevOps](integrations/azure-devops.md)
+- Delivery and network: [Slack](integrations/slack.md) and
+  [VPN](integrations/vpn.md)
+- Execution provider: [DAST](integrations/dast.md)
 
-- [GitHub](integrations/github.md) — SCM source and work-item provider
-- [GitLab](integrations/gitlab.md) — SCM source and work-item provider
-- [Gerrit](integrations/gerrit.md) — SCM source
-- [Gitea](integrations/gitea.md) — SCM source
-- [Jira](integrations/jira.md) — work-item provider
-- [YouTrack](integrations/youtrack.md) — work-item provider (no sync backend yet)
-- [Linear](integrations/linear.md) — work-item provider (no sync backend yet)
-- [Azure DevOps](integrations/azure-devops.md) — work-item provider (no sync backend yet)
-- [Slack](integrations/slack.md) — pipeline action handler
-- [VPN](integrations/vpn.md) — shared routing for internal-network integrations
-- [DAST](integrations/dast.md) — autonomous-scan gateway and manual report import
+The [work-item support matrix](product/work-item-links.md#supported-providers)
+distinguishes synchronized providers from link-only providers.
 
-## Understand the platform
+## Understand architecture and data flow
 
-Architecture pages describe one internal component or runtime responsibility at
-a time. They are linked here after their supporting data flows have been
-reviewed.
-
-- [AIST and DAST product architecture at a glance](product-architecture/README.md)
-- [Platform building blocks](architecture/platform-building-blocks.md)
-- [SAST pipeline runtime](architecture/sast-pipeline-runtime.md)
 - [Runtime deployment](architecture/runtime-deployment.md)
-
-## Follow data
-
-Data-flow pages trace one trigger to one durable outcome. They are the basis for
-the platform and security pages.
-
+- [SAST pipeline runtime](architecture/sast-pipeline-runtime.md)
 - [Source file access](data-flows/source-file-access.md)
 - [AI triage execution](data-flows/ai-triage-execution.md)
 - [VPN-routed operations](data-flows/vpn-routed-operations.md)
 
-## Assess security
+## Operate AIST
 
-- [Access control, roles, object permissions, and API tokens](security/access-control-and-roles.md)
+- [Deployment and recovery](runbooks/deployment-and-recovery.md)
+- [Recompute canonical duplicates](runbooks/canonical-deduplication-recompute.md)
+- [DAST operations](runbooks/dast-operations.md)
+- [DAST staging compatibility canary](runbooks/dast-staging-canary.md)
+
+## Review security
+
+- [Security documentation](security/README.md)
+- [Tenant isolation](security/tenant-isolation-and-access.md)
+- [Security boundaries and trust assumptions](security/threat-register.md)
+
+Report suspected vulnerabilities privately according to
+[`SECURITY.md`](../SECURITY.md).

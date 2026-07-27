@@ -1,37 +1,68 @@
-# Scheduled Pipeline Launches
+# Scheduled pipeline launches
 
-A launch schedule turns a project's launch configuration into durable queued
-pipeline requests at configured cron times.
+A launch schedule runs one saved launch configuration at recurring cron times.
+Each due tick first creates a durable launch request. A pipeline is created only
+after the request is still authorized, ready, and within its execution
+capacity.
 
-![Scheduled launch queue and dispatcher](../assets/scheduled-pipeline-launches.svg)
+![Scheduled pipeline launch lifecycle](../assets/scheduled-pipeline-launches.svg)
 
-## Schedule definition
+## Configure the schedule
 
-A schedule belongs to one launch configuration and stores a five-field cron
-expression, enabled state, and `max_concurrent_per_worker`. The API validates
-and previews ticks; a user can enqueue one run without changing the schedule.
+Each launch configuration can own one schedule with:
 
-## Create queue intent
+- a standard five-field cron expression;
+- an enabled or disabled state;
+- a maximum of 1–8 concurrent runs for that schedule.
 
-Celery Beat evaluates enabled schedules. A due tick not covered by `last_run_at`
-creates a durable queue item with the project, schedule, and launch
-configuration, then advances `last_run_at`. Invalid cron is logged and skipped.
-Scheduling never starts a pipeline directly.
+The schedule preview shows upcoming times in the server's configured timezone.
+Changing a schedule affects future ticks; it does not rewrite pipelines or
+launch requests that already exist.
 
-## Dispatch when capacity permits
+Creating or changing a schedule requires project-operate permission. Readers
+who can access the project can view the schedule and its resulting pipeline
+history.
 
-The dispatcher reads undispatched entries FIFO and compares active pipeline
-tasks on each worker with `max_concurrent_per_worker`. At capacity it leaves
-items queued. If worker inspection is unavailable, it logs that condition and
-continues rather than blocking the queue indefinitely.
+## From a due tick to a pipeline
 
-Before dispatch, it resolves the configured source version and locks it. An
-unfinished or just-dispatched run for that version leaves the item undispatched.
-On success it creates the pipeline, queues its worker task, stores the task ID,
-and links/marks the queue item dispatched. Authorized users can view, delete,
-or clear old dispatched entries.
+Celery Beat evaluates enabled schedules. For each unprocessed due tick, AIST
+records one launch request containing the selected launch configuration and the
+non-secret execution inputs needed to reproduce that request. Recording the
+request does not start a scan.
 
-## Implementation references
+The dispatcher then:
 
-- [Schedule-to-queue task](../../aist/tasks/launch_schedule.py:12)
-- [Guarded FIFO dispatcher](../../aist/tasks/pipeline_dispatcher.py:17)
+1. confirms that the schedule and project authority are still valid;
+2. resolves the execution target and checks its current readiness;
+3. waits for a capacity slot when the selected resource is busy;
+4. creates the pipeline and publishes its worker task when admission succeeds.
+
+Requests ready at the same time are considered by priority and then age. When
+an equivalent request is already waiting, AIST preserves one pending request
+and marks the replaced request as superseded rather than starting duplicate
+work.
+
+## Waiting and terminal states
+
+| Launch-request state | Meaning for the reader |
+|---|---|
+| Pending | Waiting for dispatch time, readiness, or capacity |
+| Superseded | Replaced by an equivalent pending request; no pipeline was started |
+| Dispatched | A pipeline was created and its worker task was admitted |
+| Expired | Capacity was unavailable until the request deadline |
+| Failed | Authority, readiness, or execution planning could not be validated |
+| Cancelled | The request was cancelled before execution was admitted |
+
+A capacity wait does not create an empty pipeline. The request is retried later
+and remains visible. Once dispatch creates a pipeline, execution state and
+cancellation belong to that pipeline.
+
+## Run once
+
+**Run once** queues the selected schedule immediately without changing its cron
+expression or recorded last tick. It follows the same durable request,
+authorization, capacity, and execution path as a scheduled tick.
+
+See [pipeline execution](pipeline-execution.md) for the lifecycle after a
+pipeline is created and [pipeline actions](pipeline-actions.md) for
+notifications triggered by pipeline status.

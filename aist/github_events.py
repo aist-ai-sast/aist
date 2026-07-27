@@ -5,6 +5,7 @@ import logging
 from asgiref.sync import sync_to_async
 from django_github_app.routing import GitHubRouter
 
+from aist.execution.enqueue import LaunchPrincipal, enqueue_pipeline_launch
 from aist.models import (
     AISTProjectVersion,
     PullRequest,
@@ -13,7 +14,7 @@ from aist.models import (
     ScmType,
     VersionType,
 )
-from aist.utils.pipeline import has_unfinished_pipeline, trigger_pipeline_for_pr
+from aist.utils.pipeline import has_unfinished_pipeline
 
 gh = GitHubRouter()
 logger = logging.getLogger("aist")
@@ -106,7 +107,10 @@ async def on_pr_event(event, gh, **_):
         is_from_fork,
     )
 
-    repo_info = await sync_to_async(RepositoryInfo.objects.select_related("project", "project__product").filter(
+    repo_info = await sync_to_async(RepositoryInfo.objects.select_related(
+        "project",
+        "project__product__prod_type__aist_organization",
+    ).filter(
         type=ScmType.GITHUB,
         repo_owner=owner,
         repo_name=name,
@@ -148,13 +152,24 @@ async def on_pr_event(event, gh, **_):
     else:
         logger.info("Updated PullRequest record: #%s", pr_number)
 
-    params = {"pr_launch": True}
-
-    pipeline = await sync_to_async(trigger_pipeline_for_pr)(aist_project, pv, pr_ref, params)
+    organization = aist_project.organization
+    if organization is None:
+        logger.error("AISTProject has no organization for repository: %s", repo_full)
+        return
+    enqueue_result = await sync_to_async(enqueue_pipeline_launch)(
+        project=aist_project,
+        principal=LaunchPrincipal.for_scm_webhook(organization=organization),
+        raw_params={
+            "pr_launch": True,
+            "project_version": pv.as_dict(),
+        },
+        client_request_key=f"github:{repo_info.pk}:pr:{pr_number}:sha:{head_sha}",
+        initial_launch_data={"pull_request_id": pr_ref.pk},
+    )
 
     logger.info(
-        "Pipeline enqueued for PR #%s: pipeline_id=%s task_id=%s",
+        "Launch request queued for PR #%s: request_id=%s created=%s",
         pr_number,
-        pipeline.id,
-        pipeline.run_task_id,
+        enqueue_result.request.pk,
+        enqueue_result.created,
     )

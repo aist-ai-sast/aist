@@ -198,6 +198,28 @@ def import_scan_via_default_importer(
     Findings are collected from the created test to allow for
     enrichment and deletion.
     """
+    with Path(report_path).open("rb") as report_file:
+        return import_scan_file_via_default_importer(
+            engagement=engagement,
+            scan_type=scan_type,
+            report_file=report_file,
+            test_title=test_title,
+            repo_params=repo_params,
+            minimum_severity=minimum_severity,
+            lead=lead,
+        )
+
+
+def import_scan_file_via_default_importer(
+    engagement: Engagement,
+    scan_type: str,
+    report_file,
+    test_title: str,
+    repo_params: RepoParams,
+    minimum_severity: str,
+    lead=None,
+) -> tuple[Test, list[Finding]]:
+    """Import an already-open report stream through the common hardened importer."""
     scan_date = timezone.now()
     environment = Development_Environment.objects.get_or_create(name="Development")[0]
     importer = DefaultImporter(
@@ -222,8 +244,7 @@ def import_scan_via_default_importer(
         auto_create_context=True,
         user=lead,
     )
-    with Path(report_path).open("rb") as f:
-        test_obj, *_rest = importer.process_scan(f)
+    test_obj, *_rest = importer.process_scan(report_file)
     # Collect findings associated with the test
     findings = list(Finding.objects.filter(test=test_obj))
     _harden_imported_findings(findings)

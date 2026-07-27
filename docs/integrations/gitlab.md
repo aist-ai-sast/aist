@@ -1,103 +1,40 @@
 # GitLab integration
 
-GitLab has two independent roles in AIST: an **SCM source-control
-integration** (import and clone repositories for pipelines) and a **work-item
-provider** (sync GitLab Issues to findings). They use separate credentials and
-separate models — configuring one does not configure the other.
+GitLab can provide source repositories and GitLab Issues. The SCM integration
+and work-item provider use separate credentials and can be configured
+independently.
 
-## SCM integration
+## Source repositories
 
-Import projects from GitLab (cloud or self-managed) and use them like
-GitHub/Gerrit/Gitea sources (clone for pipelines and Claude analysis, raw-file
-viewing, default-branch resolution). GitLab is wired as an SCM provider
-through the same `RepositoryInfo` binding mechanism as the others — see
-`ScmGitlabBinding` in `aist/models.py`.
+Create a GitLab organization integration with:
 
-### Credentials
+- a personal access token;
+- an optional GitLab base URL, required for a self-managed instance;
+- an optional organization VPN for a private instance.
 
-GitLab uses a **personal access token** (not OAuth / not a GitLab App):
+When the base URL is empty, AIST uses GitLab.com. The token is stored encrypted
+and is used for repository discovery, metadata, source access, and HTTPS clone.
 
-- **Token** — stored encrypted in `OrgIntegration.secret`. Sent as the
-  `PRIVATE-TOKEN` header for API calls, and as `oauth2:<token>` in the HTTPS
-  clone URL.
-- **Base URL** — the GitLab server root, stored in
-  `OrgIntegration.config["base_url"]`. Optional: defaults to
-  `https://gitlab.com` when left blank, so no config is needed for
-  gitlab.com-hosted projects; set it explicitly for a self-managed instance.
+To import source:
 
-Manage these credentials on the `/integrations` page (React
-`OrgIntegrationsPage`) — type **GitLab**. Validation (`/validate` endpoint)
-authenticates via `python-gitlab`'s `gl.auth()` through the same VPN-aware
-session as normal use.
+1. Validate the GitLab integration.
+2. On the Projects page, select **Import from GitLab**.
+3. Choose the organization and list its accessible GitLab projects.
+4. Select the projects to import.
 
-### Project names
+AIST preserves nested GitLab namespaces, records the actual default branch,
+and imports reported languages for analyzer selection.
 
-GitLab projects are `path_with_namespace` (e.g. `group/subgroup/name`) — an
-arbitrary depth of subgroups is possible, unlike Gitea/GitHub's flat
-`owner/repo`. Import splits on the **last** `/` into `repo_owner` (everything
-before it, including any subgroups) and `repo_name`, so `repo_full`
-reconstructs the full path.
+## GitLab Issues
 
-### Languages
+Create a GitLab work-item provider with a personal or project access token and
+the GitLab project identifier. A self-managed instance also needs its base URL.
+Attach a VPN to the provider when that instance is private.
 
-GitLab exposes per-project language byte-counts (`langs_raw`, a dict of
-language name → count) — the same shape as Gitea's `.languages()` endpoint, so
-the shared `AnalyzersConfigHelper.convert_languages()` helper is reused
-unchanged.
-
-### VPN
-
-Listing and metadata fetch run in a Celery worker through
-`OrgIntegration.scoped_session(...)`, which routes traffic through the VPN
-sidecar **only when** a `vpn_integration` is attached — otherwise a direct
-session is used. GitLab therefore works both behind a VPN and without one,
-the same way as self-hosted Gerrit/Gitea. The default-branch lookup during
-import specifically resolves through this VPN-aware session so a
-VPN-only-reachable instance does not silently fall back to a wrong "master"
-guess.
-
-### Import flow
-
-1. `/integrations` — create a **GitLab** `OrgIntegration` (personal access
-   token, optional base URL for self-managed instances).
-2. Projects page → **Import from GitLab** → pick the organization → **List
-   projects** (calls `gitlab_projects_list` → `fetch_gitlab_projects`) →
-   select a project → **Import selected**
-   (`ImportProjectFromGitlabAPI` → `fetch_gitlab_project_info`), which creates
-   `Product` + `RepositoryInfo(GITLAB)` + `ScmGitlabBinding` + `AISTProject`
-   and seeds the initial version from GitLab's real default branch.
-
-## Work-item provider (GitLab Issues)
-
-Implemented in `aist/work_items/backends/gitlab.py` (`GitlabIssuesBackend`,
-registered as `"GITLAB"`). Uses its own, separate credentials from the SCM
-integration above — a `WorkItemProvider` row, not an `OrgIntegration`.
-
-### Required fields
-
-- `WorkItemProvider.api_token` — a GitLab personal access token or project
-  access token.
-- `provider_config["project_id"]` — the GitLab numeric project ID, or a
-  `"namespace/project"` path.
-
-### Optional fields
-
-- `WorkItemProvider.base_url` — override for a self-managed instance (e.g.
-  `https://gitlab.company.com`); leave blank for gitlab.com.
-
-### Status mapping
-
-GitLab issue state maps to AIST's normalized status category:
-
-| GitLab state | Category |
+| GitLab issue | AIST category |
 |---|---|
-| `opened` | Open |
-| `closed` | Done |
-| `closed` with `closed_as == "unresolved"` (newer GitLab versions) | Cancelled |
+| Opened | Open |
+| Closed | Done |
+| Closed as unresolved, when reported by GitLab | Cancelled |
 
-### Setup
-
-Create a work-item provider of type **GitLab** on the organization's
-work-item providers page, supplying the access token and project
-identifier. See [work-item links](../product/work-item-links.md) for the
-sync lifecycle shared by all providers.
+See [work-item links](../product/work-item-links.md) for refresh behavior.

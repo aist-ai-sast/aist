@@ -25,9 +25,11 @@ from aist.models import (
     AISTPipeline,
     AISTProject,
     AISTProjectVersion,
+    DastProjectBinding,
     LaunchSchedule,
     Organization,
     OrgIntegration,
+    PipelineLaunchRequest,
     WorkItemProvider,
 )
 
@@ -72,12 +74,21 @@ class ResourceGetterTableTests(SimpleTestCase):
         for resource in (
             Product, AISTProject, AISTProjectVersion, AISTPipeline, Finding, Test,
             Engagement, LaunchSchedule, Organization, OrgIntegration, WorkItemProvider,
+            DastProjectBinding, PipelineLaunchRequest,
         ):
             self.assertIn(resource, RESOURCE_GETTERS)
 
     def test_pipeline_getter_is_pipeline_getter(self):
         self.assertIs(RESOURCE_GETTERS[AISTPipeline], queries.get_authorized_aist_pipelines)
         self.assertIs(RESOURCE_GETTERS[Finding], queries.get_authorized_findings)
+        self.assertIs(
+            RESOURCE_GETTERS[DastProjectBinding],
+            queries.get_authorized_dast_project_bindings,
+        )
+        self.assertIs(
+            RESOURCE_GETTERS[PipelineLaunchRequest],
+            queries.get_authorized_aist_launch_requests,
+        )
 
 
 class ResourcePolicyTests(SimpleTestCase):

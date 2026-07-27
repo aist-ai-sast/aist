@@ -1,163 +1,106 @@
 import logging
-from operator import itemgetter
+import uuid
 
-from celery import current_app, shared_task
-from django.db import transaction
-from django.utils import timezone
+from celery import shared_task
+from django.conf import settings
 
-from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, PipelineLaunchQueue
-from aist.pipeline_args import PipelineArguments
-from aist.tasks.pipeline import run_sast_pipeline
-from aist.utils.pipeline import create_pipeline_object, has_unfinished_pipeline
+from aist.execution.adapters import LaunchAdapterRegistry
+from aist.execution.claiming import claim_next_launch_request, revalidate_claimed_authority
+from aist.execution.contracts import PipelineTaskName
+from aist.execution.dast import DastPipelineLaunchAdapter
+from aist.execution.dispatching import (
+    LaunchPlanningStatus,
+    LaunchPublishCommand,
+    plan_claimed_launch,
+    prepare_launch_publish,
+)
+from aist.execution.sast import SastPipelineLaunchAdapter
+from aist.models import PipelineLaunchRequest, PipelineLaunchRequestState
+from aist.tasks.pipeline import run_pipeline_execution, run_sast_pipeline
 
 logger = logging.getLogger("aist")
+launch_adapter_registry = LaunchAdapterRegistry(
+    SastPipelineLaunchAdapter(),
+    DastPipelineLaunchAdapter(),
+)
+_PUBLISH_TASKS = {
+    PipelineTaskName.RUN_SAST_PIPELINE.value: run_sast_pipeline,
+    PipelineTaskName.RUN_PIPELINE_EXECUTION.value: run_pipeline_execution,
+}
+_MAX_DISPATCH_BATCH_SIZE = 200
+
+
+def _publish(command: LaunchPublishCommand) -> None:
+    task = _PUBLISH_TASKS.get(command.task_name)
+    if task is None:
+        message = f"No publisher registered for task {command.task_name}."
+        raise ValueError(message)
+    task.apply_async(
+        args=(command.pipeline_id, *command.task_args),
+        task_id=command.task_id,
+    )
+
+
+def _validated_batch_size(batch_size: int | None) -> int:
+    value = (
+        getattr(settings, "AIST_PIPELINE_DISPATCH_BATCH_SIZE", 50)
+        if batch_size is None
+        else batch_size
+    )
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _MAX_DISPATCH_BATCH_SIZE:
+        message = f"Dispatcher batch_size must be an integer between 1 and {_MAX_DISPATCH_BATCH_SIZE}."
+        raise ValueError(message)
+    return value
+
+
+def _republish_outbox(*, batch_size: int) -> None:
+    request_ids = list(
+        PipelineLaunchRequest.objects.filter(
+            state__in=[
+                PipelineLaunchRequestState.PLANNED,
+                PipelineLaunchRequestState.PUBLISHED,
+            ],
+        ).order_by("created", "pk").values_list("pk", flat=True)[:batch_size],
+    )
+    for request_id in request_ids:
+        try:
+            _publish(prepare_launch_publish(request_id=request_id))
+        except Exception:
+            logger.exception("Dispatcher: failed to republish launch request=%s", request_id)
 
 
 @shared_task(name="aist.tasks.pipeline_dispatcher.dispatch_queued_pipelines")
-def dispatch_queued_pipelines(async_user=None):
-    """
-    Dispatch queued pipeline launches while respecting per-worker concurrency limits.
+def dispatch_queued_pipelines(async_user=None, batch_size=None):
+    """Publish durable generic launch requests without holding DB locks across broker I/O."""
+    del async_user
+    resolved_batch_size = _validated_batch_size(batch_size)
+    _republish_outbox(batch_size=resolved_batch_size)
+    claim_owner = f"pipeline-dispatcher:{uuid.uuid4()}"
 
-    It inspects active tasks on all workers to determine how many pipelines are
-    currently running per worker. For each queued launch request, it checks the
-    associated schedule's max_concurrent_per_worker setting. If the limit is 0, the
-    pipeline is launched immediately. Otherwise, the dispatcher ensures that at least
-    one worker has fewer than `max_concurrent_per_worker` pipelines running before
-    starting a new pipeline. When a pipeline is dispatched, the queue item is marked
-    as dispatched and linked to the created AISTPipeline object.
-    """
-    app = current_app
-    inspect = app.control.inspect()
-    active = inspect.active() or {}
-    # Count currently running pipelines per worker
-    running_per_worker = {}
-    for worker, tasks in active.items():
-        count = 0
-        for t in tasks or []:
-            # Only count AIST pipeline tasks
-            if t.get("name") == "aist.tasks.pipeline.run_sast_pipeline":
-                count += 1
-        running_per_worker[worker] = count
-
-    logger.info(
-        "Dispatcher: active workers=%s running_per_worker=%s queued_count=%s",
-        list((active or {}).keys()),
-        running_per_worker,
-        PipelineLaunchQueue.objects.filter(dispatched=False).count(),
-    )
-
-    # Iterate over queued items in FIFO order
-    queued = (
-        PipelineLaunchQueue.objects
-        .filter(dispatched=False)
-        .select_related("schedule", "project")
-        .order_by("created")
-    )
-    for item in queued:
-        sched = item.schedule
-        if not sched or not sched.enabled:
+    for _index in range(resolved_batch_size):
+        claim = claim_next_launch_request(claim_owner=claim_owner)
+        if claim is None:
+            break
+        if not revalidate_claimed_authority(
+            request_id=claim.request_id,
+            claim_owner=claim.claim_owner,
+        ):
             continue
-        limit = int(sched.max_concurrent_per_worker)
-        # By contract, max_concurrent_per_worker must be >= 1.
-        if limit < 1:
-            logger.error(
-                "Invalid max_concurrent_per_worker=%s for schedule id=%s; expected >= 1",
-                sched.max_concurrent_per_worker,
-                sched.id,
-            )
+        result = plan_claimed_launch(
+            request_id=claim.request_id,
+            claim_owner=claim.claim_owner,
+            adapter_registry=launch_adapter_registry,
+        )
+        if result.status == LaunchPlanningStatus.BUSY:
+            logger.info("Dispatcher: execution capacity unavailable for request=%s", claim.request_id)
             continue
-        # If there is a concurrency limit, ensure a worker is available
-        if not running_per_worker:
-            # Can't inspect workers -> don't block dispatching, just log.
-            logger.warning(
-                "Dispatcher: can't inspect active tasks (running_per_worker empty) but limit=%s set. "
-                "Proceeding to dispatch without capacity check (schedule_id=%s queue_id=%s).",
-                limit,
-                getattr(sched, "id", None),
-                item.id,
-            )
-        else:
-            available_worker = None
-            for worker, count in sorted(running_per_worker.items(), key=itemgetter(1)):
-                if count < limit:
-                    available_worker = worker
-                    break
-            if available_worker is None:
-                logger.info(
-                    "Dispatcher: all workers at capacity (limit=%s). Stop cycle. queue_id=%s schedule_id=%s",
-                    limit, item.id, getattr(sched, "id", None),
-                )
-                break
-        # Create pipeline and dispatch Celery task
-        project = item.project
-
+        if result.status == LaunchPlanningStatus.FAILED:
+            logger.error("Dispatcher: planning failed for request=%s", claim.request_id)
+            continue
         try:
-            params = PipelineArguments.normalize_params(project=project, raw_params=item.launch_config.params)
-            project_version = AISTProjectVersion.objects.get(id=params["project_version"]["id"])
+            _publish(prepare_launch_publish(request_id=claim.request_id))
         except Exception:
             logger.exception(
-                "Dispatcher: failed to build params for queue_id=%s project=%s schedule_id=%s launch_config_id=%s. Skipping.",
-                item.id,
-                getattr(project, "id", None),
-                getattr(sched, "id", None),
-                getattr(item.launch_config, "id", None) if item.launch_config else None,
+                "Dispatcher: broker publication is ambiguous for request=%s; leaving outbox recoverable.",
+                claim.request_id,
             )
-            continue
-
-        # Atomically check and create the pipeline to close the race window
-        # between concurrent dispatcher invocations for the same project_version.
-        pipeline = None
-        with transaction.atomic():
-            # Lock the project_version row so a second dispatcher cannot sneak in
-            # between the duplicate check and the INSERT.
-            pv_locked = AISTProjectVersion.objects.select_for_update().get(id=project_version.id)
-            if has_unfinished_pipeline(pv_locked):
-                logger.info(
-                    "Dispatcher: unfinished pipeline exists for project_version=%s; skip queue_id=%s",
-                    pv_locked.id,
-                    item.id,
-                )
-                continue
-            # Also guard against a pipeline that was just dispatched (status=FINISHED,
-            # run_task_id set) but whose Celery task hasn't transitioned it yet.
-            # Old completed pipelines have run_task_id cleared on completion, so this
-            # only matches genuinely in-flight dispatches.
-            if AISTPipeline.objects.filter(
-                project_version=pv_locked,
-                status=AISTStatus.FINISHED,
-                run_task_id__isnull=False,
-            ).exists():
-                logger.info(
-                    "Dispatcher: recently dispatched pipeline still pending for project_version=%s; "
-                    "skip queue_id=%s",
-                    pv_locked.id,
-                    item.id,
-                )
-                continue
-            params["launch_config_id"] = item.launch_config_id
-            pipeline = create_pipeline_object(project, pv_locked, None)
-
-        async_result = run_sast_pipeline.delay(pipeline.id, params)
-        logger.info(
-            "Dispatcher: dispatch pipeline=%s queue_id=%s project=%s project_version=%s schedule_id=%s launch_config=%s",
-            pipeline.id,
-            item.id,
-            project.id,
-            project_version.id if project_version else None,
-            getattr(sched, "id", None),
-            item.launch_config_id,
-        )
-        pipeline.run_task_id = async_result.id
-        pipeline.save(update_fields=["run_task_id"])
-        # Mark queue item as dispatched
-        item.pipeline = pipeline
-        item.dispatched = True
-        item.dispatched_at = timezone.now()
-        item.save(update_fields=["pipeline", "dispatched", "dispatched_at"])
-        # Update running count for selected worker
-        if limit > 0 and running_per_worker:
-            # increment count on first available worker
-            for worker, count in running_per_worker.items():
-                if count < limit:
-                    running_per_worker[worker] += 1
-                    break

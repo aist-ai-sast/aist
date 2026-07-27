@@ -17,7 +17,8 @@ from aist.models import (
     AISTProjectVersion,
     LaunchSchedule,
     Organization,
-    PipelineLaunchQueue,
+    PipelineLaunchRequest,
+    PipelineLaunchRequestState,
 )
 
 
@@ -103,13 +104,13 @@ class BootstrapDemoAccessCommandTests(TestCase):
             self.assertEqual(schedule.cron_expression, spec.cron_expression)
             self.assertIsNotNone(schedule.last_run_at)
 
-            queue_qs = PipelineLaunchQueue.objects.filter(
+            queue_qs = PipelineLaunchRequest.objects.filter(
                 project=project,
                 launch_config=launch_config,
             )
             self.assertEqual(queue_qs.count(), len(spec.queue_day_offsets))
-            self.assertTrue(queue_qs.filter(dispatched=True).exists())
-            self.assertTrue(queue_qs.filter(dispatched=False).exists())
+            self.assertTrue(queue_qs.filter(state=PipelineLaunchRequestState.DISPATCHED).exists())
+            self.assertTrue(queue_qs.filter(state=PipelineLaunchRequestState.PENDING).exists())
             self.assertTrue(queue_qs.filter(created__date__lt=today).exists())
 
             pipeline_qs = AISTPipeline.objects.filter(

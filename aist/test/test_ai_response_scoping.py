@@ -28,6 +28,7 @@ class SyncAIFindingResponsesScopingTests(AISTApiBase):
         self.pipeline = AISTPipeline.objects.create(
             id="pipe-scoping",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
         engagement = Engagement.objects.create(

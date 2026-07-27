@@ -9,6 +9,7 @@ from django.db import transaction
 from django.db.models import Case, IntegerField, Q, Value, When
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
@@ -17,14 +18,13 @@ from dojo.utils import add_breadcrumb
 
 from aist.ai_filter import apply_ai_filter, get_ai_filter_reference
 from aist.api.launch_configs import ACTION_CREATE_SERIALIZERS
+from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
 from aist.forms import AISTPipelineRunForm
 from aist.launch_data import PipelineLaunchData
-from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus, VersionType
+from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects
-from aist.tasks import run_sast_pipeline
 from aist.utils.http import _fmt_duration, _qs_without
 from aist.utils.pipeline import (
-    create_pipeline_object,
     get_terminal_pipeline_statuses,
     is_terminal_pipeline_status,
     set_pipeline_status,
@@ -276,13 +276,10 @@ def pipeline_set_status(request, pipeline_id: str):
 @login_required
 def start_pipeline(request: HttpRequest) -> HttpResponse:
     """
-    Launch a new SAST pipeline or redirect to the active one.
+    Present the manual SAST form and enqueue one durable launch request.
 
-    If there is an existing pipeline that hasn't finished yet the user
-    is redirected to its detail page. Otherwise this view presents a
-    form allowing the user to configure and start a new pipeline. On
-    successful submission a new pipeline is created and the Celery
-    task is triggered.
+    Pipeline creation and Celery publication are owned by the generic
+    dispatcher, so this user-facing view never bypasses queue policy.
     """
     project_id = request.GET.get("project")
     q = (request.GET.get("q") or "").strip()
@@ -316,6 +313,7 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
 
     history_qs_str = _qs_without(request, "page")
     add_breadcrumb(title="Start pipeline", top_level=True, request=request)
+    client_request_key = (request.POST.get("client_request_key") or "").strip() or uuid.uuid4().hex
 
     def render_start(form):
         return render(
@@ -332,6 +330,7 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                 "aist_status_choices": AISTStatus.choices,
                 "aist_action_types": AISTLaunchConfigAction.ActionType.choices,
                 "ai_filter_reference": get_ai_filter_reference(),
+                "client_request_key": client_request_key,
             },
         )
 
@@ -356,7 +355,7 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                 return render_start(form)
 
             one_off_actions = []
-            for item in actions_payload:
+            for index, item in enumerate(actions_payload):
                 if not isinstance(item, dict):
                     form.add_error(None, "Invalid action payload.")
                     return render_start(form)
@@ -372,7 +371,10 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                     return render_start(form)
 
                 data = serializer.validated_data
-                action_id = item.get("id") or uuid.uuid4().hex
+                action_id = item.get("id") or uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"aist-launch:{client_request_key}:{index}",
+                ).hex
                 one_off_actions.append({
                     "id": action_id,
                     "trigger_status": data["trigger_status"],
@@ -380,32 +382,35 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                     "config": data.get("config") or {},
                 })
 
-            with transaction.atomic():
-                user_has_permission_or_403(
-                    request.user,
-                    form.cleaned_data["project"].product,
-                    Permissions.Product_Edit,
-                )
-                p = create_pipeline_object(
-                    form.cleaned_data["project"],
-                    form.cleaned_data.get("project_version")
-                    or form.cleaned_data["project"].versions.filter(version_type=VersionType.GIT_BRANCH).order_by(
-                        "-updated", "-created",
-                    ).first()
-                    or form.cleaned_data["project"].versions.order_by("-updated", "-created").first(),
-                    None,
-                )
-                if one_off_actions:
-                    ld = PipelineLaunchData(p.launch_data)
-                    ld.one_off_actions = one_off_actions
-                    ld.one_off_actions_done = []
-                    p.launch_data = ld.as_dict()
-                    p.save(update_fields=["launch_data"])
-            # Launch the Celery task and record its id on the pipeline.
-            async_result = run_sast_pipeline.delay(p.id, params)
-            p.run_task_id = async_result.id
-            p.save(update_fields=["run_task_id"])
-            return redirect("aist:pipeline_detail", pipeline_id=p.id)
+            project = form.cleaned_data["project"]
+            user_has_permission_or_403(
+                request.user,
+                project.product,
+                Permissions.Product_Edit,
+            )
+            organization = project.organization
+            if organization is None:
+                form.add_error(None, "Project does not belong to an AIST organization.")
+                return render_start(form)
+            launch_data = PipelineLaunchData({})
+            launch_data.one_off_actions = one_off_actions
+            launch_data.one_off_actions_done = []
+            try:
+                launch_request = enqueue_pipeline_launch(
+                    project=project,
+                    principal=LaunchPrincipal.for_user(
+                        organization=organization,
+                        requester=request.user,
+                    ),
+                    raw_params=params,
+                    client_request_key=client_request_key,
+                    initial_launch_data=launch_data.as_dict(),
+                ).request
+            except LaunchEnqueueError as exc:
+                form.add_error(None, str(exc))
+                return render_start(form)
+            destination = reverse("aist:launching_dashboard")
+            return redirect(f"{destination}?queued_request={launch_request.pk}")
     else:
         form = AISTPipelineRunForm()
         form.fields["project"].queryset = get_authorized_aist_projects(

@@ -20,11 +20,12 @@ from aist.models import (
     AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectVersion,
+    DastProjectBinding,
     LaunchSchedule,
     Organization,
     OrgIntegration,
     OrgMemberAccessScope,
-    PipelineLaunchQueue,
+    PipelineLaunchRequest,
     ProjectAccessDenial,
     WorkItemProvider,
 )
@@ -276,12 +277,20 @@ def get_authorized_aist_launch_schedules(permission, user=None):
     return LaunchSchedule.objects.filter(launch_config__project__product__in=products)
 
 
-def get_authorized_aist_queue_items(permission, user=None):
+def get_authorized_aist_launch_requests(permission, user=None):
     user = _resolve_user(user)
     if user is None:
-        return PipelineLaunchQueue.objects.none()
+        return PipelineLaunchRequest.objects.none()
     products = get_authorized_aist_products(permission, user=user)
-    return PipelineLaunchQueue.objects.filter(project__product__in=products)
+    return PipelineLaunchRequest.objects.filter(project__product__in=products)
+
+
+def get_authorized_dast_project_bindings(permission, user=None):
+    user = _resolve_user(user)
+    if user is None:
+        return DastProjectBinding.objects.none()
+    products = get_authorized_aist_products(permission, user=user)
+    return DastProjectBinding.objects.filter(project__product__in=products)
 
 
 def get_authorized_aist_organizations(permission, user=None):

@@ -30,7 +30,10 @@ from aist.models import (
     AISTStatus,
     LaunchSchedule,
     Organization,
-    PipelineLaunchQueue,
+    PipelineLaunchAuthorityKind,
+    PipelineLaunchOrigin,
+    PipelineLaunchRequest,
+    PipelineLaunchRequestState,
     VersionType,
 )
 
@@ -692,7 +695,7 @@ class Command(BaseCommand):
                 defaults={
                     "cron_expression": spec.cron_expression,
                     "enabled": True,
-                    "max_concurrent_per_worker": 1,
+                    "max_concurrent_runs": 1,
                 },
             )
             schedule.last_run_at = now - timedelta(days=spec.schedule_last_run_days_ago)
@@ -703,9 +706,9 @@ class Command(BaseCommand):
             if not schedule.enabled:
                 schedule.enabled = True
                 schedule_updates.append("enabled")
-            if schedule.max_concurrent_per_worker != 1:
-                schedule.max_concurrent_per_worker = 1
-                schedule_updates.append("max_concurrent_per_worker")
+            if schedule.max_concurrent_runs != 1:
+                schedule.max_concurrent_runs = 1
+                schedule_updates.append("max_concurrent_runs")
             schedule.save(update_fields=schedule_updates)
 
             engagement, _ = Engagement.objects.get_or_create(
@@ -936,13 +939,21 @@ class Command(BaseCommand):
 
             is_dispatched = index % 4 != 0
             dispatched_at = run_timestamp + timedelta(minutes=7) if is_dispatched else None
-            queue_item, _ = PipelineLaunchQueue.objects.get_or_create(
+            request_state = (
+                PipelineLaunchRequestState.DISPATCHED
+                if is_dispatched
+                else PipelineLaunchRequestState.PENDING
+            )
+            queue_item, _ = PipelineLaunchRequest.objects.get_or_create(
                 pipeline=pipeline,
                 defaults={
                     "project": project,
                     "schedule": schedule,
                     "launch_config": launch_config,
-                    "dispatched": is_dispatched,
+                    "origin": PipelineLaunchOrigin.SCHEDULE,
+                    "authority_kind": PipelineLaunchAuthorityKind.SCHEDULE,
+                    "params_snapshot": dict(launch_config.params),
+                    "state": request_state,
                     "dispatched_at": dispatched_at,
                 },
             )
@@ -956,15 +967,15 @@ class Command(BaseCommand):
             if queue_item.launch_config_id != launch_config.id:
                 queue_item.launch_config = launch_config
                 queue_updates.append("launch_config")
-            if queue_item.dispatched != is_dispatched:
-                queue_item.dispatched = is_dispatched
-                queue_updates.append("dispatched")
+            if queue_item.state != request_state:
+                queue_item.state = request_state
+                queue_updates.append("state")
             if queue_item.dispatched_at != dispatched_at:
                 queue_item.dispatched_at = dispatched_at
                 queue_updates.append("dispatched_at")
             if queue_updates:
                 queue_item.save(update_fields=queue_updates)
-            PipelineLaunchQueue.objects.filter(pk=queue_item.pk).update(created=run_timestamp)
+            PipelineLaunchRequest.objects.filter(pk=queue_item.pk).update(created=run_timestamp)
 
     def _ensure_demo_ai_responses(self, *, project: AISTProject) -> None:
         latest_pipeline = (

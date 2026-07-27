@@ -725,9 +725,9 @@ class TokenDestructiveActionTests(TokenTestBase):
         self.assertEqual(resp.status_code, 403)
         self.assertTrue(AISTApiToken.objects.filter(pk=other_token.id).exists())
 
-    def test_read_only_token_cannot_clear_launch_queue(self):
+    def test_read_only_token_cannot_clear_dispatched_launch_requests(self):
         resp = self._bearer(self._ro_token()).post(
-            reverse("aist_api:pipeline_launch_queue_clear_dispatched"), {"older_than_days": 0}, format="json",
+            reverse("aist_api:pipeline_launch_request_clear_dispatched"), {"older_than_days": 0}, format="json",
         )
         self.assertEqual(resp.status_code, 403)
 

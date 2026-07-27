@@ -31,17 +31,17 @@ def launching_dashboard(request: HttpRequest) -> HttpResponse:
 
         # API endpoints used by the JS on the page (single source of truth)
         "api_launch_schedules_url": reverse("aist_api:launch_schedule_list"),
-        "api_project_schedule_upsert_template": reverse(
-            "aist_api:project_launch_schedule_upsert",
-            kwargs={"project_id": 0},
-        ).replace("/0/", "/{project_id}/"),
+        "api_launch_config_schedule_template": reverse(
+            "aist_api:launch_config_schedule",
+            kwargs={"project_id": 0, "config_id": 0},
+        ).replace("/0/launch-configs/0/", "/{project_id}/launch-configs/{config_id}/"),
 
         "api_preview_url": reverse("aist_api:launch_schedule_preview"),
-        "api_queue_url": reverse("aist_api:pipeline_launch_queue_list"),
-        "api_queue_clear_url": reverse("aist_api:pipeline_launch_queue_clear_dispatched"),
+        "api_queue_url": reverse("aist_api:pipeline_launch_request_list"),
+        "api_queue_clear_url": reverse("aist_api:pipeline_launch_request_clear_dispatched"),
         "api_queue_delete_template": reverse(
-            "aist_api:pipeline_launch_queue_detail",
-            kwargs={"queue_id": 0},
+            "aist_api:pipeline_launch_request_detail",
+            kwargs={"request_id": 0},
         ).replace("/0/", "/{queue_id}/"),
         "api_bulk_disable_url": reverse("aist_api:launch_schedule_bulk_disable"),
         "api_project_launch_configs_template": reverse(
@@ -69,10 +69,6 @@ def launching_dashboard(request: HttpRequest) -> HttpResponse:
         ),
         "api_schedule_run_once_template": reverse(
             "aist_api:launch_schedule_run_once",
-            kwargs={"launch_schedule_id": 0},
-        ).replace("/0/", "/{launch_schedule_id}/"),
-        "api_schedule_delete_template": reverse(
-            "aist_api:launch_schedule_detail",
             kwargs={"launch_schedule_id": 0},
         ).replace("/0/", "/{launch_schedule_id}/"),
         "ui_pipeline_detail_template": reverse(

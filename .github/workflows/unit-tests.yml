@@ -35,6 +35,41 @@ jobs:
     with:
       platform: ${{ matrix.platform}}
 
+  test-dast-connector:
+    name: DAST connector (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ['linux/amd64', 'linux/arm64']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Build DAST connector test image
+        working-directory: sast-combinator/sast-pipeline
+        run: >-
+          docker build
+          --target test
+          --platform ${{ matrix.platform }}
+          -f Dockerfiles/dast_connector/Dockerfile
+          -t aist-dast-connector-tests:${{ github.sha }}
+          .
+
+      - name: Run standalone DAST protocol tests
+        run: >-
+          docker run --rm
+          aist-dast-connector-tests:${{ github.sha }}
+          tests/pipeline_tests/test_analyzers_yaml_dast.py
+          tests/pipeline_tests/test_dast_contract_snapshot.py
+          tests/pipeline_tests/test_dast_connector.py
+          tests/pipeline_tests/test_dast_executor.py
+          -p no:cacheprovider
+          -q
+
   # only run integration tests for linux/amd64 (default)
   test-user-interface:
     needs: build-docker-containers

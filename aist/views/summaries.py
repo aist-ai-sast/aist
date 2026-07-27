@@ -21,6 +21,7 @@ from aist.api.common import API_SEVERITY_VALUES, compute_risk_score, empty_sever
 from aist.launch_data import PipelineLaunchData
 from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus, WorkItemLink, WorkItemStatusCategory
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects, get_authorized_findings
+from aist.services.dast_outcomes import public_dast_outcome_code
 from aist.utils.cwe_lookup import fetch_cwe_meta, load_cwe_fixture_lookup, trim_text
 from aist.utils.project_version_refs import resolve_project_version_git_refs
 
@@ -441,7 +442,9 @@ def pipeline_summary(request: HttpRequest) -> HttpResponse:
         results.append(
             {
                 "id": pipeline.id,
+                "execution_type": pipeline.execution_type,
                 "status": pipeline.status,
+                "dast_outcome_code": public_dast_outcome_code(pipeline),
                 "project_id": pipeline.project_id,
                 "product_id": pipeline.project.product_id,
                 "product_name": pipeline.project.product.name,

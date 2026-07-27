@@ -10,7 +10,7 @@ from io import BytesIO, StringIO
 from operator import itemgetter
 from typing import TYPE_CHECKING
 
-from django.db import close_old_connections, transaction
+from django.db import close_old_connections
 from django.db.models import Count
 from django.http import HttpResponse, HttpResponseBadRequest, StreamingHttpResponse
 from django_filters import rest_framework as django_filters
@@ -24,8 +24,15 @@ from rest_framework.settings import api_settings
 
 from aist.ai_filter import validate_and_normalize_filter
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
+from aist.api.launch_requests import (
+    LaunchRequestResponseSerializer,
+    launch_principal_token,
+    launch_request_headers,
+    launch_request_response,
+)
 from aist.api.schema import AISTApiTag
 from aist.authz import ACTION_PERMISSIONS, INTERNAL_SERVICE, Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy
+from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import (
     BACKLOG_COUNT,
@@ -37,13 +44,10 @@ from aist.logging_transport import (
     get_redis,
 )
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, TestDeduplicationProgress
-from aist.pipeline_args import PipelineArguments
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_project_versions
-from aist.tasks import run_sast_pipeline
+from aist.services.dast_outcomes import public_dast_outcome_code
 from aist.utils.export import _build_ai_export_rows
 from aist.utils.pipeline import (
-    create_pipeline_object,
-    has_unfinished_pipeline,
     is_terminal_pipeline_status,
     stop_pipeline,
 )
@@ -71,6 +75,12 @@ class PipelineStartRequestSerializer(serializers.Serializer):
     )
     ai_filter = serializers.JSONField(required=False, allow_null=True)
 
+    def to_internal_value(self, data):
+        unknown = set(data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(dict.fromkeys(sorted(unknown), "Unknown field."))
+        return super().to_internal_value(data)
+
     def get_fields(self):
         fields = super().get_fields()
         request = self.context.get("request")
@@ -84,15 +94,26 @@ class PipelineStartRequestSerializer(serializers.Serializer):
 
 class PipelineResponseSerializer(serializers.Serializer):
     id = serializers.CharField()
+    execution_type = serializers.CharField()
     status = serializers.CharField()
     run_task_id = serializers.CharField(allow_null=True)
+    external_run_id = serializers.CharField(allow_null=True)
+    external_log_cursor = serializers.IntegerField()
+    external_execution_outcome = serializers.CharField()
+    dast_outcome_code = serializers.SerializerMethodField()
+    external_execution_deadline = serializers.DateTimeField(allow_null=True)
+    external_cancel_requested_at = serializers.DateTimeField(allow_null=True)
     response_from_ai = serializers.JSONField(allow_null=True)
     created = serializers.DateTimeField()
     updated = serializers.DateTimeField()
 
+    def get_dast_outcome_code(self, obj: AISTPipeline) -> str | None:
+        return public_dast_outcome_code(obj)
+
 
 class PipelineStopResponseSerializer(serializers.Serializer):
     ok = serializers.BooleanField()
+    state = serializers.CharField()
 
 
 class ExportAIResultsRequestSerializer(serializers.Serializer):
@@ -128,22 +149,28 @@ class PipelineLogsProgressiveQuerySerializer(serializers.Serializer):
 
 class PipelineStartAPI(AISTAPIView):
 
-    """Start a new AIST pipeline."""
+    """Queue a new AIST pipeline launch request."""
 
     authz = ResourcePolicy(resource=AISTProjectVersion, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
         request=PipelineStartRequestSerializer,
+        parameters=[
+            OpenApiParameter(
+                name="Idempotency-Key",
+                type=str,
+                location=OpenApiParameter.HEADER,
+                required=False,
+            ),
+        ],
         responses={
-            201: OpenApiResponse(PipelineResponseSerializer, description="Pipeline created"),
+            202: OpenApiResponse(LaunchRequestResponseSerializer, description="Launch request queued"),
             404: OpenApiResponse(description="Project version not found"),
-            405: OpenApiResponse(description="There is already a running pipeline for this project version"),
         },
         examples=[
             OpenApiExample(
                 "Start by version id",
                 value={
-                    "limit": 50,
                     "project_version_id": 123,
                     "ai_filter": {"severity": [
                         {"comparison": "EQUALS", "value": "High"},
@@ -154,8 +181,8 @@ class PipelineStartAPI(AISTAPIView):
             ),
         ],
         tags=[AISTApiTag.PIPELINES.value],
-        summary="Start pipeline",
-        description="Creates and starts AIST Pipeline for the given existing AISTProjectVersion.",
+        summary="Queue pipeline launch",
+        description="Queues a durable SAST launch request for an existing AISTProjectVersion.",
     )
     def post(self, request, *args, **kwargs) -> Response:
         if api_settings.URL_FORMAT_OVERRIDE:
@@ -167,9 +194,6 @@ class PipelineStartAPI(AISTAPIView):
         project_version = serializer.validated_data["project_version_id"]
         project = project_version.project
         provided_ai_filter = serializer.validated_data.get("ai_filter", None)
-
-        if has_unfinished_pipeline(project_version):
-            return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
         if not provided_ai_filter:
             return Response(
@@ -197,20 +221,27 @@ class PipelineStartAPI(AISTAPIView):
             "project_version": project_version.as_dict(),
         }
 
-        params = PipelineArguments.normalize_params(project=project, raw_params=raw)
-
-        # create pipeline in transaction
-        with transaction.atomic():
-            p = create_pipeline_object(project, project_version, None)
-
-        async_result = run_sast_pipeline.delay(p.id, params)
-        p.run_task_id = async_result.id
-        p.save(update_fields=["run_task_id"])
-
-        out = PipelineResponseSerializer(
-            {"id": p.id, "status": p.status, "response_from_ai": p.response_from_ai, "created": p.created,
-             "updated": p.updated, "run_task_id": p.run_task_id})
-        return Response(out.data, status=status.HTTP_201_CREATED)
+        organization = project.organization
+        if organization is None:
+            return Response(
+                {"organization": "Project does not belong to an AIST organization."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        principal = LaunchPrincipal.for_user(
+            organization=organization,
+            requester=request.user,
+            api_token=launch_principal_token(request),
+        )
+        try:
+            launch_request = enqueue_pipeline_launch(
+                project=project,
+                principal=principal,
+                raw_params=raw,
+                client_request_key=launch_request_headers(request).get("client_request_key"),
+            ).request
+        except LaunchEnqueueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+        return Response(launch_request_response(launch_request), status=status.HTTP_202_ACCEPTED)
 
 
 class PipelineListAPI(AISTAuthzMixin, generics.ListAPIView):
@@ -287,16 +318,8 @@ class PipelineAPI(AISTAPIView):
         description="Returns pipeline status and AI response.",
     )
     def get(self, request, pipeline_id: str, *args, **kwargs) -> Response:
-        p = self.resolve(id=pipeline_id)
-        data = {
-            "id": p.id,
-            "status": p.status,
-            "run_task_id": p.run_task_id,
-            "response_from_ai": p.response_from_ai,
-            "created": p.created,
-            "updated": p.updated,
-        }
-        out = PipelineResponseSerializer(data)
+        pipeline = self.resolve(id=pipeline_id)
+        out = PipelineResponseSerializer(pipeline)
         return Response(out.data, status=status.HTTP_200_OK)
 
     @extend_schema(
@@ -825,7 +848,11 @@ class PipelineStopAPI(AISTAPIView):
     def post(self, request, pipeline_id: str):
         pipeline = self.resolve(id=pipeline_id)
         stop_pipeline(pipeline)
-        return Response({"ok": True})
+        pipeline.refresh_from_db(fields=["external_execution_outcome", "status"])
+        return Response({
+            "ok": True,
+            "state": pipeline.external_execution_outcome or pipeline.status,
+        })
 
 
 class ExportAIResultsAPI(AISTAPIView):

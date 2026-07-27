@@ -13,6 +13,18 @@ from aist.models import OrgIntegration, OrgIntegrationType, ProjectIntegrationOv
 from aist.test.test_api import AISTApiBase
 
 
+def _dast_config(**overrides):
+    config = {
+        "gateway_url": "https://dast-gateway.internal",
+        "ca_bundle": "",
+        "contract_major": 2,
+        "integrator_public_id": "pub_abc123",
+        "server_fingerprint": "sha256:server-fingerprint",
+    }
+    config.update(overrides)
+    return config
+
+
 class OrgIntegrationListCreateAPITests(AISTApiBase):
 
     """GET/POST /organizations/<org_id>/integrations/"""
@@ -99,7 +111,7 @@ class OrgIntegrationListCreateAPITests(AISTApiBase):
         resp = self.client.post(self.url, {
             "integration_type": "DAST",
             "name": "Production DAST",
-            "config": {"gateway_url": "https://dast-gateway.internal"},
+            "config": _dast_config(),
             "secret": "pub_abc123.secretvaluevaluevalue",
             "is_active": True,
         }, format="json")
@@ -107,6 +119,34 @@ class OrgIntegrationListCreateAPITests(AISTApiBase):
         self.assertEqual(resp.data["integration_type"], "DAST")
         self.assertTrue(resp.data["has_secret"])
         self.assertNotIn("secret", resp.data)  # write-only
+
+    def test_second_active_dast_integration_returns_conflict(self):
+        OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type=OrgIntegrationType.DAST,
+            name="Existing DAST",
+            config=_dast_config(),
+            secret="pub_existing.secretvaluevaluevalue",  # noqa: S106
+            is_active=True,
+        )
+
+        resp = self.client.post(self.url, {
+            "integration_type": "DAST",
+            "name": "Conflicting DAST",
+            "config": _dast_config(integrator_public_id="pub_other"),
+            "secret": "pub_other.secretvaluevaluevalue",
+            "is_active": True,
+        }, format="json")
+
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(
+            OrgIntegration.objects.filter(
+                organization=self.org,
+                integration_type=OrgIntegrationType.DAST,
+                is_active=True,
+            ).count(),
+            1,
+        )
 
     def test_create_dast_integration_requires_gateway_url(self):
         resp = self.client.post(self.url, {

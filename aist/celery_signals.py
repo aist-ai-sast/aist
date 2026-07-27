@@ -17,7 +17,7 @@ from aist.models import (
     AISTProject,
     AISTProjectVersion,
     AISTTestMeta,
-    PipelineLaunchQueue,
+    PipelineLaunchRequest,
     ProcessedFinding,
     TestDeduplicationProgress,
     VersionType,
@@ -170,7 +170,7 @@ def _get_launch_config_id_from_pipeline(pipeline: AISTPipeline) -> int | None:
         return int(launch_config_id)
 
     queue_item = (
-        PipelineLaunchQueue.objects
+        PipelineLaunchRequest.objects
         .filter(pipeline_id=pipeline.id)
         .order_by("-created")
         .first()

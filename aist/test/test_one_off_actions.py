@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -13,7 +12,16 @@ from dojo.models import Product, Product_Type, Product_Type_Member, Role, SLA_Co
 
 from aist.celery_signals import on_pipeline_status_changed
 from aist.forms import AISTPipelineRunForm
-from aist.models import AISTPipeline, AISTProject, AISTProjectVersion, AISTStatus, VersionType
+from aist.models import (
+    AISTPipeline,
+    AISTProject,
+    AISTProjectVersion,
+    AISTStatus,
+    Organization,
+    PipelineLaunchOrigin,
+    PipelineLaunchRequest,
+    VersionType,
+)
 
 
 class DummyConfig:
@@ -47,6 +55,10 @@ class OneOffActionsTests(TestCase):
 
         self.sla = SLA_Configuration.objects.create(name="SLA default")
         self.prod_type = Product_Type.objects.create(name="PT")
+        self.organization = Organization.objects.create(
+            name="One-off action organization",
+            product_type=self.prod_type,
+        )
         self.product = Product.objects.create(
             name="Test Product",
             description="desc",
@@ -77,10 +89,7 @@ class OneOffActionsTests(TestCase):
         )
 
     @override_settings(DB_KEY="test-secret")
-    @patch("aist.views.pipelines.run_sast_pipeline")
-    def test_start_pipeline_persists_one_off_actions(self, mock_run_task):
-        mock_run_task.delay.return_value = SimpleNamespace(id="celery-123")
-
+    def test_start_pipeline_persists_one_off_actions_in_launch_request(self):
         with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):
             url = reverse("aist:start_pipeline")
             payload = {
@@ -103,19 +112,17 @@ class OneOffActionsTests(TestCase):
             resp = self.client.post(url, data=payload)
             self.assertEqual(resp.status_code, 302)
 
-        pipeline = AISTPipeline.objects.order_by("-created").first()
-        self.assertIsNotNone(pipeline)
-        launch_data = pipeline.launch_data or {}
+        launch_request = PipelineLaunchRequest.objects.get()
+        launch_data = launch_request.initial_launch_data_snapshot
         actions = launch_data.get("one_off_actions") or []
         self.assertEqual(len(actions), 1)
         stored = actions[0]
         self.assertEqual(stored["action_type"], "PUSH_TO_SLACK")
         self.assertNotIn("secret_config", stored)
+        self.assertFalse(AISTPipeline.objects.exists())
 
     @patch("celery.app.task.Task.apply_async")
-    def test_start_pipeline_passes_request_user_to_celery_task(self, mock_apply_async):
-        mock_apply_async.return_value = SimpleNamespace(id="celery-apply-1")
-
+    def test_repeated_start_click_is_idempotent_and_preserves_requester(self, mock_apply_async):
         with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):
             url = reverse("aist:start_pipeline")
             payload = {
@@ -125,33 +132,24 @@ class OneOffActionsTests(TestCase):
                 "time_class_level": "slow",
                 "ai_mode": "MANUAL",
                 "one_off_actions": "[]",
+                "client_request_key": "classic-start-click-1",
             }
 
-            resp = self.client.post(url, data=payload)
-            self.assertEqual(resp.status_code, 302)
+            first = self.client.post(url, data=payload)
+            second = self.client.post(url, data=payload)
+            self.assertEqual(first.status_code, 302)
+            self.assertEqual(second.status_code, 302)
 
-        self.assertTrue(mock_apply_async.called)
-        task_args = mock_apply_async.call_args.kwargs.get("args", ())
-        task_kwargs = mock_apply_async.call_args.kwargs.get("kwargs", {})
-        self.assertGreaterEqual(len(task_args), 2)
-        self.assertIn("async_user", task_kwargs)
-        self.assertEqual(task_kwargs["async_user"], self.user)
+        launch_request = PipelineLaunchRequest.objects.get()
+        self.assertEqual(launch_request.requester, self.user)
+        self.assertEqual(launch_request.origin, PipelineLaunchOrigin.MANUAL)
+        expected_location = f"{reverse('aist:launching_dashboard')}?queued_request={launch_request.pk}"
+        self.assertEqual(first.headers.get("Location"), expected_location)
+        self.assertEqual(second.headers.get("Location"), expected_location)
+        self.assertFalse(AISTPipeline.objects.exists())
+        mock_apply_async.assert_not_called()
 
-        pipeline = AISTPipeline.objects.order_by("-created").first()
-        self.assertIsNotNone(pipeline)
-        self.assertEqual(pipeline.run_task_id, "celery-apply-1")
-        self.assertEqual(str(task_args[0]), str(pipeline.id))
-
-        expected_location = reverse("aist:pipeline_detail", kwargs={"pipeline_id": pipeline.id})
-        self.assertEqual(resp.headers.get("Location"), expected_location)
-
-        detail_resp = self.client.get(expected_location)
-        self.assertEqual(detail_resp.status_code, 200)
-
-    @patch("celery.app.task.Task.apply_async")
-    def test_start_pipeline_keeps_explicit_analyzers_selection(self, mock_apply_async):
-        mock_apply_async.return_value = SimpleNamespace(id="celery-apply-analyzers")
-
+    def test_start_pipeline_keeps_explicit_analyzers_selection_in_request(self):
         with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):
             url = reverse("aist:start_pipeline")
             payload = {
@@ -166,10 +164,8 @@ class OneOffActionsTests(TestCase):
             resp = self.client.post(url, data=payload)
             self.assertEqual(resp.status_code, 302)
 
-        task_args = mock_apply_async.call_args.kwargs.get("args", ())
-        self.assertGreaterEqual(len(task_args), 2)
-        params = task_args[1]
-        self.assertEqual(params.get("analyzers"), ["bearer"])
+        launch_request = PipelineLaunchRequest.objects.get()
+        self.assertEqual(launch_request.params_snapshot.get("analyzers"), ["bearer"])
 
     def test_start_pipeline_recomputes_default_analyzers_when_language_changed(self):
         with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):

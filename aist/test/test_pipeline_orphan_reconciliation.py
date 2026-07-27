@@ -12,9 +12,14 @@ from django.core.management import call_command
 from django.utils import timezone
 from dojo.models import DojoMeta, Engagement, Finding, Test, Test_Type
 
-from aist.models import AISTPipeline, AISTStatus
+from aist.execution.dispatching import LaunchAcceptance
+from aist.models import AISTPipeline, AISTStatus, PipelineLaunchRequest, PipelineLaunchRequestState
 from aist.tasks.pipeline import postprocess_findings, run_sast_pipeline
-from aist.tasks.reconciliation import _recover_stuck_dedup_pipelines, _recover_stuck_enrich_pipelines
+from aist.tasks.reconciliation import (
+    _recover_stuck_dedup_pipelines,
+    _recover_stuck_enrich_pipelines,
+    reconcile_recent_orphans_task,
+)
 from aist.test.test_api import AISTApiBase
 from aist.utils.pipeline import finish_pipeline
 from aist.utils.reconciliation import reconcile_pipeline_orphans, safe_attach_findings_to_version
@@ -34,6 +39,15 @@ def _dummy_script_path_context():
 
 
 class PipelineOrphanReconciliationTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        acceptance = patch(
+            "aist.tasks.pipeline.accept_published_launch",
+            return_value=LaunchAcceptance.ACCEPTED,
+        )
+        acceptance.start()
+        self.addCleanup(acceptance.stop)
+
     def _make_test_with_finding(self, *, file_path: str = "src/app.py"):
         engagement = Engagement.objects.create(
             name="Reconcile Engage",
@@ -304,6 +318,20 @@ class PostprocessFindingsTests(AISTApiBase):
 
 
 class ReconciliationRecoveryTests(AISTApiBase):
+    def test_full_reconciliation_dry_run_does_not_requeue_stale_launch_request(self):
+        stale_request = PipelineLaunchRequest.objects.create(
+            project=self.project,
+            state=PipelineLaunchRequestState.CLAIMED,
+            claim_owner="dry-run-owner",
+            claimed_at=timezone.now() - timedelta(hours=1),
+        )
+
+        result = reconcile_recent_orphans_task.run(dry_run=True)
+
+        stale_request.refresh_from_db()
+        self.assertEqual(stale_request.state, PipelineLaunchRequestState.CLAIMED)
+        self.assertEqual(result["launch_requests"], {"dry_run": True})
+
     def test_recover_stuck_pipeline_helpers_dry_run_do_not_mutate_pipelines(self):
         dedup_pipeline = AISTPipeline.objects.create(
             id="pipe-reconcile-dry-dedup-1",

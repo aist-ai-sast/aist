@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, time, timedelta
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -39,6 +38,9 @@ from aist.models import (
     AISTProjectVersion,
     AISTStatus,
     Organization,
+    PipelineLaunchOrigin,
+    PipelineLaunchRequest,
+    PipelineLaunchRequestState,
     VersionType,
 )
 from aist.utils.ai_response import sync_ai_finding_responses
@@ -107,22 +109,19 @@ class AISTApiBase(TestCase):
 
 
 class PipelineStartAPITests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.organization = Organization.objects.create(
+            name="Pipeline start organization",
+            product_type=self.prod_type,
+        )
+
     def _url(self):
         # api_urls.py: path("pipelines/start/", ...)
         return reverse("aist_api:pipeline_start")
 
-    @patch("aist.api.pipelines.run_sast_pipeline")
-    @patch("aist.api.pipelines.PipelineArguments.normalize_params")
-    def test_start_pipeline_happy_path_calls_celery_with_params(
-            self, mock_normalize, mock_run_task,
-    ):
-        mock_normalize.return_value = {
-            "project_id": self.project.id,
-            "project_version": {"id": self.pv.id},
-            "log_level": "INFO",
-        }
-        mock_run_task.delay.return_value = SimpleNamespace(id="celery-123")
-
+    @patch("celery.app.task.Task.apply_async")
+    def test_start_pipeline_queues_durable_request_without_direct_celery(self, mock_apply_async):
         resp = self.client.post(
             self._url(),
             data={
@@ -135,14 +134,82 @@ class PipelineStartAPITests(AISTApiBase):
             format="json",
         )
 
-        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.status_code, 202)
+        self.assertTrue(resp.data["queued"])
+        self.assertIsNone(resp.data["pipeline_id"])
+        launch_request = PipelineLaunchRequest.objects.get(pk=resp.data["id"])
+        self.assertEqual(launch_request.project, self.project)
+        self.assertEqual(launch_request.requester, self.user)
+        self.assertEqual(launch_request.origin, PipelineLaunchOrigin.MANUAL)
+        self.assertEqual(launch_request.state, PipelineLaunchRequestState.PENDING)
+        self.assertEqual(launch_request.params_snapshot["project_version"]["id"], self.pv.id)
+        self.assertEqual(launch_request.params_snapshot["ai_mode"], "AUTO_DEFAULT")
+        self.assertFalse(AISTPipeline.objects.exists())
+        mock_apply_async.assert_not_called()
 
-        pipeline_id = resp.data["id"]
+    def test_repeated_start_with_same_idempotency_key_returns_same_request(self):
+        payload = {
+            "project_version_id": self.pv.id,
+            "ai_filter": {
+                "limit": 50,
+                "severity": [{"comparison": "EQUALS", "value": "HIGH"}],
+            },
+        }
 
-        mock_run_task.delay.assert_called_once_with(
-            pipeline_id,
-            mock_normalize.return_value,
+        first = self.client.post(
+            self._url(),
+            data=payload,
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="manual-api-click-1",
         )
+        second = self.client.post(
+            self._url(),
+            data=payload,
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="manual-api-click-1",
+        )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(first.data["id"], second.data["id"])
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 1)
+
+    def test_start_pipeline_rejects_cross_org_project_version(self):
+        resp = self.client.post(
+            self._url(),
+            data={
+                "project_version_id": self.other_pv.id,
+                "ai_filter": {
+                    "limit": 50,
+                    "severity": [{"comparison": "EQUALS", "value": "HIGH"}],
+                },
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("project_version_id", resp.data)
+        self.assertFalse(PipelineLaunchRequest.objects.exists())
+
+    def test_start_pipeline_rejects_server_owned_launch_fields(self):
+        resp = self.client.post(
+            self._url(),
+            data={
+                "project_version_id": self.pv.id,
+                "ai_filter": {
+                    "limit": 50,
+                    "severity": [{"comparison": "EQUALS", "value": "HIGH"}],
+                },
+                "origin": "SCHEDULE",
+                "authority_kind": "RECONCILER",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data["origin"], "Unknown field.")
+        self.assertIn("authority_kind", resp.data)
+        self.assertFalse(PipelineLaunchRequest.objects.exists())
 
     def test_start_pipeline_returns_400_if_filter_required_and_missing(self):
         resp = self.client.post(
@@ -160,6 +227,7 @@ class PipelineCallbackAPITests(AISTApiBase):
         pipeline = AISTPipeline.objects.create(
             id="pipe-callback-ordinary-user",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.WAITING_RESULT_FROM_AI,
         )
 
@@ -182,6 +250,7 @@ class PipelineCallbackAPITests(AISTApiBase):
         pipeline = AISTPipeline.objects.create(
             id="pipe-callback-api",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.WAITING_RESULT_FROM_AI,
         )
 
@@ -207,6 +276,7 @@ class PipelineCallbackAPITests(AISTApiBase):
         pipeline = AISTPipeline.objects.create(
             id="pipe-callback-ai-findings",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.WAITING_RESULT_FROM_AI,
         )
 
@@ -272,6 +342,7 @@ class PipelineCallbackAPITests(AISTApiBase):
         pipeline = AISTPipeline.objects.create(
             id="pipe-callback-ai-fp",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.WAITING_RESULT_FROM_AI,
         )
 
@@ -336,6 +407,7 @@ class PipelineCallbackAPITests(AISTApiBase):
         pipeline = AISTPipeline.objects.create(
             id="pipe-callback-old-url",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.WAITING_RESULT_FROM_AI,
         )
 
@@ -405,11 +477,13 @@ class AISTAuthorizationTests(AISTApiBase):
         own = AISTPipeline.objects.create(
             id="pipe-own",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
         AISTPipeline.objects.create(
             id="pipe-other",
             project=self.other_project,
+            execution_type="MANUAL_IMPORT",
             status=AISTStatus.FINISHED,
         )
 
@@ -432,6 +506,7 @@ class AISTAuthorizationTests(AISTApiBase):
                 AISTPipeline.objects.create(
                     id=pipeline_id,
                     project=self.other_project,
+                    execution_type="MANUAL_IMPORT",
                     status=AISTStatus.FINISHED,
                 )
                 resp = self.client.get(reverse(route_name, kwargs={"pipeline_id": pipeline_id}))
@@ -944,6 +1019,7 @@ class AIFindingResponseAPITests(AISTApiBase):
         pipeline = AISTPipeline.objects.create(
             id="pipe-ai-finding-api",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
         engagement = Engagement.objects.create(
@@ -999,6 +1075,7 @@ class AIFindingResponseAPITests(AISTApiBase):
         pipeline = AISTPipeline.objects.create(
             id="pipe-ai-reference-normalize",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
         engagement = Engagement.objects.create(
@@ -1044,6 +1121,7 @@ class AIFindingResponseAPITests(AISTApiBase):
         pipeline = AISTPipeline.objects.create(
             id="pipe-ai-sync",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
         engagement = Engagement.objects.create(
@@ -1118,6 +1196,7 @@ class AISTFindingAIFilterTests(AISTApiBase):
         self.pipeline = AISTPipeline.objects.create(
             id="pipe-ai-filter",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
         self.pipeline.tests.add(self.test)
@@ -1275,6 +1354,7 @@ class AISTFindingTagsTests(AISTApiBase):
         pipeline = AISTPipeline.objects.create(
             id="pipe-filter",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
         pipeline.tests.add(self.test)
@@ -1779,6 +1859,7 @@ class AISTProductSummaryTests(AISTApiBase):
         AISTPipeline.objects.create(
             id="pipe-summary",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
 
@@ -1846,6 +1927,8 @@ class AISTPipelineSummaryTests(AISTApiBase):
         results = resp.json().get("results", [])
         row = next((item for item in results if item["id"] == self.pipeline.id), None)
         self.assertIsNotNone(row)
+        self.assertEqual(row["execution_type"], self.pipeline.execution_type)
+        self.assertIsNone(row["dast_outcome_code"])
         self.assertEqual(row["status"], AISTStatus.FINISHED)
         self.assertEqual(row["branch"], "release/main")
         self.assertEqual(row["commit"], "deadbeef123")
@@ -1867,6 +1950,7 @@ class AISTPipelineSummaryTests(AISTApiBase):
         other_pipeline = AISTPipeline.objects.create(
             id="pipe-sum-other",
             project=other_project,
+            execution_type="MANUAL_IMPORT",
             status=AISTStatus.FINISHED,
         )
 
@@ -2158,6 +2242,13 @@ class AISTUIApiTests(AISTApiBase):
 
 
 class LaunchConfigAPITests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.organization = Organization.objects.create(
+            name="Launch config API organization",
+            product_type=self.prod_type,
+        )
+
     def _list_create_url(self):
         return reverse("aist_api:project_launch_config_list_create", kwargs={"project_id": self.project.id})
 
@@ -2301,48 +2392,56 @@ class LaunchConfigAPITests(AISTApiBase):
         self.assertTrue(results)
         self.assertEqual(results[0].get("params", {}).get("env", {}).get("PRIVATE_TOKEN"), MASKED_VALUE)
 
-    @patch("aist.api.launch_configs.run_sast_pipeline")
-    @patch("aist.api.launch_configs.PipelineArguments.normalize_params")
-    @patch("aist.api.launch_configs.has_unfinished_pipeline", return_value=False)
-    def test_start_by_launch_config_uses_latest_version_and_merges_overrides(
-            self,
-            mock_has_unfinished,
-            mock_normalize,
-            mock_run_task,
-    ):
-        # Create a "latest" version that should be chosen when project_version_id omitted :contentReference[oaicite:9]{index=9}
-        AISTProjectVersion.objects.create(
-            project=self.project,
-            version_type=VersionType.GIT_HASH,
-            version="develop",
-        )
-
+    @patch("celery.app.task.Task.apply_async")
+    def test_start_by_launch_config_queues_merged_snapshot_without_direct_celery(self, mock_apply_async):
         cfg = AISTProjectLaunchConfig.objects.create(
             project=self.project,
             name="Preset",
             description="",
-            params={"log_level": "INFO", "rebuild_images": False},
+            params={
+                "project_version": {"id": self.pv.id},
+                "log_level": "INFO",
+                "rebuild_images": False,
+            },
             is_default=False,
         )
-
-        mock_normalize.return_value = {"project_version": {"id": self.pv.id}}
-        mock_run_task.delay.return_value = SimpleNamespace(id="celery-999")
 
         resp = self.client.post(
             self._start_url(cfg.id),
             data={"params": {"rebuild_images": True}},
             format="json",
+            HTTP_IDEMPOTENCY_KEY="launch-config-click-1",
         )
-        self.assertEqual(resp.status_code, 201)
-        mock_has_unfinished.assert_called_once()
+        self.assertEqual(resp.status_code, 202)
+        self.assertTrue(resp.data["queued"])
+        self.assertIsNone(resp.data["pipeline_id"])
+        launch_request = PipelineLaunchRequest.objects.get(pk=resp.data["id"])
+        self.assertEqual(launch_request.launch_config, cfg)
+        self.assertEqual(launch_request.requester, self.user)
+        self.assertEqual(launch_request.origin, PipelineLaunchOrigin.MANUAL)
+        self.assertEqual(launch_request.params_snapshot["project_version"]["id"], self.pv.id)
+        self.assertEqual(launch_request.params_snapshot["log_level"], "INFO")
+        self.assertTrue(launch_request.params_snapshot["rebuild_images"])
+        self.assertFalse(AISTPipeline.objects.exists())
+        mock_apply_async.assert_not_called()
 
-        # Ensure normalize got merged raw_params
-        _, kwargs = mock_normalize.call_args
-        self.assertEqual(kwargs["project"], self.project)
-        self.assertEqual(kwargs["raw_params"]["log_level"], "INFO")
-        self.assertEqual(kwargs["raw_params"]["rebuild_images"], True)
+    def test_start_by_launch_config_rejects_server_owned_fields(self):
+        cfg = AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            name="Strict start preset",
+            params={"project_version": {"id": self.pv.id}},
+        )
 
-        mock_run_task.delay.assert_called_once()
+        resp = self.client.post(
+            self._start_url(cfg.id),
+            data={"params": {}, "execution_type": "DAST", "requester_id": self.user.id},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data["execution_type"], "Unknown field.")
+        self.assertEqual(resp.data["requester_id"], "Unknown field.")
+        self.assertFalse(PipelineLaunchRequest.objects.exists())
 
 
 class FindingMarkDuplicateAPITests(AISTFindingAuthorizationTests):

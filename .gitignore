@@ -157,9 +157,8 @@ docs/LICENSE
 docs/.hugo_build.lock
 .cursor-rules
 
-# client-ui local build/test artifacts (Dockerfile always uses --no-package-lock)
+# client-ui local build/test artifacts
 client-ui/node_modules
-client-ui/package-lock.json
 client-ui/test-results
 
 # Frontend source folder intentionally tracked.

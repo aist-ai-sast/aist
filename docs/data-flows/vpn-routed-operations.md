@@ -1,58 +1,59 @@
-# VPN-Routed Operations
+# VPN-routed operations
 
-An AIST VPN integration gives one client’s private systems a controlled AIST
-route. The platform uses two separate lifecycles: an execution sidecar for
-worker operations and warm egress for interactive source-file access. See
-[VPN integration](../integrations/vpn.md) for the credential and
-configuration detail behind this data flow.
+One organization VPN supports two independent runtime paths: a short-lived
+sidecar for worker operations and warm egress for interactive source access.
+The consumer selects the route from an authorized integration or project
+version; callers do not supply a proxy or container name.
 
 ![VPN-routed operations](../assets/vpn-routed-operations.svg)
 
-## How AIST chooses a VPN
+## Select the route
 
-A VPN integration belongs to one organization. An SCM integration or work-item
-provider can reference that organization’s VPN; source-file access first uses
-the VPN attached to its SCM integration and then falls back to the project’s
-resolved VPN configuration. A cross-organization SCM/VPN binding is ignored.
-Without an active VPN, the operation continues directly.
+SCM operations and work-item synchronization use the VPN associated with the
+integration that owns the outbound request. Pipeline source acquisition uses
+the route resolved for the project and source integration. Interactive file
+access resolves the same organization-owned route from the authorized project
+version.
 
-## Operation sidecar
+DAST uses a stricter boundary. Validation, capability synchronization, launch,
+polling, result retrieval, cancellation, and recovery use only the active VPN
+attached to the same-organization DAST integration. A private DAST gateway
+without that route is rejected; AIST does not substitute a project or SCM VPN.
 
-Workers use an execution-specific sidecar for SCM discovery/import, integration
-validation, work-item synchronization, pipeline source acquisition, and builder
-container access. HTTP clients receive its proxy URL; pipeline builders share
-its network namespace. The sidecar is removed when the operation exits,
-including an exception path.
+## Worker-operation sidecar
 
-This is not reused by UI browsing. A missing active VPN means direct execution;
-missing VPN credentials prevent the worker from starting a required sidecar.
+Before a routed worker operation begins, the worker starts a sidecar for that
+operation. HTTP clients receive its proxy address. A SAST builder or standalone
+connector can instead join the sidecar's network namespace. The sidecar is
+removed when the operation exits, including handled failure paths.
+
+If the operation does not require a VPN and no active route is selected, it
+continues directly. If a selected private route is unavailable or lacks usable
+credentials, the operation fails rather than bypassing the route.
 
 ## Warm egress for source files
 
-The web process never creates containers and does not wait for OpenVPN startup
-during a file request. From an authorized project version it derives the warm
-proxy address. A worker starts or reuses one warm sidecar per VPN integration;
-the findings UI can prewarm it before snippets are requested.
+The web process never creates a VPN container during a file request. It derives
+the warm proxy address from the authorized project version. A worker starts or
+reuses one warm sidecar for the selected VPN integration, and the findings UI
+can request a best-effort prewarm before source snippets are shown.
 
-For a cold proxy, the endpoint queues warming and returns `202 warming` with a
-retry interval. Prewarm is best-effort: failure does not break the UI, and a
-later blob request repeats the warm-up path. The warm pool is separate from
-pipeline sidecars, keyed by VPN integration, reaped when idle, and capped by
-least-recently-used eviction.
+When the proxy is cold, the file endpoint queues warming and asks the client to
+retry. Idle sidecars are reaped and the pool has a maximum size. This lifecycle
+is separate from execution sidecars so interactive browsing does not share an
+execution container or lock.
 
-## Security and cleanup boundary
+## Security boundary
 
-VPN configuration and credential fields are encrypted at rest. To start a
-sidecar, worker memory decrypts and passes them to Docker as base64-encoded
-environment values. Docker socket access is therefore a high-privilege boundary.
-Tinyproxy accepts only configured AIST container IPs; it is not a public proxy.
-The periodic cleanup task removes orphaned execution sidecars when an abrupt
-worker termination bypasses normal cleanup.
+The organization owns the VPN configuration and every integration that may use
+it. Cross-organization bindings are rejected or ignored during route
+resolution. A worker decrypts the VPN material only to start the selected
+sidecar; it is not carried in the business payload of the operation.
 
-## Implementation references
+Docker control is a privileged host boundary because the daemon can inspect
+container configuration and network state. The proxy is limited to configured
+AIST container addresses and is not exposed as a public organization proxy.
 
-- [Sidecar lifecycle](../../aist/utils/vpn.py)
-- [Warm egress selection and pool](../../aist/integrations/egress.py)
-- [Interactive blob endpoint](../../aist/api/files.py)
-- [Pipeline VPN attachment](../../aist/tasks/pipeline.py)
-- [Prewarm and reaper tasks](../../aist/tasks/egress.py)
+See [VPN integration](../integrations/vpn.md) for configuration and
+[tenant isolation and access](../security/tenant-isolation-and-access.md) for
+the ownership model.

@@ -65,6 +65,7 @@ class ClaudeDiffSecurityE2ETests(AISTApiBase):
         self.pipeline = AISTPipeline.objects.create(
             id="pipe-diff-e2e",
             project=self.project,
+            project_version=self.pv,
             status=AISTStatus.UPLOADING_RESULTS,
         )
 

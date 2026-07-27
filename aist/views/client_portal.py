@@ -134,6 +134,38 @@ def _build_routes() -> dict[str, Any]:
             "TASKID",
             "task_id",
         ),
+        "dast_integration_import_url": _replace_int_placeholder(
+            reverse("aist_api:organization_dast_integration_import", kwargs={"org_id": 0}),
+            "org_id",
+        ),
+        "dast_integration_onboarding_url": _replace_int_placeholder(
+            reverse("aist_api:dast_integration_onboarding_detail", kwargs={"integration_id": 0}),
+            "integration_id",
+        ),
+        "dast_integration_rotate_token_url": _replace_int_placeholder(
+            reverse("aist_api:dast_integration_rotate_token", kwargs={"integration_id": 0}),
+            "integration_id",
+        ),
+        "organization_dast_target_catalog_url": _replace_int_placeholder(
+            reverse("aist_api:organization_dast_target_catalog", kwargs={"org_id": 0}),
+            "org_id",
+        ),
+        "dast_integration_sync_capabilities_url": _replace_int_placeholder(
+            reverse("aist_api:dast_integration_sync_capabilities", kwargs={"integration_id": 0}),
+            "integration_id",
+        ),
+        "project_dast_bindings_url": _replace_int_placeholder(
+            reverse("aist_api:project_dast_binding_list_create", kwargs={"project_id": 0}),
+            "project_id",
+        ),
+        "dast_binding_detail_url": _replace_int_placeholder(
+            reverse("aist_api:project_dast_binding_detail", kwargs={"binding_id": 0}),
+            "binding_id",
+        ),
+        "project_launch_configs_url": _replace_int_placeholder(
+            reverse("aist_api:project_launch_config_list_create", kwargs={"project_id": 0}),
+            "project_id",
+        ),
         "project_integration_overrides_url": _replace_int_placeholder(
             reverse("aist_api:project_integration_overrides", kwargs={"project_id": 0}),
             "project_id",

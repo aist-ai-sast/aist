@@ -9,10 +9,20 @@ from celery import states
 from celery.result import AsyncResult
 from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 
+from aist.execution.observability import AuditContext, audit_event
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import uninstall_pipeline_file_logging
-from aist.models import AISTPipeline, AISTStatus
+from aist.models import (
+    AISTPipeline,
+    AISTStatus,
+    DastExecutionOutcome,
+    PipelineExecutionLease,
+    PipelineExecutionType,
+    PipelineLaunchRequest,
+    PipelineLaunchRequestState,
+)
 from aist.signals import pipeline_finished, pipeline_status_changed
 from aist.utils.pipeline_imports import cleanup_pipeline_containers
 from aist.utils.reconciliation import reconcile_pipeline_orphans
@@ -140,6 +150,10 @@ def set_pipeline_status(
         # can distinguish completed pipelines from newly dispatched ones.
         pipeline.run_task_id = None
         update_fields.add("run_task_id")
+        PipelineExecutionLease.objects.filter(
+            pipeline=pipeline,
+            released_at__isnull=True,
+        ).update(released_at=timezone.now())
     if update_fields_extra:
         update_fields.update(update_fields_extra)
     pipeline.save(update_fields=sorted(update_fields))
@@ -202,30 +216,24 @@ def _finalize_pipeline_status(pipeline_id: str, *, degraded: bool, reconcile_sta
     uninstall_pipeline_file_logging(pipeline_id)
 
 
-def create_pipeline_object(aist_project, project_version, pull_request, *, status: str = AISTStatus.FINISHED):
+def create_pipeline_object(
+    aist_project,
+    project_version,
+    pull_request,
+    *,
+    status: str = AISTStatus.FINISHED,
+    execution_type: str = PipelineExecutionType.SAST,
+    trigger_project_version=None,
+):
     return AISTPipeline.objects.create(
         id=uuid.uuid4().hex[:8],
         project=aist_project,
         project_version=project_version,
+        trigger_project_version=trigger_project_version,
+        execution_type=execution_type,
         pull_request=pull_request,
         status=status,
     )
-
-
-def trigger_pipeline_for_pr(project, project_version, pull_request, params: dict) -> AISTPipeline:
-    """
-    Create an AISTPipeline for a PR event and dispatch run_sast_pipeline.
-
-    Encapsulates pipeline creation + Celery dispatch so the GitHub event handler
-    remains a thin integration layer without direct knowledge of task routing.
-    """
-    from aist.tasks.pipeline import run_sast_pipeline  # noqa: PLC0415
-
-    pipeline = create_pipeline_object(project, project_version, pull_request)
-    async_result = run_sast_pipeline.delay(pipeline.id, params)
-    pipeline.run_task_id = async_result.id
-    pipeline.save(update_fields=["run_task_id"])
-    return pipeline
 
 
 def _revoke_task(task_id: str | None, *, terminate: bool = True) -> None:
@@ -247,6 +255,10 @@ def stop_pipeline(pipeline: AISTPipeline) -> None:
     Revokes both the run and deduplication watcher tasks (if present),
     tears down any related containers.
     """
+    if pipeline.execution_type == PipelineExecutionType.DAST:
+        _request_dast_pipeline_stop(pipeline.id)
+        return
+
     with transaction.atomic():
         cleanup_pipeline_containers(pipeline.id)
 
@@ -258,3 +270,57 @@ def stop_pipeline(pipeline: AISTPipeline) -> None:
         pipeline.run_task_id = None
         pipeline.watch_dedup_task_id = None
     finish_pipeline(pipeline.id)
+
+
+def _request_dast_pipeline_stop(pipeline_id: str) -> None:
+    """Persist DAST cancellation before signalling its connector container."""
+    finish_without_provider = False
+    task_id = None
+    with transaction.atomic():
+        launch_request = (
+            PipelineLaunchRequest.objects
+            .select_for_update()
+            .filter(pipeline_id=pipeline_id)
+            .first()
+        )
+        pipeline = AISTPipeline.objects.select_for_update().get(pk=pipeline_id)
+        if is_terminal_pipeline_status(pipeline.status):
+            return
+        if pipeline.external_cancel_requested_at is None:
+            pipeline.external_cancel_requested_at = timezone.now()
+        pipeline.external_execution_outcome = DastExecutionOutcome.STOP_PENDING
+        pipeline.save(update_fields=[
+            "external_cancel_requested_at",
+            "external_execution_outcome",
+            "updated",
+        ])
+        task_id = pipeline.run_task_id
+        if launch_request is not None and launch_request.state != PipelineLaunchRequestState.DISPATCHED:
+            launch_request.state = PipelineLaunchRequestState.CANCELLED
+            launch_request.save(update_fields=["state", "updated"])
+            pipeline.external_execution_outcome = DastExecutionOutcome.CANCELLED_BEFORE_START
+            pipeline.save(update_fields=["external_execution_outcome", "updated"])
+            finish_without_provider = True
+        else:
+            transaction.on_commit(lambda: cleanup_pipeline_containers(pipeline_id))
+        transaction.on_commit(
+            lambda: audit_event(
+                "dast_cancel_requested",
+                context=AuditContext(
+                    organization_id=pipeline.project.organization_id,
+                    project_id=pipeline.project_id,
+                    integration_id=(
+                        launch_request.dast_binding.target.integration_id
+                        if launch_request is not None and launch_request.dast_binding_id is not None
+                        else None
+                    ),
+                    binding_id=launch_request.dast_binding_id if launch_request is not None else None,
+                    request_id=launch_request.pk if launch_request is not None else None,
+                    pipeline_id=pipeline.id,
+                ),
+            ),
+        )
+
+    if finish_without_provider:
+        _revoke_task(task_id)
+        finish_pipeline(pipeline_id, degraded=True)

@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 from aist.ai_filter import validate_and_normalize_filter
-from aist.integrations.dast import dast_env
 from aist.models import AISTProject, AISTProjectScript, AISTProjectVersion, VersionType
 from aist.utils.pipeline_imports import _load_analyzers_config
 
@@ -50,11 +49,6 @@ class PipelineArguments:
         self.pipeline_path: Path | None = Path(configured_pipeline) if configured_pipeline else None
         self.project_version["excluded_paths"] = self.project.get_excluded_paths()
         self.project_version["excluded_severities"] = self.project.get_excluded_severities()
-        # DAST credentials (when configured for the project's org) join additional_environments
-        # here, so every other consumer of this field — run_sast_pipeline included — never needs
-        # to know DAST exists. All DAST-specific env-var mapping stays in
-        # aist/integrations/dast.py, mirroring claude.py's single-concentrator invariant.
-        self.additional_environments = {**self.additional_environments, **dast_env(self.project)}
 
     def build_project_version_descriptor(self) -> dict:
         """

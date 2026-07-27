@@ -111,7 +111,7 @@
                                         <div class="checkbox">
                                             <label>
                                                 <input type="checkbox" id="queue-only-pending">
-                                                {% trans "Only pending (dispatched=false)" %}
+                                                {% trans "Only pending" %}
                                             </label>
                                         </div>
 
@@ -122,7 +122,9 @@
 
                                     <div class="queue-filters__right">
                                         <div class="form-group">
-                                            <label for="clear-days">{% trans "Clear dispatched older than (days)" %}</label>
+                                            <label for="clear-days" title="{% trans 'Only removes requests whose state is exactly Dispatched. Failed, Expired, and Cancelled requests are left in place.' %}">
+                                                {% trans "Clear Dispatched requests older than (days)" %}
+                                            </label>
                                             <input type="number" min="1" max="365" value="14" id="clear-days"
                                                    class="form-control" style="width: 90px;">
                                         </div>
@@ -144,6 +146,8 @@
                                     <th>{% trans "Project" %}</th>
                                     <th>{% trans "Schedule" %}</th>
                                     <th>{% trans "Launch config" %}</th>
+                                    <th>{% trans "Origin" %}</th>
+                                    <th>{% trans "Type" %}</th>
                                     <th>{% trans "Status" %}</th>
                                     <th>{% trans "Pipeline" %}</th>
                                     <th>{% trans "Age" %}</th>
@@ -611,7 +615,7 @@
             // CONFIG (URLs from Django context)
             // ---------------------------
             var URL_SCHEDULES_LIST = "{{ api_launch_schedules_url }}";
-            var URL_SCHEDULE_UPSERT_TPL = "{{ api_project_schedule_upsert_template }}";
+            var URL_LAUNCH_CONFIG_SCHEDULE_TPL = "{{ api_launch_config_schedule_template }}";
             var URL_PREVIEW = "{{ api_preview_url }}";
             var URL_QUEUE = "{{ api_queue_url }}";
             var URL_QUEUE_CLEAR = "{{ api_queue_clear_url }}";
@@ -624,12 +628,17 @@
             var URL_LAUNCH_CONFIG_DELETE_TPL = "{{ api_launch_config_delete_template }}";
             var URL_SCHEDULE_RUN_ONCE_TPL = "{{ api_schedule_run_once_template }}";
             var URL_PIPELINE_DETAIL_TPL = "{{ ui_pipeline_detail_template }}";
-            var URL_SCHEDULE_DELETE_TPL = "{{ api_schedule_delete_template }}";
             // Translated UI strings (keep all user-facing text in one place).
             // IMPORTANT: keep Django "trans" tag arguments intact; use single-quoted JS strings.
             var TXT_SELECT_PROJECT_FIRST = '{% trans "Select project first" %}';
             var TXT_NO_LAUNCH_CONFIGS = '{% trans "No launch configs for this project" %}';
             var TXT_SELECT_LAUNCH_CONFIG = '{% trans "Select launch config" %}';
+
+            function launchConfigScheduleUrl(projectId, configId) {
+                return URL_LAUNCH_CONFIG_SCHEDULE_TPL
+                    .replace("{project_id}", String(projectId))
+                    .replace("{config_id}", String(configId));
+            }
 
             function getCookie(name) {
                 var value = "; " + document.cookie;
@@ -694,6 +703,11 @@
                 setTimeout(function () {
                     el.style.display = "none";
                 }, 3000);
+            }
+
+            var queuedRequestId = new URLSearchParams(window.location.search).get("queued_request");
+            if (queuedRequestId) {
+                showToast("Launch request #" + queuedRequestId + " queued.", "success");
             }
 
             function statusBadge(enabled, dueNow) {
@@ -1066,19 +1080,12 @@
         return;
     }
 
-    var url = URL_SCHEDULE_UPSERT_TPL.replace("{project_id}", String(s.project_id));
+    var url = launchConfigScheduleUrl(s.project_id, s.launch_config_id);
 
-    // Use the official SSOT endpoint for schedule writes:
-    // POST /projects/<project_id>/launch-schedule/
-    var payload = {
-        cron_expression: String(s.cron_expression || "").trim(),
-        enabled: !Boolean(s.enabled),
-        max_concurrent_per_worker: parseInt(s.max_concurrent_per_worker, 10),
-        launch_config_id: parseInt(s.launch_config_id, 10)
-    };
+    var payload = {enabled: !Boolean(s.enabled)};
 
     fetch(url, {
-        method: "POST",
+        method: "PATCH",
         credentials: "same-origin",
         headers: Object.assign({"Content-Type": "application/json"}, csrfHeaders()),
         body: JSON.stringify(payload)
@@ -1139,7 +1146,11 @@
                 var label = s ? (s.project_name || ("#" + s.project_id)) : ("#" + scheduleId);
                 if (!confirm("Delete schedule for " + label + "?")) return;
 
-                var url = URL_SCHEDULE_DELETE_TPL.replace("{launch_schedule_id}", String(scheduleId));
+                if (!s || !s.project_id || !s.launch_config_id) {
+                    showToast("Delete failed: schedule has no launch configuration.", "danger");
+                    return;
+                }
+                var url = launchConfigScheduleUrl(s.project_id, s.launch_config_id);
                 fetch(url, {
                     method: "DELETE",
                     credentials: "same-origin",
@@ -1204,12 +1215,13 @@
                 searching: true,
                 order: [[0, "desc"]],
                 columnDefs: [
-                    // Col 6 = "Age" (display). Sort by hidden col 8 (raw seconds).
+                    // Col 8 = "Age" (display). Sort by hidden col 10 (raw seconds).
                     // If columns are added/removed, update both indices together.
                     // Current layout: 0=Created, 1=Project, 2=Schedule, 3=LaunchConfig,
-                    //                 4=Status, 5=Pipeline, 6=Age, 7=Actions, 8=age_sort(hidden)
-                    {targets: 6, orderData: [8]},
-                    {targets: 8, visible: false}
+                    //                 4=Origin, 5=Type, 6=Status, 7=Pipeline, 8=Age,
+                    //                 9=Actions, 10=age_sort(hidden)
+                    {targets: 8, orderData: [10]},
+                    {targets: 10, visible: false}
                 ],
                 initComplete: function () {
                     moveDataTablesControls(this.api(), $("#queue-filters"));
@@ -1217,9 +1229,53 @@
             });
             var queueById = {};
 
-            function queueStatusBadge(dispatched) {
-                if (dispatched) return '<span class="label label-info">Dispatched</span>';
-                return '<span class="label label-warning">Pending</span>';
+            // Every value here is one of PipelineLaunchRequestState's 9 members
+            // (aist/models.py) — keep in sync if a state is ever added/renamed.
+            var QUEUE_STATE_BADGE_CLASS = {
+                PENDING: "label-warning",
+                CLAIMED: "label-info",
+                PLANNED: "label-info",
+                PUBLISHED: "label-info",
+                DISPATCHED: "label-primary",
+                SUPERSEDED: "label-default",
+                FAILED: "label-danger",
+                EXPIRED: "label-default",
+                CANCELLED: "label-default"
+            };
+            var QUEUE_ORIGIN_LABEL = {
+                MANUAL: "Manual",
+                SCHEDULE: "Schedule",
+                SCM_WEBHOOK: "SCM webhook",
+                RECONCILER: "Reconciler"
+            };
+            var QUEUE_EXECUTION_TYPE_LABEL = {
+                SAST: "SAST",
+                DAST: "DAST",
+                MANUAL_IMPORT: "Manual import"
+            };
+
+            function queueStateTooltip(q) {
+                var parts = [];
+                if (q.not_before) parts.push("Not before: " + fmtDate(q.not_before));
+                if (q.expires_at) parts.push("Expires: " + fmtDate(q.expires_at));
+                if (q.dispatched_at) parts.push("Dispatched at: " + fmtDate(q.dispatched_at));
+                if (q.failure_code) parts.push("Failure: " + q.failure_code);
+                return parts.join(" · ");
+            }
+
+            function queueStatusBadge(q) {
+                var state = q.state || "";
+                var cls = QUEUE_STATE_BADGE_CLASS[state] || "label-default";
+                var label = state ? (state.charAt(0) + state.slice(1).toLowerCase()) : "Unknown";
+                var tooltip = queueStateTooltip(q);
+                var html = '<span class="label ' + cls + '"'
+                    + (tooltip ? ' title="' + escapeHtml(tooltip) + '"' : "")
+                    + ">" + escapeHtml(label) + "</span>";
+                if (q.capacity_retry_count) {
+                    html += ' <span class="label label-default" title="Capacity retry count">'
+                        + "×" + escapeHtml(String(q.capacity_retry_count)) + "</span>";
+                }
+                return html;
             }
 
             function loadQueue() {
@@ -1247,7 +1303,9 @@
                                 escapeHtml(q.project_name || (q.project_id ? String(q.project_id) : "")),
                                 q.schedule_id || "",
                                 q.launch_config_id || "",
-                                queueStatusBadge(!!q.dispatched),
+                                escapeHtml(QUEUE_ORIGIN_LABEL[q.origin] || q.origin || ""),
+                                escapeHtml(QUEUE_EXECUTION_TYPE_LABEL[q.execution_type] || q.execution_type || ""),
+                                queueStatusBadge(q),
                                 pipelineLink,
                                 fmtAge(q.age_seconds),
                                 deleteBtn,
@@ -1992,13 +2050,12 @@
                 if (!Number.isFinite(maxConc)) return alert("Max concurrent must be a number");
                 if (maxConc < 1) return alert("Max concurrent must be >= 1");
 
-                var url = URL_SCHEDULE_UPSERT_TPL.replace("{project_id}", projectId);
+                var url = launchConfigScheduleUrl(projectId, launchConfigId);
                 fetch(url, {
-                    method: "POST",
+                    method: "PUT",
                     credentials: "same-origin",
                     headers: Object.assign({"Content-Type": "application/json"}, csrfHeaders()),
                     body: JSON.stringify({
-                        launch_config_id: parseInt(launchConfigId, 10),
                         cron_expression: cron,
                         enabled: enabled,
                         max_concurrent_per_worker: maxConc

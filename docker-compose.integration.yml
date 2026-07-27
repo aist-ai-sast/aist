@@ -81,8 +81,8 @@ services:
       DD_SECRET_KEY: "${DD_SECRET_KEY:-.}"
   postgres:
     ports:
-      - target: ${DD_DATABASE_PORT:-5432}
-        published: ${DD_DATABASE_PORT:-5432}
+      - target: 5432
+        published: ${DD_DATABASE_HOST_PORT:-55432}
         protocol: tcp
         mode: host
     environment:

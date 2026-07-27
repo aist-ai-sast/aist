@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { countReproductionSteps, inferMarkdownStructure, parseStepsToReproduce } from "./dastNarrative";
+import {
+  countReproductionSteps,
+  dastOutcomeNarrative,
+  inferMarkdownStructure,
+  parseStepsToReproduce,
+  type DastOutcomeCode,
+} from "./dastNarrative";
 
 // Fixtures below are excerpted from a real generic-aist-report.json DAST run
 // (2026-07-03_qa_deep_cloud-backend), not synthetic strings — this is the exact
@@ -111,5 +117,28 @@ describe("inferMarkdownStructure", () => {
   it("returns an empty string for empty input", () => {
     expect(inferMarkdownStructure(undefined)).toBe("");
     expect(inferMarkdownStructure("")).toBe("");
+  });
+});
+
+describe("dastOutcomeNarrative", () => {
+  it.each([
+    ["SUCCESS_WITH_FINDINGS", "DAST scan completed", "success"],
+    ["SUCCESS_CLEAN", "DAST scan completed cleanly", "success"],
+    ["POLICY_NO_ELIGIBLE_STAND", "No eligible stand", "warning"],
+    ["SOURCE_DRIFT", "Source changed during the scan", "warning"],
+    ["PROVIDER_FAILED", "DAST provider failed", "warning"],
+    ["PROVIDER_CREDENTIALS_EXPIRED", "DAST provider credentials expired", "warning"],
+    ["INVALID_RESULT", "DAST result rejected", "warning"],
+    ["CANCELLED", "DAST scan cancelled", "neutral"],
+    ["TIMEOUT", "DAST scan timed out", "warning"],
+  ] as Array<[DastOutcomeCode, string, string]>)(
+    "maps %s to a stable public narrative",
+    (code, title, tone) => {
+      expect(dastOutcomeNarrative(code)).toMatchObject({ title, tone });
+    },
+  );
+
+  it("does not invent a narrative without a structured code", () => {
+    expect(dastOutcomeNarrative(null)).toBeNull();
   });
 });

@@ -80,7 +80,12 @@ class CalendarEventsApiTests(TestCase):
             version_type=VersionType.GIT_HASH,
             version="main",
         )
-        self.pipeline = AISTPipeline.objects.create(id="calendar-pipeline", project=self.project, status="FINISHED")
+        self.pipeline = AISTPipeline.objects.create(
+            id="calendar-pipeline",
+            project=self.project,
+            project_version=self.version,
+            status="FINISHED",
+        )
         self.launch_config = AISTProjectLaunchConfig.objects.create(
             project=self.project,
             name="Nightly",

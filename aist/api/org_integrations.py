@@ -5,15 +5,30 @@ import re
 import shutil
 import subprocess
 
+from django.db import IntegrityError, transaction
 from django.http import Http404
-from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_field
 from rest_framework import serializers, status
+from rest_framework.permissions import SAFE_METHODS
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.execution.observability import AuditContext, audit_event
+from aist.integrations.dast_config import (
+    DastConfigError,
+    DastIntegrationConfig,
+    DastOnboardingBundle,
+)
+from aist.integrations.dast_validation import (
+    mark_dast_validation_pending,
+    mark_vpn_linked_dast_validations_pending,
+    schedule_dast_validation,
+)
 from aist.models import (
     AISTProject,
+    DastOnboardingBundleUse,
     Organization,
     OrgIntegration,
     OrgIntegrationType,
@@ -83,6 +98,137 @@ def _split_ovpn_pem_blocks(ovpn_content: str) -> tuple[str, dict[str, str]]:
 # ---------------------------------------------------------------------------
 # Serializers
 # ---------------------------------------------------------------------------
+
+
+class DastOnboardingBundleSerializer(serializers.Serializer):
+
+    """Strict write boundary for a versioned, one-shot DAST onboarding bundle."""
+
+    bundle_version = serializers.IntegerField()
+    gateway_url = serializers.CharField()
+    ca_bundle = serializers.CharField(allow_blank=True, trim_whitespace=False)
+    contract_major = serializers.IntegerField()
+    integrator_public_id = serializers.CharField()
+    server_fingerprint = serializers.CharField()
+    token = serializers.CharField(
+        write_only=True,
+        trim_whitespace=False,
+        style={"input_type": "password"},
+    )
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(token=<write-only>)"
+
+    def to_internal_value(self, data):
+        try:
+            DastOnboardingBundle.from_mapping(data)
+        except DastConfigError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        try:
+            bundle = DastOnboardingBundle.from_mapping(attrs)
+        except DastConfigError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        self.bundle = bundle
+        return {
+            **bundle.to_safe_snapshot(),
+            "token": bundle.token,
+        }
+
+
+class DastIntegrationOnboardingSerializer(serializers.Serializer):
+
+    """Create/update boundary that keeps bundle parsing and secret extraction together."""
+
+    name = serializers.CharField(max_length=255, required=False, default="DAST Gateway")
+    vpn_integration_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+    bundle = DastOnboardingBundleSerializer(write_only=True)
+
+    def to_internal_value(self, data):
+        if (
+            not isinstance(data, dict)
+            or "bundle" not in data
+            or set(data) - {"name", "vpn_integration_id", "bundle"}
+        ):
+            msg = "A DAST onboarding bundle is required and unknown fields are not allowed."
+            raise serializers.ValidationError({"non_field_errors": [msg]})
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        bundle = DastOnboardingBundle.from_mapping(attrs["bundle"])
+        attrs["parsed_bundle"] = bundle
+        if "vpn_integration_id" in attrs:
+            vpn_id = attrs.pop("vpn_integration_id")
+            vpn = None
+            if vpn_id is not None:
+                organization = self.context["organization"]
+                vpn = OrgIntegration.objects.filter(
+                    pk=vpn_id,
+                    organization=organization,
+                    integration_type=OrgIntegrationType.VPN,
+                    is_active=True,
+                ).first()
+                if vpn is None:
+                    raise serializers.ValidationError({"vpn_integration_id": "Active same-organization VPN required."})
+            attrs["vpn_integration"] = vpn
+        return attrs
+
+    def create(self, validated_data):
+        bundle = validated_data.pop("parsed_bundle")
+        validated_data.pop("bundle")
+        integration = OrgIntegration.objects.create(
+            organization=self.context["organization"],
+            integration_type=OrgIntegrationType.DAST,
+            config=bundle.config.to_snapshot(),
+            secret=bundle.token,
+            created_by=self.context["requester"],
+            is_active=True,
+            **validated_data,
+        )
+        schedule_dast_validation(integration)
+        return integration
+
+    def update(self, instance, validated_data):
+        bundle = validated_data.pop("parsed_bundle")
+        validated_data.pop("bundle")
+        instance.config = bundle.config.to_snapshot()
+        instance.secret = bundle.token
+        for field in ("name", "vpn_integration"):
+            if field in validated_data:
+                setattr(instance, field, validated_data[field])
+        instance.save(update_fields=["config", "secret", "name", "vpn_integration", "updated"])
+        schedule_dast_validation(instance)
+        return instance
+
+    def to_representation(self, instance):
+        return OrgIntegrationSerializer(instance).data
+
+
+class DastTokenRotationSerializer(serializers.Serializer):
+
+    token = serializers.CharField(
+        write_only=True,
+        trim_whitespace=False,
+        max_length=DastOnboardingBundle.MAX_TOKEN_BYTES,
+        style={"input_type": "password"},
+    )
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(token=<write-only>)"
+
+    def to_internal_value(self, data):
+        if not isinstance(data, dict) or set(data) != {"token"}:
+            msg = "A token rotation object with no unknown fields is required."
+            raise serializers.ValidationError({"non_field_errors": [msg]})
+        return super().to_internal_value(data)
+
+    def validate_token(self, value):
+        if not value or value != value.strip():
+            msg = "token must be non-empty and contain no surrounding whitespace."
+            raise serializers.ValidationError(msg)
+        return value
 
 
 class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
@@ -205,6 +351,17 @@ class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
         ]
 
 
+class DastIntegrationStateSerializer(serializers.Serializer):
+
+    validation_state = serializers.CharField()
+    validation_error_code = serializers.CharField(allow_blank=True)
+    contract_version = serializers.CharField(allow_blank=True)
+    validated_at = serializers.DateTimeField(allow_null=True)
+    capabilities_etag = serializers.CharField(allow_blank=True)
+    capabilities_synced_at = serializers.DateTimeField(allow_null=True)
+    sync_error_code = serializers.CharField(allow_blank=True)
+
+
 class OrgIntegrationSerializer(serializers.ModelSerializer):
 
     """Full serializer for creating / updating org integrations. secret is write-only."""
@@ -223,6 +380,7 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
     integration_type_display = serializers.CharField(source="get_integration_type_display", read_only=True)
     # Present in responses only when integration_type == VPN (removed in to_representation otherwise)
     vpn_secret = OrgIntegrationVPNSecretSerializer(required=False)
+    dast_state = serializers.SerializerMethodField()
 
     # VPN routing FK — nullable, only applicable to non-VPN integration types
     vpn_integration = serializers.PrimaryKeyRelatedField(
@@ -248,6 +406,7 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             "has_secret",
             "vpn_secret",
             "vpn_integration",
+            "dast_state",
             "is_active",
             "created_by",
             "created",
@@ -257,6 +416,21 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
 
     def get_has_secret(self, obj) -> bool:
         return bool(obj.secret)
+
+    @extend_schema_field(DastIntegrationStateSerializer(allow_null=True))
+    def get_dast_state(self, obj) -> dict | None:
+        state = getattr(obj, "dast_state", None)
+        if state is None:
+            return None
+        return {
+            "validation_state": state.validation_state,
+            "validation_error_code": state.validation_error_code,
+            "contract_version": state.contract_version,
+            "validated_at": state.validated_at,
+            "capabilities_etag": state.capabilities_etag,
+            "capabilities_synced_at": state.capabilities_synced_at,
+            "sync_error_code": state.sync_error_code,
+        }
 
     def validate(self, attrs):
         # Application-level guards specific to integration_type. Centralised
@@ -317,8 +491,12 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         self._require_config_key(attrs, "base_url", "Gitea integration requires a 'base_url' in config.")
 
     def _validate_dast_attrs(self, attrs):
-        """The DAST integration gateway has no public default — every org points at its own."""
-        self._require_config_key(attrs, "gateway_url", "DAST integration requires a 'gateway_url' in config.")
+        """Validate and canonicalize the complete versioned DAST connection snapshot."""
+        try:
+            config = DastIntegrationConfig.from_snapshot(self._effective_config(attrs))
+        except DastConfigError as exc:
+            raise serializers.ValidationError({"config": str(exc)}) from exc
+        attrs["config"] = config.to_snapshot()
 
     def _validate_claude_attrs(self, attrs):
         """
@@ -393,9 +571,21 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         # VPN integrations cannot themselves route through another VPN
         if instance.integration_type == OrgIntegrationType.VPN:
             data.pop("vpn_integration", None)
+        if instance.integration_type == OrgIntegrationType.DAST:
+            data["config"] = instance.get_dast_config().to_snapshot()
+        else:
+            data.pop("dast_state", None)
         return data
 
     def update(self, instance, validated_data):
+        previous_dast_connection = None
+        if instance.integration_type == OrgIntegrationType.DAST:
+            previous_dast_connection = (
+                instance.config,
+                instance.secret,
+                instance.vpn_integration_id,
+                instance.is_active,
+            )
         # On PATCH: if secret is not provided at all, keep existing value.
         if "secret" not in self.initial_data:
             validated_data.pop("secret", None)
@@ -412,6 +602,20 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             vpn_ser.is_valid(raise_exception=True)
             vpn_ser.save()
             instance.refresh_from_db()
+        if instance.integration_type == OrgIntegrationType.DAST:
+            current_dast_connection = (
+                instance.config,
+                instance.secret,
+                instance.vpn_integration_id,
+                instance.is_active,
+            )
+            if current_dast_connection != previous_dast_connection:
+                schedule_dast_validation(instance)
+        elif instance.integration_type == OrgIntegrationType.VPN and (
+            vpn_data is not None
+            or any(field in self.initial_data for field in ("config", "secret", "is_active"))
+        ):
+            mark_vpn_linked_dast_validations_pending(instance)
         return instance
 
     def create(self, validated_data):
@@ -420,6 +624,8 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         if instance.integration_type == OrgIntegrationType.VPN:
             OrgIntegrationVPNSecret.objects.create(integration=instance, **(vpn_data or {}))
             instance.refresh_from_db()
+        elif instance.integration_type == OrgIntegrationType.DAST:
+            schedule_dast_validation(instance)
         return instance
 
 
@@ -487,13 +693,32 @@ class OrgIntegrationListCreateAPI(AISTAPIView):
             201: OrgIntegrationSerializer,
             400: OpenApiResponse(description="Validation error"),
             403: OpenApiResponse(description="Forbidden"),
+            409: OpenApiResponse(description="An active DAST integration already exists"),
         },
     )
     def post(self, request, org_id: int):
         org = self.resolve(pk=org_id)
         serializer = OrgIntegrationSerializer(data=request.data, context={"organization": org})
         serializer.is_valid(raise_exception=True)
-        serializer.save(organization=org, created_by=request.user)
+        try:
+            with transaction.atomic():
+                serializer.save(organization=org, created_by=request.user)
+        except IntegrityError as exc:
+            if "one_active_dast_integration_per_org" not in str(exc):
+                raise
+            return Response(
+                {"detail": "Only one active DAST integration is allowed per organization."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if serializer.instance.integration_type == OrgIntegrationType.DAST:
+            audit_event(
+                "dast_integration_imported",
+                context=AuditContext(
+                    organization_id=org.pk,
+                    integration_id=serializer.instance.pk,
+                    actor_id=request.user.pk,
+                ),
+            )
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -504,6 +729,15 @@ class OrgIntegrationDetailAPI(AISTAPIView):
     PATCH  /integrations/<integration_id>/
     DELETE /integrations/<integration_id>/
     """
+
+    # Each write here can store a new DAST connection, and storing one schedules a probe of the
+    # tenant-supplied gateway URL. Bound how often one actor can drive that; reads stay free.
+    throttle_scope = "aist_dast_gateway_probe"
+
+    def get_throttles(self):
+        if self.request.method in SAFE_METHODS:
+            return []
+        return [ScopedRateThrottle()]
 
     authz = ResourcePolicy(resource=OrgIntegration, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
@@ -522,7 +756,11 @@ class OrgIntegrationDetailAPI(AISTAPIView):
         tags=[AISTApiTag.INTEGRATIONS],
         summary="Update an org integration",
         request=OrgIntegrationSerializer,
-        responses={200: OrgIntegrationSerializer, 400: OpenApiResponse(description="Validation error")},
+        responses={
+            200: OrgIntegrationSerializer,
+            400: OpenApiResponse(description="Validation error"),
+            409: OpenApiResponse(description="An active DAST integration already exists"),
+        },
     )
     def patch(self, request, integration_id: int):
         integration = self._get_integration(integration_id)
@@ -533,7 +771,16 @@ class OrgIntegrationDetailAPI(AISTAPIView):
             context={"organization": integration.organization},
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        try:
+            with transaction.atomic():
+                serializer.save()
+        except IntegrityError as exc:
+            if "one_active_dast_integration_per_org" not in str(exc):
+                raise
+            return Response(
+                {"detail": "Only one active DAST integration is allowed per organization."},
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(serializer.data)
 
     @extend_schema(
@@ -546,6 +793,218 @@ class OrgIntegrationDetailAPI(AISTAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class OrganizationDastIntegrationImportAPI(AISTAPIView):
+
+    """Import the one active DAST integration for an authorized organization."""
+
+    # Each write here can store a new DAST connection, and storing one schedules a probe of the
+    # tenant-supplied gateway URL. Bound how often one actor can drive that; reads stay free.
+    throttle_scope = "aist_dast_gateway_probe"
+
+    def get_throttles(self):
+        if self.request.method in SAFE_METHODS:
+            return []
+        return [ScopedRateThrottle()]
+
+    authz = ResourcePolicy(resource=Organization, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
+    serializer_class = DastIntegrationOnboardingSerializer
+
+    @extend_schema(
+        tags=[AISTApiTag.INTEGRATIONS],
+        summary="Retrieve the active DAST integration",
+        responses={200: OrgIntegrationSerializer},
+    )
+    def get(self, request, org_id: int):
+        organization = self.resolve(pk=org_id)
+        integration = OrgIntegration.objects.filter(
+            organization=organization,
+            integration_type=OrgIntegrationType.DAST,
+            is_active=True,
+        ).first()
+        if integration is None:
+            raise Http404
+        return Response(OrgIntegrationSerializer(integration).data)
+
+    @extend_schema(
+        tags=[AISTApiTag.INTEGRATIONS],
+        summary="Import a versioned DAST onboarding bundle",
+        request=DastIntegrationOnboardingSerializer,
+        responses={
+            201: OrgIntegrationSerializer,
+            400: OpenApiResponse(description="Invalid onboarding bundle"),
+            409: OpenApiResponse(
+                description="An active DAST integration already exists, or this bundle was already imported",
+            ),
+        },
+    )
+    def post(self, request, org_id: int):
+        organization = self.resolve(pk=org_id)
+        serializer = DastIntegrationOnboardingSerializer(
+            data=request.data,
+            context={"organization": organization, "requester": request.user},
+        )
+        serializer.is_valid(raise_exception=True)
+        integrator_public_id = serializer.validated_data["bundle"]["integrator_public_id"]
+        try:
+            with transaction.atomic():
+                serializer.save()
+                # Claiming the bundle inside the same transaction as the integration it
+                # creates: a UNIQUE constraint on integrator_public_id makes re-importing
+                # the same exported bundle (elsewhere, or after this integration is later
+                # deleted) fail closed instead of silently succeeding again.
+                DastOnboardingBundleUse.objects.create(
+                    integrator_public_id=integrator_public_id,
+                    org_integration=serializer.instance,
+                )
+        except IntegrityError as exc:
+            message = str(exc)
+            if "dastonboardingbundleuse" in message.lower():
+                return Response(
+                    {"detail": "This onboarding bundle has already been used."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if "one_active_dast_integration_per_org" not in message:
+                raise
+            return Response(
+                {"detail": "Only one active DAST integration is allowed per organization."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        audit_event(
+            "dast_integration_imported",
+            context=AuditContext(
+                organization_id=organization.pk,
+                integration_id=serializer.instance.pk,
+                actor_id=request.user.pk,
+            ),
+        )
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class DastIntegrationOnboardingDetailAPI(AISTAPIView):
+
+    """Read or replace a DAST connection using the strict bundle boundary."""
+
+    # Each write here can store a new DAST connection, and storing one schedules a probe of the
+    # tenant-supplied gateway URL. Bound how often one actor can drive that; reads stay free.
+    throttle_scope = "aist_dast_gateway_probe"
+
+    def get_throttles(self):
+        if self.request.method in SAFE_METHODS:
+            return []
+        return [ScopedRateThrottle()]
+
+    authz = ResourcePolicy(resource=OrgIntegration, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
+    serializer_class = DastIntegrationOnboardingSerializer
+
+    def _integration(self, integration_id: int):
+        integration = self.resolve(pk=integration_id)
+        if integration.integration_type != OrgIntegrationType.DAST:
+            raise Http404
+        return integration
+
+    @extend_schema(
+        tags=[AISTApiTag.INTEGRATIONS],
+        summary="Retrieve a DAST onboarding connection",
+        responses={200: OrgIntegrationSerializer},
+    )
+    def get(self, request, integration_id: int):
+        return Response(OrgIntegrationSerializer(self._integration(integration_id)).data)
+
+    @extend_schema(
+        tags=[AISTApiTag.INTEGRATIONS],
+        summary="Replace a DAST onboarding bundle",
+        request=DastIntegrationOnboardingSerializer,
+        responses={200: OrgIntegrationSerializer, 400: OpenApiResponse(description="Invalid onboarding bundle")},
+    )
+    def patch(self, request, integration_id: int):
+        integration = self._integration(integration_id)
+        serializer = DastIntegrationOnboardingSerializer(
+            integration,
+            data=request.data,
+            partial=True,
+            context={"organization": integration.organization, "requester": request.user},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        audit_event(
+            "dast_integration_updated",
+            context=AuditContext(
+                organization_id=integration.organization_id,
+                integration_id=integration.pk,
+                actor_id=request.user.pk,
+            ),
+        )
+        return Response(serializer.data)
+
+
+class DastIntegrationDisableAPI(AISTAPIView):
+
+    authz = ResourcePolicy(resource=OrgIntegration, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
+    serializer_class = OrgIntegrationSerializer
+
+    @extend_schema(
+        tags=[AISTApiTag.INTEGRATIONS],
+        summary="Disable a DAST integration",
+        request=None,
+        responses={200: OrgIntegrationSerializer},
+    )
+    def post(self, request, integration_id: int):
+        integration = self.resolve(pk=integration_id)
+        if integration.integration_type != OrgIntegrationType.DAST:
+            raise Http404
+        integration.is_active = False
+        integration.save(update_fields=["is_active", "updated"])
+        mark_dast_validation_pending(integration)
+        audit_event(
+            "dast_integration_disabled",
+            context=AuditContext(
+                organization_id=integration.organization_id,
+                integration_id=integration.pk,
+                actor_id=request.user.pk,
+            ),
+        )
+        return Response(OrgIntegrationSerializer(integration).data)
+
+
+class DastIntegrationTokenRotateAPI(AISTAPIView):
+
+    # Each write here can store a new DAST connection, and storing one schedules a probe of the
+    # tenant-supplied gateway URL. Bound how often one actor can drive that; reads stay free.
+    throttle_scope = "aist_dast_gateway_probe"
+
+    def get_throttles(self):
+        if self.request.method in SAFE_METHODS:
+            return []
+        return [ScopedRateThrottle()]
+
+    authz = ResourcePolicy(resource=OrgIntegration, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
+
+    @extend_schema(
+        tags=[AISTApiTag.INTEGRATIONS],
+        summary="Store a newly rotated DAST integrator token",
+        request=DastTokenRotationSerializer,
+        responses={200: OrgIntegrationSerializer, 400: OpenApiResponse(description="Invalid token")},
+    )
+    def post(self, request, integration_id: int):
+        integration = self.resolve(pk=integration_id)
+        if integration.integration_type != OrgIntegrationType.DAST:
+            raise Http404
+        serializer = DastTokenRotationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        integration.secret = serializer.validated_data["token"]
+        integration.save(update_fields=["secret", "updated"])
+        schedule_dast_validation(integration)
+        audit_event(
+            "dast_token_rotated",
+            context=AuditContext(
+                organization_id=integration.organization_id,
+                integration_id=integration.pk,
+                actor_id=request.user.pk,
+            ),
+        )
+        return Response(OrgIntegrationSerializer(integration).data)
+
+
 class OrgIntegrationValidateAPI(AISTAPIView):
 
     """
@@ -555,6 +1014,15 @@ class OrgIntegrationValidateAPI(AISTAPIView):
     access for VPN-routed checks).  Returns 202 {"task_id": "..."} immediately.
     Poll GET /integrations/<id>/validate/<task_id>/ for the result.
     """
+
+    # Each write here can store a new DAST connection, and storing one schedules a probe of the
+    # tenant-supplied gateway URL. Bound how often one actor can drive that; reads stay free.
+    throttle_scope = "aist_dast_gateway_probe"
+
+    def get_throttles(self):
+        if self.request.method in SAFE_METHODS:
+            return []
+        return [ScopedRateThrottle()]
 
     authz = ResourcePolicy(resource=OrgIntegration, read=Action.ORG_MANAGE_READ, write=Action.ORG_MANAGE)
 
@@ -568,6 +1036,9 @@ class OrgIntegrationValidateAPI(AISTAPIView):
     )
     def post(self, request, integration_id: int):
         integration = self.resolve(pk=integration_id)
+        if integration.integration_type == OrgIntegrationType.DAST:
+            ticket = schedule_dast_validation(integration)
+            return Response({"task_id": ticket.task_id}, status=status.HTTP_202_ACCEPTED)
         from aist.tasks.validate import validate_integration  # noqa: PLC0415
 
         result = validate_integration.delay(integration.pk)
@@ -604,7 +1075,20 @@ class OrgIntegrationValidateStatusAPI(AISTAPIView):
         },
     )
     def get(self, request, integration_id: int, task_id: str):
-        self.resolve(pk=integration_id)  # org isolation check
+        integration = self.resolve(pk=integration_id)
+        if integration.integration_type == OrgIntegrationType.DAST:
+            dast_state = getattr(integration, "dast_state", None)
+            if dast_state is None or dast_state.validation_task_id != task_id:
+                return Response({"state": "PENDING", "valid": None, "detail": ""})
+            return Response({
+                "state": dast_state.validation_state,
+                "valid": (
+                    True
+                    if dast_state.validation_state == "READY"
+                    else False if dast_state.validation_state == "INVALID" else None
+                ),
+                "detail": dast_state.validation_error_code,
+            })
         from celery.result import AsyncResult  # noqa: PLC0415
 
         ar = AsyncResult(task_id)

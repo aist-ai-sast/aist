@@ -344,6 +344,7 @@
                     {% endif %}
                 </div>
                 {% if scope == "start" %}
+                    <input type="hidden" name="client_request_key" value="{{ client_request_key }}">
                     <input type="hidden" name="one_off_actions" id="aist-one-off-actions" value="[]">
                     <div id="aist-one-off-actions-list" class="mt-2"></div>
                 {% else %}
@@ -367,3 +368,13 @@
         </form>
     {% endif %}
 </div>
+{% if form.project %}
+    <script>
+        document.getElementById("btn-start")?.closest("form")?.addEventListener("submit", function () {
+            var button = document.getElementById("btn-start");
+            if (!button) return;
+            button.disabled = true;
+            button.textContent = "Queueing…";
+        });
+    </script>
+{% endif %}

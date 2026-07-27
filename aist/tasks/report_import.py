@@ -1,15 +1,22 @@
 """Import a stored report and attach its results to an AIST pipeline."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+
 from celery import shared_task
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.storage import default_storage
 from django.db import transaction
 
+from aist.integrations.dast_report import validate_manual_dast_terminal_result_bytes
 from aist.internal_upload import ensure_engagement, import_scan_via_default_importer
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging, uninstall_pipeline_file_logging
-from aist.models import AISTPipeline, AISTStatus
+from aist.models import AISTPipeline, AISTStatus, DastProjectBinding
+from aist.parser_overrides import DAST_SCAN_TYPE
+from aist.services.dast_finalization import finalize_dast_report
 from aist.tasks.pipeline import attach_findings_and_finish
 from aist.utils.pipeline import finish_pipeline, is_terminal_pipeline_status, set_pipeline_status
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
@@ -98,6 +105,101 @@ def _record_provenance(
         pipeline.save(update_fields=["launch_data"])
 
 
+def _import_and_finish(
+    pipeline_id: str,
+    project,
+    version,
+    scan_type: str,
+    storage_name: str,
+    uploader_id: int,
+    filename: str,
+    sha256: str,
+    log_level: str,
+    logger,
+) -> None:
+    test_obj, findings = _import_report_as_test(project, version, scan_type, storage_name, uploader_id)
+    _record_provenance(pipeline_id, test_obj, scan_type, uploader_id, filename, sha256)
+    attach_findings_and_finish(
+        pipeline_id=pipeline_id,
+        project_version_id=version.id,
+        finding_ids=[finding.id for finding in findings],
+        log_level=log_level,
+        logger=logger,
+    )
+
+
+def _process_report_import(
+    pipeline_id: str,
+    project_id: int,
+    commit_hash: str,
+    sha256: str,
+    scan_type: str,
+    storage_name: str,
+    uploader_id: int,
+    filename: str,
+    log_level: str,
+    logger,
+) -> bool:
+    resolved = _resolve_version_and_mark_uploading(pipeline_id, project_id, commit_hash, sha256)
+    if resolved is None:
+        logger.info("Report import is already active; skipping duplicate delivery.")
+        uninstall_pipeline_file_logging(pipeline_id)
+        return False
+    project, version = resolved
+    _import_and_finish(
+        pipeline_id, project, version, scan_type, storage_name, uploader_id, filename, sha256, log_level, logger,
+    )
+    return True
+
+
+def _process_dast_report_import(
+    *,
+    pipeline_id: str,
+    project_id: int,
+    binding_id: int | None,
+    storage_name: str,
+    uploader_id: int,
+    sha256: str,
+    log_level: str,
+    logger,
+) -> None:
+    if binding_id is None:
+        msg = "An explicit DAST project binding is required."
+        raise ValueError(msg)
+    binding = (
+        DastProjectBinding.objects
+        .select_related("project", "target")
+        .get(pk=binding_id, project_id=project_id, enabled=True)
+    )
+    with default_storage.open(storage_name, "rb") as stored_report:
+        raw = stored_report.read(settings.PIPELINE_IMPORT_MAX_SIZE_BYTES + 1)
+    if len(raw) > settings.PIPELINE_IMPORT_MAX_SIZE_BYTES:
+        msg = "DAST terminal result exceeds its size limit."
+        raise ValueError(msg)
+    if not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), sha256):
+        msg = "Persisted DAST report checksum does not match the accepted upload."
+        raise ValueError(msg)
+    report = validate_manual_dast_terminal_result_bytes(
+        raw,
+        target_id=binding.target.provider_id,
+        allowed_repository_keys=frozenset(binding.target.repository_keys),
+        maximum_result_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
+        maximum_report_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
+    )
+    if report.source_commit_for(binding.source_repo_key) is None:
+        msg = "DAST report does not contain the binding source repository."
+        raise ValueError(msg)
+    uploader = get_user_model().objects.filter(pk=uploader_id).first()
+    finalize_dast_report(
+        pipeline_id=pipeline_id,
+        report=report,
+        binding=binding,
+        logger=logger,
+        log_level=log_level,
+        lead=uploader,
+    )
+
+
 @shared_task(bind=True)
 def import_report(
     self,
@@ -109,28 +211,39 @@ def import_report(
     commit_hash: str,
     filename: str,
     sha256: str,
+    binding_id: int | None = None,
     log_level: str = "INFO",
+    async_user=None,
 ) -> None:
+    del async_user  # unused; accepted only for the DojoAsyncTask contract
     logger = install_pipeline_logging(pipeline_id, log_level)
     cleanup_upload = True
 
     try:
-        resolved = _resolve_version_and_mark_uploading(pipeline_id, project_id, commit_hash, sha256)
-        if resolved is None:
-            cleanup_upload = False
-            logger.info("Report import is already active; skipping duplicate delivery.")
-            uninstall_pipeline_file_logging(pipeline_id)
-            return
-        project, version = resolved
-        test_obj, findings = _import_report_as_test(project, version, scan_type, storage_name, uploader_id)
-        _record_provenance(pipeline_id, test_obj, scan_type, uploader_id, filename, sha256)
-        attach_findings_and_finish(
-            pipeline_id=pipeline_id,
-            project_version_id=version.id,
-            finding_ids=[f.id for f in findings],
-            log_level=log_level,
-            logger=logger,
-        )
+        if scan_type == DAST_SCAN_TYPE:
+            _process_dast_report_import(
+                pipeline_id=pipeline_id,
+                project_id=project_id,
+                binding_id=binding_id,
+                storage_name=storage_name,
+                uploader_id=uploader_id,
+                sha256=sha256,
+                log_level=log_level,
+                logger=logger,
+            )
+        else:
+            cleanup_upload = _process_report_import(
+                pipeline_id,
+                project_id,
+                commit_hash,
+                sha256,
+                scan_type,
+                storage_name,
+                uploader_id,
+                filename,
+                log_level,
+                logger,
+            )
     except _ReportAlreadyImportedError:
         logger.info("Report with sha256=%s is already attached to pipeline %s.", sha256, pipeline_id)
         uninstall_pipeline_file_logging(pipeline_id)
