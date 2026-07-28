@@ -236,6 +236,16 @@ class DastTargetSnapshot:
         },
     )
 
+    # These mirror the column widths in aist.models.DastTarget, and a test holds them in step. A
+    # catalog is tenant-supplied, so an oversized value has to be refused here -- as a catalog error
+    # naming the field -- instead of reaching storage and failing an atomic refresh with a database
+    # error that says nothing about which target or field was at fault.
+    MAX_PROVIDER_ID_LENGTH: ClassVar[int] = 255
+    MAX_DISPLAY_NAME_LENGTH: ClassVar[int] = 255
+    MAX_CONTRACT_REVISION_LENGTH: ClassVar[int] = 64
+    MAX_CAPABILITY_REVISION_LENGTH: ClassVar[int] = 96
+    MAX_SCHEMA_DIGEST_LENGTH: ClassVar[int] = 96
+
     @classmethod
     def from_snapshot(cls, snapshot: Mapping[str, Any]) -> DastTargetSnapshot:
         if not isinstance(snapshot, Mapping):
@@ -269,22 +279,40 @@ class DastTargetSnapshot:
             raise DastConfigError(msg)
 
         return cls(
-            provider_id=DastIntegrationConfig._required_string(snapshot["id"], "id"),
-            display_name=DastIntegrationConfig._required_string(snapshot["display_name"], "display_name"),
-            contract_revision=DastIntegrationConfig._required_string(
+            provider_id=cls._bounded_string(snapshot["id"], "id", cls.MAX_PROVIDER_ID_LENGTH),
+            display_name=cls._bounded_string(
+                snapshot["display_name"],
+                "display_name",
+                cls.MAX_DISPLAY_NAME_LENGTH,
+            ),
+            contract_revision=cls._bounded_string(
                 snapshot["contract_revision"],
                 "contract_revision",
+                cls.MAX_CONTRACT_REVISION_LENGTH,
             ),
-            capability_revision=DastIntegrationConfig._required_string(
+            capability_revision=cls._bounded_string(
                 snapshot["capability_revision"],
                 "capability_revision",
+                cls.MAX_CAPABILITY_REVISION_LENGTH,
             ),
-            schema_digest=DastIntegrationConfig._required_string(snapshot["schema_digest"], "schema_digest"),
+            schema_digest=cls._bounded_string(
+                snapshot["schema_digest"],
+                "schema_digest",
+                cls.MAX_SCHEMA_DIGEST_LENGTH,
+            ),
             parameter_schema=parameter_schema,
             provider_defaults=provider_defaults,
             repository_keys=normalized_repository_keys,
             autonomous_ready=autonomous_ready,
         )
+
+    @classmethod
+    def _bounded_string(cls, value: Any, field: str, limit: int) -> str:
+        text = DastIntegrationConfig._required_string(value, field)
+        if len(text) > limit:
+            msg = f"{field} exceeds {limit} characters."
+            raise DastConfigError(msg)
+        return text
 
     @staticmethod
     def _json_object(value: Any, field: str) -> dict[str, Any]:

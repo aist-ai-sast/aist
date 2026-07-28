@@ -24,6 +24,7 @@ from aist.utils.vpn import (
     _assemble_env,
     _extract_key_direction,
     cleanup_orphaned_vpn_containers,
+    vpn_sidecar_container_name,
 )
 
 # ---------------------------------------------------------------------------
@@ -893,3 +894,59 @@ class EgressAllowedIpsTests(AISTApiBase):
             self.settings(AIST_EGRESS_ALLOWED_IPS=""),
         ):
             self.assertEqual(egress._allowed_ips(), ["172.20.0.9"])
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: vpn_sidecar_container_name
+# ---------------------------------------------------------------------------
+
+
+class VpnSidecarContainerNameTests(AISTApiBase):
+
+    """
+    The name is also the proxy hostname, so it must stay one resolvable DNS label.
+
+    A DAST capability sync used to compose a 66-character name and every sync failed with a URL
+    parse error before a request left the worker, while validation happened to fit at 61 and worked
+    -- so the integration reported itself ready with an empty target catalog.
+    """
+
+    def test_a_name_that_fits_is_used_verbatim_so_pipeline_cleanup_still_matches(self):
+        pipeline_id = "3f2b8c14-9a6d-4e51-8b77-1c2d3e4f5a6b"
+
+        name = vpn_sidecar_container_name(pipeline_id)
+
+        # cleanup_pipeline_containers() removes a pipeline's containers by substring on its id.
+        self.assertEqual(name, f"aist-vpn-{pipeline_id}")
+        self.assertIn(pipeline_id, name)
+
+    def test_long_execution_ids_stay_within_the_dns_label_limit(self):
+        task_id = "5b76090f-0a81-4476-8466-d1fb43201972"
+        execution_ids = (
+            f"dast-capability-sync-{task_id}",
+            f"dast-validation-{task_id}",
+            "x" * 200,
+        )
+        for execution_id in execution_ids:
+            with self.subTest(execution_id=execution_id):
+                name = vpn_sidecar_container_name(execution_id)
+                self.assertLessEqual(len(name), 63)
+                self.assertTrue(name.startswith("aist-vpn-"))
+                # A trailing or doubled hyphen would not survive as a label component.
+                self.assertFalse(name.endswith("-"))
+                self.assertNotIn("--", name)
+
+    def test_an_execution_id_that_strips_to_nothing_still_yields_one_clean_label(self):
+        # Nothing produces such an id today, but the name is a DNS label for whatever it is given.
+        name = vpn_sidecar_container_name("-" * 80)
+
+        self.assertEqual(name, f"aist-vpn-{name.rsplit('-', maxsplit=1)[-1]}")
+        self.assertNotIn("--", name)
+        self.assertLessEqual(len(name), 63)
+
+    def test_shortened_names_are_reproducible_and_distinct_per_execution(self):
+        first = f"dast-capability-sync-{'a' * 40}"
+        second = f"dast-capability-sync-{'a' * 39}b"
+
+        self.assertEqual(vpn_sidecar_container_name(first), vpn_sidecar_container_name(first))
+        self.assertNotEqual(vpn_sidecar_container_name(first), vpn_sidecar_container_name(second))

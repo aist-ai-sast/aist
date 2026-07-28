@@ -129,6 +129,44 @@ class DastGatewayClientTests(SimpleTestCase):
         for runtime_method in ("start", "status", "logs", "result", "stop"):
             self.assertFalse(hasattr(client, runtime_method))
 
+    def test_deeply_nested_body_is_an_invalid_response_not_an_internal_failure(self):
+        """
+        Nesting depth is bounded by neither the byte cap nor the target count, so a tiny body can
+        still exhaust the JSON parser. The resulting error is not a transport error, and letting it
+        escape would record the sync as an opaque internal failure instead of a bad response.
+        """
+        session = MagicMock(spec=requests.Session)
+        # ~20 KB against a 2 MB cap, so nothing about the size is suspicious.
+        session.get.return_value = FakeResponse(
+            200,
+            headers={"Content-Type": "application/json"},
+            raw_body=b"[" * 10000 + b"]" * 10000,
+        )
+
+        with self.assertRaises(DastGatewayClientError) as caught:
+            self._client(session).catalog()
+
+        self.assertEqual(caught.exception.code, "RESPONSE_JSON_INVALID")
+
+    def test_catalog_accepts_a_transport_etag_the_gateway_did_not_write(self):
+        """
+        A compressing proxy in front of the gateway re-tags the response it re-encodes, and HTTP
+        allows it: the header validates the representation that was served, while the body carries
+        the catalog's own tag. Cross-checking the two rejected every catalog behind such a proxy.
+        """
+        session = MagicMock(spec=requests.Session)
+        session.get.return_value = FakeResponse(
+            200,
+            {"contract_version": "2.0", "etag": "catalog-1", "targets": [_target()]},
+            headers={"Content-Type": "application/json", "ETag": '"catalog-1-gzip"'},
+        )
+
+        catalog = self._client(session).catalog()
+
+        # The stored tag is the body's, so a later conditional request replays what the gateway knows.
+        self.assertEqual(catalog.etag, "catalog-1")
+        self.assertEqual(catalog.targets[0].provider_id, "webapp")
+
     def test_catalog_304_returns_typed_not_modified_result(self):
         session = MagicMock(spec=requests.Session)
         session.get.return_value = FakeResponse(304)

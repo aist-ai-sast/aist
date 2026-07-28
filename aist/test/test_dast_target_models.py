@@ -71,6 +71,40 @@ class DastTargetSnapshotTests(TestCase):
         with self.assertRaises(DastConfigError):
             DastTargetSnapshot.from_snapshot({**_target_wire(), "legacy_defaults": {}})
 
+    def test_oversized_target_strings_are_refused_before_they_reach_storage(self):
+        """
+        A gateway once returned a 259-character label for a 255-character column, and the resulting
+        database error aborted the whole atomic refresh -- every target was lost over one field, and
+        the recorded outcome named neither the target nor the field. Refuse it here instead.
+        """
+        oversized = {
+            "id": DastTargetSnapshot.MAX_PROVIDER_ID_LENGTH,
+            "display_name": DastTargetSnapshot.MAX_DISPLAY_NAME_LENGTH,
+            "contract_revision": DastTargetSnapshot.MAX_CONTRACT_REVISION_LENGTH,
+            "capability_revision": DastTargetSnapshot.MAX_CAPABILITY_REVISION_LENGTH,
+            "schema_digest": DastTargetSnapshot.MAX_SCHEMA_DIGEST_LENGTH,
+        }
+        for field, limit in oversized.items():
+            with self.subTest(field=field):
+                # At the limit the value is still accepted; one character past it is not.
+                DastTargetSnapshot.from_snapshot(_target_wire(**{field: "x" * limit}))
+                with self.assertRaises(DastConfigError) as caught:
+                    DastTargetSnapshot.from_snapshot(_target_wire(**{field: "x" * (limit + 1)}))
+                self.assertIn(field, str(caught.exception))
+
+    def test_snapshot_limits_stay_in_step_with_the_columns_they_protect(self):
+        # The limits exist to keep storage from being what rejects a catalog, so a widened column
+        # with a stale limit would silently reintroduce the refusal it was added to prevent.
+        for field_name, limit in (
+            ("provider_id", DastTargetSnapshot.MAX_PROVIDER_ID_LENGTH),
+            ("display_name", DastTargetSnapshot.MAX_DISPLAY_NAME_LENGTH),
+            ("contract_revision", DastTargetSnapshot.MAX_CONTRACT_REVISION_LENGTH),
+            ("capability_revision", DastTargetSnapshot.MAX_CAPABILITY_REVISION_LENGTH),
+            ("schema_digest", DastTargetSnapshot.MAX_SCHEMA_DIGEST_LENGTH),
+        ):
+            with self.subTest(field=field_name):
+                self.assertEqual(DastTarget._meta.get_field(field_name).max_length, limit)
+
 
 class DastTargetAndBindingModelTests(TestCase):
     def setUp(self):

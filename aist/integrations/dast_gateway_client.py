@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import time
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
 
     from aist.models import OrgIntegration
 
+logger = logging.getLogger(__name__)
+
 
 class DastGatewayClientError(RuntimeError):
 
@@ -42,7 +45,6 @@ class DastGatewayErrorCode(StrEnum):
     TLS_VERIFY_REQUIRED = "TLS_VERIFY_REQUIRED"
     ENDPOINT_POLICY_REJECTED = "ENDPOINT_POLICY_REJECTED"
     GATEWAY_NOT_READY = "GATEWAY_NOT_READY"
-    CATALOG_ETAG_MISMATCH = "CATALOG_ETAG_MISMATCH"
     CATALOG_INVALID = "CATALOG_INVALID"
     GATEWAY_UNREACHABLE = "GATEWAY_UNREACHABLE"
     TLS_HANDSHAKE_FAILED = "TLS_HANDSHAKE_FAILED"
@@ -162,19 +164,27 @@ class DastGatewayClient:
             if response is None:
                 result = DastTargetCatalog(contract_version="", etag=etag, targets=(), not_modified=True)
             else:
-                payload, response_headers = response
+                payload, _response_headers = response
                 self._require_exact_fields(payload, self._CATALOG_FIELDS)
                 contract_version = self._contract_version(payload["contract_version"])
+                # The catalog's own entity-tag is the one in the body: it is what gets stored and
+                # replayed as If-None-Match. The transport header is deliberately not cross-checked
+                # against it -- an entity-tag identifies the representation that was served, so an
+                # intermediary that re-encodes the response is entitled to re-tag it, and a gzipping
+                # proxy in front of the gateway would otherwise make every catalog look like a
+                # gateway contradicting itself.
                 response_etag = self._required_string(payload["etag"])
-                header_etag = response_headers.get("ETag", "").strip('"')
-                if header_etag and header_etag != response_etag:
-                    raise _client_error(DastGatewayErrorCode.CATALOG_ETAG_MISMATCH)
                 raw_targets = payload["targets"]
                 if not isinstance(raw_targets, list) or len(raw_targets) > self.MAX_TARGETS:
                     raise _client_error(DastGatewayErrorCode.CATALOG_INVALID)
                 try:
                     targets = tuple(DastTargetSnapshot.from_snapshot(item) for item in raw_targets)
                 except DastConfigError as exc:
+                    # The persisted code is deliberately fixed and carries no detail, so without this
+                    # the reason is lost: one malformed target reads as "invalid catalog" with nothing
+                    # for the operator to act on. The message names the offending field and limit and
+                    # never carries a credential.
+                    logger.warning("DAST catalog rejected as invalid: %s", exc)
                     raise _client_error(DastGatewayErrorCode.CATALOG_INVALID) from exc
                 provider_ids = [target.provider_id for target in targets]
                 if len(provider_ids) != len(set(provider_ids)):
@@ -261,7 +271,11 @@ class DastGatewayClient:
                 raise _client_error(DastGatewayErrorCode.RESPONSE_TOO_LARGE)
         try:
             return json.loads(body)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (ValueError, RecursionError) as exc:
+            # ValueError covers a decode failure, malformed JSON, and an over-long integer literal.
+            # RecursionError covers a body nested deeply enough to exhaust the parser while staying
+            # far inside the size cap -- no byte or count limit bounds nesting depth, and an escaping
+            # error here would be recorded as an opaque internal failure rather than a bad response.
             raise _client_error(DastGatewayErrorCode.RESPONSE_JSON_INVALID) from exc
 
     def _contract_version(self, value: Any) -> str:

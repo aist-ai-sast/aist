@@ -28,6 +28,7 @@ Security notes:
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -51,6 +52,36 @@ _TUN_WAIT_SECS = 35  # tun0 timeout (30 s in sidecar) + 5 s buffer for tinyproxy
 
 # Lines in docker logs output that may expose client DNS server IPs or search domains.
 _REDACT_LOG_PREFIXES = ("[VPN] DNS configured", "nameserver ", "search ")
+
+_VPN_CONTAINER_PREFIX = "aist-vpn-"
+# The container name doubles as the proxy hostname, so it has to stay one valid DNS label. Docker
+# itself accepts a longer name, but a client refuses to resolve a label over 63 characters and the
+# request then fails before it is ever sent -- with a parse error, nowhere near the name that caused
+# it. Anything composing this name has to respect the limit.
+_MAX_CONTAINER_NAME_LENGTH = 63
+_CONTAINER_NAME_DIGEST_LENGTH = 12
+
+
+def vpn_sidecar_container_name(execution_id: str) -> str:
+    """
+    Return the sidecar container name for *execution_id*, kept resolvable as a single DNS label.
+
+    An execution id that fits is used verbatim, so the name still *contains* the id -- which is what
+    ``cleanup_pipeline_containers`` filters on when it removes a pipeline's containers by substring.
+    A longer one is shortened and given a digest of the full id, which keeps the name unique and
+    reproducible for the same execution without crossing the label limit.
+    """
+    name = f"{_VPN_CONTAINER_PREFIX}{execution_id}"
+    if len(name) <= _MAX_CONTAINER_NAME_LENGTH:
+        return name
+    digest = hashlib.sha256(execution_id.encode("utf-8")).hexdigest()[:_CONTAINER_NAME_DIGEST_LENGTH]
+    room = _MAX_CONTAINER_NAME_LENGTH - len(_VPN_CONTAINER_PREFIX) - len(digest) - 1
+    stem = execution_id[:room].rstrip("-")
+    # The digest alone identifies the execution, so a stem that strips away to nothing is dropped
+    # rather than left to contribute a stray separator.
+    if not stem:
+        return f"{_VPN_CONTAINER_PREFIX}{digest}"
+    return f"{_VPN_CONTAINER_PREFIX}{stem}-{digest}"
 
 
 def _find_executable(name: str) -> str | None:
@@ -516,7 +547,7 @@ def vpn_sidecar_context(
         yield None, None
         return
 
-    container_name = f"aist-vpn-{execution_id}"
+    container_name = vpn_sidecar_container_name(execution_id)
 
     image = _get_vpn_sidecar_image()
     _build_vpn_sidecar_if_needed(image)

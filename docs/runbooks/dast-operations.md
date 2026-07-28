@@ -133,6 +133,7 @@ promotion.
 | Validation reports a rejected endpoint | Absolute HTTPS URL with no credentials, query, or fragment, and port 443 or 8443 |
 | Validation reports a TLS handshake failure | Gateway certificate chain, the CA carried in the bundle, and whether the gateway serves the hostname in the gateway URL. This is a certificate or naming fault, not a network one |
 | Validation reports an unreachable gateway | DAST VPN health, gateway availability, and the listening port |
+| Ready, but no targets to bind | Whether the gateway accepts a target-catalog request from this integrator identity. Reaching the gateway and being allowed to list its targets are separate permissions on the DAST side, so validation can succeed while the catalog is refused |
 | Binding stale | Capability revision, schema digest, target availability, and parameter snapshot |
 | Launch remains pending | Stored authority, readiness, capacity, and request expiry |
 | Cancellation remains pending | Provider reachability and reconciliation progress |
