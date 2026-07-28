@@ -54,6 +54,13 @@ Docker control is a privileged host boundary because the daemon can inspect
 container configuration and network state. The proxy is limited to configured
 AIST container addresses and is not exposed as a public organization proxy.
 
+A routed request names its destination to the proxy, and the proxy resolves that
+name inside the tunnel. The reach of the route is therefore what bounds where a
+routed connection can land; a name lookup performed outside the tunnel cannot
+stand in for that boundary. Give a route no more reach than its consumers need.
+[DAST integration](../integrations/dast.md#network-and-credentials) describes how
+a DAST gateway destination is checked under this constraint.
+
 See [VPN integration](../integrations/vpn.md) for configuration and
 [tenant isolation and access](../security/tenant-isolation-and-access.md) for
 the ownership model.

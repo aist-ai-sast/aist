@@ -22,6 +22,12 @@ Continue only when validation is **Ready**, synchronization succeeded, and at
 least one target is available. A private gateway without an active credentialed
 DAST VPN should remain not ready.
 
+To edit an integration later, leave the bundle field empty when only the name or
+the DAST VPN changes; the stored connection and token are kept. Changing the
+gateway URL, CA, integrator identity, or fingerprint needs a bundle carrying the
+matching token. A replaced connection or a changed route re-runs validation, so
+wait for **Ready** again before relying on the integration.
+
 API clients use the organization DAST import, integration validation,
 capability synchronization, and target-list endpoints under `/api/v2/aist/`.
 
@@ -124,6 +130,9 @@ promotion.
 | Symptom | Check |
 |---|---|
 | Integration not ready | Gateway URL policy, token, CA, explicit DAST VPN, and validation result |
+| Validation reports a rejected endpoint | Absolute HTTPS URL with no credentials, query, or fragment, and port 443 or 8443 |
+| Validation reports a TLS handshake failure | Gateway certificate chain, the CA carried in the bundle, and whether the gateway serves the hostname in the gateway URL. This is a certificate or naming fault, not a network one |
+| Validation reports an unreachable gateway | DAST VPN health, gateway availability, and the listening port |
 | Binding stale | Capability revision, schema digest, target availability, and parameter snapshot |
 | Launch remains pending | Stored authority, readiness, capacity, and request expiry |
 | Cancellation remains pending | Provider reachability and reconciliation progress |

@@ -521,6 +521,15 @@ export type DastOnboardingPayload = {
   bundle: DastOnboardingBundle;
 };
 
+/**
+ * An update may omit the bundle. The stored integrator token is never readable, so rebuilding a
+ * bundle from what the UI holds would send an empty token; omitting it keeps the stored connection
+ * and token untouched and edits only the fields that are present.
+ */
+export type DastOnboardingUpdatePayload = Omit<DastOnboardingPayload, "bundle"> & {
+  bundle?: DastOnboardingBundle;
+};
+
 export function useImportDastIntegration(orgId: number) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -536,7 +545,7 @@ export function useImportDastIntegration(orgId: number) {
 export function useUpdateDastIntegrationOnboarding(orgId: number) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ integrationId, payload }: { integrationId: number; payload: DastOnboardingPayload }) =>
+    mutationFn: ({ integrationId, payload }: { integrationId: number; payload: DastOnboardingUpdatePayload }) =>
       fetchJson(getRoute("dast_integration_onboarding_url", { integration_id: integrationId }), {
         method: "PATCH",
         body: JSON.stringify(payload),

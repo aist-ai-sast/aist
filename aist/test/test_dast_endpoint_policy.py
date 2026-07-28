@@ -1,3 +1,5 @@
+import socket
+
 from django.test import SimpleTestCase
 
 from aist.integrations.dast_endpoint_policy import DastEndpointPolicy, DastEndpointPolicyError
@@ -35,6 +37,58 @@ class DastEndpointPolicyTests(SimpleTestCase):
         endpoint = policy.validate("https://gateway.example:8443")
 
         self.assertEqual(endpoint.port, 8443)
+
+    def test_vpn_routed_name_with_no_local_answer_is_accepted_unverified(self):
+        # A VPN-internal name has no answer outside the tunnel, and the sidecar's proxy is what
+        # resolves it for the real connection. Refusing it here would reject a legitimate gateway.
+        def no_local_answer(_hostname, _port):
+            raise socket.gaierror(-2, "Name or service not known")
+
+        policy = DastEndpointPolicy(trusted_vpn=True, resolver=no_local_answer)
+
+        endpoint = policy.validate("https://gateway.internal.example:8443")
+
+        self.assertEqual(endpoint.hostname, "gateway.internal.example")
+        self.assertEqual(endpoint.port, 8443)
+        # Empty means "the proxy owns this lookup", not "no addresses".
+        self.assertEqual(endpoint.addresses, ())
+
+    def test_vpn_routed_name_resolving_inside_the_vpn_is_not_authorized_locally(self):
+        policy = DastEndpointPolicy(trusted_vpn=True, resolver=lambda _host, _port: ("10.2.42.7",))
+
+        self.assertEqual(policy.validate("https://gateway.internal.example:8443").addresses, ())
+
+    def test_vpn_routed_name_with_an_oversized_answer_set_is_refused(self):
+        # Checking only the first answers would let whoever owns the zone pad the set with harmless
+        # records until a forbidden one falls outside the window, defeating the denial above.
+        padded = tuple(f"93.184.216.{octet}" for octet in range(1, 40)) + ("127.0.0.1",)
+        policy = DastEndpointPolicy(trusted_vpn=True, resolver=lambda _host, _port: padded)
+
+        with self.assertRaises(DastEndpointPolicyError):
+            policy.validate("https://gateway.internal.example:8443")
+
+    def test_vpn_routed_name_resolving_to_a_special_purpose_address_is_refused(self):
+        # A local answer cannot authorize a routed destination, but it can still deny one: a name
+        # that resolves to a loopback or metadata address is never a gateway.
+        for address in ("127.0.0.1", "169.254.169.254", "0.0.0.0", "::1"):  # noqa: S104 - forbidden test input
+            policy = DastEndpointPolicy(trusted_vpn=True, resolver=lambda _host, _port, a=address: (a,))
+            with self.subTest(address=address), self.assertRaises(DastEndpointPolicyError):
+                policy.validate("https://gateway.internal.example:8443")
+
+    def test_vpn_routed_address_literal_is_still_checked(self):
+        # An address literal needs no lookup, so the value checked here is the value connected to --
+        # a private one is in range for a trusted VPN, a special-purpose one never is.
+        policy = DastEndpointPolicy(trusted_vpn=True)
+
+        self.assertEqual(policy.validate("https://10.2.42.7:8443").addresses, ("10.2.42.7",))
+        with self.assertRaises(DastEndpointPolicyError):
+            policy.validate("https://169.254.169.254:8443")
+
+    def test_direct_route_name_is_still_resolved_and_restricted_to_public(self):
+        policy = DastEndpointPolicy(trusted_vpn=False, resolver=lambda _host, _port: ("10.2.42.7",))
+
+        with self.assertRaises(DastEndpointPolicyError):
+            policy.validate("https://gateway.internal.example")
 
     def test_private_addresses_require_trusted_vpn(self):
         private_addresses = ("10.0.0.7", "172.16.4.8", "192.168.20.9", "fd00::10")

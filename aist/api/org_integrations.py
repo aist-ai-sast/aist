@@ -147,9 +147,12 @@ class DastIntegrationOnboardingSerializer(serializers.Serializer):
     bundle = DastOnboardingBundleSerializer(write_only=True)
 
     def to_internal_value(self, data):
+        # A partial update may omit the bundle: the stored token is never readable, so requiring one
+        # would make renaming an integration or moving it to another VPN impossible without the
+        # operator re-exporting a fresh bundle from the gateway. Creating still requires one.
         if (
             not isinstance(data, dict)
-            or "bundle" not in data
+            or ("bundle" not in data and not self.partial)
             or set(data) - {"name", "vpn_integration_id", "bundle"}
         ):
             msg = "A DAST onboarding bundle is required and unknown fields are not allowed."
@@ -157,8 +160,8 @@ class DastIntegrationOnboardingSerializer(serializers.Serializer):
         return super().to_internal_value(data)
 
     def validate(self, attrs):
-        bundle = DastOnboardingBundle.from_mapping(attrs["bundle"])
-        attrs["parsed_bundle"] = bundle
+        if "bundle" in attrs:
+            attrs["parsed_bundle"] = DastOnboardingBundle.from_mapping(attrs["bundle"])
         if "vpn_integration_id" in attrs:
             vpn_id = attrs.pop("vpn_integration_id")
             vpn = None
@@ -191,15 +194,23 @@ class DastIntegrationOnboardingSerializer(serializers.Serializer):
         return integration
 
     def update(self, instance, validated_data):
-        bundle = validated_data.pop("parsed_bundle")
-        validated_data.pop("bundle")
-        instance.config = bundle.config.to_snapshot()
-        instance.secret = bundle.token
+        bundle = validated_data.pop("parsed_bundle", None)
+        validated_data.pop("bundle", None)
+        update_fields = ["updated"]
+        if bundle is not None:
+            instance.config = bundle.config.to_snapshot()
+            instance.secret = bundle.token
+            update_fields += ["config", "secret"]
         for field in ("name", "vpn_integration"):
             if field in validated_data:
                 setattr(instance, field, validated_data[field])
-        instance.save(update_fields=["config", "secret", "name", "vpn_integration", "updated"])
-        schedule_dast_validation(instance)
+                update_fields.append(field)
+        instance.save(update_fields=update_fields)
+        # Only a new connection or a new egress route changes what a probe would reach. Re-validating
+        # on a rename would drop a READY integration back to VALIDATING and spend a gateway probe to
+        # rediscover the result it already had.
+        if bundle is not None or "vpn_integration" in validated_data:
+            schedule_dast_validation(instance)
         return instance
 
     def to_representation(self, instance):

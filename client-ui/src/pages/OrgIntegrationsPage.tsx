@@ -267,6 +267,14 @@ const EMPTY_ORG_FORM: OrgIntegrationFormState = {
   is_active: true,
 };
 
+/** DAST connection fields the backend only accepts as part of a signed onboarding bundle. */
+const DAST_CONNECTION_FIELDS = [
+  "gateway_url",
+  "ca_bundle",
+  "integrator_public_id",
+  "server_fingerprint",
+] as const;
+
 function OrgIntegrationConfigFields({
   type,
   config,
@@ -710,23 +718,32 @@ function OrgIntegrationForm({
 
   async function handleSave() {
     if (form.integration_type === "DAST") {
-      const bundle: DastOnboardingBundle = {
-        bundle_version: 1,
-        gateway_url: form.config.gateway_url?.trim() ?? "",
-        ca_bundle: form.config.ca_bundle?.trim() ?? "",
-        contract_major: 2,
-        integrator_public_id: form.config.integrator_public_id?.trim() ?? "",
-        server_fingerprint: form.config.server_fingerprint?.trim() ?? "",
-        token: form.secret,
-      };
+      // A bundle can only be assembled when the operator supplied the integrator token — by pasting
+      // a bundle or typing one. The stored token is never readable, so an edit without one keeps the
+      // connection already stored and changes only the name and VPN route.
+      const bundle: DastOnboardingBundle | null = form.secret
+        ? {
+            bundle_version: 1,
+            gateway_url: form.config.gateway_url?.trim() ?? "",
+            ca_bundle: form.config.ca_bundle?.trim() ?? "",
+            contract_major: 2,
+            integrator_public_id: form.config.integrator_public_id?.trim() ?? "",
+            server_fingerprint: form.config.server_fingerprint?.trim() ?? "",
+            token: form.secret,
+          }
+        : null;
       try {
         if (editing) {
           await updateDastIntegration.mutateAsync({
             integrationId: editing.id,
-            payload: { name: form.name.trim(), vpn_integration_id: form.vpn_integration, bundle },
+            payload: {
+              name: form.name.trim(),
+              vpn_integration_id: form.vpn_integration,
+              ...(bundle ? { bundle } : {}),
+            },
           });
           toast.push("DAST integration updated.", "success");
-        } else {
+        } else if (bundle) {
           await importDastIntegration.mutateAsync({
             name: form.name.trim(),
             vpn_integration_id: form.vpn_integration,
@@ -791,6 +808,15 @@ function OrgIntegrationForm({
     importDastIntegration.isPending ||
     updateDastIntegration.isPending;
 
+  // Connection fields travel to the backend only inside a bundle, and a bundle needs the token. If
+  // they were edited without one, the edit would be dropped on the way out — so require it instead.
+  const dastConnectionEdited =
+    form.integration_type === "DAST" &&
+    editing != null &&
+    DAST_CONNECTION_FIELDS.some(
+      (key) => (form.config[key]?.trim() ?? "") !== String(editing.config?.[key] ?? "").trim(),
+    );
+
   return (
     <div className="rounded-2xl border border-night-500/80 bg-night-700/60 p-4 space-y-3">
       <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
@@ -837,6 +863,13 @@ function OrgIntegrationForm({
                 <p className="mt-1 text-[11px] text-slate-500">
                   Paste the protected JSON emitted by the DAST deployment, or enter the same fields manually below.
                 </p>
+                {editing && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Leave this empty to keep the stored connection and change only the name or VPN route.
+                    Changing the gateway URL, CA bundle, integrator id, or fingerprint requires the
+                    integrator token that belongs to them.
+                  </p>
+                )}
                 <SecretTextareaField
                   className="mt-2"
                   rows={5}
@@ -862,7 +895,7 @@ function OrgIntegrationForm({
                     ? "Integrator Token"
                     : "Access Token"}
                 {form.integration_type === "GITHUB" && <span className="text-slate-500"> (optional)</span>}
-                {editing?.has_secret && form.integration_type !== "DAST" && (
+                {editing?.has_secret && (
                   <span className="ml-1 text-slate-500">(leave blank to keep existing)</span>
                 )}
                 <PasswordField
@@ -915,7 +948,7 @@ function OrgIntegrationForm({
             (!form.config.gateway_url?.trim() ||
               !form.config.integrator_public_id?.trim() ||
               !form.config.server_fingerprint?.trim() ||
-              !form.secret)) ||
+              (!form.secret && (!editing || dastConnectionEdited)))) ||
           (form.integration_type === "EMAIL" && !form.config.from_email?.trim()) ||
           (form.integration_type === "SLACK" && !form.config.default_channel?.trim())
         }

@@ -150,6 +150,74 @@ describe("OrgIntegrationsPage — DAST integration", () => {
     expect(screen.queryByDisplayValue(bundle.token)).not.toBeInTheDocument();
   });
 
+  it("renames an existing DAST integration without re-entering the integrator token", async () => {
+    // The stored token is never sent back to the UI, so a rename has to go out without a bundle.
+    // Sending one built from what the form holds would carry an empty token and be rejected.
+    mockIntegrations = [
+      {
+        id: 7,
+        name: "Primary DAST gateway",
+        integration_type: "DAST",
+        is_active: true,
+        has_secret: true,
+        config: {
+          gateway_url: "https://gateway.example",
+          ca_bundle: "",
+          integrator_public_id: "pub_aist",
+          server_fingerprint: "sha256:fingerprint",
+        },
+        vpn_integration: null,
+      },
+    ];
+
+    render(<OrgIntegrationsPage />);
+    const section = screen.getByText("Org Integrations").closest("section")!;
+    fireEvent.click(within(section).getByRole("button", { name: /edit/i }));
+    fireEvent.change(within(section).getByPlaceholderText("e.g. Production"), {
+      target: { value: "Renamed gateway" },
+    });
+    fireEvent.click(within(section).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(updateDastMutateAsync).toHaveBeenCalled());
+    expect(updateDastMutateAsync).toHaveBeenCalledWith({
+      integrationId: 7,
+      payload: { name: "Renamed gateway", vpn_integration_id: null },
+    });
+  });
+
+  it("requires the integrator token before a changed DAST connection can be saved", () => {
+    // Connection fields only reach the backend inside a bundle. Without the token there is no
+    // bundle, so an edit to them would be silently dropped — the control has to block instead.
+    mockIntegrations = [
+      {
+        id: 7,
+        name: "Primary DAST gateway",
+        integration_type: "DAST",
+        is_active: true,
+        has_secret: true,
+        config: {
+          gateway_url: "https://gateway.example",
+          ca_bundle: "",
+          integrator_public_id: "pub_aist",
+          server_fingerprint: "sha256:fingerprint",
+        },
+        vpn_integration: null,
+      },
+    ];
+
+    render(<OrgIntegrationsPage />);
+    const section = screen.getByText("Org Integrations").closest("section")!;
+    fireEvent.click(within(section).getByRole("button", { name: /edit/i }));
+    const save = within(section).getByRole("button", { name: "Save changes" });
+    expect(save).toBeEnabled();
+
+    fireEvent.change(within(section).getByDisplayValue("https://gateway.example"), {
+      target: { value: "https://moved-gateway.example:8443" },
+    });
+
+    expect(within(section).getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
   it("hides mutation controls when manage-access permission is absent", () => {
     mockIntegrations = [
       {

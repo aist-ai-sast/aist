@@ -65,10 +65,20 @@ class DastOnboardingAPITests(AISTApiBase):
             "aist_api:dast_integration_onboarding_detail",
             kwargs={"integration_id": integration.pk},
         )
-        missing_bundle = self.client.patch(detail_url, {"name": "Incomplete replacement"}, format="json")
-        self.assertEqual(missing_bundle.status_code, 400)
+        # A rename carries no bundle: the stored token cannot be read back, so demanding one would
+        # mean re-exporting a bundle from the gateway just to change a label. The connection behind
+        # the integration has to survive that untouched.
+        renamed = self.client.patch(detail_url, {"name": "Renamed DAST"}, format="json")
+        self.assertEqual(renamed.status_code, 200, renamed.data)
         integration.refresh_from_db()
-        self.assertEqual(integration.name, "Primary DAST")
+        self.assertEqual(integration.name, "Renamed DAST")
+        self.assertEqual(integration.secret, TOKEN)
+        self.assertEqual(integration.config["gateway_url"], "https://gateway.example")
+
+        unknown_field = self.client.patch(detail_url, {"is_active": False}, format="json")
+        self.assertEqual(unknown_field.status_code, 400)
+        integration.refresh_from_db()
+        self.assertTrue(integration.is_active)
 
         updated = self.client.patch(
             detail_url,
@@ -147,6 +157,63 @@ class DastOnboardingAPITests(AISTApiBase):
 
         self.assertEqual(replaced.status_code, 200, replaced.data)
         send_task.assert_called_once()
+
+    @patch("aist.integrations.dast_validation.current_app.send_task")
+    def test_renaming_keeps_the_validated_connection_and_does_not_reprobe(self, send_task):
+        """
+        A rename does not change what a probe would reach. Revalidating anyway would drop a READY
+        integration back to VALIDATING -- and spend a probe against the tenant's gateway -- to
+        rediscover the state it already had.
+        """
+        with self.captureOnCommitCallbacks(execute=True):
+            integration_id = self._import().data["id"]
+        integration = OrgIntegration.objects.get(pk=integration_id)
+        integration.dast_state.validation_state = DastIntegrationValidationState.READY
+        integration.dast_state.save(update_fields=["validation_state"])
+        send_task.reset_mock()
+        detail_url = reverse(
+            "aist_api:dast_integration_onboarding_detail",
+            kwargs={"integration_id": integration_id},
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            renamed = self.client.patch(detail_url, {"name": "Renamed only"}, format="json")
+
+        self.assertEqual(renamed.status_code, 200, renamed.data)
+        send_task.assert_not_called()
+        integration.refresh_from_db()
+        integration.dast_state.refresh_from_db()
+        self.assertEqual(integration.name, "Renamed only")
+        self.assertEqual(
+            integration.dast_state.validation_state,
+            DastIntegrationValidationState.READY,
+        )
+
+    @patch("aist.integrations.dast_validation.current_app.send_task")
+    def test_moving_to_another_vpn_route_revalidates_without_a_new_bundle(self, send_task):
+        """A different egress route can reach a different host, so the connection must be re-probed."""
+        with self.captureOnCommitCallbacks(execute=True):
+            integration_id = self._import().data["id"]
+        vpn = OrgIntegration.objects.create(
+            organization=self.organization,
+            integration_type=OrgIntegrationType.VPN,
+            name="Route B",
+            is_active=True,
+        )
+        send_task.reset_mock()
+        detail_url = reverse(
+            "aist_api:dast_integration_onboarding_detail",
+            kwargs={"integration_id": integration_id},
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            rerouted = self.client.patch(detail_url, {"vpn_integration_id": vpn.pk}, format="json")
+
+        self.assertEqual(rerouted.status_code, 200, rerouted.data)
+        send_task.assert_called_once()
+        integration = OrgIntegration.objects.get(pk=integration_id)
+        self.assertEqual(integration.vpn_integration_id, vpn.pk)
+        self.assertEqual(integration.secret, TOKEN)
 
     @patch("aist.integrations.dast_validation.current_app.send_task")
     def test_disabling_an_integration_does_not_start_a_validation(self, send_task):

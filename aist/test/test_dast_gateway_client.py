@@ -177,6 +177,21 @@ class DastGatewayClientTests(SimpleTestCase):
         self.assertTrue(caught.exception.retryable)
         self.assertNotIn(TOKEN, str(caught.exception))
 
+    def test_tls_failure_is_reported_separately_from_an_unreachable_gateway(self):
+        # requests.SSLError subclasses ConnectionError, so without its own branch a certificate or
+        # handshake problem reports as GATEWAY_UNREACHABLE and points the operator at the network.
+        session = MagicMock(spec=requests.Session)
+        session.get.side_effect = requests.exceptions.SSLError(
+            f"tlsv1 alert internal error, Authorization Bearer {TOKEN}",
+        )
+
+        with self.assertRaises(DastGatewayClientError) as caught:
+            self._client(session).ping()
+
+        self.assertEqual(caught.exception.code, "TLS_HANDSHAKE_FAILED")
+        self.assertFalse(caught.exception.retryable)
+        self.assertNotIn(TOKEN, str(caught.exception))
+
     def test_insecure_tls_verification_is_rejected(self):
         with self.assertRaises(DastGatewayClientError) as caught:
             DastGatewayClient(

@@ -45,6 +45,7 @@ class DastGatewayErrorCode(StrEnum):
     CATALOG_ETAG_MISMATCH = "CATALOG_ETAG_MISMATCH"
     CATALOG_INVALID = "CATALOG_INVALID"
     GATEWAY_UNREACHABLE = "GATEWAY_UNREACHABLE"
+    TLS_HANDSHAKE_FAILED = "TLS_HANDSHAKE_FAILED"
     GATEWAY_REQUEST_FAILED = "GATEWAY_REQUEST_FAILED"
     REDIRECT_REJECTED = "REDIRECT_REJECTED"
     TOKEN_REJECTED = "TOKEN_REJECTED"  # noqa: S105 - error code, not a credential
@@ -214,6 +215,10 @@ class DastGatewayClient:
                 allow_redirects=False,
                 stream=True,
             )
+        except requests.exceptions.SSLError as exc:
+            # SSLError subclasses ConnectionError, so it has to be caught first or a certificate
+            # problem reports as "unreachable" and sends the operator looking at the network.
+            raise _client_error(DastGatewayErrorCode.TLS_HANDSHAKE_FAILED) from exc
         except (requests.ConnectionError, requests.Timeout) as exc:
             raise _client_error(DastGatewayErrorCode.GATEWAY_UNREACHABLE, retryable=True) from exc
         except requests.RequestException as exc:
