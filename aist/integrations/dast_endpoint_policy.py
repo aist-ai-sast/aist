@@ -31,6 +31,10 @@ class DastEndpointPolicy:
     """Fail-closed SSRF policy for DAST onboarding and catalog traffic."""
 
     HTTPS_PORT: ClassVar[int] = 443
+    # Deliberately a short enumerated allowlist, not an open range: DAST gateway deployments
+    # commonly front their service on 8443 to avoid binding a privileged port, but each addition
+    # here is still a reviewed exception to the SSRF policy, not a general "any port" escape hatch.
+    ALLOWED_PORTS: ClassVar[frozenset[int]] = frozenset({HTTPS_PORT, 8443})
     MAX_DNS_ANSWERS: ClassVar[int] = 32
     _TRUSTED_VPN_IPV4: ClassVar[tuple[ipaddress.IPv4Network, ...]] = (
         ipaddress.ip_network("10.0.0.0/8"),
@@ -62,8 +66,8 @@ class DastEndpointPolicy:
         except ValueError as exc:
             msg = "DAST gateway port is invalid."
             raise DastEndpointPolicyError(msg) from exc
-        if port != self.HTTPS_PORT:
-            msg = "DAST gateway must use HTTPS port 443."
+        if port not in self.ALLOWED_PORTS:
+            msg = "DAST gateway must use HTTPS on port 443 or 8443."
             raise DastEndpointPolicyError(msg)
 
         hostname = parsed.hostname.rstrip(".").lower()

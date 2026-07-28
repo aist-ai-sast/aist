@@ -69,7 +69,11 @@ autonomous result.
 Private DAST traffic uses only the VPN attached directly to the DAST
 integration; project and SCM VPN configuration does not substitute for it. A
 direct connection is allowed only for destinations accepted by the deployment's
-public-endpoint policy.
+public-endpoint policy: the gateway URL must be an absolute HTTPS URL with no
+credentials, query, or fragment, on port 443 or 8443, and it must resolve to a
+public address (or, when the integration's VPN is trusted, to an address inside
+that VPN's private ranges). Every other destination is rejected before any
+connection is attempted.
 
 The service token and optional custom CA are loaded from the organization
 integration when the connector starts. They are not launch parameters or

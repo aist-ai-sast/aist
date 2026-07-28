@@ -26,6 +26,16 @@ class DastEndpointPolicyTests(SimpleTestCase):
         self.assertEqual(endpoint.port, 443)
         self.assertEqual(len(endpoint.addresses), 2)
 
+    def test_direct_route_accepts_alternate_https_port_8443(self):
+        policy = DastEndpointPolicy(
+            trusted_vpn=False,
+            resolver=lambda _host, _port: ("93.184.216.34",),
+        )
+
+        endpoint = policy.validate("https://gateway.example:8443")
+
+        self.assertEqual(endpoint.port, 8443)
+
     def test_private_addresses_require_trusted_vpn(self):
         private_addresses = ("10.0.0.7", "172.16.4.8", "192.168.20.9", "fd00::10")
         for address in private_addresses:
@@ -77,7 +87,7 @@ class DastEndpointPolicyTests(SimpleTestCase):
             "https://user:password@gateway.example",
             "https://gateway.example?destination=metadata",
             "https://gateway.example#fragment",
-            "https://gateway.example:8443",
+            "https://gateway.example:8080",
             "https://*.example",
         )
         for url in invalid_urls:

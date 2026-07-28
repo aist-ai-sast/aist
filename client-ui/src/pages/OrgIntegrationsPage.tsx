@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { toUserMessage } from "../lib/api";
 import {
@@ -930,6 +931,7 @@ function OrgIntegrationForm({
 
 function OrgIntegrationsSection({ orgId }: { orgId: number }) {
   const toast = useToast();
+  const queryClient = useQueryClient();
   const integrationsQuery = useOrgIntegrations(orgId);
   const deleteIntegration = useDeleteOrgIntegration(orgId);
   const validateIntegration = useValidateOrgIntegration();
@@ -959,6 +961,7 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
         data.valid ? "success" : "error",
       );
       setValidatingState(null);
+      queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
     }
   }, [validationStatus.data?.state]);
 
