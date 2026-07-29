@@ -7,7 +7,7 @@ test("create-token button works end to end (regression for reported 500)", async
   await page.goto("/settings");
   await expect(page.locator("#tokens")).toBeVisible({ timeout: 30_000 });
 
-  await page.getByPlaceholder(/CI pipe/i).fill("smoke-test-token");
+  await page.getByPlaceholder(/CI pipe/i).fill(`smoke-test-token-${Date.now()}`);
   await page.getByRole("combobox").last().click();
   await page.getByRole("option", { name: "Read and write" }).click();
 

@@ -49,7 +49,7 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
         )
         current = self._make_pipeline(
             project_version=self.branch_pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             pipeline_id="pipe-current-branch",
         )
         self.assertEqual(get_prior_successful_commit(current), self.prior_hash_pv.last_resolved_commit)
@@ -71,7 +71,7 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
         )
         current = self._make_pipeline(
             project_version=current_hash_pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             pipeline_id="pipe-current-hash",
         )
         self.assertEqual(get_prior_successful_commit(current), self.prior_hash_pv.last_resolved_commit)
@@ -79,7 +79,7 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
     def test_returns_none_when_no_prior_pipeline(self):
         current = self._make_pipeline(
             project_version=self.branch_pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             pipeline_id="pipe-no-prior",
         )
         self.assertIsNone(get_prior_successful_commit(current))
@@ -88,12 +88,12 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
         # A pipeline still running on the same branch must not be picked.
         self._make_pipeline(
             project_version=self.prior_hash_pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             pipeline_id="pipe-running",
         )
         current = self._make_pipeline(
             project_version=self.branch_pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             pipeline_id="pipe-current-only",
         )
         self.assertIsNone(get_prior_successful_commit(current))
@@ -120,7 +120,7 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
         )
         current = self._make_pipeline(
             project_version=self.branch_pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             pipeline_id="pipe-iso",
         )
         self.assertIsNone(get_prior_successful_commit(current))
@@ -133,7 +133,7 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
         )
         current = self._make_pipeline(
             project_version=file_pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             pipeline_id="pipe-file-hash",
         )
         self.assertIsNone(get_prior_successful_commit(current))
@@ -155,7 +155,7 @@ class BuildDiffEnvTests(AISTApiBase):
             id="pipe-build-env",
             project=self.project,
             project_version=self.branch_pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
         )
 
     def test_returns_all_required_keys_with_string_values(self):

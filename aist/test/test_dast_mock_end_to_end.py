@@ -295,13 +295,14 @@ class DastMockEndToEndTests(AISTApiBase):
             name=name,
             execution_type=PipelineExecutionType.DAST,
             dast_binding=binding,
+            trigger_project_version=self.branch,
             params={"depth": "light"},
         )
         start_url = reverse(
             "aist_api:project_launch_config_start",
             kwargs={"project_id": self.project.pk, "config_id": config.pk},
         )
-        response = self.client.post(start_url, {"project_version_id": self.branch.pk}, format="json")
+        response = self.client.post(start_url, {}, format="json")
         self.assertEqual(response.status_code, 202, response.data)
         return PipelineLaunchRequest.objects.get(pk=response.data["id"])
 

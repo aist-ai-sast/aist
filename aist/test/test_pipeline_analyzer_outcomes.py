@@ -11,7 +11,7 @@ from dojo.models import Engagement, Finding, Test, Test_Type
 
 from aist.execution.dispatching import LaunchAcceptance
 from aist.models import AISTPipeline, AISTStatus
-from aist.tasks.pipeline import run_sast_pipeline
+from aist.test.pipeline_execution_helpers import run_persisted_sast_pipeline
 from aist.test.test_api import AISTApiBase
 
 
@@ -114,7 +114,7 @@ class AnalyzerOutcomesPipelineTests(AISTApiBase):
         patches = (
             patch(
                 "aist.tasks.pipeline.PipelineArguments.from_dict",
-                return_value=self._pipeline_params(output_dir=output_dir),
+                return_value=SimpleNamespace(sast=self._pipeline_params(output_dir=output_dir)),
             ),
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
             patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
@@ -122,8 +122,8 @@ class AnalyzerOutcomesPipelineTests(AISTApiBase):
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.build_bridge_client_from_settings", return_value=object()),
             patch(
-                "aist.tasks.pipeline.configure_project_run_analyses",
-                return_value={
+                "aist.tasks.pipeline.execute_pipeline",
+                return_value=SimpleNamespace(launch_data={
                     "git": {},
                     "output_dir": output_dir,
                     "project_path": "/aist-project",
@@ -144,7 +144,7 @@ class AnalyzerOutcomesPipelineTests(AISTApiBase):
                             "artifacts": {},
                         },
                     ],
-                },
+                }),
             ),
             patch("aist.tasks.pipeline.upload_results_internal", return_value=upload_results),
             *extra_patches,
@@ -152,7 +152,11 @@ class AnalyzerOutcomesPipelineTests(AISTApiBase):
         with ExitStack() as stack:
             for ctx in patches:
                 stack.enter_context(ctx)
-            run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id}, async_user=async_user)
+            run_persisted_sast_pipeline(
+                pipeline,
+                {"project_id": self.project.id},
+                async_user=async_user,
+            )
 
     def test_degraded_analyzer_outcome_is_persisted_before_finish(self):
         pipeline = self._make_pipeline("pipe-agent-missing")

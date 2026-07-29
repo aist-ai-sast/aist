@@ -10,40 +10,87 @@ from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.execution.leases import DEFAULT_EXECUTION_LEASE_POLICY
 from aist.execution.reconciliation import (
-    DAST_EXECUTION_RESUMED,
     DEAD_EXECUTION_TASK,
     EXECUTION_LEASE_MISSING,
+    EXECUTION_RECOVERY_REPUBLISHED,
     ORPHAN_PIPELINE,
     OUTBOX_LEASE_RENEWED,
     STALE_CLAIM_REQUEUED,
     TERMINAL_LEASE_RELEASED,
     reconcile_launch_requests,
 )
+from aist.integrations.dast_config import DastTargetSnapshot
 from aist.models import (
     AISTPipeline,
     AISTProject,
     AISTStatus,
     DastExecutionOutcome,
+    DastExecutionState,
+    DastIntegrationState,
+    DastIntegrationValidationState,
+    DastProjectBinding,
+    Organization,
+    OrgIntegration,
+    OrgIntegrationType,
     PipelineExecutionLease,
     PipelineExecutionType,
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
+from aist.services.dast_targets import refresh_dast_targets
 from aist.test.test_api import AISTApiBase
+from aist.test.test_dast_target_models import _integration_config, _target_wire
 
 
 class LaunchRequestReconciliationTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        organization = Organization.objects.create(
+            name="DAST reconciliation fixture organization",
+            product_type=self.prod_type,
+        )
+        integration = OrgIntegration.objects.create(
+            organization=organization,
+            integration_type=OrgIntegrationType.DAST,
+            name="DAST reconciliation fixture",
+            config=_integration_config("dast-reconciliation-public-id"),
+            secret="runtime-token",  # noqa: S106 -- test fixture
+            is_active=True,
+        )
+        now = timezone.now()
+        DastIntegrationState.objects.create(
+            integration=integration,
+            validation_state=DastIntegrationValidationState.READY,
+            validated_at=now,
+            contract_version="2.0",
+            capabilities_etag="reconciliation-catalog",
+            capabilities_synced_at=now,
+        )
+        target = refresh_dast_targets(
+            integration,
+            (DastTargetSnapshot.from_snapshot(_target_wire("reconciliation-api")),),
+            seen_at=now,
+        )[0]
+        self.dast_binding = DastProjectBinding.objects.create(
+            project=self.project,
+            target=target,
+            source_repo_key="reconciliation-api",
+            enabled=True,
+            autonomous_enabled=True,
+            parameter_snapshot={"depth": "deep"},
+        )
+
     def _request(self, *, state, claimed_at=None):
         return PipelineLaunchRequest.objects.create(
             project=self.project,
             state=state,
             claim_owner="crashed-dispatcher" if claimed_at else None,
             claimed_at=claimed_at,
-            task_name="aist.tasks.pipeline.run_sast_pipeline",
-            task_args_snapshot=[{"log_level": "INFO"}],
+            task_name="aist.tasks.pipeline.run_pipeline_execution",
+            task_args_snapshot=[],
         )
 
-    def _attach_outbox_pipeline(self, request, *, status=AISTStatus.FINISHED):
+    def _attach_outbox_pipeline(self, request, *, status=AISTStatus.ADMITTED):
         pipeline = AISTPipeline.objects.create(
             id=request.task_id.hex,
             project=self.project,
@@ -165,7 +212,7 @@ class LaunchRequestReconciliationTests(AISTApiBase):
     def test_dead_celery_task_finishes_pipeline_and_releases_lease_once(self):
         now = timezone.now()
         request = self._request(state=PipelineLaunchRequestState.DISPATCHED)
-        pipeline = self._attach_outbox_pipeline(request, status=AISTStatus.SAST_LAUNCHED)
+        pipeline = self._attach_outbox_pipeline(request, status=AISTStatus.EXECUTING)
         lease = self._lease(request, pipeline=pipeline, now=now)
 
         first = reconcile_launch_requests(now=now, task_state_getter=lambda _task_id: "FAILURE")
@@ -191,7 +238,7 @@ class LaunchRequestReconciliationTests(AISTApiBase):
         """
         now = timezone.now()
         request = self._request(state=PipelineLaunchRequestState.DISPATCHED)
-        pipeline = self._attach_outbox_pipeline(request, status=AISTStatus.SAST_LAUNCHED)
+        pipeline = self._attach_outbox_pipeline(request, status=AISTStatus.EXECUTING)
         lease = self._lease(request, pipeline=pipeline, now=now)
 
         stats = reconcile_launch_requests(now=now, task_state_getter=lambda _task_id: "STARTED")
@@ -202,7 +249,7 @@ class LaunchRequestReconciliationTests(AISTApiBase):
         self.assertIsNone(lease.released_at)
         self.assertEqual(lease.heartbeat_at, now)
         self.assertEqual(lease.expires_at, now + DEFAULT_EXECUTION_LEASE_POLICY.ttl)
-        self.assertEqual(pipeline.status, AISTStatus.SAST_LAUNCHED)
+        self.assertEqual(pipeline.status, AISTStatus.EXECUTING)
         self.assertEqual(request.failure_code, "")
 
     def test_dead_dast_task_resumes_known_provider_run_without_releasing_lease(self):
@@ -210,6 +257,7 @@ class LaunchRequestReconciliationTests(AISTApiBase):
         request = PipelineLaunchRequest.objects.create(
             project=self.project,
             execution_type=PipelineExecutionType.DAST,
+            dast_binding=self.dast_binding,
             trigger_project_version=self.pv,
             state=PipelineLaunchRequestState.DISPATCHED,
             task_name="aist.tasks.pipeline.run_pipeline_execution",
@@ -220,11 +268,14 @@ class LaunchRequestReconciliationTests(AISTApiBase):
             project=self.project,
             trigger_project_version=self.pv,
             execution_type=PipelineExecutionType.DAST,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             run_task_id=str(request.task_id),
-            external_run_id="provider-run-id",
-            external_log_cursor=9,
-            external_execution_outcome=DastExecutionOutcome.STOP_PENDING,
+        )
+        DastExecutionState.objects.create(
+            pipeline=pipeline,
+            run_id="provider-run-id",
+            log_cursor=9,
+            outcome=DastExecutionOutcome.STOP_PENDING,
         )
         request.pipeline = pipeline
         request.save(update_fields=["pipeline", "updated"])
@@ -238,16 +289,19 @@ class LaunchRequestReconciliationTests(AISTApiBase):
 
         request.refresh_from_db()
         pipeline.refresh_from_db()
+        execution_state = pipeline.dast_execution_state
         lease.refresh_from_db()
-        self.assertEqual(request.failure_code, DAST_EXECUTION_RESUMED)
-        self.assertEqual(pipeline.status, AISTStatus.SAST_LAUNCHED)
-        self.assertEqual(pipeline.external_run_id, "provider-run-id")
-        self.assertEqual(pipeline.external_log_cursor, 9)
+        self.assertEqual(request.failure_code, EXECUTION_RECOVERY_REPUBLISHED)
+        self.assertEqual(request.state, PipelineLaunchRequestState.PUBLISHED)
+        self.assertEqual(str(request.task_id), pipeline.run_task_id)
+        self.assertEqual(pipeline.status, AISTStatus.EXECUTING)
+        self.assertEqual(execution_state.run_id, "provider-run-id")
+        self.assertEqual(execution_state.log_cursor, 9)
         self.assertIsNone(lease.released_at)
         self.assertEqual(lease.heartbeat_at, now)
-        self.assertEqual(stats["resumed_dast_executions"], 1)
+        self.assertEqual(stats["resumed_executions"], 1)
         send_task.assert_called_once_with(
-            "aist.tasks.pipeline.reconcile_dast_execution",
+            "aist.tasks.pipeline.run_pipeline_execution",
             args=[pipeline.id],
             task_id=pipeline.run_task_id,
         )

@@ -15,6 +15,12 @@ function acceptNextDialog(page: Page) {
   page.once("dialog", (dialog) => dialog.accept());
 }
 
+function resourceRow(section: Locator, name: string) {
+  return section
+    .getByText(name, { exact: true })
+    .locator("xpath=ancestor::div[.//button[normalize-space()='Edit']][1]");
+}
+
 test.beforeEach(async ({ page }) => {
   await loginByApi(page);
 });
@@ -32,6 +38,7 @@ test("integrations page lets a maintainer manage org integrations, providers, an
 
   await orgSection.getByRole("button", { name: "Add" }).click();
   await expect(orgSection.getByText("New Integration")).toBeVisible();
+  await openSelectOption(orgSection.getByText("Type").locator("..").getByRole("combobox"), "GitLab");
   await orgSection.getByPlaceholder("e.g. Production").fill(integrationName);
   await orgSection.getByPlaceholder("https://gitlab.com").fill(`https://gitlab-${suffix}.example.com`);
   await orgSection.getByRole("button", { name: "Create" }).click();
@@ -40,7 +47,7 @@ test("integrations page lets a maintainer manage org integrations, providers, an
   await expect(orgSection).toContainText(integrationName);
   await expect(orgSection).toContainText("default");
 
-  await orgSection.getByRole("button", { name: "Edit" }).first().click();
+  await resourceRow(orgSection, integrationName).getByRole("button", { name: "Edit" }).click();
   await expect(orgSection.getByText("Edit Integration")).toBeVisible();
   await orgSection.getByPlaceholder("e.g. Production").fill(renamedIntegration);
   await orgSection.getByRole("button", { name: "Save changes" }).click();
@@ -65,10 +72,10 @@ test("integrations page lets a maintainer manage org integrations, providers, an
   await expect(page.getByText("Override cleared.")).toBeVisible();
 
   acceptNextDialog(page);
-  await providerSection.getByRole("button", { name: "Delete" }).first().click();
+  await resourceRow(providerSection, providerName).getByRole("button", { name: "Delete" }).click();
   await expect(page.getByText("Provider deleted.")).toBeVisible();
   acceptNextDialog(page);
-  await orgSection.getByRole("button", { name: "Delete" }).first().click();
+  await resourceRow(orgSection, renamedIntegration).getByRole("button", { name: "Delete" }).click();
   await expect(page.getByText("Integration deleted.")).toBeVisible();
 });
 
@@ -190,7 +197,7 @@ test("maintainer can create a VPN integration and link it to a work item provide
   await expect(page.getByText("Provider created.")).toBeVisible();
 
   // --- Edit provider — verify VPN selection is preserved ---
-  await providerSection.getByRole("button", { name: "Edit" }).first().click();
+  await resourceRow(providerSection, providerName).getByRole("button", { name: "Edit" }).click();
   await expect(providerSection.getByRole("combobox").nth(1)).toContainText(vpnName);
   await providerSection.getByRole("button", { name: "Cancel" }).click();
 
@@ -203,10 +210,10 @@ test("maintainer can create a VPN integration and link it to a work item provide
 
   // --- Cleanup ---
   acceptNextDialog(page);
-  await providerSection.getByRole("button", { name: "Delete" }).first().click();
+  await resourceRow(providerSection, providerName).getByRole("button", { name: "Delete" }).click();
   await expect(page.getByText("Provider deleted.")).toBeVisible();
   acceptNextDialog(page);
-  await orgSection.getByRole("button", { name: "Delete" }).first().click();
+  await resourceRow(orgSection, vpnName).getByRole("button", { name: "Delete" }).click();
   await expect(page.getByText("Integration deleted.")).toBeVisible();
 });
 
@@ -254,6 +261,7 @@ test("DAST onboarding imports a strict bundle without retaining the token", asyn
     await expect(page.getByText(token, { exact: false })).toHaveCount(0);
   } finally {
     if (integrationId) {
+      await page.request.post(`/api/v2/aist/dast-integrations/${integrationId}/disable/`);
       await page.request.delete(`/api/v2/aist/integrations/${integrationId}/`);
     }
   }

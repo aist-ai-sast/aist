@@ -17,8 +17,9 @@ from aist.logging_transport import install_pipeline_logging, uninstall_pipeline_
 from aist.models import AISTPipeline, AISTStatus, DastProjectBinding
 from aist.parser_overrides import DAST_SCAN_TYPE
 from aist.services.dast_finalization import finalize_dast_report
+from aist.services.pipeline_lifecycle import transition_pipeline_status
 from aist.tasks.pipeline import attach_findings_and_finish
-from aist.utils.pipeline import finish_pipeline, is_terminal_pipeline_status, set_pipeline_status
+from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
 from aist.utils.report_import import discard_uploaded_report, resolve_import_version
 
@@ -49,12 +50,13 @@ def _resolve_version_and_mark_uploading(
         if project.id != project_id:
             msg = f"Pipeline {pipeline_id} project mismatch: expected {project_id}, got {project.id}"
             raise ValueError(msg)
-        if not is_terminal_pipeline_status(pipeline.status):
+        if pipeline.status != AISTStatus.ADMITTED:
             return None
         launch_data = pipeline.launch_data or {}
         if launch_data.get("source") == "manual_import" and launch_data.get("sha256") == sha256:
             raise _ReportAlreadyImportedError
         version = resolve_import_version(project, commit_hash)
+        pipeline = transition_pipeline_status(pipeline.pk, AISTStatus.EXECUTING).pipeline
         pipeline.project_version = version
         set_pipeline_status(pipeline, AISTStatus.UPLOADING_RESULTS, update_fields_extra=["project_version"])
     return project, version

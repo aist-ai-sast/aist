@@ -6,12 +6,12 @@ import validator from "@rjsf/validator-ajv8";
 import { toUserMessage } from "../lib/api";
 import {
   useDeleteDastProjectBinding,
-  useCreateDastLaunchConfig,
   useUpsertDastProjectBinding,
   type DastBindingPayload,
 } from "../lib/mutations";
 import {
   useOrganizationDastTargets,
+  useOrgIntegrations,
   useProjectDastBindings,
   useProjects,
   type DastProjectBinding,
@@ -19,7 +19,6 @@ import {
 } from "../lib/queries";
 import { useToast } from "./ToastProvider";
 import SelectField from "./SelectField";
-import TextInput from "./TextInput";
 import PermissionGate from "./PermissionGate";
 import { SectionCard, TypeBadge, AddButton } from "./OrgIntegrationUI";
 
@@ -48,12 +47,9 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [editingBindingId, setEditingBindingId] = useState<number | null>(null);
   const [formState, setFormState] = useState<BindingFormState | null>(null);
-  const [launchConfigBindingId, setLaunchConfigBindingId] = useState<number | null>(null);
-  const [launchConfigName, setLaunchConfigName] = useState("");
   const bindingsQuery = useProjectDastBindings(selectedProjectId ?? undefined);
   const upsertBinding = useUpsertDastProjectBinding(selectedProjectId ?? 0);
   const deleteBinding = useDeleteDastProjectBinding(selectedProjectId ?? 0);
-  const createLaunchConfig = useCreateDastLaunchConfig(selectedProjectId ?? 0);
 
   const projects = (projectsQuery.data ?? []).filter((project) => project.organizationId === orgId);
   const targets = (targetsQuery.data ?? []).filter((target) => target.is_available);
@@ -124,23 +120,6 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
     }
   }
 
-  async function submitLaunchConfig(binding: DastProjectBinding) {
-    const name = launchConfigName.trim();
-    if (!name) return;
-    try {
-      await createLaunchConfig.mutateAsync({
-        bindingId: binding.id,
-        name,
-        params: binding.parameter_snapshot,
-      });
-      toast.push("DAST launch config created.", "success");
-      setLaunchConfigBindingId(null);
-      setLaunchConfigName("");
-    } catch (error) {
-      toast.push(toUserMessage(error), "error");
-    }
-  }
-
   return (
     <SectionCard
       title="DAST Target Bindings"
@@ -166,8 +145,13 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
                 <TypeBadge type="DAST" />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-slate-200">{binding.target.display_name}</div>
+                  {/*
+                    Provider digests (schema_digest / capability_revision) are launch-admission
+                    machinery, not operator-facing facts — the backend already fails a launch when
+                    they drift. Showing them here only added noise nobody could act on.
+                  */}
                   <div className="mt-1 text-xs text-slate-400">
-                    {binding.source_repo_key} · schema {binding.target.schema_digest.slice(0, 12)}
+                    Source repository: {binding.source_repo_key}
                   </div>
                   <div className="mt-1 text-[11px] text-slate-500">
                     {binding.enabled ? "Enabled" : "Disabled"}
@@ -188,48 +172,11 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
                   <button className="text-xs text-brand-300 hover:text-brand-200" onClick={() => startEdit(binding)}>
                     Edit
                   </button>
-                  <button
-                    className="text-xs text-brand-300 hover:text-brand-200"
-                    disabled={!binding.enabled}
-                    onClick={() => {
-                      setLaunchConfigBindingId(binding.id);
-                      setLaunchConfigName(`${binding.target.display_name} DAST`);
-                    }}
-                  >
-                    Create launch config
-                  </button>
                   <button className="text-xs text-danger-400 hover:text-danger-300" onClick={() => removeBinding(binding.id)}>
                     Remove
                   </button>
                 </div>
               </div>
-              {launchConfigBindingId === binding.id && (
-                <div className="mt-3 flex flex-col gap-2 border-t border-night-500/60 pt-3 sm:flex-row">
-                  <TextInput
-                    aria-label="Launch config name"
-                    value={launchConfigName}
-                    onChange={(event) => setLaunchConfigName(event.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="rounded-lg bg-brand-500 px-3 py-2 text-xs font-medium text-white disabled:opacity-50"
-                    disabled={createLaunchConfig.isPending || !launchConfigName.trim()}
-                    onClick={() => submitLaunchConfig(binding)}
-                  >
-                    {createLaunchConfig.isPending ? "Creating..." : "Save launch config"}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg px-3 py-2 text-xs text-slate-300 hover:text-white"
-                    onClick={() => {
-                      setLaunchConfigBindingId(null);
-                      setLaunchConfigName("");
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
             </div>
           ))}
 
@@ -238,53 +185,63 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
           )}
 
           {formState && selectedTarget && (
-            <Form<Record<string, unknown>, RJSFSchema>
-              key={`${selectedTarget.id}:${selectedTarget.schema_digest}:${editingBindingId ?? "new"}`}
-              schema={selectedTarget.parameter_schema as RJSFSchema}
-              validator={validator}
-              formData={formState.parameters}
-              liveValidate
-              showErrorList={false}
-              onChange={(event) => setFormState((current) => current ? { ...current, parameters: event.formData ?? {} } : current)}
-              onSubmit={submitBinding}
-              uiSchema={{ "ui:submitButtonOptions": { norender: true } }}
-              className="space-y-3 rounded-xl border border-brand-500/30 bg-night-800/70 p-4 [&_fieldset]:space-y-3 [&_label]:mb-1 [&_label]:block [&_label]:text-xs [&_label]:font-medium [&_label]:text-slate-300 [&_input]:w-full [&_input]:rounded-lg [&_input]:border [&_input]:border-night-400 [&_input]:bg-night-900 [&_input]:px-3 [&_input]:py-2 [&_input]:text-sm [&_input]:text-slate-100 [&_select]:w-full [&_select]:rounded-lg [&_select]:border [&_select]:border-night-400 [&_select]:bg-night-900 [&_select]:px-3 [&_select]:py-2 [&_select]:text-sm [&_select]:text-slate-100 [&_.text-danger]:text-xs [&_.text-danger]:text-danger-400"
-            >
-              <div className="space-y-3">
-                {!editingBindingId && (
-                  <SelectField
-                    label="DAST target"
-                    value={String(formState.targetId)}
-                    onChange={(value) => selectTarget(Number(value))}
-                    options={targets
-                      .filter((target) => !bindings.some((binding) => binding.target.id === target.id))
-                      .map((target) => ({ value: String(target.id), label: target.display_name }))}
-                  />
-                )}
+            <div className="space-y-3 rounded-xl border border-brand-500/30 bg-night-800/70 p-4">
+              {/*
+                Binding metadata controls live OUTSIDE <Form>. The RJSF wrapper below styles
+                provider-schema fields through descendant selectors ([&_input], [&_label], …);
+                those are arbitrary variants, so they out-specify a plain utility class and
+                would override our own controls — turning each checkbox into a full-width
+                bordered box and forcing `display:block` onto the flex checkbox rows.
+              */}
+              {!editingBindingId && (
                 <SelectField
-                  label="Source repository"
-                  value={formState.sourceRepoKey}
-                  onChange={(value) => setFormState({ ...formState, sourceRepoKey: value })}
-                  options={selectedTarget.repository_keys.map((key) => ({ value: key, label: key }))}
+                  label="DAST target"
+                  value={String(formState.targetId)}
+                  onChange={(value) => selectTarget(Number(value))}
+                  options={targets
+                    .filter((target) => !bindings.some((binding) => binding.target.id === target.id))
+                    .map((target) => ({ value: String(target.id), label: target.display_name }))}
                 />
-                <label className="flex items-center gap-2 text-xs text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={formState.enabled}
-                    onChange={(event) => setFormState({ ...formState, enabled: event.target.checked })}
-                  />
-                  Enabled
-                </label>
-                <label className="flex items-center gap-2 text-xs text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={formState.autonomousEnabled}
-                    disabled={!selectedTarget.autonomous_ready}
-                    onChange={(event) => setFormState({ ...formState, autonomousEnabled: event.target.checked })}
-                  />
-                  Allow autonomous launches
-                </label>
-                <div className="flex justify-end gap-2">
+              )}
+              <SelectField
+                label="Source repository"
+                value={formState.sourceRepoKey}
+                onChange={(value) => setFormState({ ...formState, sourceRepoKey: value })}
+                options={selectedTarget.repository_keys.map((key) => ({ value: key, label: key }))}
+              />
+              <label className="flex items-center gap-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0"
+                  checked={formState.enabled}
+                  onChange={(event) => setFormState({ ...formState, enabled: event.target.checked })}
+                />
+                Enabled
+              </label>
+              <label className="flex items-center gap-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0"
+                  checked={formState.autonomousEnabled}
+                  disabled={!selectedTarget.autonomous_ready}
+                  onChange={(event) => setFormState({ ...formState, autonomousEnabled: event.target.checked })}
+                />
+                Allow autonomous launches
+              </label>
+
+              <Form<Record<string, unknown>, RJSFSchema>
+                key={`${selectedTarget.id}:${selectedTarget.schema_digest}:${editingBindingId ?? "new"}`}
+                schema={selectedTarget.parameter_schema as RJSFSchema}
+                validator={validator}
+                formData={formState.parameters}
+                liveValidate
+                showErrorList={false}
+                onChange={(event) => setFormState((current) => current ? { ...current, parameters: event.formData ?? {} } : current)}
+                onSubmit={submitBinding}
+                uiSchema={{ "ui:submitButtonOptions": { norender: true } }}
+                className="space-y-3 [&_fieldset]:space-y-3 [&_label]:mb-1 [&_label]:block [&_label]:text-xs [&_label]:font-medium [&_label]:text-slate-300 [&_input]:w-full [&_input]:rounded-lg [&_input]:border [&_input]:border-night-400 [&_input]:bg-night-900 [&_input]:px-3 [&_input]:py-2 [&_input]:text-sm [&_input]:text-slate-100 [&_select]:w-full [&_select]:rounded-lg [&_select]:border [&_select]:border-night-400 [&_select]:bg-night-900 [&_select]:px-3 [&_select]:py-2 [&_select]:text-sm [&_select]:text-slate-100 [&_.text-danger]:text-xs [&_.text-danger]:text-danger-400"
+              >
+                <div className="flex justify-end gap-2 pt-1">
                   <button type="button" className="rounded-lg px-3 py-2 text-xs text-slate-300 hover:text-white" onClick={resetForm}>
                     Cancel
                   </button>
@@ -296,8 +253,8 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
                     {upsertBinding.isPending ? "Saving..." : "Save binding"}
                   </button>
                 </div>
-              </div>
-            </Form>
+              </Form>
+            </div>
           )}
 
           {!formState && targets.length > 0 && <AddButton onClick={startCreate} />}
@@ -317,6 +274,13 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
  * an explanatory notice instead of a read-only shell of a section they can't act on.
  */
 export default function DastBindingsSection({ orgId }: { orgId: number }) {
+  const integrationsQuery = useOrgIntegrations(orgId);
+  const hasDastIntegration = (integrationsQuery.data ?? []).some(
+    (integration) => integration.integration_type === "DAST",
+  );
+
+  if (!hasDastIntegration) return null;
+
   return (
     <PermissionGate
       action="operate_project"

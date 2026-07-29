@@ -32,7 +32,8 @@ validated result needed for its finding workflow.
 
 ## How one autonomous run crosses the boundary
 
-1. An authorized AIST user starts an enabled DAST launch configuration.
+1. An authorized AIST user submits a one-off DAST launch or starts an enabled
+   DAST launch configuration.
 2. AIST validates project authority, integration readiness, target capability,
    source compatibility, and execution capacity.
 3. An AIST worker starts a short-lived connector, optionally in the VPN network
@@ -58,8 +59,8 @@ creating the pipeline's tests and findings.
   finding lifecycle
 - [DAST integration](../integrations/dast.md) — configuration, readiness, and
   result boundary
-- [SAST pipeline runtime](../architecture/sast-pipeline-runtime.md) — builder and
-  analyzer execution
+- [Pipeline execution runtime](../architecture/sast-pipeline-runtime.md) —
+  generic dispatch, SAST analysis, and standalone-provider execution
 - [Runtime deployment](../architecture/runtime-deployment.md) — where AIST
   services and operation containers run
 - [DAST operations](../runbooks/dast-operations.md) — onboarding, launch,

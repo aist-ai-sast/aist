@@ -6,6 +6,7 @@ import shutil
 import subprocess
 
 from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 from django.http import Http404
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_field
 from rest_framework import serializers, status
@@ -22,7 +23,6 @@ from aist.integrations.dast_config import (
     DastOnboardingBundle,
 )
 from aist.integrations.dast_validation import (
-    mark_dast_validation_pending,
     mark_vpn_linked_dast_validations_pending,
     schedule_dast_validation,
 )
@@ -34,6 +34,11 @@ from aist.models import (
     OrgIntegrationType,
     OrgIntegrationVPNSecret,
     ProjectIntegrationOverride,
+)
+from aist.services.dast_integration_lifecycle import (
+    DastIntegrationLifecycleError,
+    delete_dast_integration,
+    disable_dast_integration,
 )
 
 logger = logging.getLogger(__name__)
@@ -797,10 +802,39 @@ class OrgIntegrationDetailAPI(AISTAPIView):
     @extend_schema(
         tags=[AISTApiTag.INTEGRATIONS],
         summary="Delete an org integration",
-        responses={204: None},
+        responses={
+            204: None,
+            409: OpenApiResponse(description="Integration must be disabled or still has active dependencies"),
+        },
     )
     def delete(self, request, integration_id: int):
-        self._get_integration(integration_id).delete()
+        integration = self._get_integration(integration_id)
+        if integration.integration_type == OrgIntegrationType.DAST:
+            try:
+                delete_dast_integration(integration.pk)
+            except DastIntegrationLifecycleError as exc:
+                detail = {
+                    "INTEGRATION_MUST_BE_DISABLED": "Disable the DAST integration before deleting it.",
+                    "EXECUTION_ACTIVE": (
+                        "Wait for active DAST launches to finish or cancel them before deleting the integration."
+                    ),
+                }.get(exc.code.value, "The DAST integration cannot be deleted while dependencies are active.")
+                return Response(
+                    {
+                        "code": exc.code.value,
+                        "detail": detail,
+                        "dependency_count": exc.dependency_count,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+        else:
+            try:
+                integration.delete()
+            except ProtectedError:
+                return Response(
+                    {"code": "INTEGRATION_HAS_DEPENDENCIES"},
+                    status=status.HTTP_409_CONFLICT,
+                )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -963,9 +997,8 @@ class DastIntegrationDisableAPI(AISTAPIView):
         integration = self.resolve(pk=integration_id)
         if integration.integration_type != OrgIntegrationType.DAST:
             raise Http404
-        integration.is_active = False
-        integration.save(update_fields=["is_active", "updated"])
-        mark_dast_validation_pending(integration)
+        disable_dast_integration(integration.pk)
+        integration.refresh_from_db()
         audit_event(
             "dast_integration_disabled",
             context=AuditContext(

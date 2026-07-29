@@ -235,6 +235,39 @@ class DastOnboardingAPITests(AISTApiBase):
             OrgIntegration.objects.get(pk=integration_id).dast_state.validation_state,
             DastIntegrationValidationState.PENDING_VALIDATION,
         )
+        integration = OrgIntegration.objects.get(pk=integration_id)
+        generations = (
+            integration.dast_state.validation_generation,
+            integration.dast_state.sync_generation,
+        )
+        disabled_again = self.client.post(disable_url, format="json")
+        self.assertEqual(disabled_again.status_code, 200)
+        integration.dast_state.refresh_from_db()
+        self.assertEqual(
+            (integration.dast_state.validation_generation, integration.dast_state.sync_generation),
+            generations,
+        )
+
+    def test_delete_requires_disable_and_preserves_onboarding_anti_replay(self):
+        imported = self._import()
+        integration_id = imported.data["id"]
+        delete_url = reverse(
+            "aist_api:org_integration_detail",
+            kwargs={"integration_id": integration_id},
+        )
+
+        active = self.client.delete(delete_url)
+        self.assertEqual(active.status_code, 409)
+        self.assertEqual(active.data["code"], "INTEGRATION_MUST_BE_DISABLED")
+
+        disable_url = reverse(
+            "aist_api:dast_integration_disable",
+            kwargs={"integration_id": integration_id},
+        )
+        self.assertEqual(self.client.post(disable_url, format="json").status_code, 200)
+        self.assertEqual(self.client.delete(delete_url).status_code, 204)
+        self.assertFalse(OrgIntegration.objects.filter(pk=integration_id).exists())
+        self.assertEqual(self._import(name="Replay after teardown").status_code, 409)
 
     def test_second_active_import_returns_controlled_conflict(self):
         self.assertEqual(self._import().status_code, 201)

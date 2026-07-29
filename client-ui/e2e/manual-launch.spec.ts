@@ -7,7 +7,12 @@ test.beforeEach(async ({ page }) => {
 
 test("manual SAST start shows queueing state and redirects to the durable request", async ({ page }) => {
   await page.goto("/aist-admin/aist/start/");
-  await expect(page.getByRole("heading", { name: "Run SAST Pipeline" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Run pipeline" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("link", { name: "SAST", exact: true })).toHaveClass(/btn-primary/);
+  await expect(page.getByRole("link", { name: "DAST", exact: true })).toHaveAttribute(
+    "href",
+    "?execution_type=DAST",
+  );
 
   const project = page.locator("#id_project");
   const projectId = await project.locator('option:not([value=""])').first().getAttribute("value");

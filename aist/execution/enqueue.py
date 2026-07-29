@@ -20,14 +20,16 @@ from aist.execution.launch_request import (
 from aist.execution.observability import AuditContext, audit_event, record_queue_event
 from aist.execution.retry import DEFAULT_LAUNCH_RETRY_POLICY
 from aist.execution.sast import build_sast_coalesce_key, resolve_effective_sast_schedule
+from aist.integrations.dast_readiness import check_dast_launch_readiness
 from aist.models import (
     AISTApiToken,
     AISTLaunchConfigAction,
     AISTProject,
     AISTProjectLaunchConfig,
-    AISTProjectVersion,
+    DastProjectBinding,
     LaunchSchedule,
     Organization,
+    OrgIntegration,
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
@@ -58,6 +60,11 @@ _ERR_INITIAL_LAUNCH_DATA = "initial_launch_data_snapshot must be a JSON object."
 class LaunchEnqueueError(ValueError):
 
     """Raised when trusted producer context cannot form a valid launch request."""
+
+    def __init__(self, detail: str, *, code: str = "ADMISSION_REJECTED"):
+        self.code = code[:64]
+        self.safe_detail = str(detail)[:512]
+        super().__init__(self.safe_detail)
 
 
 class LaunchIdempotencyConflictError(LaunchEnqueueError):
@@ -174,25 +181,6 @@ def _client_request_key_hash(
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def _snapshots_for_launch(
-    *,
-    project: AISTProject,
-    execution_type: PipelineExecutionKind,
-    launch_config: AISTProjectLaunchConfig | None,
-    raw_params: Mapping[str, object],
-) -> LaunchRequestSnapshots:
-    params = deepcopy(dict(launch_config.params)) if launch_config is not None else {}
-    params.update(deepcopy(dict(raw_params)))
-    if execution_type == PipelineExecutionKind.SAST:
-        params = PipelineArguments.normalize_params(project=project, raw_params=params)
-        capability = {}
-    else:
-        if launch_config is None or launch_config.dast_binding_id is None:
-            raise LaunchEnqueueError(_ERR_DAST_CONFIG)
-        capability = launch_config.dast_binding.target.get_snapshot().to_snapshot()
-    return LaunchRequestSnapshots.from_values(params=params, capability=capability)
-
-
 def _launch_config_actions_snapshot(launch_config: AISTProjectLaunchConfig) -> list[dict]:
     return [
         {
@@ -227,40 +215,26 @@ def _matches_existing(existing: PipelineLaunchRequest, values: dict[str, object]
 
 def enqueue_pipeline_launch(
     *,
-    project: AISTProject,
+    arguments: PipelineArguments,
     principal: LaunchPrincipal,
-    raw_params: Mapping[str, object],
-    execution_type: PipelineExecutionKind = PipelineExecutionKind.SAST,
     launch_config: AISTProjectLaunchConfig | None = None,
     schedule: LaunchSchedule | None = None,
-    trigger_project_version: AISTProjectVersion | None = None,
     client_request_key: str | None = None,
     initial_launch_data: Mapping[str, object] | None = None,
 ) -> EnqueueResult:
     """Validate, normalize, freeze, and atomically persist one durable launch intent."""
+    project = arguments.project
+    execution_type = PipelineExecutionKind(arguments.execution_type)
     if project.pk is None or project.organization_id != principal.organization.pk:
         raise LaunchEnqueueError(_ERR_PROJECT_ORGANIZATION)
     if launch_config is not None:
         if launch_config.project_id != project.pk:
             raise LaunchEnqueueError(_ERR_CONFIG_PROJECT)
-        execution_type = PipelineExecutionKind(launch_config.execution_type)
+        if PipelineExecutionKind(launch_config.execution_type) != execution_type:
+            raise LaunchEnqueueError(_ERR_CONFIG_PROJECT)
     if schedule is not None and (launch_config is None or schedule.launch_config_id != launch_config.pk):
         raise LaunchEnqueueError(_ERR_SCHEDULE_CONFIG)
-    if trigger_project_version is not None and trigger_project_version.project_id != project.pk:
-        raise LaunchEnqueueError(_ERR_TRIGGER_PROJECT)
 
-    try:
-        snapshots = _snapshots_for_launch(
-            project=project,
-            execution_type=execution_type,
-            launch_config=launch_config,
-            raw_params=raw_params,
-        )
-    except (TypeError, ValueError, ValidationError, AISTProjectVersion.DoesNotExist) as exc:
-        raise LaunchEnqueueError(str(exc)) from exc
-    dast_binding = launch_config.dast_binding if execution_type == PipelineExecutionKind.DAST else None
-    params_snapshot = snapshots.params_snapshot()
-    capability_snapshot = snapshots.capability_snapshot()
     try:
         initial_launch_data_snapshot = validated_secret_free_json(
             dict(initial_launch_data or {}),
@@ -280,49 +254,93 @@ def enqueue_pipeline_launch(
             )
         except (LaunchRequestSnapshotError, TypeError, ValueError) as exc:
             raise LaunchEnqueueError(str(exc)) from exc
-    coalesce_key = None
-    if execution_type == PipelineExecutionKind.SAST:
-        coalesce_key = build_sast_coalesce_key(
-            project_id=project.pk,
-            effective_project_version_id=(params_snapshot.get("project_version") or {}).get("id"),
-            params_snapshot=params_snapshot,
-            initial_launch_data_snapshot=initial_launch_data_snapshot,
-            schedule=resolve_effective_sast_schedule(schedule=schedule, launch_config=launch_config),
-        )
-    else:
-        coalesce_key = build_dast_coalesce_key(
-            project_id=project.pk,
-            binding_id=dast_binding.pk,
-            integration_id=dast_binding.target.integration_id,
-            params_snapshot=params_snapshot,
-            capability_snapshot=capability_snapshot,
-        )
     key_hash = _client_request_key_hash(
         principal=principal,
         project_id=project.pk,
         client_request_key=client_request_key,
     )
-    values: dict[str, object] = {
-        "origin": principal.source.value,
-        "execution_type": execution_type.value,
-        "project_id": project.pk,
-        "dast_binding_id": dast_binding.pk if dast_binding is not None else None,
-        "trigger_project_version_id": trigger_project_version.pk if trigger_project_version is not None else None,
-        "schedule_id": schedule.pk if schedule is not None else None,
-        "launch_config_id": launch_config.pk if launch_config is not None else None,
-        "requester_id": principal.requester.pk if principal.requester is not None else None,
-        "api_token_id": principal.api_token.pk if principal.api_token is not None else None,
-        "authority_kind": principal.kind.value,
-        "params_snapshot": params_snapshot,
-        "capability_snapshot": capability_snapshot,
-        "initial_launch_data_snapshot": initial_launch_data_snapshot,
-        "coalesce_key": coalesce_key,
-        "client_request_key_hash": key_hash,
-        "expires_at": timezone.now() + DEFAULT_LAUNCH_RETRY_POLICY.max_age,
-    }
-
     with transaction.atomic():
-        AISTProject.objects.select_for_update().only("pk").get(pk=project.pk)
+        frozen_arguments = arguments
+        dast_binding = None
+        trigger_project_version = None
+        if execution_type == PipelineExecutionKind.DAST:
+            dast_payload = arguments.dast
+            OrgIntegration.objects.select_for_update().only("pk").get(
+                pk=dast_payload.binding.target.integration_id,
+            )
+            AISTProject.objects.select_for_update().only("pk").get(pk=project.pk)
+            dast_binding = (
+                DastProjectBinding.objects
+                .select_related(
+                    "target__integration__dast_state",
+                    "target__integration__vpn_integration__vpn_secret",
+                )
+                .get(pk=dast_payload.binding.pk, project=project)
+            )
+            try:
+                frozen_arguments = PipelineArguments.for_dast(
+                    project=project,
+                    binding=dast_binding,
+                    trigger_project_version=dast_payload.trigger_project_version,
+                    raw_params=dast_payload.parameters,
+                )
+            except (TypeError, ValueError, ValidationError) as exc:
+                raise LaunchEnqueueError(str(exc)) from exc
+            readiness = check_dast_launch_readiness(frozen_arguments)
+            if not readiness.ready:
+                codes = ", ".join(issue.code.value for issue in readiness.issues)
+                detail = f"DAST launch is not ready: {codes}."
+                raise LaunchEnqueueError(detail)
+            trigger_project_version = frozen_arguments.dast.trigger_project_version
+
+        else:
+            AISTProject.objects.select_for_update().only("pk").get(pk=project.pk)
+        try:
+            snapshots = LaunchRequestSnapshots.from_values(
+                params=frozen_arguments.params_snapshot,
+                capability=frozen_arguments.capability_snapshot,
+            )
+        except (TypeError, ValueError, ValidationError, LaunchRequestSnapshotError) as exc:
+            raise LaunchEnqueueError(str(exc)) from exc
+        params_snapshot = snapshots.params_snapshot()
+        capability_snapshot = snapshots.capability_snapshot()
+        if execution_type == PipelineExecutionKind.SAST:
+            coalesce_key = build_sast_coalesce_key(
+                project_id=project.pk,
+                effective_project_version_id=(params_snapshot.get("project_version") or {}).get("id"),
+                params_snapshot=params_snapshot,
+                initial_launch_data_snapshot=initial_launch_data_snapshot,
+                schedule=resolve_effective_sast_schedule(schedule=schedule, launch_config=launch_config),
+            )
+        else:
+            coalesce_key = build_dast_coalesce_key(
+                project_id=project.pk,
+                binding_id=dast_binding.pk,
+                integration_id=dast_binding.target.integration_id,
+                trigger_project_version_id=trigger_project_version.pk,
+                params_snapshot=params_snapshot,
+                capability_snapshot=capability_snapshot,
+            )
+        values: dict[str, object] = {
+            "origin": principal.source.value,
+            "execution_type": execution_type.value,
+            "project_id": project.pk,
+            "dast_binding_id": dast_binding.pk if dast_binding is not None else None,
+            "trigger_project_version_id": (
+                trigger_project_version.pk if trigger_project_version is not None else None
+            ),
+            "schedule_id": schedule.pk if schedule is not None else None,
+            "launch_config_id": launch_config.pk if launch_config is not None else None,
+            "requester_id": principal.requester.pk if principal.requester is not None else None,
+            "api_token_id": principal.api_token.pk if principal.api_token is not None else None,
+            "authority_kind": principal.kind.value,
+            "params_snapshot": params_snapshot,
+            "capability_snapshot": capability_snapshot,
+            "initial_launch_data_snapshot": initial_launch_data_snapshot,
+            "coalesce_key": coalesce_key,
+            "client_request_key_hash": key_hash,
+            "expires_at": timezone.now() + DEFAULT_LAUNCH_RETRY_POLICY.max_age,
+        }
         if key_hash is not None:
             existing = PipelineLaunchRequest.objects.filter(client_request_key_hash=key_hash).first()
             if existing is not None:

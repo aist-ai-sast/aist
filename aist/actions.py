@@ -113,11 +113,15 @@ class BaseAction:
 
     @staticmethod
     def _pipeline_duration(pipeline: AISTPipeline) -> str:
-        end = pipeline.updated or timezone.now()
+        end = pipeline.finished_at or pipeline.updated or timezone.now()
         start = pipeline.started or pipeline.created
         if not start:
             return "unknown"
-        if pipeline.created and start >= end and pipeline.created < end:
+        if (
+            pipeline.created
+            and pipeline.created < end
+            and (start >= end or (end - start).total_seconds() < 1)
+        ):
             start = pipeline.created
         if end < start and pipeline.created:
             start = pipeline.created

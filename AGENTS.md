@@ -31,8 +31,8 @@ responsibility groupings):
 
 - `aist/` — core platform: models, REST API (`aist/api/`), async Celery tasks (`aist/tasks/`),
   deduplication (`aist/dedupe/`), SCM integrations, work items, UI views
-- `sast-combinator/sast-pipeline/` — analyzer orchestrator (git submodule); see
-  [SAST pipeline runtime](docs/architecture/sast-pipeline-runtime.md)
+- `sast-combinator/sast-pipeline/` — SAST and standalone-provider execution package
+  (git submodule); see [pipeline execution runtime](docs/architecture/sast-pipeline-runtime.md)
 - `sast-combinator/context_extractor_service/` — MCP server with Tree-sitter AST analysis
   (git submodule); resolves `pipeline_id` → project path via platform API
 - `sast-combinator/vpn-sidecar/` — ephemeral VPN container; see

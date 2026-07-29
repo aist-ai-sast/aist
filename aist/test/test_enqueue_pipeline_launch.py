@@ -66,6 +66,12 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
             expires_at=timezone.now() + timedelta(hours=1),
         )
 
+    def _arguments(self, raw_params=None):
+        return PipelineArguments.for_sast(
+            project=self.project,
+            raw_params=self.raw_params if raw_params is None else raw_params,
+        )
+
     def test_all_producer_principals_freeze_same_normalized_snapshot_with_explicit_audit(self):
         expected = PipelineArguments.normalize_params(project=self.project, raw_params=self.raw_params)
         producer_inputs = (
@@ -106,10 +112,8 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
         requests = []
         for principal, relations, client_key, origin, authority_kind in producer_inputs:
             result = enqueue_pipeline_launch(
-                project=self.project,
+                arguments=PipelineArguments.from_launch_config(self.config) if relations else self._arguments(),
                 principal=principal,
-                raw_params=self.raw_params if not relations else {},
-                execution_type=PipelineExecutionKind.SAST,
                 client_request_key=client_key,
                 **relations,
             )
@@ -124,15 +128,13 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
     def test_client_request_key_is_idempotent_and_conflicting_reuse_is_rejected(self):
         principal = LaunchPrincipal.for_user(organization=self.organization, requester=self.user)
         first = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=principal,
-            raw_params=self.raw_params,
             client_request_key="stable-client-key",
         )
         replay = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=principal,
-            raw_params=self.raw_params,
             client_request_key="stable-client-key",
         )
 
@@ -142,9 +144,8 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
         self.assertNotIn("stable-client-key", first.request.client_request_key_hash)
         with self.assertRaises(LaunchIdempotencyConflictError):
             enqueue_pipeline_launch(
-                project=self.project,
+                arguments=self._arguments({**self.raw_params, "log_level": "DEBUG"}),
                 principal=principal,
-                raw_params={**self.raw_params, "log_level": "DEBUG"},
                 client_request_key="stable-client-key",
             )
 
@@ -156,9 +157,8 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
         }
 
         result = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=principal,
-            raw_params=self.raw_params,
             client_request_key="launch-data-1",
             initial_launch_data=launch_data,
         )
@@ -170,9 +170,8 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
         )
         with self.assertRaises(LaunchEnqueueError):
             enqueue_pipeline_launch(
-                project=self.project,
+                arguments=self._arguments(),
                 principal=principal,
-                raw_params=self.raw_params,
                 client_request_key="launch-data-secret",
                 initial_launch_data={"one_off_actions": [{"config": {"api_token": "secret"}}]},
             )
@@ -186,12 +185,11 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
         )
 
         request = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=PipelineArguments.from_launch_config(self.config),
             principal=LaunchPrincipal.for_user(
                 organization=self.organization,
                 requester=self.user,
             ),
-            raw_params={},
             launch_config=self.config,
         ).request
         action.config = {"level": "ERROR", "description": "Changed later"}
@@ -208,12 +206,15 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
         )
         with self.assertRaises(LaunchEnqueueError):
             enqueue_pipeline_launch(
-                project=self.project,
+                arguments=self._arguments(),
                 principal=LaunchPrincipal.for_schedule(organization=other_organization),
-                raw_params=self.raw_params,
             )
 
         parameters = signature(enqueue_pipeline_launch).parameters
+        self.assertEqual(
+            set(parameters),
+            {"arguments", "principal", "launch_config", "schedule", "client_request_key", "initial_launch_data"},
+        )
         self.assertNotIn("state", parameters)
         self.assertNotIn("resource_key", parameters)
         self.assertNotIn("coalesce_key", parameters)
@@ -224,23 +225,20 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
     def test_new_equivalent_request_supersedes_only_pending_equivalent_requests(self):
         principal = LaunchPrincipal.for_user(organization=self.organization, requester=self.user)
         first = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=principal,
-            raw_params=self.raw_params,
             client_request_key="coalesce-first",
         ).request
         claimed = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments({**self.raw_params, "log_level": "DEBUG"}),
             principal=principal,
-            raw_params={**self.raw_params, "log_level": "DEBUG"},
             client_request_key="coalesce-claimed",
         ).request
         PipelineLaunchRequest.objects.filter(pk=claimed.pk).update(state=PipelineLaunchRequestState.CLAIMED)
 
         replacement = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=principal,
-            raw_params=self.raw_params,
             client_request_key="coalesce-replacement",
         ).request
 
@@ -280,9 +278,8 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
         """
         principal = LaunchPrincipal.for_user(organization=self.organization, requester=self.user)
         request = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=principal,
-            raw_params=self.raw_params,
             launch_config=self.config,
         ).request
 
@@ -325,12 +322,14 @@ class ConcurrentEnqueueCoalescingTests(TransactionTestCase):
             try:
                 barrier.wait(timeout=5)
                 result = enqueue_pipeline_launch(
-                    project=AISTProject.objects.get(pk=self.project_id),
+                    arguments=PipelineArguments.for_sast(
+                        project=AISTProject.objects.get(pk=self.project_id),
+                        raw_params=self.params,
+                    ),
                     principal=LaunchPrincipal.for_user(
                         organization=Organization.objects.get(pk=self.organization_id),
                         requester=get_user_model().objects.get(pk=self.user_id),
                     ),
-                    raw_params=self.params,
                     client_request_key=f"concurrent-{index}",
                 )
                 request_ids.append(result.request.pk)

@@ -25,7 +25,8 @@ selected on the DAST integration.
 3. Validate gateway connectivity and credentials.
 4. Synchronize the provider's targets and capabilities.
 5. Bind an eligible target and source identity to one AIST project.
-6. Create a DAST launch configuration from the enabled binding.
+6. Choose an explicit Git branch or commit and either create a reusable DAST
+   launch configuration or submit a one-off launch.
 
 Only one DAST integration is active for an organization at a time; disabled
 records remain as history. The service token is write-only after import.
@@ -51,12 +52,17 @@ The same readiness result is shown during configuration and checked again when
 execution is admitted. A stale capability revision or changed provider schema
 must be reviewed before the binding becomes ready again.
 
+Launch parameters are deliberately secret-free. Provider or application scan
+credentials remain with the DAST target; the synchronized parameter schema may
+not introduce credential-shaped fields or secret defaults. The service token
+and optional CA are loaded only at execution time from the integration.
+
 ## Autonomous execution
 
-An authorized start enters the normal durable launch lifecycle. After admission,
-an AIST worker starts the standalone DAST connector. The connector starts and
-observes the provider run, while AIST retains cancellation intent, pipeline
-state, and the final import decision.
+An authorized start enters the normal durable launch lifecycle. After a worker
+accepts the generic pipeline task, the shared execution runtime starts the DAST
+connector container. The connector starts and observes the provider run, while
+AIST retains cancellation intent, pipeline state, and the final import decision.
 
 Before importing a terminal result, AIST verifies the expected provider run,
 target binding, source revision, result format, and nested report. Invalid,
@@ -69,10 +75,10 @@ gateway. A user with project-operate permission selects an enabled binding,
 uploads the terminal result, reviews its validation preview, and confirms the
 import.
 
-AIST derives the source revision from the selected binding rather than accepting
-an unrelated commit from the client. Confirmation creates an import pipeline
-and applies the same result validation and finding lifecycle used by an
-autonomous result.
+AIST resolves the effective Git hash from the validated report entry whose
+repository identity matches the selected binding. It does not accept a separate
+client-supplied revision. Confirmation creates an import pipeline and applies
+the same result validation and finding lifecycle used by an autonomous result.
 
 ## Network and credentials
 
@@ -80,9 +86,10 @@ Private DAST traffic uses only the VPN attached directly to the DAST
 integration; project and SCM VPN configuration does not substitute for it.
 
 Every gateway URL must be an absolute HTTPS URL with no credentials, query, or
-fragment, on port 443 or 8443; that much is enforced in every case. How far the
-destination address can be checked in addition depends on which side resolves it
-for the connection that follows:
+fragment, on port 443 or 8443. Configuration validation and the connector
+runtime enforce the same allowlist, so an integration on either port validates
+and launches consistently. How far the destination address can be checked
+depends on which side resolves it for the connection that follows:
 
 - An address literal needs no lookup, so the address checked is the address used.
   It must be public, or — when the integration has an active VPN route — a
@@ -110,6 +117,19 @@ diagnosed as the same fault.
 The service token and optional custom CA are loaded from the organization
 integration when the connector starts. They are not launch parameters or
 general broker payloads.
+
+## Disable and teardown
+
+Disabling an integration is the normal reversible stop. It prevents new DAST
+admission, invalidates in-flight validation and synchronization work, and
+disables its schedules while preserving targets, bindings, presets, pipelines,
+findings, and onboarding history.
+
+Deletion is a separate quiescent teardown. It is available only after disable
+and only when no launch or execution remains active. Teardown removes DAST
+targets, bindings, presets, schedules, and queue-control records, but retains
+pipeline and finding history. This separation prevents a UI delete action from
+silently removing the durable state required to recover active work.
 
 Use the [DAST operations runbook](../runbooks/dast-operations.md) for API
 examples, cancellation, recovery, contract promotion, and token rotation. Use

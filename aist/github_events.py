@@ -14,6 +14,7 @@ from aist.models import (
     ScmType,
     VersionType,
 )
+from aist.pipeline_args import PipelineArguments
 from aist.utils.pipeline import has_unfinished_pipeline
 
 gh = GitHubRouter()
@@ -156,13 +157,16 @@ async def on_pr_event(event, gh, **_):
     if organization is None:
         logger.error("AISTProject has no organization for repository: %s", repo_full)
         return
-    enqueue_result = await sync_to_async(enqueue_pipeline_launch)(
+    arguments = await sync_to_async(PipelineArguments.for_sast)(
         project=aist_project,
-        principal=LaunchPrincipal.for_scm_webhook(organization=organization),
         raw_params={
             "pr_launch": True,
             "project_version": pv.as_dict(),
         },
+    )
+    enqueue_result = await sync_to_async(enqueue_pipeline_launch)(
+        arguments=arguments,
+        principal=LaunchPrincipal.for_scm_webhook(organization=organization),
         client_request_key=f"github:{repo_info.pk}:pr:{pr_number}:sha:{head_sha}",
         initial_launch_data={"pull_request_id": pr_ref.pk},
     )

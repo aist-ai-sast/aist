@@ -27,6 +27,7 @@ from aist.models import (
     ProjectAccessDenial,
     VersionType,
 )
+from aist.pipeline_args import PipelineArguments
 from aist.test.test_api import AISTApiBase
 
 
@@ -39,6 +40,9 @@ class LaunchRequestAuthorityRevalidationTests(AISTApiBase):
         )
         self.params = {"project_version": {"id": self.pv.pk}}
 
+    def _arguments(self):
+        return PipelineArguments.for_sast(project=self.project, raw_params=self.params)
+
     def _claim(self, request: PipelineLaunchRequest, owner: str = "dispatcher-a") -> None:
         claimed = claim_next_launch_request(claim_owner=owner)
         self.assertIsNotNone(claimed)
@@ -46,9 +50,8 @@ class LaunchRequestAuthorityRevalidationTests(AISTApiBase):
 
     def test_active_user_authority_is_valid_after_claim(self):
         request = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=LaunchPrincipal.for_user(organization=self.organization, requester=self.user),
-            raw_params=self.params,
         ).request
         self._claim(request)
 
@@ -59,9 +62,8 @@ class LaunchRequestAuthorityRevalidationTests(AISTApiBase):
 
     def test_membership_revoked_between_enqueue_and_claim_fails_without_pipeline(self):
         request = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=LaunchPrincipal.for_user(organization=self.organization, requester=self.user),
-            raw_params=self.params,
         ).request
         Product_Type_Member.objects.filter(product_type=self.prod_type, user=self.user).delete()
         self._claim(request)
@@ -74,9 +76,8 @@ class LaunchRequestAuthorityRevalidationTests(AISTApiBase):
 
     def test_project_denial_added_between_enqueue_and_claim_fails_closed(self):
         request = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=LaunchPrincipal.for_user(organization=self.organization, requester=self.user),
-            raw_params=self.params,
         ).request
         ProjectAccessDenial.objects.create(project=self.project, user=self.user)
         self._claim(request)
@@ -94,13 +95,12 @@ class LaunchRequestAuthorityRevalidationTests(AISTApiBase):
             expires_at=timezone.now() + timedelta(hours=1),
         )
         request = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=LaunchPrincipal.for_user(
                 organization=self.organization,
                 requester=self.user,
                 api_token=token,
             ),
-            raw_params=self.params,
         ).request
         AISTApiToken.objects.filter(pk=token.pk).update(scope=ApiTokenScope.READ_ONLY)
         self._claim(request)
@@ -119,13 +119,12 @@ class LaunchRequestAuthorityRevalidationTests(AISTApiBase):
             expires_at=timezone.now() + timedelta(hours=1),
         )
         request = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=LaunchPrincipal.for_user(
                 organization=self.organization,
                 requester=self.user,
                 api_token=token,
             ),
-            raw_params=self.params,
         ).request
         AISTApiToken.objects.filter(pk=token.pk).update(revoked_at=timezone.now())
         self._claim(request)
@@ -147,9 +146,8 @@ class LaunchRequestAuthorityRevalidationTests(AISTApiBase):
             max_concurrent_runs=1,
         )
         request = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=PipelineArguments.from_launch_config(config),
             principal=LaunchPrincipal.for_schedule(organization=self.organization),
-            raw_params={},
             launch_config=config,
             schedule=schedule,
         ).request
@@ -162,10 +160,8 @@ class LaunchRequestAuthorityRevalidationTests(AISTApiBase):
 
     def test_webhook_authority_requires_current_project_repository(self):
         request = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=LaunchPrincipal.for_scm_webhook(organization=self.organization),
-            raw_params=self.params,
-            trigger_project_version=self.pv,
         ).request
         self._claim(request)
 
@@ -175,9 +171,8 @@ class LaunchRequestAuthorityRevalidationTests(AISTApiBase):
 
     def test_wrong_claim_owner_cannot_revalidate_or_mutate_request(self):
         request = enqueue_pipeline_launch(
-            project=self.project,
+            arguments=self._arguments(),
             principal=LaunchPrincipal.for_user(organization=self.organization, requester=self.user),
-            raw_params=self.params,
         ).request
         self._claim(request)
 
@@ -205,9 +200,9 @@ class ConcurrentLaunchRequestClaimTests(TransactionTestCase):
         )
         self.request_id = PipelineLaunchRequest.objects.create(
             project=project,
-            trigger_project_version=version,
             origin=PipelineLaunchOrigin.RECONCILER,
             authority_kind=PipelineLaunchAuthorityKind.RECONCILER,
+            params_snapshot={"project_version": version.as_dict()},
         ).pk
 
     def test_two_workers_never_claim_the_same_request(self):

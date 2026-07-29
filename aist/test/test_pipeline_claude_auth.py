@@ -1,5 +1,5 @@
 """
-Task 7 — ``run_sast_pipeline`` resolves the project's Claude integration
+The generic pipeline worker resolves the project's Claude integration
 alongside the existing VPN resolution and forwards the resulting generic
 ``auth_env`` dict to ``build_bridge_client_from_settings``.
 
@@ -28,7 +28,7 @@ from aist.models import (
     OrgIntegrationType,
     VersionType,
 )
-from aist.tasks.pipeline import run_sast_pipeline
+from aist.test.pipeline_execution_helpers import run_persisted_sast_pipeline
 from aist.test.test_api import AISTApiBase
 
 
@@ -106,25 +106,25 @@ class PipelineClaudeAuthEnvTests(AISTApiBase):
         """Run the pipeline and return the factory mock for inspection."""
         params = _params_namespace(self._project_version_state)
         with (
-            patch("aist.tasks.pipeline.PipelineArguments.from_dict", return_value=params),
+            patch("aist.tasks.pipeline.PipelineArguments.from_dict", return_value=SimpleNamespace(sast=params)),
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
             patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
-            patch("aist.tasks.pipeline.configure_project_run_analyses", return_value={
+            patch("aist.tasks.pipeline.execute_pipeline", return_value=SimpleNamespace(launch_data={
                 "git": {"resolved_commit": ""},
                 "output_dir": "/aist-output",
                 "project_path": "/aist-project",
                 "trim_path": "",
                 "tmp_analyzer_config_path": "/aist-analyzers.yml",
-            }),
+            })),
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[]),
             patch(
                 "aist.tasks.pipeline.build_bridge_client_from_settings",
             ) as mock_factory,
         ):
             mock_factory.return_value = MagicMock()
-            run_sast_pipeline.run(self.pipeline.id, {"project_id": self.project.id})
+            run_persisted_sast_pipeline(self.pipeline, {"project_id": self.project.id})
             return mock_factory
 
     def test_factory_called_with_claude_oauth_token_when_integration_configured(self):

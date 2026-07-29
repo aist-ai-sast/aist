@@ -15,7 +15,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from aist.execution.observability import observe_provider_call
-from aist.integrations.dast_config import DastConfigError, DastIntegrationConfig, DastTargetSnapshot
+from aist.integrations.dast_config import (
+    DastConfigError,
+    DastIntegrationConfig,
+    DastSecretParameterSchemaError,
+    DastTargetSnapshot,
+)
 from aist.integrations.dast_endpoint_policy import (
     AddressResolver,
     DastEndpointPolicy,
@@ -46,6 +51,7 @@ class DastGatewayErrorCode(StrEnum):
     ENDPOINT_POLICY_REJECTED = "ENDPOINT_POLICY_REJECTED"
     GATEWAY_NOT_READY = "GATEWAY_NOT_READY"
     CATALOG_INVALID = "CATALOG_INVALID"
+    CATALOG_SECRET_PARAMETERS = "CATALOG_SECRET_PARAMETERS"  # noqa: S105 - error code
     GATEWAY_UNREACHABLE = "GATEWAY_UNREACHABLE"
     TLS_HANDSHAKE_FAILED = "TLS_HANDSHAKE_FAILED"
     GATEWAY_REQUEST_FAILED = "GATEWAY_REQUEST_FAILED"
@@ -179,6 +185,9 @@ class DastGatewayClient:
                     raise _client_error(DastGatewayErrorCode.CATALOG_INVALID)
                 try:
                     targets = tuple(DastTargetSnapshot.from_snapshot(item) for item in raw_targets)
+                except DastSecretParameterSchemaError as exc:
+                    logger.warning("DAST catalog rejected because launch parameters contain credentials.")
+                    raise _client_error(DastGatewayErrorCode.CATALOG_SECRET_PARAMETERS) from exc
                 except DastConfigError as exc:
                     # The persisted code is deliberately fixed and carries no detail, so without this
                     # the reason is lost: one malformed target reads as "invalid catalog" with nothing

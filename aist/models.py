@@ -552,7 +552,8 @@ class PullRequest(models.Model):
 
 
 class AISTStatus(models.TextChoices):
-    SAST_LAUNCHED = "SAST_LAUNCHED", "Launched"
+    ADMITTED = "ADMITTED", "Admitted"
+    EXECUTING = "EXECUTING", "Executing"
     UPLOADING_RESULTS = "UPLOADING_RESULTS", "Uploading Results"
     FINDING_POSTPROCESSING = "FINDING_POSTPROCESSING", "Finding post-processing"
     WAITING_DEDUPLICATION_TO_FINISH = "WAITING_DEDUPLICATION_TO_FINISH", "Waiting Deduplication To Finish"
@@ -1403,7 +1404,8 @@ class DastExecutionOutcome(models.TextChoices):
 class AISTPipeline(models.Model):
     created = models.DateTimeField(default=timezone.now, editable=False)
     updated = models.DateTimeField(auto_now=True)
-    started = models.DateTimeField(auto_now=True)
+    started = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
 
     id = models.CharField(primary_key=True, max_length=64)
 
@@ -1430,17 +1432,7 @@ class AISTPipeline(models.Model):
         default=PipelineExecutionType.SAST,
         db_index=True,
     )
-    external_run_id = models.CharField(max_length=255, null=True, blank=True)
-    external_log_cursor = models.PositiveBigIntegerField(default=0)
-    external_execution_outcome = models.CharField(
-        max_length=32,
-        choices=DastExecutionOutcome.choices,
-        blank=True,
-        default="",
-    )
-    external_execution_deadline = models.DateTimeField(null=True, blank=True)
-    external_cancel_requested_at = models.DateTimeField(null=True, blank=True)
-    status = models.CharField(max_length=64, choices=AISTStatus.choices, default=AISTStatus.FINISHED)
+    status = models.CharField(max_length=64, choices=AISTStatus.choices, default=AISTStatus.ADMITTED)
 
     tests = models.ManyToManyField(Test, related_name="aist_pipelines", blank=True)
     launch_data = models.JSONField(default=dict, blank=True)
@@ -1478,19 +1470,6 @@ class AISTPipeline(models.Model):
                 ),
                 name="aist_pipeline_execution_source_valid",
             ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(execution_type=PipelineExecutionType.DAST)
-                    | models.Q(
-                        external_run_id__isnull=True,
-                        external_log_cursor=0,
-                        external_execution_outcome="",
-                        external_execution_deadline__isnull=True,
-                        external_cancel_requested_at__isnull=True,
-                    )
-                ),
-                name="aist_pipeline_dast_control_fields_valid",
-            ),
         ]
 
     def __str__(self) -> str:
@@ -1514,17 +1493,36 @@ class AISTPipeline(models.Model):
         elif self.execution_type == PipelineExecutionType.MANUAL_IMPORT and self.trigger_project_version_id:
             errors["trigger_project_version"] = "Manual imports cannot have a DAST trigger version."
 
-        if self.execution_type != PipelineExecutionType.DAST and (
-            self.external_run_id is not None
-            or self.external_log_cursor != 0
-            or self.external_execution_outcome
-            or self.external_execution_deadline is not None
-            or self.external_cancel_requested_at is not None
-        ):
-            errors["external_execution_outcome"] = "External DAST control fields require a DAST pipeline."
-
         if errors:
             raise ValidationError(errors)
+
+
+class DastExecutionState(models.Model):
+
+    """Typed provider runtime state kept outside the common pipeline row."""
+
+    pipeline = models.OneToOneField(
+        AISTPipeline,
+        on_delete=models.CASCADE,
+        related_name="dast_execution_state",
+    )
+    run_id = models.CharField(max_length=255, null=True, blank=True)
+    log_cursor = models.PositiveBigIntegerField(default=0)
+    outcome = models.CharField(
+        max_length=32,
+        choices=DastExecutionOutcome.choices,
+        blank=True,
+        default="",
+    )
+    deadline = models.DateTimeField(null=True, blank=True)
+    cancel_requested_at = models.DateTimeField(null=True, blank=True)
+    recovery_checkpoint = models.JSONField(default=dict, blank=True)
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    def clean(self):
+        if self.pipeline.execution_type != PipelineExecutionType.DAST:
+            raise ValidationError({"pipeline": "DAST execution state requires a DAST pipeline."})
 
 
 class AISTTestMeta(models.Model):
@@ -1782,10 +1780,17 @@ class LaunchSchedule(models.Model):
         blank=True,
         help_text="Timestamp of the last time this schedule launched pipelines.",
     )
+    next_run_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=64, blank=True, default="")
+    last_error_detail = models.CharField(max_length=512, blank=True, default="")
 
     class Meta:
         verbose_name = "Launch Schedule"
         verbose_name_plural = "Launch Schedules"
+        indexes = [
+            models.Index(fields=["enabled", "next_run_at"], name="aist_schedule_due_idx"),
+        ]
 
     def __str__(self) -> str:
         return (f"LaunchSchedule(project={self.launch_config.project_id}, "
@@ -1922,7 +1927,7 @@ class PipelineLaunchRequest(models.Model):
     )
     launch_config = models.ForeignKey(
         "AISTProjectLaunchConfig",
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="launch_requests",
@@ -2031,6 +2036,21 @@ class PipelineLaunchRequest(models.Model):
                 ),
                 name="aist_launch_request_supersede_link_valid",
             ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        execution_type=PipelineExecutionType.SAST,
+                        dast_binding__isnull=True,
+                        trigger_project_version__isnull=True,
+                    )
+                    | models.Q(
+                        execution_type=PipelineExecutionType.DAST,
+                        dast_binding__isnull=False,
+                        trigger_project_version__isnull=False,
+                    )
+                ),
+                name="aist_launch_request_execution_target_valid",
+            ),
         ]
 
     def __str__(self):
@@ -2078,6 +2098,11 @@ class PipelineLaunchRequest(models.Model):
             errors["schedule"] = "Schedule must belong to the request launch config."
         if self.trigger_project_version_id and self.trigger_project_version.project_id != self.project_id:
             errors["trigger_project_version"] = "Trigger version must belong to the request project."
+        elif self.trigger_project_version_id and self.trigger_project_version.version_type not in {
+            VersionType.GIT_BRANCH,
+            VersionType.GIT_HASH,
+        }:
+            errors["trigger_project_version"] = "DAST trigger version must be a Git branch or Git hash."
         if self.dast_binding_id and self.dast_binding.project_id != self.project_id:
             errors["dast_binding"] = "DAST binding must belong to the request project."
         if self.superseded_by_id and self.superseded_by.project_id != self.project_id:
@@ -2093,6 +2118,15 @@ class PipelineLaunchRequest(models.Model):
             errors["authority_kind"] = "A PAT record is valid only for PAT authority."
         if self.created and self.expires_at and self.expires_at <= self.created:
             errors["expires_at"] = "Expiry must be later than request creation."
+
+        if self.execution_type == PipelineExecutionType.SAST:
+            if self.dast_binding_id or self.trigger_project_version_id:
+                errors["execution_type"] = "SAST launch requests cannot contain DAST execution input."
+        elif self.execution_type == PipelineExecutionType.DAST:
+            if not self.dast_binding_id:
+                errors["dast_binding"] = "DAST launch requests require a project binding."
+            if not self.trigger_project_version_id:
+                errors["trigger_project_version"] = "DAST launch requests require a Git trigger version."
 
         if errors:
             raise ValidationError(errors)
@@ -2175,6 +2209,13 @@ class AISTProjectLaunchConfig(models.Model):
         blank=True,
         related_name="launch_configs",
     )
+    trigger_project_version = models.ForeignKey(
+        AISTProjectVersion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="dast_launch_configs",
+    )
 
     name = models.CharField(max_length=128)
     description = models.TextField(blank=True, default="")
@@ -2192,10 +2233,23 @@ class AISTProjectLaunchConfig(models.Model):
             models.UniqueConstraint(fields=["project", "name"], name="uniq_aist_launch_cfg_name_per_project"),
             models.CheckConstraint(
                 condition=(
-                    models.Q(execution_type=PipelineExecutionType.SAST, dast_binding__isnull=True)
-                    | models.Q(execution_type=PipelineExecutionType.DAST, dast_binding__isnull=False)
+                    models.Q(
+                        execution_type=PipelineExecutionType.SAST,
+                        dast_binding__isnull=True,
+                        trigger_project_version__isnull=True,
+                    )
+                    | models.Q(
+                        execution_type=PipelineExecutionType.DAST,
+                        dast_binding__isnull=False,
+                        trigger_project_version__isnull=False,
+                    )
                 ),
                 name="aist_launch_config_execution_target_valid",
+            ),
+            models.UniqueConstraint(
+                fields=["project"],
+                condition=models.Q(is_default=True),
+                name="uniq_default_launch_config_per_project",
             ),
             models.CheckConstraint(
                 condition=(
@@ -2220,6 +2274,8 @@ class AISTProjectLaunchConfig(models.Model):
         if self.execution_type == PipelineExecutionType.SAST:
             if self.dast_binding_id:
                 errors["dast_binding"] = "SAST launch config cannot select a DAST binding."
+            if self.trigger_project_version_id:
+                errors["trigger_project_version"] = "SAST launch config cannot select a DAST trigger version."
         elif self.execution_type == PipelineExecutionType.DAST:
             if not self.dast_binding_id:
                 errors["dast_binding"] = "DAST launch config requires an explicit binding."
@@ -2227,6 +2283,12 @@ class AISTProjectLaunchConfig(models.Model):
                 errors["dast_binding"] = "DAST binding must belong to the launch config project."
             elif not self.dast_binding.enabled:
                 errors["dast_binding"] = "DAST binding must be enabled."
+            if not self.trigger_project_version_id:
+                errors["trigger_project_version"] = "DAST launch config requires a Git trigger version."
+            elif self.trigger_project_version.project_id != self.project_id:
+                errors["trigger_project_version"] = "DAST trigger version must belong to the launch config project."
+            elif self.trigger_project_version.version_type not in {VersionType.GIT_BRANCH, VersionType.GIT_HASH}:
+                errors["trigger_project_version"] = "DAST trigger version must be a Git branch or Git hash."
             if "analyzers" in self.params:
                 errors["params"] = "DAST launch config cannot contain SAST analyzers."
         else:

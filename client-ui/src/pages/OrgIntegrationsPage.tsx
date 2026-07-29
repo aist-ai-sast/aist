@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toUserMessage } from "../lib/api";
 import {
   useCreateOrgIntegration,
+  useDisableDastIntegration,
   useDeleteOrgIntegration,
   useImportDastIntegration,
   useUpdateDastIntegrationOnboarding,
@@ -93,6 +94,8 @@ function ResourceRow({
   organizationId,
   statusLabel,
   fingerprint,
+  destructiveLabel = "Delete",
+  destructiveTitle = "Delete",
 }: {
   typeKey: string;
   name: string;
@@ -110,6 +113,8 @@ function ResourceRow({
   organizationId: number;
   statusLabel?: string;
   fingerprint?: string;
+  destructiveLabel?: string;
+  destructiveTitle?: string;
 }) {
   return (
     <div className="flex items-center gap-3 rounded-2xl border border-night-500/80 bg-night-800/75 px-4 py-3">
@@ -194,12 +199,12 @@ function ResourceRow({
           className="inline-flex items-center gap-1.5 rounded-xl border border-danger-500/50 bg-danger-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-danger-400 transition hover:bg-danger-500/20 disabled:opacity-60"
           disabled={isPendingDelete}
           onClick={onDelete}
-          title="Delete"
+          title={destructiveTitle}
         >
           <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
             <path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12ZM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4Z" />
           </svg>
-          Delete
+          {destructiveLabel}
         </button>
       </div>
       </PermissionGate>
@@ -928,15 +933,17 @@ function OrgIntegrationForm({
             )}
           </>
         )}
-        <label className="flex items-center gap-2 text-xs text-slate-400 sm:col-span-2">
-          <input
-            type="checkbox"
-            className="accent-brand-500"
-            checked={form.is_active}
-            onChange={(e) => setForm((prev) => ({ ...prev, is_active: e.target.checked }))}
-          />
-          Active
-        </label>
+        {form.integration_type !== "DAST" && (
+          <label className="flex items-center gap-2 text-xs text-slate-400 sm:col-span-2">
+            <input
+              type="checkbox"
+              className="accent-brand-500"
+              checked={form.is_active}
+              onChange={(e) => setForm((prev) => ({ ...prev, is_active: e.target.checked }))}
+            />
+            Active
+          </label>
+        )}
       </div>
       <SaveCancelButtons
         onSave={handleSave}
@@ -967,6 +974,7 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
   const queryClient = useQueryClient();
   const integrationsQuery = useOrgIntegrations(orgId);
   const deleteIntegration = useDeleteOrgIntegration(orgId);
+  const disableDastIntegration = useDisableDastIntegration(orgId);
   const validateIntegration = useValidateOrgIntegration();
   const syncCapabilities = useSyncDastCapabilities(orgId);
   const [showForm, setShowForm] = useState(false);
@@ -1011,10 +1019,24 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
   }
 
   async function handleDelete(integration: OrgIntegration) {
-    if (!confirm(`Delete integration "${integration.name}"?`)) return;
+    const isDast = integration.integration_type === "DAST";
+    const warning = isDast
+      ? `Delete inactive DAST integration "${integration.name}"? Targets, bindings, presets, schedules, and queue control data will be removed. Pipeline and finding history will be preserved.`
+      : `Delete integration "${integration.name}"?`;
+    if (!confirm(warning)) return;
     try {
       await deleteIntegration.mutateAsync(integration.id);
       toast.push("Integration deleted.", "success");
+    } catch (error) {
+      toast.push(toUserMessage(error), "error");
+    }
+  }
+
+  async function handleDisable(integration: OrgIntegration) {
+    if (!confirm(`Disable DAST integration "${integration.name}"? Pipeline history and saved configuration will be preserved, but schedules will be disabled.`)) return;
+    try {
+      await disableDastIntegration.mutateAsync(integration.id);
+      toast.push("DAST integration disabled. History and configuration were preserved.", "success");
     } catch (error) {
       toast.push(toUserMessage(error), "error");
     }
@@ -1074,14 +1096,18 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
                 : undefined
             }
             onEdit={() => { setEditingId(integration.id); setShowForm(false); }}
-            onDelete={() => handleDelete(integration)}
+            onDelete={() =>
+              integration.integration_type === "DAST" && integration.is_active
+                ? handleDisable(integration)
+                : handleDelete(integration)
+            }
             onValidate={() => handleValidate(integration)}
             onSynchronize={
               integration.integration_type === "DAST" && integration.dast_state?.validation_state === "READY"
                 ? () => handleSynchronize(integration)
                 : undefined
             }
-            isPendingDelete={deleteIntegration.isPending}
+            isPendingDelete={deleteIntegration.isPending || disableDastIntegration.isPending}
             isPendingValidate={
               (validateIntegration.isPending && validateIntegration.variables === integration.id) ||
               validatingState?.integrationId === integration.id
@@ -1090,6 +1116,14 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
               syncCapabilities.isPending && syncCapabilities.variables === integration.id
             }
             organizationId={orgId}
+            destructiveLabel={
+              integration.integration_type === "DAST" && integration.is_active ? "Disable" : "Delete"
+            }
+            destructiveTitle={
+              integration.integration_type === "DAST" && integration.is_active
+                ? "Disable DAST integration"
+                : "Delete integration"
+            }
             statusLabel={
               integration.integration_type === "DAST"
                 ? integration.dast_state?.validation_state.replaceAll("_", " ")

@@ -155,8 +155,15 @@ class DastTargetBindingAPITests(AISTApiBase):
             self._binding_payload(source_repo_key="not-advertised"),
             format="json",
         )
+        invalid_target_pk = self.client.post(
+            self.bindings_url,
+            self._binding_payload(target_id="not-a-pk"),
+            format="json",
+        )
         self.assertEqual(cross_org.status_code, 400)
         self.assertEqual(bad_repository.status_code, 400)
+        self.assertEqual(invalid_target_pk.status_code, 400)
+        self.assertIn("target_id", invalid_target_pk.data)
 
     def test_binding_rejects_mass_assignment_of_server_owned_fields(self):
         payload = {
@@ -182,6 +189,7 @@ class DastTargetBindingAPITests(AISTApiBase):
                 "description": "Autonomous staging scan",
                 "execution_type": PipelineExecutionType.DAST,
                 "dast_binding_id": binding_response.data["id"],
+                "trigger_project_version_id": self.pv.pk,
                 "params": {},
                 "is_default": False,
             },
@@ -194,6 +202,67 @@ class DastTargetBindingAPITests(AISTApiBase):
         self.assertEqual(config.execution_type, PipelineExecutionType.DAST)
         self.assertEqual(config.dast_binding_id, binding_response.data["id"])
         self.assertEqual(config.params, {})
+        self.assertEqual(response.data["dast_target_label"], "app API")
+        self.assertEqual(response.data["dast_source_repository"], "source")
+        self.assertEqual(response.data["trigger_project_version_id"], self.pv.pk)
+
+        listed = self.client.get(self._launch_configs_url())
+        self.assertEqual(listed.status_code, 200, listed.data)
+        self.assertEqual(listed.data[0]["dast_target_label"], "app API")
+        self.assertEqual(listed.data[0]["dast_source_repository"], "source")
+
+    def test_dast_launch_config_update_selects_a_scoped_enabled_binding(self):
+        targets = refresh_dast_targets(self.integration, (_target(), _target("mobile")))
+        self.target = targets[0]
+        first_response = self.client.post(self.bindings_url, self._binding_payload(), format="json")
+        self.assertEqual(first_response.status_code, 200, first_response.data)
+        mobile = targets[1]
+        second_response = self.client.post(
+            self.bindings_url,
+            self._binding_payload(
+                target_id=mobile.pk,
+                capability_revision=mobile.capability_revision,
+                schema_digest=mobile.schema_digest,
+            ),
+            format="json",
+        )
+        self.assertEqual(second_response.status_code, 200, second_response.data)
+        created = self.client.post(
+            self._launch_configs_url(),
+            {
+                "name": "Switchable DAST",
+                "execution_type": PipelineExecutionType.DAST,
+                "dast_binding_id": first_response.data["id"],
+                "trigger_project_version_id": self.pv.pk,
+                "params": {},
+            },
+            format="json",
+        )
+        detail_url = reverse(
+            "aist_api:project_launch_config_detail",
+            kwargs={"project_id": self.project.pk, "config_id": created.data["id"]},
+        )
+
+        updated = self.client.patch(
+            detail_url,
+            {"dast_binding_id": second_response.data["id"]},
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, 200, updated.data)
+        self.assertEqual(updated.data["dast_binding"], second_response.data["id"])
+        self.assertEqual(updated.data["dast_target_label"], "mobile API")
+
+        second_binding = DastProjectBinding.objects.get(pk=second_response.data["id"])
+        second_binding.enabled = False
+        second_binding.save(update_fields=["enabled"])
+        rejected = self.client.patch(
+            detail_url,
+            {"dast_binding_id": second_binding.pk},
+            format="json",
+        )
+        self.assertEqual(rejected.status_code, 400, rejected.data)
+        self.assertIn("dast_binding_id", rejected.data)
 
     def test_dast_launch_config_create_rejects_missing_binding_analyzers_and_server_fields(self):
         binding_response = self.client.post(self.bindings_url, self._binding_payload(), format="json")
@@ -202,12 +271,15 @@ class DastTargetBindingAPITests(AISTApiBase):
             "name": "Strict DAST config",
             "execution_type": PipelineExecutionType.DAST,
             "dast_binding_id": binding_response.data["id"],
+            "trigger_project_version_id": self.pv.pk,
             "params": {},
         }
 
         cases = (
             ({key: value for key, value in base.items() if key != "dast_binding_id"}, "dast_binding_id"),
             ({**base, "params": {"analyzers": ["semgrep"]}}, "params"),
+            ({**base, "dast_binding_id": "not-a-pk"}, "dast_binding_id"),
+            ({**base, "trigger_project_version_id": "not-a-pk"}, "trigger_project_version_id"),
             ({**base, "project": self.project.pk}, "project"),
             ({**base, "dast_binding": binding_response.data["id"]}, "dast_binding"),
         )
@@ -252,6 +324,7 @@ class DastTargetBindingAPITests(AISTApiBase):
                 "name": "Cross-organization DAST",
                 "execution_type": PipelineExecutionType.DAST,
                 "dast_binding_id": other_binding.pk,
+                "trigger_project_version_id": self.pv.pk,
                 "params": {},
             },
             format="json",
@@ -270,6 +343,7 @@ class DastTargetBindingAPITests(AISTApiBase):
             name="DAST readiness launch",
             execution_type=PipelineExecutionType.DAST,
             dast_binding=binding,
+            trigger_project_version=self.pv,
             params={},
         )
         start_url = reverse(
@@ -292,15 +366,7 @@ class DastTargetBindingAPITests(AISTApiBase):
         state.capabilities_etag = "catalog-1"
         state.capabilities_synced_at = timezone.now()
         state.save(update_fields=["capabilities_etag", "capabilities_synced_at", "updated"])
-        missing_trigger = self.client.post(start_url, {}, format="json")
-        self.assertEqual(missing_trigger.status_code, 400)
-        self.assertIn("project_version_id", missing_trigger.data)
-
-        ready_response = self.client.post(
-            start_url,
-            {"project_version_id": self.pv.pk},
-            format="json",
-        )
+        ready_response = self.client.post(start_url, {}, format="json")
         self.assertEqual(ready_response.status_code, 202, ready_response.data)
         launch_request = PipelineLaunchRequest.objects.get(pk=ready_response.data["id"])
         self.assertEqual(launch_request.state, PipelineLaunchRequestState.PENDING)

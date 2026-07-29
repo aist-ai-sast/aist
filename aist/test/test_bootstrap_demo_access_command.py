@@ -15,8 +15,12 @@ from aist.models import (
     AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectVersion,
+    DastProjectBinding,
     LaunchSchedule,
     Organization,
+    OrgIntegration,
+    OrgIntegrationType,
+    PipelineExecutionType,
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
@@ -77,10 +81,12 @@ class BootstrapDemoAccessCommandTests(TestCase):
             actual_by_day = Counter(findings_qs.values_list("date", flat=True))
             self.assertEqual(actual_by_day, expected_by_day)
 
-            dast_finding = Finding.objects.get(
+            dast_findings = Finding.objects.filter(
                 test__engagement__product=project.product,
                 title__contains=f"[DAST-{spec.slug.upper()}-",
             )
+            self.assertEqual(dast_findings.count(), 3)
+            dast_finding = dast_findings.order_by("id").first()
             self.assertTrue(dast_finding.dynamic_finding)
             self.assertEqual(
                 dast_finding.references,
@@ -92,6 +98,9 @@ class BootstrapDemoAccessCommandTests(TestCase):
                 project=project,
                 name=spec.launch_config_name,
             )
+            self.assertEqual(launch_config.execution_type, PipelineExecutionType.SAST)
+            self.assertIsNone(launch_config.dast_binding_id)
+            self.assertIsNone(launch_config.trigger_project_version_id)
             self.assertEqual(launch_config.params.get("ai_mode"), "AUTO_DEFAULT")
             self.assertEqual(
                 launch_config.params.get("ai_filter_snapshot"),
@@ -103,14 +112,16 @@ class BootstrapDemoAccessCommandTests(TestCase):
             schedule = LaunchSchedule.objects.get(launch_config=launch_config)
             self.assertEqual(schedule.cron_expression, spec.cron_expression)
             self.assertIsNotNone(schedule.last_run_at)
+            self.assertIsNotNone(schedule.next_run_at)
+            self.assertGreater(schedule.next_run_at, timezone.now())
 
             queue_qs = PipelineLaunchRequest.objects.filter(
                 project=project,
                 launch_config=launch_config,
             )
             self.assertEqual(queue_qs.count(), len(spec.queue_day_offsets))
-            self.assertTrue(queue_qs.filter(state=PipelineLaunchRequestState.DISPATCHED).exists())
-            self.assertTrue(queue_qs.filter(state=PipelineLaunchRequestState.PENDING).exists())
+            self.assertFalse(queue_qs.exclude(execution_type=PipelineExecutionType.SAST).exists())
+            self.assertFalse(queue_qs.exclude(state=PipelineLaunchRequestState.DISPATCHED).exists())
             self.assertTrue(queue_qs.filter(created__date__lt=today).exists())
 
             pipeline_qs = AISTPipeline.objects.filter(
@@ -121,11 +132,94 @@ class BootstrapDemoAccessCommandTests(TestCase):
             self.assertTrue(pipeline_qs.filter(project_version__version="main").exists())
             self.assertTrue(pipeline_qs.filter(project_version__version="release-v1").exists())
             self.assertTrue(pipeline_qs.filter(created__date__lt=today).exists())
-            durations = [int((pipeline.updated - pipeline.created).total_seconds()) for pipeline in pipeline_qs]
+            self.assertFalse(pipeline_qs.exclude(execution_type=PipelineExecutionType.SAST).exists())
+            self.assertFalse(pipeline_qs.filter(started__isnull=True).exists())
+            self.assertFalse(pipeline_qs.filter(finished_at__isnull=True).exists())
+            durations = [
+                int((pipeline.finished_at - pipeline.started).total_seconds())
+                for pipeline in pipeline_qs
+            ]
             self.assertTrue(all(duration >= 0 for duration in durations))
             self.assertIn(0, durations)
             self.assertIn(5 * 60, durations)
             self.assertIn(30 * 60, durations)
+
+            dast_bindings = DastProjectBinding.objects.filter(project=project)
+            self.assertGreaterEqual(dast_bindings.count(), 1)
+            self.assertFalse(dast_bindings.filter(enabled=False).exists())
+            self.assertTrue(dast_bindings.filter(autonomous_enabled=True).exists())
+
+            dast_configs = AISTProjectLaunchConfig.objects.filter(
+                project=project,
+                execution_type=PipelineExecutionType.DAST,
+            )
+            self.assertEqual(dast_configs.count(), dast_bindings.count())
+            self.assertFalse(dast_configs.filter(dast_binding__isnull=True).exists())
+            self.assertFalse(dast_configs.filter(trigger_project_version__isnull=True).exists())
+
+            dast_pipelines = AISTPipeline.objects.filter(
+                project=project,
+                id__startswith=f"demo-{spec.slug}-dast-run-",
+            )
+            self.assertEqual(dast_pipelines.count(), 3)
+            self.assertFalse(dast_pipelines.exclude(execution_type=PipelineExecutionType.DAST).exists())
+            self.assertFalse(dast_pipelines.filter(trigger_project_version__isnull=True).exists())
+            self.assertTrue(all(pipeline.tests.exists() for pipeline in dast_pipelines))
+            self.assertTrue(all(pipeline.launch_data.get("dast_binding_id") for pipeline in dast_pipelines))
+
+            manual_imports = AISTPipeline.objects.filter(
+                project=project,
+                id__startswith=f"demo-{spec.slug}-manual-import-",
+            )
+            self.assertEqual(manual_imports.count(), 3)
+            self.assertFalse(manual_imports.exclude(execution_type=PipelineExecutionType.MANUAL_IMPORT).exists())
+            self.assertTrue(all(pipeline.tests.exists() for pipeline in manual_imports))
+            self.assertTrue(all(pipeline.launch_data.get("source") == "manual_import" for pipeline in manual_imports))
+
+            self.assertTrue(
+                Finding.objects.filter(
+                    test__aist_pipelines__in=dast_pipelines,
+                    title__contains=f"[DAST-{spec.slug.upper()}-",
+                ).exists(),
+            )
+            self.assertTrue(
+                Finding.objects.filter(
+                    test__aist_pipelines__in=manual_imports,
+                    title__contains=f"[MANUAL-{spec.slug.upper()}-",
+                ).exists(),
+            )
+
+        self.assertTrue(
+            any(
+                project.dast_bindings.count() > 1
+                for project in projects
+            ),
+        )
+        for organization in Organization.objects.filter(name__in=ORG_NAMES):
+            self.assertEqual(
+                OrgIntegration.objects.filter(
+                    organization=organization,
+                    integration_type=OrgIntegrationType.DAST,
+                ).count(),
+                1,
+            )
+
+        counts_before_rerun = {
+            "bindings": DastProjectBinding.objects.count(),
+            "configs": AISTProjectLaunchConfig.objects.count(),
+            "pipelines": AISTPipeline.objects.count(),
+            "findings": Finding.objects.count(),
+        }
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        self.assertEqual(
+            counts_before_rerun,
+            {
+                "bindings": DastProjectBinding.objects.count(),
+                "configs": AISTProjectLaunchConfig.objects.count(),
+                "pipelines": AISTPipeline.objects.count(),
+                "findings": Finding.objects.count(),
+            },
+        )
 
     def test_each_demo_user_belongs_to_exactly_their_assigned_organization(self):
         """

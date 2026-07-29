@@ -9,12 +9,13 @@ import { getRoute } from "../lib/routes";
 import PageErrorState from "../components/PageErrorState";
 import PermissionGate from "../components/PermissionGate";
 import ImportPipelineDialog, { ImportUploadIcon } from "../components/ImportPipelineDialog";
-import { pipelineStatusBadgeClass } from "../lib/badgeStyles";
+import { pipelineStatusBadgeClass, pipelineStatusLabel } from "../lib/badgeStyles";
 import { dastOutcomeNarrative } from "../lib/dastNarrative";
 
 const statusOptions = [
   { value: "all", label: "All statuses" },
-  { value: "SAST_LAUNCHED", label: "Launched" },
+  { value: "ADMITTED", label: "Admitted" },
+  { value: "EXECUTING", label: "Executing" },
   { value: "UPLOADING_RESULTS", label: "Uploading Results" },
   { value: "FINDING_POSTPROCESSING", label: "Finding Post-processing" },
   { value: "WAITING_DEDUPLICATION_TO_FINISH", label: "Waiting Deduplication" },
@@ -226,7 +227,8 @@ export default function PipelinesPage() {
       total: pipelines.length,
       finished: (byStatus.FINISHED ?? 0) + (byStatus.FINISHED_WITH_WARNINGS ?? 0),
       inProgress:
-        (byStatus.SAST_LAUNCHED ?? 0) +
+        (byStatus.ADMITTED ?? 0) +
+        (byStatus.EXECUTING ?? 0) +
         (byStatus.UPLOADING_RESULTS ?? 0) +
         (byStatus.FINDING_POSTPROCESSING ?? 0) +
         (byStatus.WAITING_DEDUPLICATION_TO_FINISH ?? 0) +
@@ -357,7 +359,7 @@ export default function PipelinesPage() {
                           pipelineStatusBadgeClass(pipeline.status),
                         ].join(" ")}
                       >
-                        {pipeline.status}
+                        {pipelineStatusLabel(pipeline.status)}
                       </span>
                       <span className="text-xs text-slate-400">Pipeline {pipeline.id}</span>
                     </div>

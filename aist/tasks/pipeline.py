@@ -14,6 +14,7 @@ from django.utils import timezone
 from dojo.models import Finding, Test
 
 from aist.celery_signals import _update_action_run
+from aist.execution.adapters import UnknownLaunchAdapterError
 from aist.execution.dast_trigger import DastTrigger
 from aist.execution.dispatching import LaunchAcceptance, accept_published_launch
 from aist.execution.observability import (
@@ -21,6 +22,7 @@ from aist.execution.observability import (
     observe_dast_outcome,
     observe_provider_call,
 )
+from aist.execution.registry import execution_driver_registry
 from aist.integrations.claude import claude_auth_env
 from aist.integrations.dast_config import DastBindingParameters, DastTargetSnapshot
 from aist.integrations.dast_readiness import check_dast_binding_readiness
@@ -37,6 +39,7 @@ from aist.models import (
     AISTProjectVersion,
     AISTStatus,
     DastExecutionOutcome,
+    DastExecutionState,
     OrgIntegrationType,
     PipelineExecutionType,
     PipelineLaunchRequest,
@@ -61,7 +64,6 @@ from aist.utils.pipeline import (
     cleanup_terminal_project_build_paths,
     finish_pipeline,
     get_project_build_path,
-    is_terminal_pipeline_status,
     set_pipeline_status,
 )
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
@@ -82,7 +84,7 @@ from pipeline.dast import (  # type: ignore[import-not-found]  # noqa: E402
     DastStartCommand,
 )
 from pipeline.execution import execute_pipeline  # type: ignore[import-not-found]  # noqa: E402
-from pipeline.project_builder import configure_project_run_analyses  # type: ignore[import-not-found]  # noqa: E402
+from pipeline.sast_execution import SastExecutionInput  # type: ignore[import-not-found]  # noqa: E402
 
 from aist.internal_upload import upload_results_internal  # noqa: E402
 
@@ -90,8 +92,6 @@ from aist.internal_upload import upload_results_internal  # noqa: E402
 # Error messages/constants
 # -------------------------
 MSG_PROJECT_BUILD_PATH_NOT_SET = "Project build path for AIST is not setup"
-_ERR_SAST_TASK_TYPE = "run_sast_pipeline accepts only persisted SAST pipelines."
-_ERR_DAST_TASK_TYPE = "run_pipeline_execution accepts only persisted DAST pipelines."
 _ERR_DAST_RUNTIME = "Persisted DAST execution data is invalid."
 _DAST_EXECUTION_TIMEOUT = timedelta(hours=4)
 _DAST_UNREACHABLE_GRACE = timedelta(minutes=15)
@@ -112,18 +112,6 @@ class _DastRuntimeSpec:
     lead: object | None
 
 
-def _require_pipeline_execution_type(pipeline_id: str, execution_type: str, error_message: str) -> None:
-    with transaction.atomic():
-        actual = (
-            AISTPipeline.objects
-            .select_for_update()
-            .values_list("execution_type", flat=True)
-            .get(pk=pipeline_id)
-        )
-        if actual != execution_type:
-            raise ValueError(error_message)
-
-
 def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
     with transaction.atomic():
         pipeline = (
@@ -132,12 +120,14 @@ def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
             .select_related(
                 "project__product__prod_type",
                 "trigger_project_version",
+                "dast_execution_state",
                 "launch_request__dast_binding__target__integration__vpn_integration",
                 "launch_request__requester",
             )
             .get(pk=pipeline_id, execution_type=PipelineExecutionType.DAST)
         )
         launch_request = pipeline.launch_request
+        execution_state = pipeline.dast_execution_state
         binding = launch_request.dast_binding
         if (
             binding is None
@@ -183,20 +173,15 @@ def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
             raise ValueError(_ERR_DAST_RUNTIME)
 
         now = timezone.now()
-        if pipeline.external_execution_deadline is None:
-            pipeline.external_execution_deadline = now + _DAST_EXECUTION_TIMEOUT
-        pipeline.external_execution_outcome = DastExecutionOutcome.RUNNING
-        pipeline.started = now
-        set_pipeline_status(
-            pipeline,
-            AISTStatus.SAST_LAUNCHED,
-            update_fields_extra=["started", "external_execution_deadline", "external_execution_outcome"],
-        )
+        if execution_state.deadline is None:
+            execution_state.deadline = now + _DAST_EXECUTION_TIMEOUT
+        execution_state.outcome = DastExecutionOutcome.RUNNING
+        execution_state.save(update_fields=["deadline", "outcome", "updated"])
         recovery = DastRecoveryState(
             correlation_id=pipeline.id,
             idempotency_key=str(launch_request.task_id),
-            run_id=pipeline.external_run_id,
-            log_cursor=pipeline.external_log_cursor,
+            run_id=execution_state.run_id,
+            log_cursor=execution_state.log_cursor,
         )
         return _DastRuntimeSpec(
             gateway_url=config.gateway_url,
@@ -214,8 +199,8 @@ def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
             vpn_integration=integration.vpn_integration,
             recovery=recovery,
             allowed_repository_keys=frozenset(capability.repository_keys),
-            deadline_at=pipeline.external_execution_deadline,
-            stop_requested=pipeline.external_cancel_requested_at is not None,
+            deadline_at=execution_state.deadline,
+            stop_requested=execution_state.cancel_requested_at is not None,
             binding=binding,
             lead=launch_request.requester,
         )
@@ -230,17 +215,13 @@ def _persist_dast_execution_result(pipeline_id: str, result) -> None:
     }
     with transaction.atomic():
         pipeline = AISTPipeline.objects.select_for_update().get(pk=pipeline_id)
+        execution_state = DastExecutionState.objects.select_for_update().get(pipeline=pipeline)
         if result.recovery.correlation_id != pipeline.id:
             raise ValueError(_ERR_DAST_RUNTIME)
-        pipeline.external_run_id = result.recovery.run_id
-        pipeline.external_log_cursor = result.recovery.log_cursor
-        pipeline.external_execution_outcome = outcome_map[result.outcome.state]
-        pipeline.save(update_fields=[
-            "external_run_id",
-            "external_log_cursor",
-            "external_execution_outcome",
-            "updated",
-        ])
+        execution_state.run_id = result.recovery.run_id
+        execution_state.log_cursor = result.recovery.log_cursor
+        execution_state.outcome = outcome_map[result.outcome.state]
+        execution_state.save(update_fields=["run_id", "log_cursor", "outcome", "updated"])
 
 
 def _execute_dast_pipeline(pipeline_id: str, logger=None):
@@ -308,32 +289,17 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
     return result
 
 
-def _dast_retry_is_authorized(pipeline_id: str, task_id: str | None, retries: int) -> bool:
-    if retries < 1 or task_id is None:
-        return False
-    return AISTPipeline.objects.filter(
-        pk=pipeline_id,
-        execution_type=PipelineExecutionType.DAST,
-        run_task_id=str(task_id),
-        launch_request__state="DISPATCHED",
-        external_execution_outcome__in=[
-            DastExecutionOutcome.STOP_PENDING,
-            DastExecutionOutcome.UNREACHABLE,
-        ],
-    ).exists()
-
-
 def _dast_reconciliation_exhausted(pipeline_id: str) -> bool:
-    deadline = AISTPipeline.objects.filter(pk=pipeline_id).values_list(
-        "external_execution_deadline",
+    deadline = DastExecutionState.objects.filter(pipeline_id=pipeline_id).values_list(
+        "deadline",
         flat=True,
     ).first()
     return deadline is not None and timezone.now() >= deadline + _DAST_UNREACHABLE_GRACE
 
 
 def _mark_dast_unreachable(pipeline_id: str) -> None:
-    AISTPipeline.objects.filter(pk=pipeline_id).update(
-        external_execution_outcome=DastExecutionOutcome.UNREACHABLE,
+    DastExecutionState.objects.filter(pipeline_id=pipeline_id).update(
+        outcome=DastExecutionOutcome.UNREACHABLE,
     )
 
 
@@ -421,7 +387,7 @@ def attach_findings_and_finish(
     project version (and its GIT_HASH parent, if any), then hand off to
     postprocess_findings (dedup) or finish_pipeline directly when there are no findings.
 
-    Used by both run_sast_pipeline (after analyzer upload) and import_report (after
+    Used by both the SAST execution worker (after analyzer upload) and import_report (after
     manual report import, any scan_type) — the two pipeline-creation paths converge here
     once findings are attached to a Test, so this logic exists exactly once instead of
     being reimplemented per path.
@@ -484,92 +450,66 @@ def _run_dast_execution(task, pipeline_id: str, *, operation: str):
     return _handle_dast_execution_result(task, pipeline_id, result)
 
 
-@shared_task(bind=True)
-def run_pipeline_execution(self, pipeline_id: str, async_user=None) -> None:
-    """Execute one persisted standalone pipeline using its trusted execution type."""
-    del async_user
-    _require_pipeline_execution_type(
-        pipeline_id,
-        PipelineExecutionType.DAST,
-        _ERR_DAST_TASK_TYPE,
-    )
-    acceptance = accept_published_launch(
-        pipeline_id=pipeline_id,
-        task_id=getattr(self.request, "id", None),
-    )
-    if acceptance is LaunchAcceptance.REJECTED:
-        return None
-    if acceptance is LaunchAcceptance.DUPLICATE and not _dast_retry_is_authorized(
-        pipeline_id,
-        getattr(self.request, "id", None),
-        int(getattr(self.request, "retries", 0) or 0),
-    ):
-        return None
-    return _run_dast_execution(self, pipeline_id, operation="execute")
-
-
-@shared_task(bind=True)
-def reconcile_dast_execution(self, pipeline_id: str) -> None:
-    """Resume a persisted DAST run after worker loss without bypassing the shared executor."""
-    with transaction.atomic():
-        launch_request = (
-            PipelineLaunchRequest.objects
-            .select_for_update()
-            .filter(
-                pipeline_id=pipeline_id,
-                state=PipelineLaunchRequestState.DISPATCHED,
-                execution_type=PipelineExecutionType.DAST,
-            )
-            .first()
-        )
-        if launch_request is None:
-            return None
-        pipeline = AISTPipeline.objects.select_for_update().get(pk=pipeline_id)
-        if is_terminal_pipeline_status(pipeline.status):
-            return None
-        pipeline.run_task_id = str(self.request.id)
-        pipeline.save(update_fields=["run_task_id", "updated"])
-
-    return _run_dast_execution(self, pipeline_id, operation="reconcile")
-
-
-@shared_task(bind=True)
-def run_sast_pipeline(self, pipeline_id: str, params: dict, async_user=None) -> None:
-    """
-    Execute a SAST pipeline asynchronously.
-
-    This task coordinates the SAST pipeline by invoking the configure
-    and upload functions provided by the external ``sast-pipeline``
-    package. All progress is recorded in the database so that
-    connected clients can observe status changes and log output in real time.
-
-    :param pipeline_id: Primary key of the :class:`AISTPipeline` instance.
-    :param params: Dictionary of parameters collected from the form.
-    """
-    _require_pipeline_execution_type(
-        pipeline_id,
-        PipelineExecutionType.SAST,
-        _ERR_SAST_TASK_TYPE,
-    )
-    acceptance = accept_published_launch(
-        pipeline_id=pipeline_id,
-        task_id=getattr(self.request, "id", None),
-    )
-    if acceptance in {LaunchAcceptance.DUPLICATE, LaunchAcceptance.REJECTED}:
-        return
-
+def _run_sast_execution(task, pipeline_id: str):
+    del task
+    request = PipelineLaunchRequest.objects.get(pipeline_id=pipeline_id)
+    params = dict(request.params_snapshot)
+    if request.launch_config_id is not None:
+        params["launch_config_id"] = request.launch_config_id
     log_level = params.get("log_level", "INFO")
-    launch_config_id = params.get("launch_config_id")
     logger = install_pipeline_logging(pipeline_id, log_level)
-
     try:
-        _execute_sast_pipeline(pipeline_id, params, log_level, launch_config_id, logger, async_user)
+        return _execute_sast_pipeline(
+            pipeline_id,
+            params,
+            log_level,
+            request.launch_config_id,
+            logger,
+            request.requester,
+        )
     except Ignore:
         raise
     except Exception:
         logger.exception("Exception while running SAST pipeline (pipeline_id=%s)", pipeline_id)
         finish_pipeline(pipeline_id, degraded=True)
         raise
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkerExecutionRuntime:
+    task: object
+
+    def run_sast(self, pipeline_id: str):
+        return _run_sast_execution(self.task, pipeline_id)
+
+    def run_dast(self, pipeline_id: str):
+        return _run_dast_execution(self.task, pipeline_id, operation="execute")
+
+
+@shared_task(bind=True)
+def run_pipeline_execution(self, pipeline_id: str, async_user=None) -> None:
+    """Execute one persisted pipeline; the broker carries only ``pipeline_id``."""
+    del async_user
+    execution_type = AISTPipeline.objects.values_list("execution_type", flat=True).get(pk=pipeline_id)
+    try:
+        driver = execution_driver_registry.resolve(execution_type)
+    except UnknownLaunchAdapterError as exc:
+        detail = "Persisted pipeline execution type is not executable."
+        raise ValueError(detail) from exc
+    acceptance = accept_published_launch(
+        pipeline_id=pipeline_id,
+        task_id=getattr(self.request, "id", None),
+    )
+    if acceptance is LaunchAcceptance.REJECTED:
+        return None
+    if acceptance is LaunchAcceptance.DUPLICATE:
+        if not driver.allows_duplicate_delivery(
+            pipeline_id=pipeline_id,
+            task_id=getattr(self.request, "id", None),
+            retries=int(getattr(self.request, "retries", 0) or 0),
+        ):
+            return None
+    return driver.invoke(_WorkerExecutionRuntime(self), pipeline_id)
 
 
 def _execute_sast_pipeline(pipeline_id, params, log_level, launch_config_id, logger, async_user) -> None:
@@ -581,15 +521,13 @@ def _execute_sast_pipeline(pipeline_id, params, log_level, launch_config_id, log
             .get(id=pipeline_id)
         )
 
-        # protection from secondary launch
-        if not is_terminal_pipeline_status(pipeline.status):
+        # Worker acceptance is the only transition into EXECUTING. Any other
+        # state is either a duplicate delivery or an invalid lifecycle entry.
+        if pipeline.status != AISTStatus.EXECUTING:
             logger.info("Pipeline already in progress; skipping duplicate start.")
             return
 
-        pipeline.started = timezone.now()
-        set_pipeline_status(pipeline, AISTStatus.SAST_LAUNCHED, update_fields_extra=["started"])
-
-        params = PipelineArguments.from_dict(params)
+        params = PipelineArguments.from_dict(params).sast
 
     logger.info(f"Project version: {params.project_version}")
     param_project_version_id = (params.project_version or {}).get("id")
@@ -660,27 +598,34 @@ def _execute_sast_pipeline(pipeline_id, params, log_level, launch_config_id, log
             )
         vpn_network = f"container:{vpn_container}" if vpn_container else None
         with params.script_path_context() as script_path:
-            ld = PipelineLaunchData(configure_project_run_analyses(
-                script_path=script_path,
-                output_dir=output_dir,
-                languages=languages,
-                analyzer_config=analyzers_helper,
-                dockerfile_path=dockerfile_path,
-                context_dir=params.pipeline_src_path,
-                image_name=f"project-{project_name}-builder" if project_name else "project-builder",
-                project_path=project_build_path,
-                force_rebuild=False,
-                rebuild_images=rebuild_images,
-                version=project_version,
-                log_level=log_level,
-                min_time_class=time_class_level or "",
-                analyzers=analyzers,
-                pipeline_id=pipeline_id,
-                additional_env=params.additional_environments,
-                network=vpn_network,
-                bridge_client=bridge_client,
-                agent_bridge_runtime_env=agent_runtime_env,
-            ))
+            execution_result = execute_pipeline(
+                PipelineExecutionType.SAST,
+                SastExecutionInput(
+                    execution_id=pipeline_id,
+                    runtime_arguments={
+                        "script_path": script_path,
+                        "output_dir": output_dir,
+                        "languages": languages,
+                        "analyzer_config": analyzers_helper,
+                        "dockerfile_path": dockerfile_path,
+                        "context_dir": params.pipeline_src_path,
+                        "image_name": f"project-{project_name}-builder" if project_name else "project-builder",
+                        "project_path": project_build_path,
+                        "force_rebuild": False,
+                        "rebuild_images": rebuild_images,
+                        "version": project_version,
+                        "log_level": log_level,
+                        "min_time_class": time_class_level or "",
+                        "analyzers": analyzers,
+                        "pipeline_id": pipeline_id,
+                        "additional_env": params.additional_environments,
+                        "network": vpn_network,
+                        "bridge_client": bridge_client,
+                        "agent_bridge_runtime_env": agent_runtime_env,
+                    },
+                ),
+            )
+            ld = PipelineLaunchData(execution_result.launch_data)
 
     ld.languages = languages
     ld.ai = {

@@ -520,7 +520,14 @@ class AISTProjectActiveScriptAPI(AISTAPIView):
 
 
 def project_meta_payload(project: AISTProject) -> dict:
-    versions = [{"id": str(v.id), "label": str(v)} for v in project.versions.all()]
+    versions = [
+        {
+            "id": str(version.id),
+            "label": str(version),
+            "version_type": version.version_type,
+        }
+        for version in project.versions.all()
+    ]
 
     integration_defaults: dict[str, dict] = {}
     for itype in (OrgIntegrationType.SLACK, OrgIntegrationType.EMAIL):

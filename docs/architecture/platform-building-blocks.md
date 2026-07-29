@@ -48,17 +48,20 @@ already-created pipeline.
 
 The dashed arrows leave ordinary application processing:
 
+- the worker calls the shared execution package, whose registry selects a SAST
+  run or a standalone provider;
 - a SAST run creates its workspace, builder, and analyzer containers;
-- a standalone connector communicates with an external execution provider;
+- a standalone run creates a connector that communicates with its external
+  provider;
 - the local AI bridge creates an isolated CLI operation;
 - that AI operation can use context-extractor tools, which resolve the active
   pipeline through the internal API and read its workspace through a read-only
   mount.
 
-The execution and analysis services do not decide who may access a project.
-They receive a pipeline identity that has already passed admission, and their
-results become product state only through the platform import or callback
-boundary.
+The execution package runs inside the worker rather than as a long-lived
+service. Its operation containers do not decide who may access a project. They
+receive a pipeline identity that has already passed admission, and their results
+become product state only through the platform import or callback boundary.
 
 ## Follow one operation
 
@@ -69,5 +72,5 @@ coordination blocks separate from execution blocks even when they run on the
 same host.
 
 The sequence inside one pipeline is described in
-[pipeline execution](../product/pipeline-execution.md). The SAST-specific
-runtime is described in [SAST pipeline runtime](sast-pipeline-runtime.md).
+[pipeline execution](../product/pipeline-execution.md). The shared execution
+boundary is described in [pipeline execution runtime](sast-pipeline-runtime.md).

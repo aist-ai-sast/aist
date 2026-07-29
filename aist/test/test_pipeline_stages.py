@@ -43,12 +43,20 @@ def _mk_pipeline(**overrides):
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
 
+
+def _set_status(pipeline, status, **_kwargs):
+    pipeline.status = status
+    pipeline.save(update_fields=["status", "updated"])
+    return True
+
+
 # ---- after_upload_enrich_and_watch ------------------------------------------
 
 
 def _call_after_upload_enrich(*, enriched_count_list, pipeline, test_ids, log_level="INFO"):
     with patch("aist.tasks.enrich.install_pipeline_logging", return_value=DummyLogger()), \
          patch("aist.tasks.enrich.AISTPipeline") as mock_model, \
+         patch("aist.tasks.enrich.set_pipeline_status", side_effect=_set_status), \
          patch("aist.tasks.ai.auto_push_to_ai_if_configured") as mock_auto_push, \
          patch("aist.tasks.regression.detect_regressions_for_pipeline") as mock_regression:
 
@@ -104,6 +112,7 @@ def _call_watch_dedup(*, pipeline, progress_qs=None, remaining_counts=None, dupl
          patch("aist.tasks.dedup.TestDeduplicationProgress") as mock_progress, \
          patch("aist.tasks.dedup.AISTTestMeta") as mock_meta, \
          patch("aist.tasks.dedup.Finding") as mock_finding, \
+         patch("aist.tasks.dedup.set_pipeline_status", side_effect=_set_status), \
          patch("aist.tasks.enrich.make_enrich_chord", return_value=mock_chord_sig):
         mock_model.objects.get.return_value = pipeline
         mock_model.objects.select_for_update.return_value.get.return_value = pipeline
@@ -304,6 +313,7 @@ class PushRequestToAITests(TestCase):
     def test_push_success_transitions_to_waiting_result(self):
         with patch("aist.tasks.ai.requests.post") as mock_post, \
              patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()), \
+             patch("aist.tasks.ai.set_pipeline_status", side_effect=_set_status), \
              patch("aist.tasks.ai.AISTPipeline") as mock_model:
             pipeline = _mk_pipeline(status="PUSH_TO_AI")
             sfu = mock_model.objects.select_for_update.return_value

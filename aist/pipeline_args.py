@@ -15,7 +15,16 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 from aist.ai_filter import validate_and_normalize_filter
-from aist.models import AISTProject, AISTProjectScript, AISTProjectVersion, VersionType
+from aist.integrations.dast_config import DastBindingParameters
+from aist.models import (
+    AISTProject,
+    AISTProjectLaunchConfig,
+    AISTProjectScript,
+    AISTProjectVersion,
+    DastProjectBinding,
+    PipelineExecutionType,
+    VersionType,
+)
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 _logger = logging.getLogger(__name__)
@@ -26,7 +35,7 @@ MSG_DOCKERFILE_NOT_FOUND = "Dockerfile does not exist"
 
 
 @dataclass
-class PipelineArguments:
+class SastPipelineArguments:
     project: AISTProject
     project_version: dict = field(default_factory=dict)
     selected_analyzers: list[str] = field(default_factory=list)
@@ -144,7 +153,7 @@ class PipelineArguments:
 
         normalized = dict(raw_params)
 
-        # Always pin project_id here (so run_sast_pipeline can reconstruct args)
+        # Always pin project_id so the generic execution worker can reconstruct arguments.
         normalized["project_id"] = project.id
 
         # ---- project_version ----
@@ -221,7 +230,7 @@ class PipelineArguments:
 
         if project.repository:
             env["REPO_URL"] = project.repository.clone_url
-        env["PROJECT_NAME"] = PipelineArguments.normalize_project_name(project)
+        env["PROJECT_NAME"] = SastPipelineArguments.normalize_project_name(project)
         normalized["env"] = env
 
         # ---- AI triage type (optional per-launch override) ----
@@ -257,7 +266,7 @@ class PipelineArguments:
         return normalized
 
     @classmethod
-    def from_dict(cls, data: dict) -> PipelineArguments:
+    def from_dict(cls, data: dict) -> SastPipelineArguments:
         """
         Build PipelineArguments instance from dictionary.
         The dictionary must contain `project_id` instead of `project`.
@@ -390,3 +399,171 @@ class PipelineArguments:
             msg = MSG_DOCKERFILE_NOT_FOUND
             raise RuntimeError(msg)
         return str(dockerfile_path)
+
+
+@dataclass(frozen=True, slots=True)
+class DastPipelineArguments:
+    project: AISTProject
+    binding: DastProjectBinding
+    trigger_project_version: AISTProjectVersion
+    parameters: dict
+    capability: dict
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        project: AISTProject,
+        binding: DastProjectBinding,
+        trigger_project_version: AISTProjectVersion,
+        raw_parameters: dict,
+    ) -> DastPipelineArguments:
+        if binding.project_id != project.pk:
+            msg = "DAST binding must belong to the launch project."
+            raise ValueError(msg)
+        if not binding.enabled:
+            msg = "DAST binding must be enabled."
+            raise ValueError(msg)
+        if trigger_project_version.project_id != project.pk:
+            msg = "DAST trigger version must belong to the launch project."
+            raise ValueError(msg)
+        if trigger_project_version.version_type not in {VersionType.GIT_BRANCH, VersionType.GIT_HASH}:
+            msg = "DAST trigger version must be a Git branch or Git hash."
+            raise ValueError(msg)
+        target = binding.target.get_snapshot()
+        parameters = DastBindingParameters.from_snapshot(
+            raw_parameters,
+            target=target,
+        ).to_snapshot()
+        return cls(
+            project=project,
+            binding=binding,
+            trigger_project_version=trigger_project_version,
+            parameters=parameters,
+            capability=target.to_snapshot(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineArguments:
+
+    """
+    Execution-neutral, in-memory launch envelope.
+
+    Exactly one discriminated payload is present. Saved presets and ephemeral
+    launches both become this value before the durable request is written.
+    """
+
+    project: AISTProject
+    payload: SastPipelineArguments | DastPipelineArguments
+
+    def __post_init__(self) -> None:
+        if self.project.pk is None or self.payload.project.pk != self.project.pk:
+            msg = "Pipeline arguments payload must belong to the launch project."
+            raise ValueError(msg)
+
+    @property
+    def execution_type(self) -> PipelineExecutionType:
+        if isinstance(self.payload, SastPipelineArguments):
+            return PipelineExecutionType.SAST
+        return PipelineExecutionType.DAST
+
+    @property
+    def sast(self) -> SastPipelineArguments:
+        if not isinstance(self.payload, SastPipelineArguments):
+            msg = "DAST pipeline arguments do not contain a SAST payload."
+            raise TypeError(msg)
+        return self.payload
+
+    @property
+    def dast(self) -> DastPipelineArguments:
+        if not isinstance(self.payload, DastPipelineArguments):
+            msg = "SAST pipeline arguments do not contain a DAST payload."
+            raise TypeError(msg)
+        return self.payload
+
+    @property
+    def effective_project_version(self) -> AISTProjectVersion | None:
+        if isinstance(self.payload, DastPipelineArguments):
+            return self.payload.trigger_project_version
+        version_id = (self.payload.project_version or {}).get("id")
+        if not version_id:
+            return None
+        return AISTProjectVersion.objects.filter(pk=version_id, project=self.project).first()
+
+    @property
+    def params_snapshot(self) -> dict:
+        if isinstance(self.payload, DastPipelineArguments):
+            return dict(self.payload.parameters)
+        return self.normalize_params(
+            project=self.project,
+            raw_params={
+                "project_version": dict(self.payload.project_version),
+                "analyzers": list(self.payload.selected_analyzers),
+                "selected_languages": list(self.payload.selected_languages),
+                "log_level": self.payload.log_level,
+                "rebuild_images": self.payload.rebuild_images,
+                "ai_mode": self.payload.ai_mode,
+                "ai_triage_type": self.payload.ai_triage_type,
+                "ai_filter_snapshot": self.payload.ai_filter_snapshot,
+                "time_class_level": self.payload.time_class_level,
+                "env": dict(self.payload.additional_environments),
+            },
+        )
+
+    @property
+    def capability_snapshot(self) -> dict:
+        if isinstance(self.payload, DastPipelineArguments):
+            return dict(self.payload.capability)
+        return {}
+
+    @classmethod
+    def for_sast(cls, *, project: AISTProject, raw_params: dict) -> PipelineArguments:
+        normalized = SastPipelineArguments.normalize_params(project=project, raw_params=raw_params)
+        return cls(project=project, payload=SastPipelineArguments.from_dict(normalized))
+
+    @classmethod
+    def for_dast(
+        cls,
+        *,
+        project: AISTProject,
+        binding: DastProjectBinding,
+        trigger_project_version: AISTProjectVersion,
+        raw_params: dict,
+    ) -> PipelineArguments:
+        return cls(
+            project=project,
+            payload=DastPipelineArguments.build(
+                project=project,
+                binding=binding,
+                trigger_project_version=trigger_project_version,
+                raw_parameters=raw_params,
+            ),
+        )
+
+    @classmethod
+    def from_launch_config(cls, config: AISTProjectLaunchConfig) -> PipelineArguments:
+        if config.execution_type == PipelineExecutionType.SAST:
+            return cls.for_sast(project=config.project, raw_params=dict(config.params or {}))
+        if config.dast_binding_id is None or config.trigger_project_version_id is None:
+            msg = "DAST launch config requires a binding and trigger version."
+            raise ValueError(msg)
+        return cls.for_dast(
+            project=config.project,
+            binding=config.dast_binding,
+            trigger_project_version=config.trigger_project_version,
+            raw_params=dict(config.params or {}),
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> PipelineArguments:
+        project = AISTProject.objects.get(pk=data["project_id"])
+        return cls.for_sast(project=project, raw_params=data)
+
+    @classmethod
+    def normalize_project_name(cls, project: AISTProject) -> str:
+        return SastPipelineArguments.normalize_project_name(project)
+
+    @classmethod
+    def normalize_params(cls, *, project: AISTProject, raw_params: dict) -> dict:
+        return SastPipelineArguments.normalize_params(project=project, raw_params=raw_params)

@@ -10,6 +10,8 @@ from django.utils import timezone
 from aist.integrations.dast_config import DastTargetSnapshot
 from aist.models import (
     AISTProjectLaunchConfig,
+    DastIntegrationState,
+    DastIntegrationValidationState,
     DastProjectBinding,
     LaunchSchedule,
     Organization,
@@ -62,6 +64,7 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
             integration_type=OrgIntegrationType.DAST,
             name="Scheduled DAST",
             config=_integration_config("scheduled-dast"),
+            secret="scheduled-runtime-token",  # noqa: S106 -- test fixture
             is_active=True,
         )
         target = refresh_dast_targets(
@@ -69,17 +72,27 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
             [DastTargetSnapshot.from_snapshot(_target_wire("scheduled-api"))],
             seen_at=timezone.now(),
         )[0]
+        DastIntegrationState.objects.create(
+            integration=integration,
+            validation_state=DastIntegrationValidationState.READY,
+            validated_at=timezone.now(),
+            contract_version="2.0",
+            capabilities_etag="scheduled-catalog",
+            capabilities_synced_at=timezone.now(),
+        )
         binding = DastProjectBinding.objects.create(
             project=self.project,
             target=target,
             source_repo_key="scheduled-api",
             parameter_snapshot={"depth": "light"},
+            autonomous_enabled=True,
         )
         config = AISTProjectLaunchConfig.objects.create(
             project=self.project,
             name="Scheduled DAST config",
             execution_type=PipelineExecutionType.DAST,
             dast_binding=binding,
+            trigger_project_version=self.pv,
             params={"depth": "light"},
         )
         schedule = LaunchSchedule.objects.create(
@@ -102,25 +115,23 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
     @patch("aist.tasks.launch_schedule.logger")
     def test_invalid_cron_expression_is_logged_and_skipped(self, mock_logger):
         _, sched = self._mk_config_and_schedule(cron_expression="not a cron")
+        LaunchSchedule.objects.filter(pk=sched.pk).update(next_run_at=timezone.now())
 
         process_launch_schedules()
 
         self.assertEqual(PipelineLaunchRequest.objects.count(), 0)
         sched.refresh_from_db()
         self.assertIsNone(sched.last_run_at)
-        mock_logger.exception.assert_called()  # ensures exception branch executed
+        self.assertEqual(sched.last_error_code, "INVALID_CRON")
+        self.assertIn("invalid", sched.last_error_detail)
+        mock_logger.exception.assert_not_called()
 
     def test_not_due_when_last_run_at_same_tick(self):
         _, sched = self._mk_config_and_schedule()
 
         now = timezone.now()
-        due_time = now - timedelta(minutes=5)
-
-        # last_run_at >= due_time => already processed tick => skip
-        LaunchSchedule.objects.filter(id=sched.id).update(last_run_at=now)
-
-        with patch.object(LaunchSchedule, "get_next_run_time", return_value=due_time):
-            process_launch_schedules()
+        LaunchSchedule.objects.filter(id=sched.id).update(last_run_at=now, next_run_at=now + timedelta(minutes=5))
+        process_launch_schedules()
 
         self.assertEqual(PipelineLaunchRequest.objects.count(), 0)
 
@@ -130,13 +141,12 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
         now = timezone.now()
         due_time = now - timedelta(minutes=5)
 
-        with (
-            patch("aist.tasks.launch_schedule.timezone.now", return_value=now),
-            patch.object(LaunchSchedule, "get_next_run_time", return_value=due_time),
-        ):
+        LaunchSchedule.objects.filter(pk=sched.pk).update(next_run_at=due_time)
+        with patch("aist.tasks.launch_schedule.timezone.now", return_value=now):
             process_launch_schedules()
 
-        self.assertEqual(PipelineLaunchRequest.objects.count(), 1)
+        sched.refresh_from_db()
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 1, sched.last_error_detail)
         item = PipelineLaunchRequest.objects.get()
         self.assertEqual(item.project_id, self.project.id)
         self.assertEqual(item.schedule_id, sched.id)
@@ -144,22 +154,21 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
         self.assertFalse(item.dispatched)
 
         sched.refresh_from_db()
-        self.assertEqual(sched.last_run_at, now)
+        self.assertEqual(sched.last_run_at, due_time)
 
     def test_due_dast_schedule_freezes_its_exact_binding_and_replays_one_tick(self):
         binding, config, schedule = self._mk_dast_config_and_schedule()
         now = timezone.now()
         due_time = now - timedelta(minutes=5)
 
-        with (
-            patch("aist.tasks.launch_schedule.timezone.now", return_value=now),
-            patch.object(LaunchSchedule, "get_next_run_time", return_value=due_time),
-        ):
+        LaunchSchedule.objects.filter(pk=schedule.pk).update(next_run_at=due_time)
+        with patch("aist.tasks.launch_schedule.timezone.now", return_value=now):
             process_launch_schedules()
-            LaunchSchedule.objects.filter(pk=schedule.pk).update(last_run_at=None)
+            LaunchSchedule.objects.filter(pk=schedule.pk).update(last_run_at=None, next_run_at=due_time)
             process_launch_schedules()
 
-        self.assertEqual(PipelineLaunchRequest.objects.count(), 1)
+        schedule.refresh_from_db()
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 1, schedule.last_error_detail)
         request = PipelineLaunchRequest.objects.get()
         self.assertEqual(request.execution_type, PipelineExecutionType.DAST)
         self.assertEqual(request.dast_binding_id, binding.pk)
@@ -175,13 +184,13 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
         second_due_time = now - timedelta(minutes=5)
 
         with patch("aist.tasks.launch_schedule.timezone.now", return_value=now):
-            with patch.object(LaunchSchedule, "get_next_run_time", return_value=first_due_time):
-                process_launch_schedules()
-            LaunchSchedule.objects.filter(pk=schedule.pk).update(last_run_at=None)
-            with patch.object(LaunchSchedule, "get_next_run_time", return_value=second_due_time):
-                process_launch_schedules()
+            LaunchSchedule.objects.filter(pk=schedule.pk).update(next_run_at=first_due_time)
+            process_launch_schedules()
+            LaunchSchedule.objects.filter(pk=schedule.pk).update(last_run_at=None, next_run_at=second_due_time)
+            process_launch_schedules()
 
-        self.assertEqual(PipelineLaunchRequest.objects.count(), 2)
+        schedule.refresh_from_db()
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 2, schedule.last_error_detail)
         pending = PipelineLaunchRequest.objects.get(state=PipelineLaunchRequestState.PENDING)
         superseded = PipelineLaunchRequest.objects.get(state=PipelineLaunchRequestState.SUPERSEDED)
         self.assertEqual(superseded.superseded_by_id, pending.pk)

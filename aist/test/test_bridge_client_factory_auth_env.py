@@ -5,7 +5,7 @@ The factory ``build_bridge_client_from_settings`` accepts a generic
 ``auth_env`` kwarg and forwards it to ``BridgeClient``. Per architectural
 invariant I4, the factory itself MUST NOT resolve integrations or
 touch the DB — that responsibility lives at the call site (typically
-``aist.tasks.pipeline.run_sast_pipeline`` / ``aist.tasks.claude``).
+the generic pipeline execution task / ``aist.tasks.claude``).
 """
 from __future__ import annotations
 

@@ -12,13 +12,13 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from aist.execution.contracts import PipelineTaskName
 from aist.execution.leases import DEFAULT_EXECUTION_LEASE_POLICY, ExecutionLeasePolicy
+from aist.execution.registry import execution_driver_registry
 from aist.models import (
     AISTPipeline,
     AISTStatus,
-    DastExecutionOutcome,
     PipelineExecutionLease,
-    PipelineExecutionType,
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
@@ -36,7 +36,7 @@ ORPHAN_PIPELINE = "ORPHAN_PIPELINE"
 EXECUTION_LEASE_MISSING = "EXECUTION_LEASE_MISSING"
 OUTBOX_LEASE_RENEWED = "OUTBOX_LEASE_RENEWED"
 DEAD_EXECUTION_TASK = "DEAD_EXECUTION_TASK"
-DAST_EXECUTION_RESUMED = "DAST_EXECUTION_RESUMED"
+EXECUTION_RECOVERY_REPUBLISHED = "EXECUTION_RECOVERY_REPUBLISHED"
 TERMINAL_LEASE_RELEASED = "TERMINAL_LEASE_RELEASED"
 
 _STALE_CLAIM_DETAIL = "A stale dispatcher claim was returned to the durable launch queue."
@@ -45,7 +45,7 @@ _ORPHAN_PIPELINE_DETAIL = "The launch request no longer has its committed pipeli
 _MISSING_LEASE_DETAIL = "The committed launch outbox no longer owns an active execution lease."
 _RENEWED_OUTBOX_DETAIL = "The committed outbox lease was renewed while broker delivery remains recoverable."
 _DEAD_TASK_DETAIL = "The dispatched execution task became terminal before its pipeline completed."
-_DAST_RESUMED_DETAIL = "A non-terminal DAST provider run was resumed through its shared executor."
+_RECOVERY_REPUBLISHED_DETAIL = "A recoverable provider run was republished through the generic executor."
 _TERMINAL_RELEASE_DETAIL = "A lease left behind by a terminal pipeline was released."
 
 _OUTBOX_STATES = {
@@ -68,7 +68,7 @@ class LaunchReconciliationStats:
     failed_orphans: int = 0
     released_leases: int = 0
     reconciled_dead_tasks: int = 0
-    resumed_dast_executions: int = 0
+    resumed_executions: int = 0
     renewed_live_leases: int = 0
     skipped_live_owners: int = 0
 
@@ -316,30 +316,38 @@ def _reconcile_locked_request(
             stats.skipped_live_owners += 1
         stats.renewed_live_leases += _renew_leases(leases, now=now, policy=lease_policy)
         return
-    if (
-        pipeline.execution_type == PipelineExecutionType.DAST
-        and pipeline.external_execution_outcome in {
-            DastExecutionOutcome.STOP_PENDING,
-            DastExecutionOutcome.UNREACHABLE,
-        }
-        and leases
-    ):
-        reconcile_task_id = uuid.uuid4().hex
-        pipeline.run_task_id = reconcile_task_id
+    driver = execution_driver_registry.resolve(pipeline.execution_type)
+    if driver.should_recover(pipeline) and leases:
+        recovery_task_id = uuid.uuid4()
+        pipeline.run_task_id = str(recovery_task_id)
         pipeline.save(update_fields=["run_task_id", "updated"])
         for lease in leases:
             lease.heartbeat_at = now
             lease.expires_at = now + lease_policy.ttl
             lease.save(update_fields=["heartbeat_at", "expires_at"])
-        _audit_request(request, code=DAST_EXECUTION_RESUMED, detail=_DAST_RESUMED_DETAIL)
+        request.task_id = recovery_task_id
+        request.task_name = PipelineTaskName.RUN_PIPELINE_EXECUTION.value
+        request.state = PipelineLaunchRequestState.PUBLISHED
+        request.dispatched_at = None
+        request.failure_code = EXECUTION_RECOVERY_REPUBLISHED
+        request.failure_detail = _RECOVERY_REPUBLISHED_DETAIL
+        request.save(update_fields=[
+            "task_id",
+            "task_name",
+            "state",
+            "dispatched_at",
+            "failure_code",
+            "failure_detail",
+            "updated",
+        ])
         transaction.on_commit(
             lambda: current_app.send_task(
-                "aist.tasks.pipeline.reconcile_dast_execution",
+                PipelineTaskName.RUN_PIPELINE_EXECUTION.value,
                 args=[pipeline.id],
-                task_id=reconcile_task_id,
+                task_id=str(recovery_task_id),
             ),
         )
-        stats.resumed_dast_executions += 1
+        stats.resumed_executions += 1
         return
     _mark_pipeline_reconciled_failure(
         pipeline,

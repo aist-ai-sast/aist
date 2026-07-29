@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from django.db import transaction
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, transaction
 from django_filters import rest_framework as django_filters
-from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_field
 from rest_framework import serializers, status
 from rest_framework.response import Response
 
@@ -17,7 +18,7 @@ from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
 from aist.integrations.dast_config import DastBindingParameters, DastConfigError
-from aist.integrations.dast_readiness import check_dast_binding_readiness
+from aist.integrations.dast_readiness import check_dast_launch_readiness
 from aist.models import (
     AISTLaunchConfigAction,
     AISTProject,
@@ -26,11 +27,34 @@ from aist.models import (
     AISTStatus,
     DastProjectBinding,
     PipelineExecutionType,
+    VersionType,
 )
 from aist.pipeline_args import PipelineArguments
 
 
 class LaunchConfigSerializer(serializers.ModelSerializer):
+    trigger_project_version_id = serializers.PrimaryKeyRelatedField(
+        source="trigger_project_version",
+        read_only=True,
+        allow_null=True,
+    )
+    trigger_project_version_label = serializers.SerializerMethodField()
+    dast_target_label = serializers.CharField(
+        source="dast_binding.target.display_name",
+        read_only=True,
+        allow_null=True,
+    )
+    dast_source_repository = serializers.CharField(
+        source="dast_binding.source_repo_key",
+        read_only=True,
+        allow_null=True,
+    )
+
+    def get_trigger_project_version_label(self, obj: AISTProjectLaunchConfig) -> str | None:
+        if obj.trigger_project_version_id is None:
+            return None
+        return obj.trigger_project_version.version
+
     class Meta:
         model = AISTProjectLaunchConfig
         fields = [
@@ -38,6 +62,10 @@ class LaunchConfigSerializer(serializers.ModelSerializer):
             "project",
             "execution_type",
             "dast_binding",
+            "dast_target_label",
+            "dast_source_repository",
+            "trigger_project_version_id",
+            "trigger_project_version_label",
             "name",
             "description",
             "params",
@@ -64,6 +92,13 @@ class LaunchConfigCreateRequestSerializer(serializers.Serializer):
         allow_null=True,
         write_only=True,
     )
+    trigger_project_version_id = serializers.PrimaryKeyRelatedField(
+        source="trigger_project_version",
+        queryset=AISTProjectVersion.objects.none(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
 
     def to_internal_value(self, data):
         unknown = set(data) - set(self.fields)
@@ -76,19 +111,31 @@ class LaunchConfigCreateRequestSerializer(serializers.Serializer):
         project = self.context.get("project")
         if project is not None:
             fields["dast_binding_id"].queryset = project.dast_bindings.select_related("target")
+            fields["trigger_project_version_id"].queryset = project.versions.filter(
+                version_type__in=[VersionType.GIT_BRANCH, VersionType.GIT_HASH],
+            )
         return fields
 
     def validate(self, attrs):
         execution_type = attrs["execution_type"]
         binding = attrs.get("dast_binding")
+        trigger = attrs.get("trigger_project_version")
         if execution_type == PipelineExecutionType.SAST:
             if binding is not None:
                 raise serializers.ValidationError({"dast_binding_id": "SAST launch config cannot select a DAST binding."})
+            if trigger is not None:
+                raise serializers.ValidationError({
+                    "trigger_project_version_id": "SAST launch config cannot select a DAST trigger version.",
+                })
             return attrs
         if binding is None:
             raise serializers.ValidationError({"dast_binding_id": "DAST launch config requires an explicit binding."})
         if not binding.enabled:
             raise serializers.ValidationError({"dast_binding_id": "DAST binding must be enabled."})
+        if trigger is None:
+            raise serializers.ValidationError({
+                "trigger_project_version_id": "DAST launch config requires a Git trigger version.",
+            })
         try:
             attrs["params"] = DastBindingParameters.from_snapshot(
                 attrs["params"],
@@ -100,9 +147,74 @@ class LaunchConfigCreateRequestSerializer(serializers.Serializer):
 
 
 class LaunchConfigUpdateRequestSerializer(serializers.ModelSerializer):
+    dast_binding_id = serializers.PrimaryKeyRelatedField(
+        source="dast_binding",
+        queryset=DastProjectBinding.objects.none(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
+    trigger_project_version_id = serializers.PrimaryKeyRelatedField(
+        source="trigger_project_version",
+        queryset=AISTProjectVersion.objects.none(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
+
     class Meta:
         model = AISTProjectLaunchConfig
-        fields = ["name", "description", "is_default", "params"]
+        fields = [
+            "name",
+            "description",
+            "is_default",
+            "params",
+            "dast_binding_id",
+            "trigger_project_version_id",
+        ]
+
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.instance is not None:
+            fields["dast_binding_id"].queryset = self.instance.project.dast_bindings.select_related("target")
+            fields["trigger_project_version_id"].queryset = self.instance.project.versions.filter(
+                version_type__in=[VersionType.GIT_BRANCH, VersionType.GIT_HASH],
+            )
+        return fields
+
+    def validate(self, attrs):
+        if self.instance is None:
+            return attrs
+        binding = attrs.get("dast_binding", self.instance.dast_binding)
+        trigger = attrs.get("trigger_project_version", self.instance.trigger_project_version)
+        if self.instance.execution_type == PipelineExecutionType.SAST:
+            if binding is not None:
+                raise serializers.ValidationError({
+                    "dast_binding_id": "SAST launch config cannot select a DAST binding.",
+                })
+            if trigger is not None:
+                raise serializers.ValidationError({
+                    "trigger_project_version_id": "SAST launch config cannot select a DAST trigger version.",
+                })
+            return attrs
+        if binding is None:
+            raise serializers.ValidationError({
+                "dast_binding_id": "DAST launch config requires an explicit binding.",
+            })
+        if not binding.enabled:
+            raise serializers.ValidationError({"dast_binding_id": "DAST binding must be enabled."})
+        if trigger is None:
+            raise serializers.ValidationError({
+                "trigger_project_version_id": "DAST launch config requires a Git trigger version.",
+            })
+        try:
+            attrs["params"] = DastBindingParameters.from_snapshot(
+                attrs.get("params", self.instance.params),
+                target=binding.target.get_snapshot(),
+            ).to_snapshot()
+        except DastConfigError as exc:
+            raise serializers.ValidationError({"params": str(exc)}) from exc
+        return attrs
 
     def to_internal_value(self, data):
         unknown = set(data) - set(self.fields)
@@ -116,14 +228,6 @@ class LaunchConfigUpdateRequestSerializer(serializers.ModelSerializer):
         if not isinstance(value, dict):
             msg = "params must be a JSON object"
             raise serializers.ValidationError(msg)
-        if self.instance is not None and self.instance.execution_type == PipelineExecutionType.DAST:
-            try:
-                return DastBindingParameters.from_snapshot(
-                    value,
-                    target=self.instance.dast_binding.target.get_snapshot(),
-                ).to_snapshot()
-            except DastConfigError as exc:
-                raise serializers.ValidationError(str(exc)) from exc
         return value
 
 
@@ -164,14 +268,15 @@ class LaunchConfigStartRequestSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         config = self.context.get("config")
-        if (
-            config is not None
-            and config.execution_type == PipelineExecutionType.DAST
-            and attrs.get("project_version_id") is None
-        ):
-            raise serializers.ValidationError(
-                {"project_version_id": "DAST launches require a source project version."},
-            )
+        if config is not None and config.execution_type == PipelineExecutionType.DAST:
+            if attrs.get("project_version_id") is not None:
+                raise serializers.ValidationError({
+                    "project_version_id": "DAST saved launches use the trigger version stored in the config.",
+                })
+            if attrs.get("params"):
+                raise serializers.ValidationError({
+                    "params": "DAST saved launches use the parameters stored in the config.",
+                })
         return attrs
 
 
@@ -210,6 +315,34 @@ class LaunchConfigDashboardSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source="project.product.name", read_only=True)
     organization_id = serializers.IntegerField(source="project.organization_id", read_only=True)
     organization_name = serializers.CharField(source="project.organization.name", read_only=True)
+    trigger_project_version_id = serializers.PrimaryKeyRelatedField(
+        source="trigger_project_version",
+        read_only=True,
+        allow_null=True,
+    )
+    trigger_project_version_label = serializers.CharField(
+        source="trigger_project_version.version",
+        read_only=True,
+        allow_null=True,
+    )
+    dast_target_label = serializers.CharField(source="dast_binding.target.display_name", read_only=True, allow_null=True)
+    dast_source_repository = serializers.CharField(source="dast_binding.source_repo_key", read_only=True, allow_null=True)
+    readiness = serializers.SerializerMethodField()
+
+    @extend_schema_field(serializers.JSONField(allow_null=True))
+    def get_readiness(self, obj: AISTProjectLaunchConfig) -> dict[str, object] | None:
+        if obj.execution_type != PipelineExecutionType.DAST:
+            return None
+        try:
+            return check_dast_launch_readiness(PipelineArguments.from_launch_config(obj)).to_snapshot()
+        except (DastConfigError, TypeError, ValueError):
+            return {
+                "ready": False,
+                "issues": [{
+                    "code": "INVALID_LAUNCH_CONFIG",
+                    "detail": "The saved DAST launch config is incomplete or invalid.",
+                }],
+            }
 
     class Meta:
         model = AISTProjectLaunchConfig
@@ -222,6 +355,11 @@ class LaunchConfigDashboardSerializer(serializers.ModelSerializer):
             "organization_name",
             "execution_type",
             "dast_binding",
+            "dast_target_label",
+            "dast_source_repository",
+            "trigger_project_version_id",
+            "trigger_project_version_label",
+            "readiness",
             "name",
             "description",
             "params",
@@ -344,6 +482,7 @@ def create_launch_config_for_project(
     raw_params: dict,
     execution_type: str = PipelineExecutionType.SAST,
     dast_binding: DastProjectBinding | None = None,
+    trigger_project_version: AISTProjectVersion | None = None,
 ) -> AISTProjectLaunchConfig:
     """
     Shared create logic for BOTH API and UI.
@@ -363,6 +502,7 @@ def create_launch_config_for_project(
         raise serializers.ValidationError({"dast_binding_id": "DAST launch config requires an explicit binding."})
 
     with transaction.atomic():
+        AISTProject.objects.select_for_update().only("pk").get(pk=project.pk)
         if is_default:
             AISTProjectLaunchConfig.objects.filter(project=project, is_default=True).update(is_default=False)
 
@@ -370,13 +510,17 @@ def create_launch_config_for_project(
             project=project,
             execution_type=execution_type,
             dast_binding=dast_binding,
+            trigger_project_version=trigger_project_version,
             name=name,
             description=description or "",
             params=normalized,
             is_default=is_default,
         )
-        launch_config.full_clean()
-        launch_config.save()
+        try:
+            launch_config.full_clean()
+            launch_config.save()
+        except (DjangoValidationError, IntegrityError) as exc:
+            raise serializers.ValidationError({"name": "A launch config with this name already exists."}) from exc
         return launch_config
 
 
@@ -390,7 +534,12 @@ class ProjectLaunchConfigListCreateAPI(AISTAPIView):
     )
     def get(self, request, project_id: int, *args, **kwargs):
         project = self.resolve(id=project_id)
-        qs = AISTProjectLaunchConfig.objects.filter(project=project).order_by("-updated")
+        qs = (
+            AISTProjectLaunchConfig.objects
+            .filter(project=project)
+            .select_related("dast_binding__target", "trigger_project_version")
+            .order_by("-updated")
+        )
         return Response(LaunchConfigSerializer(qs, many=True).data)
 
     @extend_schema(
@@ -447,7 +596,7 @@ class ProjectLaunchConfigListCreateAPI(AISTAPIView):
     def post(self, request, project_id: int, *args, **kwargs):
         project = self.resolve(id=project_id)
 
-        s = LaunchConfigCreateRequestSerializer(data=request.data, context={"project": project})
+        s = LaunchConfigCreateRequestSerializer(data=request.data, context={"project": project, "request": request})
         s.is_valid(raise_exception=True)
 
         obj = create_launch_config_for_project(
@@ -458,6 +607,7 @@ class ProjectLaunchConfigListCreateAPI(AISTAPIView):
             raw_params=s.validated_data["params"],
             execution_type=s.validated_data["execution_type"],
             dast_binding=s.validated_data.get("dast_binding"),
+            trigger_project_version=s.validated_data.get("trigger_project_version"),
         )
 
         return Response(LaunchConfigSerializer(obj).data, status=status.HTTP_201_CREATED)
@@ -498,6 +648,7 @@ class ProjectLaunchConfigDetailAPI(AISTAPIView):
         data = s.validated_data
 
         with transaction.atomic():
+            AISTProject.objects.select_for_update().only("pk").get(pk=obj.project_id)
             if data.get("is_default"):
                 AISTProjectLaunchConfig.objects.filter(project=obj.project, is_default=True).exclude(id=obj.id).update(
                     is_default=False,
@@ -515,9 +666,18 @@ class ProjectLaunchConfigDetailAPI(AISTAPIView):
                 if obj.execution_type == PipelineExecutionType.SAST:
                     normalized = PipelineArguments.normalize_params(project=obj.project, raw_params=normalized)
                 obj.params = normalized
+            if "dast_binding" in data:
+                obj.dast_binding = data["dast_binding"]
+            if "trigger_project_version" in data:
+                obj.trigger_project_version = data["trigger_project_version"]
 
-            obj.full_clean()
-            obj.save()
+            try:
+                obj.full_clean()
+                obj.save()
+            except (DjangoValidationError, IntegrityError) as exc:
+                raise serializers.ValidationError({
+                    "name": "A launch config with this name already exists or is invalid.",
+                }) from exc
 
         return Response(LaunchConfigSerializer(obj).data)
 
@@ -600,7 +760,13 @@ class ProjectLaunchConfigStartAPI(AISTAPIView):
         cfg = self.resolve(id=config_id, project_id=project_id)
         project = cfg.project
         if cfg.execution_type == PipelineExecutionType.DAST:
-            readiness = check_dast_binding_readiness(cfg.dast_binding)
+            try:
+                readiness = check_dast_launch_readiness(PipelineArguments.from_launch_config(cfg))
+            except (DastConfigError, TypeError, ValueError):
+                return Response(
+                    {"detail": "The saved DAST launch config is incomplete or invalid."},
+                    status=status.HTTP_409_CONFLICT,
+                )
             if not readiness.ready:
                 return Response(
                     {"readiness": readiness.to_snapshot()},
@@ -635,16 +801,18 @@ class ProjectLaunchConfigStartAPI(AISTAPIView):
             api_token=launch_principal_token(request),
         )
         try:
+            arguments = (
+                PipelineArguments.for_sast(
+                    project=project,
+                    raw_params={**dict(cfg.params or {}), **req_params},
+                )
+                if cfg.execution_type == PipelineExecutionType.SAST
+                else PipelineArguments.from_launch_config(cfg)
+            )
             launch_request = enqueue_pipeline_launch(
-                project=project,
+                arguments=arguments,
                 principal=principal,
-                raw_params=req_params,
                 launch_config=cfg,
-                trigger_project_version=(
-                    project_version
-                    if cfg.execution_type == PipelineExecutionType.DAST
-                    else None
-                ),
                 client_request_key=launch_request_headers(request).get("client_request_key"),
             ).request
         except LaunchEnqueueError as exc:
@@ -782,7 +950,12 @@ class LaunchConfigDashboardListAPI(AISTAPIView):
             data=request.query_params,
             queryset=(
                 self.authorized_queryset()
-                .select_related("project__product__prod_type__aist_organization")
+                .select_related(
+                    "project__product__prod_type__aist_organization",
+                    "trigger_project_version",
+                    "dast_binding__target__integration__dast_state",
+                    "dast_binding__target__integration__vpn_integration__vpn_secret",
+                )
                 .prefetch_related("actions")
                 .order_by("-updated")
             ),

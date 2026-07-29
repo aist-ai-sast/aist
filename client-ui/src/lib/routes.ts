@@ -64,6 +64,7 @@ type RouteMap = {
   manageable_orgs_url: string;
   org_integrations_url: string;
   org_integration_detail_url: string;
+  dast_integration_disable_url: string;
   org_integration_validate_url: string;
   org_integration_validate_status_url: string;
   dast_integration_import_url: string;

@@ -19,9 +19,10 @@ from dojo.utils import add_breadcrumb
 from aist.ai_filter import apply_ai_filter, get_ai_filter_reference
 from aist.api.launch_configs import ACTION_CREATE_SERIALIZERS
 from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
-from aist.forms import AISTPipelineRunForm
+from aist.forms import AISTPipelineRunForm, DastPipelineRunForm
 from aist.launch_data import PipelineLaunchData
-from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus
+from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus, PipelineExecutionType
+from aist.pipeline_args import PipelineArguments
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects
 from aist.utils.http import _fmt_duration, _qs_without
 from aist.utils.pipeline import (
@@ -276,7 +277,7 @@ def pipeline_set_status(request, pipeline_id: str):
 @login_required
 def start_pipeline(request: HttpRequest) -> HttpResponse:
     """
-    Present the manual SAST form and enqueue one durable launch request.
+    Present manual SAST/DAST forms and enqueue one durable launch request.
 
     Pipeline creation and Celery publication are owned by the generic
     dispatcher, so this user-facing view never bypasses queue policy.
@@ -308,12 +309,20 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
         "project_name": getattr(getattr(p.project, "product", None), "name", str(p.project_id)),
         "updated": p.updated,
         "status": p.status,
+        "execution_type": p.execution_type,
         "duration": _fmt_duration(p.created, p.updated),
     } for p in page_obj.object_list]
 
     history_qs_str = _qs_without(request, "page")
     add_breadcrumb(title="Start pipeline", top_level=True, request=request)
     client_request_key = (request.POST.get("client_request_key") or "").strip() or uuid.uuid4().hex
+    execution_type = (request.POST.get("execution_type") or request.GET.get("execution_type") or "SAST").upper()
+    if execution_type not in {PipelineExecutionType.SAST, PipelineExecutionType.DAST}:
+        execution_type = PipelineExecutionType.SAST
+    authorized_projects = get_authorized_aist_projects(
+        Permissions.Product_Edit,
+        user=request.user,
+    ).order_by("product__name")
 
     def render_start(form):
         return render(
@@ -331,17 +340,24 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                 "aist_action_types": AISTLaunchConfigAction.ActionType.choices,
                 "ai_filter_reference": get_ai_filter_reference(),
                 "client_request_key": client_request_key,
+                "execution_type": execution_type,
+                "history_projects": authorized_projects,
             },
         )
 
     if request.method == "POST":
-        form = AISTPipelineRunForm(request.POST)
-        form.fields["project"].queryset = get_authorized_aist_projects(
-            Permissions.Product_Edit,
-            user=request.user,
-        ).order_by("product__name")
+        if execution_type == PipelineExecutionType.DAST:
+            form = DastPipelineRunForm(request.POST, project_queryset=authorized_projects)
+        else:
+            form = AISTPipelineRunForm(request.POST)
+            form.fields["project"].queryset = authorized_projects
         if form.is_valid():
-            params = form.get_params()
+            project = form.cleaned_data["project"]
+            arguments = (
+                form.get_arguments()
+                if execution_type == PipelineExecutionType.DAST
+                else PipelineArguments.for_sast(project=project, raw_params=form.get_params())
+            )
 
             raw_actions = request.POST.get("one_off_actions") or "[]"
             try:
@@ -352,6 +368,10 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
 
             if not isinstance(actions_payload, list):
                 form.add_error(None, "Actions payload must be a list.")
+                return render_start(form)
+
+            if execution_type == PipelineExecutionType.DAST and actions_payload:
+                form.add_error(None, "One-off actions are currently available only for SAST launches.")
                 return render_start(form)
 
             one_off_actions = []
@@ -382,7 +402,6 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                     "config": data.get("config") or {},
                 })
 
-            project = form.cleaned_data["project"]
             user_has_permission_or_403(
                 request.user,
                 project.product,
@@ -397,12 +416,11 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
             launch_data.one_off_actions_done = []
             try:
                 launch_request = enqueue_pipeline_launch(
-                    project=project,
+                    arguments=arguments,
                     principal=LaunchPrincipal.for_user(
                         organization=organization,
                         requester=request.user,
                     ),
-                    raw_params=params,
                     client_request_key=client_request_key,
                     initial_launch_data=launch_data.as_dict(),
                 ).request
@@ -411,12 +429,11 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                 return render_start(form)
             destination = reverse("aist:launching_dashboard")
             return redirect(f"{destination}?queued_request={launch_request.pk}")
+    elif execution_type == PipelineExecutionType.DAST:
+        form = DastPipelineRunForm(project_queryset=authorized_projects)
     else:
         form = AISTPipelineRunForm()
-        form.fields["project"].queryset = get_authorized_aist_projects(
-            Permissions.Product_Edit,
-            user=request.user,
-        ).order_by("product__name")
+        form.fields["project"].queryset = authorized_projects
     return render_start(form)
 
 

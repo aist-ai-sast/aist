@@ -10,7 +10,16 @@
         {% include "aist/_status_finished.html" %}
     {% elif pipeline.status == "WAITING_CONFIRMATION_TO_PUSH_TO_AI" %}
         {% include "aist/_confirm_push_to_ai.html" %}
-    {% elif pipeline.status == "SAST_LAUNCHED" %}
+    {% elif pipeline.status == "ADMITTED" %}
+        <div class="alert alert-info" role="status">
+            <i class="fa fa-clock-o"></i>
+            <strong>Admitted.</strong> Waiting for execution capacity.
+        </div>
+    {% elif pipeline.status == "EXECUTING" %}
+        <div class="alert alert-primary" role="status">
+            <i class="fa fa-spinner fa-spin"></i>
+            <strong>Executing.</strong> The pipeline worker is running.
+        </div>
     {% elif pipeline.status == "UPLOADING_RESULTS" %}
     {% elif pipeline.status == "PUSH_TO_AI" %}
     {% else %}

@@ -37,6 +37,8 @@ const upsertBindingMutateAsync = vi.fn().mockResolvedValue({ id: 11 });
 const deleteBindingMutateAsync = vi.fn().mockResolvedValue(undefined);
 const createDastLaunchConfigMutateAsync = vi.fn().mockResolvedValue({ id: 31 });
 const syncCapabilitiesMutateAsync = vi.fn().mockResolvedValue({ task_id: "sync-1" });
+const disableDastMutateAsync = vi.fn().mockResolvedValue({ id: 7, is_active: false });
+const deleteIntegrationMutateAsync = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../lib/queries", () => ({
   useManageableOrgs: () => ({ data: [{ id: 1, name: "Acme" }], isLoading: false }),
@@ -53,7 +55,8 @@ vi.mock("../lib/queries", () => ({
 vi.mock("../lib/mutations", () => ({
   useCreateOrgIntegration: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateOrgIntegration: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useDeleteOrgIntegration: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useDeleteOrgIntegration: () => ({ mutateAsync: deleteIntegrationMutateAsync, isPending: false }),
+  useDisableDastIntegration: () => ({ mutateAsync: disableDastMutateAsync, isPending: false }),
   useValidateOrgIntegration: () => ({ mutateAsync: vi.fn().mockResolvedValue({ task_id: "t1" }), isPending: false, variables: undefined }),
   useSyncDastCapabilities: () => ({ mutateAsync: syncCapabilitiesMutateAsync, isPending: false, variables: undefined }),
   useImportDastIntegration: () => ({ mutateAsync: importDastMutateAsync, reset: importDastReset, isPending: false }),
@@ -132,6 +135,69 @@ describe("OrgIntegrationsPage — DAST integration", () => {
     expect(screen.getByText("Primary DAST gateway")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /validate/i }));
+  });
+
+  it("disables an active DAST integration without offering destructive delete", async () => {
+    mockIntegrations = [{
+      id: 7,
+      name: "Primary DAST gateway",
+      integration_type: "DAST",
+      is_active: true,
+      has_secret: true,
+      config: { gateway_url: "https://gateway.example" },
+      vpn_integration: null,
+    }];
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderPage();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+
+    await waitFor(() => expect(disableDastMutateAsync).toHaveBeenCalledWith(7));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("history"));
+    expect(deleteIntegrationMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("deletes only an inactive DAST integration with an explicit dependency warning", async () => {
+    mockIntegrations = [{
+      id: 7,
+      name: "Retired DAST gateway",
+      integration_type: "DAST",
+      is_active: false,
+      has_secret: true,
+      config: { gateway_url: "https://gateway.example" },
+      vpn_integration: null,
+    }];
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(deleteIntegrationMutateAsync).toHaveBeenCalledWith(7));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("Targets, bindings, presets, schedules"));
+    expect(disableDastMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("does not render the misleading Active checkbox while editing DAST", () => {
+    mockIntegrations = [{
+      id: 7,
+      name: "Primary DAST gateway",
+      integration_type: "DAST",
+      is_active: true,
+      has_secret: true,
+      config: {
+        gateway_url: "https://gateway.example",
+        ca_bundle: "",
+        integrator_public_id: "pub_aist",
+        server_fingerprint: "sha256:fingerprint",
+      },
+      vpn_integration: null,
+    }];
+
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+
+    expect(screen.queryByLabelText("Active")).not.toBeInTheDocument();
   });
 
   it("imports a versioned bundle and clears token-bearing UI and mutation state after submit", async () => {
@@ -295,6 +361,17 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
 
   beforeEach(() => {
     canManage = true;
+    mockIntegrations = [
+      {
+        id: 7,
+        name: "Primary DAST gateway",
+        integration_type: "DAST",
+        is_active: true,
+        has_secret: true,
+        config: { gateway_url: "https://gateway.example" },
+        vpn_integration: null,
+      },
+    ];
     mockProjects = [{ id: 9, name: "Checkout", organizationId: 1, productId: 3 }];
     mockDastTargets = [target];
     mockDastBindings = [];
@@ -309,6 +386,32 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
     fireEvent.click(screen.getByRole("option", { name: "Checkout" }));
     return section;
   }
+
+  it("shows target bindings only after the organization has a DAST integration", () => {
+    mockIntegrations = [];
+    const { rerender } = renderPage();
+
+    expect(screen.queryByText("DAST Target Bindings")).not.toBeInTheDocument();
+
+    mockIntegrations = [
+      {
+        id: 7,
+        name: "Retired DAST gateway",
+        integration_type: "DAST",
+        is_active: false,
+        has_secret: true,
+        config: { gateway_url: "https://gateway.example" },
+        vpn_integration: null,
+      },
+    ];
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <OrgIntegrationsPage />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("DAST Target Bindings")).toBeInTheDocument();
+  });
 
   it("submits the complete provider-defaulted schema object", async () => {
     renderPage();
@@ -354,7 +457,7 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
     expect(within(section).queryByText("Web application")).not.toBeInTheDocument();
   });
 
-  it("creates a DAST launch config from an enabled binding", async () => {
+  it("does not offer launch-config creation — that lives in the AIST admin launch dashboard", () => {
     mockDastBindings = [
       {
         id: 11,
@@ -370,18 +473,65 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
     renderPage();
     const section = selectProject();
 
-    fireEvent.click(within(section).getByRole("button", { name: "Create launch config" }));
-    fireEvent.change(within(section).getByLabelText("Launch config name"), {
-      target: { value: "Nightly web DAST" },
-    });
-    fireEvent.click(within(section).getByRole("button", { name: "Save launch config" }));
-
-    await waitFor(() => expect(createDastLaunchConfigMutateAsync).toHaveBeenCalledWith({
-      bindingId: 11,
-      name: "Nightly web DAST",
-      params: { mode: "fast", label: "baseline", count: 2, advanced: false },
-    }));
+    // The old control created a config client-ui could not then list, edit, start or schedule.
+    expect(within(section).queryByRole("button", { name: "Create launch config" })).not.toBeInTheDocument();
+    expect(within(section).queryByLabelText("Launch config name")).not.toBeInTheDocument();
+    expect(createDastLaunchConfigMutateAsync).not.toHaveBeenCalled();
+    // Binding management itself stays here.
+    expect(within(section).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(within(section).getByRole("button", { name: "Remove" })).toBeInTheDocument();
   });
+
+  it("summarises a binding by its source repository without leaking provider digests", () => {
+    mockDastBindings = [
+      {
+        id: 11,
+        project: 9,
+        target,
+        source_repo_key: "source",
+        enabled: true,
+        parameter_snapshot: {},
+        autonomous_enabled: false,
+        readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
+      },
+    ];
+    renderPage();
+    const section = selectProject();
+
+    expect(within(section).getByText(/Source repository: source/)).toBeInTheDocument();
+    // schema_digest / capability_revision are launch-admission machinery the operator
+    // cannot act on; the backend fails the launch when they drift.
+    expect(section.textContent).not.toContain("schema-7");
+    expect(section.textContent).not.toContain("cap-7");
+  });
+
+  it("keeps binding metadata controls out of the provider-schema form so RJSF styling cannot reflow them", () => {
+    mockDastBindings = [
+      {
+        id: 11,
+        project: 9,
+        target,
+        source_repo_key: "source",
+        enabled: true,
+        parameter_snapshot: { mode: "fast", label: "baseline", count: 2, advanced: false },
+        autonomous_enabled: false,
+        readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
+      },
+    ];
+    renderPage();
+    const section = selectProject();
+    fireEvent.click(within(section).getByRole("button", { name: "Edit" }));
+
+    const schemaForm = section.querySelector("form")!;
+    for (const name of ["Enabled", "Allow autonomous launches"]) {
+      const checkbox = within(section).getByLabelText(name);
+      expect(checkbox).toBeInTheDocument();
+      expect(schemaForm.contains(checkbox)).toBe(false);
+    }
+    // The provider-schema fields themselves must stay inside the RJSF form.
+    expect(schemaForm.contains(within(section).getByLabelText(/Label/))).toBe(true);
+  });
+
   it("offers a catalog refresh only for a validated DAST integration", async () => {
     mockIntegrations = [
       {

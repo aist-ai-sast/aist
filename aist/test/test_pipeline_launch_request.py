@@ -54,7 +54,6 @@ class PipelineLaunchRequestTests(AISTApiBase):
             origin=PipelineLaunchOrigin.MANUAL,
             execution_type=PipelineExecutionType.SAST,
             project=self.project,
-            trigger_project_version=self.pv,
             requester=self.user,
             api_token=token,
             authority_kind=PipelineLaunchAuthorityKind.PAT,

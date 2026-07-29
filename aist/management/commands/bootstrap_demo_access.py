@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -28,8 +29,17 @@ from aist.models import (
     AISTProjectLaunchConfig,
     AISTProjectVersion,
     AISTStatus,
+    DastExecutionOutcome,
+    DastExecutionState,
+    DastIntegrationState,
+    DastIntegrationValidationState,
+    DastProjectBinding,
+    DastTarget,
     LaunchSchedule,
     Organization,
+    OrgIntegration,
+    OrgIntegrationType,
+    PipelineExecutionType,
     PipelineLaunchAuthorityKind,
     PipelineLaunchOrigin,
     PipelineLaunchRequest,
@@ -98,6 +108,9 @@ ORG_NAMES = [
 
 # Test type name used by the DAST parser registration and demo records.
 DAST_DEMO_SCAN_TYPE = "DAST Autonomous Scan"
+MANUAL_DEMO_SCAN_TYPE = "Demo Manual Report Import"
+DAST_DEMO_RUN_COUNT = 3
+MANUAL_DEMO_IMPORT_COUNT = 3
 
 
 def demo_ai_filter_snapshot() -> dict:
@@ -582,6 +595,105 @@ class Command(BaseCommand):
                 defaults={"role": roles[spec.role_name]},
             )
 
+    def _ensure_demo_dast_integrations(
+        self,
+        *,
+        organizations: list[Organization],
+        now,
+    ) -> dict[str, list[DastTarget]]:
+        targets_by_organization: dict[str, list[DastTarget]] = {}
+        project_slugs_by_organization = {
+            organization.name: [
+                spec.slug
+                for spec in DEMO_PROJECTS
+                if spec.organization_name == organization.name
+            ]
+            for organization in organizations
+        }
+        parameter_schema = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "scan_profile": {
+                    "type": "string",
+                    "title": "Scan profile",
+                    "enum": ["quick", "full"],
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "title": "Maximum crawl depth",
+                    "minimum": 1,
+                    "maximum": 10,
+                },
+            },
+            "required": ["scan_profile", "max_depth"],
+        }
+        for organization_index, organization in enumerate(organizations, start=1):
+            organization_key = organization.name.lower().replace(" ", "-")
+            integration, _ = OrgIntegration.objects.get_or_create(
+                organization=organization,
+                integration_type=OrgIntegrationType.DAST,
+                name="Demo DAST gateway",
+                defaults={
+                    "config": {
+                        "gateway_url": f"https://dast-{organization_key}.example",
+                        "ca_bundle": "",
+                        "contract_major": 2,
+                        "integrator_public_id": f"demo_{organization_key}",
+                        "server_fingerprint": f"sha256:demo-{organization_key}-fingerprint",
+                    },
+                    "is_active": True,
+                },
+            )
+            integration_updates: list[str] = []
+            if not integration.is_active:
+                integration.is_active = True
+                integration_updates.append("is_active")
+            if integration_updates:
+                integration.save(update_fields=[*integration_updates, "updated"])
+
+            DastIntegrationState.objects.update_or_create(
+                integration=integration,
+                defaults={
+                    "validation_state": DastIntegrationValidationState.READY,
+                    "validated_at": now,
+                    "contract_version": "2.0",
+                    "capabilities_etag": f"demo-catalog-{organization_index}",
+                    "capabilities_synced_at": now,
+                },
+            )
+
+            repository_keys = project_slugs_by_organization[organization.name]
+            targets: list[DastTarget] = []
+            for target_index, (target_key, display_name, defaults) in enumerate(
+                (
+                    ("browser", "Customer web application", {"scan_profile": "full", "max_depth": 6}),
+                    ("api", "Public API surface", {"scan_profile": "quick", "max_depth": 3}),
+                ),
+                start=1,
+            ):
+                target, _ = DastTarget.objects.update_or_create(
+                    integration=integration,
+                    provider_id=f"demo-{target_key}",
+                    defaults={
+                        "display_name": display_name,
+                        "contract_revision": "2.0",
+                        "capability_revision": f"sha256:demo-{organization_index}-{target_key}-capability-v1",
+                        "schema_digest": f"sha256:demo-{organization_index}-{target_key}-schema-v1",
+                        "parameter_schema": parameter_schema,
+                        "provider_defaults": defaults,
+                        "repository_keys": repository_keys,
+                        "autonomous_ready": True,
+                        "is_available": True,
+                        "last_seen_at": now - timedelta(minutes=target_index),
+                    },
+                )
+                target.full_clean()
+                targets.append(target)
+            targets_by_organization[organization.name] = targets
+        return targets_by_organization
+
     def _ensure_demo_projects(self, *, organizations: list[Organization], users_by_username: dict[str, object]) -> None:
         organizations_by_name = {org.name: org for org in organizations}
         first_maintainer_username = next(s.username for s in DEMO_USERS if s.role_name == "Maintainer")
@@ -590,6 +702,10 @@ class Command(BaseCommand):
         today = timezone.localdate()
         sla_config, _ = SLA_Configuration.objects.get_or_create(name="Demo SLA")
         test_type, _ = Test_Type.objects.get_or_create(name="Semgrep JSON Report")
+        dast_targets_by_organization = self._ensure_demo_dast_integrations(
+            organizations=organizations,
+            now=now,
+        )
 
         for spec in DEMO_PROJECTS:
             organization = organizations_by_name[spec.organization_name]
@@ -653,10 +769,18 @@ class Command(BaseCommand):
                 defaults={"description": "Stable demo release"},
             )
 
+            dast_bindings, dast_launch_configs = self._ensure_project_dast_bindings_and_configs(
+                spec=spec,
+                project=project,
+                trigger_version=main_version,
+                targets=dast_targets_by_organization[spec.organization_name],
+            )
+
             launch_config, _ = AISTProjectLaunchConfig.objects.get_or_create(
                 project=project,
                 name=spec.launch_config_name,
                 defaults={
+                    "execution_type": PipelineExecutionType.SAST,
                     "description": f"Demo launch config for {spec.slug}",
                     "params": {
                         "analyzers": ["semgrep", "snyk"],
@@ -670,6 +794,15 @@ class Command(BaseCommand):
             )
 
             launch_config_updates: list[str] = []
+            if launch_config.execution_type != PipelineExecutionType.SAST:
+                launch_config.execution_type = PipelineExecutionType.SAST
+                launch_config_updates.append("execution_type")
+            if launch_config.dast_binding_id is not None:
+                launch_config.dast_binding = None
+                launch_config_updates.append("dast_binding")
+            if launch_config.trigger_project_version_id is not None:
+                launch_config.trigger_project_version = None
+                launch_config_updates.append("trigger_project_version")
             desired_params = {
                 "analyzers": ["semgrep", "snyk"],
                 "time_class_level": "normal",
@@ -709,6 +842,10 @@ class Command(BaseCommand):
             if schedule.max_concurrent_runs != 1:
                 schedule.max_concurrent_runs = 1
                 schedule_updates.append("max_concurrent_runs")
+            desired_next_run_at = schedule.get_next_scheduled_time(now=now)
+            if schedule.next_run_at != desired_next_run_at:
+                schedule.next_run_at = desired_next_run_at
+                schedule_updates.append("next_run_at")
             schedule.save(update_fields=schedule_updates)
 
             engagement, _ = Engagement.objects.get_or_create(
@@ -744,15 +881,6 @@ class Command(BaseCommand):
             if release_ids:
                 release_version.findings.add(*release_ids)
 
-            dast_finding_id = self._ensure_dast_demo_finding(
-                spec=spec,
-                project=project,
-                engagement=engagement,
-                reporter=default_reporter,
-                base_date=today,
-            )
-            main_version.findings.add(dast_finding_id)
-
             self._ensure_historical_queue(
                 spec=spec,
                 project=project,
@@ -762,7 +890,89 @@ class Command(BaseCommand):
                 schedule=schedule,
                 now=now,
             )
+            self._ensure_historical_dast_runs(
+                spec=spec,
+                project=project,
+                main_version=main_version,
+                release_version=release_version,
+                bindings=dast_bindings,
+                launch_configs=dast_launch_configs,
+                engagement=engagement,
+                reporter=default_reporter,
+                now=now,
+                base_date=today,
+            )
+            self._ensure_historical_manual_imports(
+                spec=spec,
+                project=project,
+                main_version=main_version,
+                release_version=release_version,
+                engagement=engagement,
+                reporter=default_reporter,
+                now=now,
+                base_date=today,
+            )
             self._ensure_demo_ai_responses(project=project)
+
+    def _ensure_project_dast_bindings_and_configs(
+        self,
+        *,
+        spec: DemoProjectSpec,
+        project: AISTProject,
+        trigger_version: AISTProjectVersion,
+        targets: list[DastTarget],
+    ) -> tuple[list[DastProjectBinding], list[AISTProjectLaunchConfig]]:
+        bindings: list[DastProjectBinding] = []
+        launch_configs: list[AISTProjectLaunchConfig] = []
+        for target_index, target in enumerate(targets, start=1):
+            parameters = dict(target.provider_defaults)
+            binding, _ = DastProjectBinding.objects.update_or_create(
+                project=project,
+                target=target,
+                defaults={
+                    "source_repo_key": spec.slug,
+                    "enabled": True,
+                    "parameter_snapshot": parameters,
+                    "autonomous_enabled": True,
+                },
+            )
+            binding.full_clean()
+            bindings.append(binding)
+
+            config_name = f"DAST · {target.display_name}"
+            launch_config, _ = AISTProjectLaunchConfig.objects.get_or_create(
+                project=project,
+                name=config_name,
+                defaults={
+                    "execution_type": PipelineExecutionType.DAST,
+                    "dast_binding": binding,
+                    "trigger_project_version": trigger_version,
+                    "description": f"Demo DAST preset for {spec.slug} on {target.display_name}",
+                    "params": parameters,
+                    "is_default": False,
+                },
+            )
+            launch_config.execution_type = PipelineExecutionType.DAST
+            launch_config.dast_binding = binding
+            launch_config.trigger_project_version = trigger_version
+            launch_config.description = f"Demo DAST preset for {spec.slug} on {target.display_name}"
+            launch_config.params = parameters
+            launch_config.is_default = False
+            launch_config.full_clean()
+            launch_config.save()
+            launch_configs.append(launch_config)
+
+            LaunchSchedule.objects.update_or_create(
+                launch_config=launch_config,
+                defaults={
+                    "cron_expression": f"{10 + target_index * 5} 6 * * {target_index}",
+                    "enabled": False,
+                    "max_concurrent_runs": 1,
+                    "last_run_at": None,
+                    "next_run_at": None,
+                },
+            )
+        return bindings, launch_configs
 
     def _ensure_project_findings(self, *, spec: DemoProjectSpec, dojo_test: Test, reporter, base_date):
         finding_ids: list[int] = []
@@ -772,22 +982,22 @@ class Command(BaseCommand):
             for _ in range(findings_count):
                 template = DEMO_FINDING_TEMPLATES[(sequence - 1) % len(DEMO_FINDING_TEMPLATES)]
                 title = f"{template.title} [{spec.slug.upper()}-{sequence:03d}]"
+                desired_vuln_id = f"{template.vuln_id}-{sequence:03d}"
                 finding, _ = Finding.objects.get_or_create(
                     test=dojo_test,
-                    title=title,
+                    vuln_id_from_tool=desired_vuln_id,
                     defaults={
+                        "title": title,
                         "severity": template.severity,
                         "cwe": template.cwe,
                         "date": finding_date,
                         "reporter": reporter,
                         "file_path": template.file_path,
-                        "vuln_id_from_tool": f"{template.vuln_id}-{sequence:03d}",
                         "description": template.description,
                         "mitigation": template.mitigation,
                     },
                 )
                 updates: list[str] = []
-                desired_vuln_id = f"{template.vuln_id}-{sequence:03d}"
                 if finding.severity != template.severity:
                     finding.severity = template.severity
                     updates.append("severity")
@@ -826,27 +1036,28 @@ class Command(BaseCommand):
         engagement: Engagement,
         reporter,
         base_date,
-    ) -> int:
-        """Seed one DAST finding for the client-ui demo view."""
+        sequence: int,
+    ) -> tuple[int, Test]:
+        """Seed one DAST finding attached to a distinct autonomous scan test."""
         test_type, _ = Test_Type.objects.get_or_create(name=DAST_DEMO_SCAN_TYPE)
         now = timezone.now()
         dast_test, _ = Test.objects.get_or_create(
             engagement=engagement,
             test_type=test_type,
-            title=f"{spec.slug} dast baseline scan",
+            title=f"{spec.slug} dast autonomous run {sequence:02d}",
             defaults={"target_start": now - timedelta(days=1), "target_end": now},
         )
 
         # The DAST prefix keeps the SAST distribution fixture stable.
-        title = f"Cross-tenant BOLA on subscription keys [DAST-{spec.slug.upper()}-001]"
+        title = f"Cross-tenant BOLA on subscription keys [DAST-{spec.slug.upper()}-{sequence:03d}]"
         desired = {
             "severity": "High",
             "date": base_date,
             "reporter": reporter,
             "dynamic_finding": True,
             "static_finding": False,
-            "unique_id_from_tool": f"{spec.slug}-dast-bola-001",
-            "vuln_id_from_tool": f"{spec.slug}-dast-bola-001",
+            "unique_id_from_tool": f"{spec.slug}-dast-bola-{sequence:03d}",
+            "vuln_id_from_tool": f"{spec.slug}-dast-bola-{sequence:03d}",
             "description": (
                 "An authenticated user of one tenant can access another tenant's "
                 "subscription resource by guessing the numeric subscription id in the "
@@ -869,8 +1080,8 @@ class Command(BaseCommand):
         }
         finding, _ = Finding.objects.get_or_create(
             test=dast_test,
-            title=title,
-            defaults=desired,
+            unique_id_from_tool=desired["unique_id_from_tool"],
+            defaults={"title": title, **desired},
         )
         updates = []
         for field, value in desired.items():
@@ -893,7 +1104,199 @@ class Command(BaseCommand):
             endpoint=endpoint,
             defaults={"date": finding.date},
         )
-        return finding.id
+        return finding.id, dast_test
+
+    @staticmethod
+    def _upsert_demo_pipeline(
+        *,
+        pipeline_id: str,
+        project: AISTProject,
+        project_version: AISTProjectVersion,
+        trigger_project_version: AISTProjectVersion | None,
+        execution_type: str,
+        started,
+        finished_at,
+        launch_data: dict,
+        dojo_test: Test,
+    ) -> AISTPipeline:
+        pipeline, _ = AISTPipeline.objects.update_or_create(
+            id=pipeline_id,
+            defaults={
+                "project": project,
+                "project_version": project_version,
+                "trigger_project_version": trigger_project_version,
+                "execution_type": execution_type,
+                "status": AISTStatus.FINISHED,
+                "started": started,
+                "finished_at": finished_at,
+                "launch_data": launch_data,
+                "created": started,
+            },
+        )
+        pipeline.tests.set([dojo_test])
+        AISTPipeline.objects.filter(pk=pipeline.pk).update(created=started, updated=finished_at)
+        return pipeline
+
+    def _ensure_historical_dast_runs(
+        self,
+        *,
+        spec: DemoProjectSpec,
+        project: AISTProject,
+        main_version: AISTProjectVersion,
+        release_version: AISTProjectVersion,
+        bindings: list[DastProjectBinding],
+        launch_configs: list[AISTProjectLaunchConfig],
+        engagement: Engagement,
+        reporter,
+        now,
+        base_date,
+    ) -> None:
+        day_offsets = (12, 7, 2)
+        for sequence, day_offset in enumerate(day_offsets, start=1):
+            binding_index = (sequence - 1) % len(bindings)
+            binding = bindings[binding_index]
+            launch_config = launch_configs[binding_index]
+            project_version = release_version if sequence % 2 == 0 else main_version
+            started = now - timedelta(days=day_offset, minutes=sequence * 11)
+            finished_at = started + timedelta(minutes=18 + sequence * 4)
+            finding_id, dojo_test = self._ensure_dast_demo_finding(
+                spec=spec,
+                project=project,
+                engagement=engagement,
+                reporter=reporter,
+                base_date=base_date - timedelta(days=day_offset),
+                sequence=sequence,
+            )
+            dojo_test.target_start = started
+            dojo_test.target_end = finished_at
+            dojo_test.save(update_fields=["target_start", "target_end"])
+            project_version.findings.add(finding_id)
+
+            provider_run_id = f"demo-provider-{spec.slug}-{sequence:02d}"
+            pipeline = self._upsert_demo_pipeline(
+                pipeline_id=f"demo-{spec.slug}-dast-run-{sequence:02d}",
+                project=project,
+                project_version=project_version,
+                trigger_project_version=project_version,
+                execution_type=PipelineExecutionType.DAST,
+                started=started,
+                finished_at=finished_at,
+                launch_data={
+                    "source": "bootstrap_demo_access",
+                    "dast_binding_id": binding.pk,
+                    "provider_run_id": provider_run_id,
+                    "target_id": binding.target.provider_id,
+                    "dast_outcome": {
+                        "version": "1",
+                        "code": "SUCCESS_WITH_FINDINGS",
+                    },
+                },
+                dojo_test=dojo_test,
+            )
+            DastExecutionState.objects.update_or_create(
+                pipeline=pipeline,
+                defaults={
+                    "run_id": provider_run_id,
+                    "log_cursor": 120 + sequence,
+                    "outcome": DastExecutionOutcome.TERMINAL,
+                    "deadline": finished_at,
+                    "recovery_checkpoint": {
+                        "source": "bootstrap_demo_access",
+                        "terminal": True,
+                    },
+                },
+            )
+            PipelineLaunchRequest.objects.update_or_create(
+                pipeline=pipeline,
+                defaults={
+                    "execution_type": PipelineExecutionType.DAST,
+                    "project": project,
+                    "dast_binding": binding,
+                    "trigger_project_version": project_version,
+                    "schedule": launch_config.get_launch_schedule(),
+                    "launch_config": launch_config,
+                    "origin": PipelineLaunchOrigin.SCHEDULE,
+                    "authority_kind": PipelineLaunchAuthorityKind.SCHEDULE,
+                    "requester": None,
+                    "params_snapshot": dict(binding.parameter_snapshot),
+                    "capability_snapshot": {},
+                    "initial_launch_data_snapshot": {
+                        "source": "bootstrap_demo_access",
+                        "dast_binding_id": binding.pk,
+                    },
+                    "state": PipelineLaunchRequestState.DISPATCHED,
+                    "dispatched_at": started,
+                },
+            )
+
+    def _ensure_historical_manual_imports(
+        self,
+        *,
+        spec: DemoProjectSpec,
+        project: AISTProject,
+        main_version: AISTProjectVersion,
+        release_version: AISTProjectVersion,
+        engagement: Engagement,
+        reporter,
+        now,
+        base_date,
+    ) -> None:
+        test_type, _ = Test_Type.objects.get_or_create(name=MANUAL_DEMO_SCAN_TYPE)
+        day_offsets = (10, 5, 1)
+        for sequence, day_offset in enumerate(day_offsets, start=1):
+            project_version = release_version if sequence % 2 == 0 else main_version
+            started = now - timedelta(days=day_offset, minutes=sequence * 7)
+            finished_at = started + timedelta(minutes=2 + sequence)
+            dojo_test, _ = Test.objects.get_or_create(
+                engagement=engagement,
+                test_type=test_type,
+                title=f"{spec.slug} manual report upload {sequence:02d}",
+                defaults={"target_start": started, "target_end": finished_at},
+            )
+            dojo_test.target_start = started
+            dojo_test.target_end = finished_at
+            dojo_test.save(update_fields=["target_start", "target_end"])
+
+            template = DEMO_FINDING_TEMPLATES[(sequence - 1) % len(DEMO_FINDING_TEMPLATES)]
+            title = f"Manual report: {template.title} [MANUAL-{spec.slug.upper()}-{sequence:03d}]"
+            unique_id_from_tool = f"{spec.slug}-manual-{sequence:03d}"
+            finding, _ = Finding.objects.get_or_create(
+                test=dojo_test,
+                unique_id_from_tool=unique_id_from_tool,
+                defaults={
+                    "title": title,
+                    "severity": template.severity,
+                    "cwe": template.cwe,
+                    "date": base_date - timedelta(days=day_offset),
+                    "reporter": reporter,
+                    "file_path": template.file_path,
+                    "static_finding": True,
+                    "dynamic_finding": False,
+                    "vuln_id_from_tool": f"{template.vuln_id}-MANUAL-{sequence:03d}",
+                    "description": f"Imported by an operator from {MANUAL_DEMO_SCAN_TYPE}. {template.description}",
+                    "mitigation": template.mitigation,
+                },
+            )
+            project_version.findings.add(finding.pk)
+            filename = f"{spec.slug}-manual-report-{sequence:02d}.json"
+            sha256 = hashlib.sha256(filename.encode()).hexdigest()
+            self._upsert_demo_pipeline(
+                pipeline_id=f"demo-{spec.slug}-manual-import-{sequence:02d}",
+                project=project,
+                project_version=project_version,
+                trigger_project_version=None,
+                execution_type=PipelineExecutionType.MANUAL_IMPORT,
+                started=started,
+                finished_at=finished_at,
+                launch_data={
+                    "source": "manual_import",
+                    "scan_type": MANUAL_DEMO_SCAN_TYPE,
+                    "uploader_id": reporter.pk,
+                    "filename": filename,
+                    "sha256": sha256,
+                },
+                dojo_test=dojo_test,
+            )
 
     def _ensure_historical_queue(
             self,
@@ -918,7 +1321,10 @@ class Command(BaseCommand):
                 defaults={
                     "project": project,
                     "project_version": project_version,
+                    "execution_type": PipelineExecutionType.SAST,
                     "status": status,
+                    "started": run_timestamp,
+                    "finished_at": pipeline_finished_at,
                     "launch_data": {"source": "bootstrap_demo_access", "sequence": index},
                     "created": run_timestamp,
                 },
@@ -930,30 +1336,37 @@ class Command(BaseCommand):
             if pipeline.project_version_id != project_version.id:
                 pipeline.project_version = project_version
                 pipeline_updates.append("project_version")
+            if pipeline.execution_type != PipelineExecutionType.SAST:
+                pipeline.execution_type = PipelineExecutionType.SAST
+                pipeline_updates.append("execution_type")
+            if pipeline.trigger_project_version_id is not None:
+                pipeline.trigger_project_version = None
+                pipeline_updates.append("trigger_project_version")
             if pipeline.status != status:
                 pipeline.status = status
                 pipeline_updates.append("status")
+            if pipeline.started != run_timestamp:
+                pipeline.started = run_timestamp
+                pipeline_updates.append("started")
+            if pipeline.finished_at != pipeline_finished_at:
+                pipeline.finished_at = pipeline_finished_at
+                pipeline_updates.append("finished_at")
             if pipeline_updates:
                 pipeline.save(update_fields=pipeline_updates)
             AISTPipeline.objects.filter(pk=pipeline.pk).update(created=run_timestamp, updated=pipeline_finished_at)
 
-            is_dispatched = index % 4 != 0
-            dispatched_at = run_timestamp + timedelta(minutes=7) if is_dispatched else None
-            request_state = (
-                PipelineLaunchRequestState.DISPATCHED
-                if is_dispatched
-                else PipelineLaunchRequestState.PENDING
-            )
+            dispatched_at = run_timestamp + timedelta(minutes=7)
             queue_item, _ = PipelineLaunchRequest.objects.get_or_create(
                 pipeline=pipeline,
                 defaults={
+                    "execution_type": PipelineExecutionType.SAST,
                     "project": project,
                     "schedule": schedule,
                     "launch_config": launch_config,
                     "origin": PipelineLaunchOrigin.SCHEDULE,
                     "authority_kind": PipelineLaunchAuthorityKind.SCHEDULE,
                     "params_snapshot": dict(launch_config.params),
-                    "state": request_state,
+                    "state": PipelineLaunchRequestState.DISPATCHED,
                     "dispatched_at": dispatched_at,
                 },
             )
@@ -967,8 +1380,17 @@ class Command(BaseCommand):
             if queue_item.launch_config_id != launch_config.id:
                 queue_item.launch_config = launch_config
                 queue_updates.append("launch_config")
-            if queue_item.state != request_state:
-                queue_item.state = request_state
+            if queue_item.execution_type != PipelineExecutionType.SAST:
+                queue_item.execution_type = PipelineExecutionType.SAST
+                queue_updates.append("execution_type")
+            if queue_item.dast_binding_id is not None:
+                queue_item.dast_binding = None
+                queue_updates.append("dast_binding")
+            if queue_item.trigger_project_version_id is not None:
+                queue_item.trigger_project_version = None
+                queue_updates.append("trigger_project_version")
+            if queue_item.state != PipelineLaunchRequestState.DISPATCHED:
+                queue_item.state = PipelineLaunchRequestState.DISPATCHED
                 queue_updates.append("state")
             if queue_item.dispatched_at != dispatched_at:
                 queue_item.dispatched_at = dispatched_at

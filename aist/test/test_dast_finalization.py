@@ -15,6 +15,7 @@ from aist.models import (
     AISTProject,
     AISTProjectVersion,
     AISTStatus,
+    DastExecutionState,
     DastProjectBinding,
     DastTarget,
     Organization,
@@ -87,6 +88,9 @@ def _validated_report(*, correlation_id: str, findings: list[dict] | None = None
 
 class DastFinalizationTests(TestCase):
     def setUp(self):
+        dispatch = patch("dojo.importers.default_importer.dojo_dispatch_task")
+        dispatch.start()
+        self.addCleanup(dispatch.stop)
         product_type = Product_Type.objects.create(name="DAST finalization")
         sla = SLA_Configuration.objects.create(name="DAST finalization SLA")
         self.organization = Organization.objects.create(
@@ -148,9 +152,9 @@ class DastFinalizationTests(TestCase):
             project=self.project,
             trigger_project_version=self.trigger,
             execution_type=PipelineExecutionType.DAST,
-            external_run_id="run-123",
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
         )
+        DastExecutionState.objects.create(pipeline=self.remote, run_id="run-123")
         PipelineLaunchRequest.objects.create(
             project=self.project,
             execution_type=PipelineExecutionType.DAST,
@@ -164,7 +168,7 @@ class DastFinalizationTests(TestCase):
             id="dast-manual-finalize",
             project=self.project,
             execution_type=PipelineExecutionType.MANUAL_IMPORT,
-            status=AISTStatus.FINISHED,
+            status=AISTStatus.ADMITTED,
         )
 
     def test_remote_and_manual_use_identical_import_and_post_commit_handoff(self):

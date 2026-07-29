@@ -48,9 +48,21 @@ def launching_dashboard(request: HttpRequest) -> HttpResponse:
             "aist_api:project_launch_config_list_create",
             kwargs={"project_id": 0},
         ).replace("/0/", "/{project_id}/"),
+        "api_project_dast_bindings_template": reverse(
+            "aist_api:project_dast_binding_list_create",
+            kwargs={"project_id": 0},
+        ).replace("/0/", "/{project_id}/"),
+        "api_project_meta_template": reverse(
+            "aist_api:project_meta",
+            kwargs={"project_id": 0},
+        ).replace("/0/", "/{project_id}/"),
         "api_launch_configs_dashboard_url": reverse("aist_api:launch_config_dashboard_list"),
         "api_launch_config_delete_template": reverse(
             "aist_api:project_launch_config_detail",
+            kwargs={"project_id": 0, "config_id": 0},
+        ).replace("/0/launch-configs/0/", "/{project_id}/launch-configs/{config_id}/"),
+        "api_launch_config_start_template": reverse(
+            "aist_api:project_launch_config_start",
             kwargs={"project_id": 0, "config_id": 0},
         ).replace("/0/launch-configs/0/", "/{project_id}/launch-configs/{config_id}/"),
         "api_launch_config_action_detail_template": reverse(

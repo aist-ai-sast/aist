@@ -45,8 +45,28 @@ export function findingStatusBadgeClass(status: FindingStatusBadge) {
   return FINDING_STATUS_BADGE_CLASSES[status];
 }
 
+const PIPELINE_STATUS_LABELS: Record<string, string> = {
+  ADMITTED: "Admitted",
+  EXECUTING: "Executing",
+  UPLOADING_RESULTS: "Uploading results",
+  FINDING_POSTPROCESSING: "Finding post-processing",
+  WAITING_DEDUPLICATION_TO_FINISH: "Waiting for deduplication",
+  WAITING_CONFIRMATION_TO_PUSH_TO_AI: "Waiting for AI confirmation",
+  PUSH_TO_AI: "Sending to AI",
+  WAITING_RESULT_FROM_AI: "Waiting for AI result",
+  FINISHED: "Finished",
+  FINISHED_WITH_WARNINGS: "Finished with warnings",
+};
+
+export function pipelineStatusLabel(status: string) {
+  const upper = status.toUpperCase();
+  return PIPELINE_STATUS_LABELS[upper] ?? status;
+}
+
 export function pipelineStatusBadgeClass(status: string) {
   const upper = status.toUpperCase();
+  if (upper === "ADMITTED") return "border-sky-400/50 text-sky-300 bg-sky-400/10";
+  if (upper === "EXECUTING") return "border-brand-500/50 text-brand-300 bg-brand-500/10";
   if (upper.includes("FAIL")) return "border-danger-500/50 text-danger-500 bg-danger-500/10";
   if (upper.includes("WARNING")) return "border-amber-400/50 text-amber-300 bg-amber-400/10";
   if (upper.includes("FINISH")) return "border-brand-600/50 text-brand-500 bg-brand-600/10";

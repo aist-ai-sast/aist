@@ -1,0 +1,29 @@
+<form method="post" id="dast-pipeline-run-form">
+    {% csrf_token %}
+    <input type="hidden" name="execution_type" value="DAST">
+    <input type="hidden" name="client_request_key" value="{{ client_request_key }}">
+    <input type="hidden" name="one_off_actions" value="[]">
+
+    {% if form.non_field_errors %}
+        <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+    {% endif %}
+
+    {% for field in form %}
+        <div class="mb-3 row">
+            <label class="col-sm-3 col-form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            <div class="col-sm-9">
+                {{ field }}
+                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% for error in field.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+            </div>
+        </div>
+    {% endfor %}
+
+    <div class="alert alert-info py-2 small">
+        This is a one-off launch. It does not create or modify a saved launch preset.
+        Parameters are validated server-side against the selected target's current schema.
+    </div>
+    <div class="text-end mt-3">
+        <button type="submit" class="btn btn-primary">Queue DAST pipeline</button>
+    </div>
+</form>

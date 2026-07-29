@@ -18,7 +18,7 @@ from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.ai_filter import validate_and_normalize_filter
 from aist.models import AISTProject, AISTProjectScript, AISTProjectVersion, VersionType
-from aist.pipeline_args import PipelineArguments
+from aist.pipeline_args import PipelineArguments, SastPipelineArguments
 
 
 class DummyCfg:
@@ -71,7 +71,7 @@ class PipelineArgsProfileTests(TestCase):
             profile={},  # no special analyzers profile
         )
 
-        args = PipelineArguments(
+        args = SastPipelineArguments(
             project=project,
             project_version={},
             selected_analyzers=[],     # force reading from config
@@ -108,7 +108,7 @@ class PipelineArgsProfileTests(TestCase):
             },  # profile-driven modifications
         )
 
-        args = PipelineArguments(
+        args = SastPipelineArguments(
             project=project,
             project_version={},
             selected_analyzers=[],     # force reading from config
@@ -284,7 +284,7 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
             version_type=VersionType.GIT_HASH,
             version="0123456789abcdef0123456789abcdef01234567",
         )
-        args = PipelineArguments(
+        args = SastPipelineArguments(
             project=self.project,
             project_version={"id": 0, "version": "main", "type": VersionType.GIT_BRANCH},
             selected_analyzers=[],
@@ -309,7 +309,7 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
             version_type=VersionType.GIT_BRANCH,
             version="main",
         )
-        args = PipelineArguments(
+        args = SastPipelineArguments(
             project=self.project,
             project_version=branch.as_dict(),
             selected_analyzers=[],
@@ -350,7 +350,7 @@ class ScriptFromDBTests(TestCase):
         )
 
     def _make_args(self, project, project_version):
-        args = PipelineArguments.__new__(PipelineArguments)
+        args = SastPipelineArguments.__new__(SastPipelineArguments)
         args.project = project
         args.project_version = project_version
         args.pipeline_path = None
@@ -454,7 +454,7 @@ class AnalyzersDiscardTests(TestCase):
                 },
             },
         )
-        args = PipelineArguments(
+        args = SastPipelineArguments(
             project=project,
             project_version={},
             selected_analyzers=[],

@@ -15,21 +15,38 @@ authority, configuration, and execution target are still valid.
 
 A pipeline does not exist merely because a request is queued. Admission creates
 the pipeline only after readiness and capacity checks succeed. Until then, the
-launching view shows the request as waiting, superseded, cancelled, expired, or
-failed without presenting it as a running pipeline.
+launch queue shows the request's current admission state without presenting it
+as a running pipeline.
+
+Admission acquires execution capacity and creates the pipeline in **Admitted**
+with a durable publish intent. The worker's first accepted delivery moves it to
+**Executing** and sets its start time. A repeated delivery cannot start a second
+execution. **Finished** and **Finished with warnings** are terminal outcomes;
+the finish time is recorded only on the first terminal transition.
 
 ## Execute the selected target
 
-One launch configuration selects one execution target:
+Each launch request selects one execution target:
 
 - **SAST** prepares an isolated source workspace and runs the configured builder
   and analyzer containers;
 - **DAST** invokes a standalone connector while the external DAST product owns
   the target-side scan and raw evidence.
 
-Both targets use the same AIST admission, pipeline control, cancellation intent,
-and result-import boundary. Target-specific readiness and execution details stay
-with the owning integration or runtime.
+Both targets use the same admission, capacity, pipeline lifecycle, generic
+worker task, and result-import boundary. Cancellation follows the selected
+driver: SAST stops locally, while DAST persists stop intent until the external
+provider reaches a terminal state.
+
+SAST has an effective source version at admission. DAST records the selected
+Git branch or hash as its trigger, then sets the effective version only after a
+validated provider result maps the bound repository identity to an actual
+commit. Manual DAST imports use the same result-to-binding mapping.
+
+The manual start page can build either a one-off SAST or DAST launch. A one-off
+DAST launch selects an enabled binding, an explicit Git source version, and
+target-schema-valid parameters in memory. It does not create or alter a saved
+launch configuration.
 
 ## Import a result
 
@@ -54,7 +71,7 @@ An execution or processing failure does not erase the pipeline. The terminal
 outcome and available logs remain part of its history. Provider-controlled
 messages are normalized before they are presented as a product outcome.
 
-See [SAST pipeline runtime](../architecture/sast-pipeline-runtime.md),
+See [pipeline execution runtime](../architecture/sast-pipeline-runtime.md),
 [DAST integration](../integrations/dast.md), [finding review](finding-review.md),
 and [AI triage](ai-triage.md) for the responsibilities on either side of this
 shared lifecycle.

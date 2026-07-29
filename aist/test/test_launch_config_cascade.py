@@ -38,11 +38,13 @@ class LaunchConfigCascadeTests(TestCase):
             launch_config=self.launch_config,
         )
 
-    def test_delete_launch_config_cascades_schedule_and_queue(self):
+    def test_delete_launch_config_preserves_durable_request(self):
         self.launch_config.delete()
 
         self.assertFalse(LaunchSchedule.objects.filter(id=self.schedule.id).exists())
-        self.assertFalse(PipelineLaunchRequest.objects.filter(id=self.queue.id).exists())
+        self.queue.refresh_from_db()
+        self.assertIsNone(self.queue.schedule_id)
+        self.assertIsNone(self.queue.launch_config_id)
 
     def test_delete_project_cascades_launch_configs(self):
         self.project.delete()

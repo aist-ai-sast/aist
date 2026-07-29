@@ -199,7 +199,7 @@ class OneOffActionsTests(TestCase):
             id="pipe-1",
             project=self.project,
             project_version=self.pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             launch_data={
                 "one_off_actions": [
                     {
@@ -216,13 +216,13 @@ class OneOffActionsTests(TestCase):
         on_pipeline_status_changed(
             sender=AISTPipeline,
             pipeline_id=pipeline.id,
-            old_status=AISTStatus.SAST_LAUNCHED,
+            old_status=AISTStatus.EXECUTING,
             new_status=AISTStatus.FINISHED,
         )
         on_pipeline_status_changed(
             sender=AISTPipeline,
             pipeline_id=pipeline.id,
-            old_status=AISTStatus.SAST_LAUNCHED,
+            old_status=AISTStatus.EXECUTING,
             new_status=AISTStatus.FINISHED,
         )
 
@@ -251,7 +251,7 @@ class OneOffActionsTests(TestCase):
             id="pipe-config-action",
             project=self.project,
             project_version=self.pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             launch_data={
                 "launch_config_id": str(config.pk),
                 "launch_config_actions": [{
@@ -267,7 +267,7 @@ class OneOffActionsTests(TestCase):
             on_pipeline_status_changed(
                 sender=AISTPipeline,
                 pipeline_id=pipeline.id,
-                old_status=AISTStatus.SAST_LAUNCHED,
+                old_status=AISTStatus.EXECUTING,
                 new_status=AISTStatus.FINISHED,
             )
 

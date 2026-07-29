@@ -45,10 +45,15 @@ The ready state should show no unresolved integration, capability, parameter,
 source, or VPN issue. If the provider revision or schema changed, reload the
 catalog and review the new snapshot instead of reusing stale defaults.
 
-## Create and start a launch configuration
+## Start once or create a launch configuration
 
-Create a DAST launch configuration from the enabled binding. Select the source
-version and start it from the UI. API clients may enqueue the same configuration:
+For a single run, open **Start pipeline**, select **DAST**, then choose the
+project, enabled binding, explicit Git source version, and target parameters.
+This path creates a durable request but does not save a preset.
+
+For reuse or scheduling, create a DAST launch configuration in the launch
+dashboard. The preset stores its binding, Git trigger, and schema-validated
+parameters. Start it from the dashboard or enqueue it through the API:
 
 ```text
 POST projects/<project_id>/launch-configs/<config_id>/start/
@@ -64,9 +69,10 @@ admission.
 
 ## Schedule or run once
 
-Configure the schedule on the launch configuration with a five-field cron,
-enabled state, and concurrency limit. **Run once** queues an immediate request
-without changing the cron or recorded last tick.
+Configure the schedule on the launch configuration with a five-field cron and
+enabled state. DAST capacity is one integration slot and is not operator
+configurable. **Run once** queues an immediate request without changing the cron
+or recorded last tick.
 
 Scheduled and immediate requests use the same authorization, readiness,
 capacity, connector, and result path. See
@@ -92,14 +98,20 @@ When a run appears stuck, check in order:
 3. the provider run identified by the AIST correlation value;
 4. whether reconciliation later records a terminal provider outcome.
 
+For a schedule that does not launch, inspect its persisted last-attempt time,
+error code, and safe error explanation before changing cron or readiness state.
+Do not repeatedly recreate the schedule: the stored due tick is the recovery
+anchor after an admission failure.
+
 ## Import an external result
 
 In **Pipelines → Import**, select DAST, choose the enabled binding, upload the
 complete provider terminal result, and review the validation preview before
 confirming.
 
-AIST derives the source revision from the binding. Do not supply a different
-commit. Confirmation creates an import pipeline and repeats validation before
+AIST resolves the effective Git hash from the validated report entry matching
+the binding's repository identity; there is no separate revision field to
+override. Confirmation creates an import pipeline and repeats validation before
 findings are persisted.
 
 ## Rotate or disable access
@@ -109,8 +121,14 @@ operation, then rotate the integration token in AIST. Wait for the new
 validation generation and capability synchronization before re-enabling
 autonomous bindings.
 
-Disable the integration when access must stop. Existing history remains, but
-new autonomous launches should fail readiness.
+Disable the integration when access must stop. Disable is idempotent: it blocks
+new admission, supersedes pending validation and catalog synchronization work,
+and disables schedules while preserving configuration and history.
+
+Use **Delete** only for an already disabled, quiescent integration. Deletion is
+blocked while a request, pipeline, or execution lease is active. A successful
+teardown removes targets, bindings, presets, schedules, and DAST queue-control
+records, while pipelines and findings remain available.
 
 ## Promote a provider contract change
 
@@ -130,7 +148,7 @@ promotion.
 | Symptom | Check |
 |---|---|
 | Integration not ready | Gateway URL policy, token, CA, explicit DAST VPN, and validation result |
-| Validation reports a rejected endpoint | Absolute HTTPS URL with no credentials, query, or fragment, and port 443 or 8443 |
+| Validation reports a rejected endpoint | Absolute HTTPS URL with no credentials, query, or fragment, on port 443 or 8443 |
 | Validation reports a TLS handshake failure | Gateway certificate chain, the CA carried in the bundle, and whether the gateway serves the hostname in the gateway URL. This is a certificate or naming fault, not a network one |
 | Validation reports an unreachable gateway | DAST VPN health, gateway availability, and the listening port |
 | Ready, but no targets to bind | Whether the gateway accepts a target-catalog request from this integrator identity. Reaching the gateway and being allowed to list its targets are separate permissions on the DAST side, so validation can succeed while the catalog is refused |

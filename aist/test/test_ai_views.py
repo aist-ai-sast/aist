@@ -214,6 +214,14 @@ class AISTAIViewsTests(AISTApiBase):
         template = resp.context["api_launch_config_action_create_template"]
         self.assertIn("{project_id}", template)
         self.assertIn("{config_id}", template)
+        self.assertIn("{project_id}", resp.context["api_project_dast_bindings_template"])
+        self.assertIn("{project_id}", resp.context["api_project_meta_template"])
+
+        body = resp.content.decode("utf-8")
+        self.assertIn('id="dast-preset-binding"', body)
+        self.assertIn('id="dast-preset-trigger"', body)
+        self.assertIn('id="dast-preset-params-help"', body)
+        self.assertIn('id="form-dast-binding"', body)
 
     def test_launching_dashboard_queue_renders_all_launch_request_states(self):
         """

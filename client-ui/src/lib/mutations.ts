@@ -405,30 +405,9 @@ export function useDeleteDastProjectBinding(projectId: number) {
   });
 }
 
-export function useCreateDastLaunchConfig(projectId: number) {
-  return useMutation({
-    mutationFn: ({
-      bindingId,
-      name,
-      params,
-    }: {
-      bindingId: number;
-      name: string;
-      params: Record<string, unknown>;
-    }) =>
-      fetchJson(getRoute("project_launch_configs_url", { project_id: projectId }), {
-        method: "POST",
-        body: JSON.stringify({
-          name,
-          description: "",
-          execution_type: "DAST",
-          dast_binding_id: bindingId,
-          params,
-          is_default: false,
-        }),
-      }),
-  });
-}
+// DAST launch configs are created in the AIST admin launch dashboard, alongside SAST ones.
+// client-ui deliberately has no create mutation: it had no list, edit, start or schedule
+// surface to go with it, so a config created here was unreachable afterwards.
 
 // ---------------------------------------------------------------------------
 // Work item link mutations
@@ -613,9 +592,25 @@ export function useDeleteOrgIntegration(orgId: number) {
   return useMutation({
     mutationFn: (integrationId: number) =>
       fetchJson(getRoute("org_integration_detail_url", { integration_id: integrationId }), { method: "DELETE" }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
-    },
+    onSuccess: () => invalidateDastLifecycleQueries(queryClient, orgId),
+  });
+}
+
+function invalidateDastLifecycleQueries(queryClient: ReturnType<typeof useQueryClient>, orgId: number) {
+  queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
+  queryClient.invalidateQueries({ queryKey: ["dast-targets", orgId] });
+  queryClient.invalidateQueries({ queryKey: ["dast-bindings"] });
+  queryClient.invalidateQueries({ queryKey: ["launch-configs"] });
+  queryClient.invalidateQueries({ queryKey: ["launch-schedules"] });
+  queryClient.invalidateQueries({ queryKey: ["launch-requests"] });
+}
+
+export function useDisableDastIntegration(orgId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (integrationId: number) =>
+      fetchJson(getRoute("dast_integration_disable_url", { integration_id: integrationId }), { method: "POST" }),
+    onSuccess: () => invalidateDastLifecycleQueries(queryClient, orgId),
   });
 }
 

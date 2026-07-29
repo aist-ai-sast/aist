@@ -7,7 +7,7 @@ from prometheus_client import Counter, Histogram
 
 _logger = logging.getLogger("aist.execution.audit")
 
-_EXECUTION_TYPES = frozenset({"sast", "dast", "all"})
+_EXECUTION_TYPES = {"all"}
 _QUEUE_EVENTS = frozenset({"claimed", "coalesced", "expired", "capacity_wait"})
 _PROVIDER_OPERATIONS = frozenset({"ping", "catalog", "execute", "reconcile"})
 _DAST_OUTCOMES = frozenset({
@@ -95,8 +95,12 @@ def _bounded(value: str, allowed: frozenset[str], *, fallback: str) -> str:
     return normalized if normalized in allowed else fallback
 
 
+def register_execution_metric_descriptor(descriptor) -> None:
+    _EXECUTION_TYPES.add(descriptor.label)
+
+
 def observe_queue_claim(*, execution_type: str, age_seconds: float) -> None:
-    execution_type = _bounded(execution_type, _EXECUTION_TYPES, fallback="sast")
+    execution_type = _bounded(execution_type.lower(), frozenset(_EXECUTION_TYPES), fallback="all")
     age_seconds = max(0.0, float(age_seconds))
     QUEUE_AGE_SECONDS.labels(execution_type=execution_type).observe(age_seconds)
     QUEUE_EVENTS_TOTAL.labels(execution_type=execution_type, event="claimed").inc()
@@ -105,13 +109,13 @@ def observe_queue_claim(*, execution_type: str, age_seconds: float) -> None:
 
 
 def record_queue_event(*, execution_type: str, event: str, amount: int = 1) -> None:
-    execution_type = _bounded(execution_type, _EXECUTION_TYPES, fallback="sast")
+    execution_type = _bounded(execution_type.lower(), frozenset(_EXECUTION_TYPES), fallback="all")
     event = _bounded(event, _QUEUE_EVENTS, fallback="capacity_wait")
     QUEUE_EVENTS_TOTAL.labels(execution_type=execution_type, event=event).inc(max(0, int(amount)))
 
 
 def observe_lease_decision(*, execution_type: str, acquired_slot: int | None, capacity: int) -> None:
-    execution_type = _bounded(execution_type, _EXECUTION_TYPES, fallback="sast")
+    execution_type = _bounded(execution_type.lower(), frozenset(_EXECUTION_TYPES), fallback="all")
     capacity = max(1, int(capacity))
     decision = "busy" if acquired_slot is None else "acquired"
     utilization = 1.0 if acquired_slot is None else min(1.0, (int(acquired_slot) + 1) / capacity)
@@ -194,7 +198,11 @@ def operational_alert(code: str, *, execution_type: str, count: int) -> None:
         extra={
             "aist_execution_alert": {
                 "code": code,
-                "execution_type": _bounded(execution_type, _EXECUTION_TYPES, fallback="sast"),
+                "execution_type": _bounded(
+                    execution_type.lower(),
+                    frozenset(_EXECUTION_TYPES),
+                    fallback="all",
+                ),
                 "count": max(0, int(count)),
             },
         },

@@ -46,7 +46,11 @@ class DastTargetSerializer(serializers.ModelSerializer):
 class DastProjectBindingSerializer(serializers.ModelSerializer):
 
     target = DastTargetSerializer(read_only=True)
-    target_id = serializers.IntegerField(write_only=True)
+    target_id = serializers.PrimaryKeyRelatedField(
+        source="target",
+        queryset=DastTarget.objects.none(),
+        write_only=True,
+    )
     capability_revision = serializers.CharField(write_only=True)
     schema_digest = serializers.CharField(write_only=True)
     parameter_snapshot = serializers.DictField()
@@ -74,6 +78,22 @@ class DastProjectBindingSerializer(serializers.ModelSerializer):
     def get_readiness(self, obj) -> dict:
         return check_dast_binding_readiness(obj).to_snapshot()
 
+    def get_fields(self):
+        fields = super().get_fields()
+        project = self.context.get("project")
+        if project is not None:
+            fields["target_id"].queryset = (
+                DastTarget.objects
+                .filter(
+                    integration__organization_id=project.organization_id,
+                    integration__integration_type=OrgIntegrationType.DAST,
+                    integration__is_active=True,
+                    is_available=True,
+                )
+                .select_related("integration", "integration__dast_state")
+            )
+        return fields
+
     def to_internal_value(self, data):
         expected = {
             "target_id",
@@ -91,15 +111,7 @@ class DastProjectBindingSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         project = self.context["project"]
-        target = DastTarget.objects.select_related("integration", "integration__dast_state").filter(
-            pk=attrs.pop("target_id"),
-            integration__organization_id=project.organization_id,
-            integration__integration_type=OrgIntegrationType.DAST,
-            integration__is_active=True,
-            is_available=True,
-        ).first()
-        if target is None:
-            raise serializers.ValidationError({"target_id": "Available same-organization DAST target required."})
+        target = attrs["target"]
         state = getattr(target.integration, "dast_state", None)
         if state is None or state.validation_state != DastIntegrationValidationState.READY:
             raise serializers.ValidationError({"target_id": "DAST integration is not ready."})
@@ -109,12 +121,11 @@ class DastProjectBindingSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"schema_digest": "Target schema changed; reload the catalog."})
         if attrs.get("autonomous_enabled") and not target.autonomous_ready:
             raise serializers.ValidationError({"autonomous_enabled": "Target is not autonomous-ready."})
-        candidate = DastProjectBinding(project=project, target=target, **attrs)
+        candidate = DastProjectBinding(project=project, **attrs)
         try:
             candidate.full_clean(exclude=["id"], validate_unique=False, validate_constraints=False)
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc.message_dict) from exc
-        attrs["target"] = target
         return attrs
 
     def create(self, validated_data):

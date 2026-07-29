@@ -37,7 +37,7 @@ def _target(**overrides):
     payload = {
         "id": "webapp",
         "display_name": "Web application",
-        "contract_revision": "sha256:" + "a" * 64,
+        "contract_revision": "2.0",
         "capability_revision": "sha256:" + "b" * 64,
         "schema_digest": "sha256:" + "c" * 64,
         "parameter_schema": {

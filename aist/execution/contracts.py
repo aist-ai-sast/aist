@@ -19,6 +19,8 @@ _ERR_EFFECTIVE_REQUIRED = "Preselected-version policy requires an effective proj
 _ERR_RESULT_TRIGGER_REQUIRED = "Result-resolved version policy requires a trigger project version."
 _ERR_RESULT_VERSION = "Result-resolved version policy cannot preselect an effective version."
 _ERR_PULL_REQUEST = "Execution plan pull request id must be a positive integer."
+_ERR_METRIC_LABEL = "Execution metric label is invalid."
+_ERR_METRIC_OPERATIONS = "Execution metric operations are invalid."
 
 
 class PipelineExecutionKind(StrEnum):
@@ -27,8 +29,24 @@ class PipelineExecutionKind(StrEnum):
 
 
 class PipelineTaskName(StrEnum):
-    RUN_SAST_PIPELINE = "aist.tasks.pipeline.run_sast_pipeline"
     RUN_PIPELINE_EXECUTION = "aist.tasks.pipeline.run_pipeline_execution"
+
+
+class ExecutionCancellationMode(StrEnum):
+    IMMEDIATE = "IMMEDIATE"
+    COOPERATIVE = "COOPERATIVE"
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionMetricDescriptor:
+    label: str
+    operations: frozenset[str]
+
+    def __post_init__(self) -> None:
+        if not self.label or len(self.label) > 24 or not self.label.replace("_", "").isalnum():
+            raise ExecutionPlanError(_ERR_METRIC_LABEL)
+        if not self.operations or any(not operation or len(operation) > 24 for operation in self.operations):
+            raise ExecutionPlanError(_ERR_METRIC_OPERATIONS)
 
 
 class EffectiveVersionPolicy(StrEnum):
@@ -54,6 +72,11 @@ class LaunchAuthorityKind(StrEnum):
 class ExecutionPlanError(ValueError):
 
     """Raised when trusted adapter code produces an invalid execution plan."""
+
+    def __init__(self, detail: str, *, code: str = "PLANNING_REJECTED"):
+        self.code = code[:64]
+        self.safe_detail = str(detail)[:512]
+        super().__init__(self.safe_detail)
 
 
 @dataclass(frozen=True, slots=True)

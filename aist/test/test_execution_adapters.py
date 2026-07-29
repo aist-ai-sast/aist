@@ -3,11 +3,14 @@ from unittest import TestCase
 
 from aist.execution.adapters import (
     DuplicateLaunchAdapterError,
+    IncompleteExecutionDriverError,
     LaunchAdapterRegistry,
     UnknownLaunchAdapterError,
 )
 from aist.execution.contracts import (
     EffectiveVersionPolicy,
+    ExecutionCancellationMode,
+    ExecutionMetricDescriptor,
     ExecutionPlan,
     LaunchAuthority,
     LaunchAuthorityKind,
@@ -22,12 +25,31 @@ class FakeLaunchAdapter:
 
     def __init__(self, execution_type: PipelineExecutionKind, plan: ExecutionPlan):
         self.execution_type = execution_type
+        self.cancellation_mode = ExecutionCancellationMode.IMMEDIATE
+        self.metric_descriptor = ExecutionMetricDescriptor(
+            label=execution_type.value.lower(),
+            operations=frozenset({"execute", "cancel"}),
+        )
         self.plan = plan
         self.calls: list[LaunchPlanningContext] = []
 
     def build_plan(self, context: LaunchPlanningContext) -> ExecutionPlan:
         self.calls.append(context)
         return self.plan
+
+    def initialize_pipeline(self, pipeline) -> None:
+        del pipeline
+
+    def allows_duplicate_delivery(self, *, pipeline_id: str, task_id: str | None, retries: int) -> bool:
+        del pipeline_id, task_id, retries
+        return False
+
+    def should_recover(self, pipeline) -> bool:
+        del pipeline
+        return False
+
+    def invoke(self, runtime, pipeline_id: str):
+        return runtime.run_sast(pipeline_id)
 
 
 class LaunchAdapterRegistryTests(TestCase):
@@ -98,6 +120,20 @@ class LaunchAdapterRegistryTests(TestCase):
             registry.resolve("MANUAL_IMPORT")
 
         self.assertEqual(adapter.calls, [])
+
+    def test_partial_driver_is_rejected_before_it_can_plan_a_pipeline(self):
+        partial = type("PartialDriver", (), {
+            "execution_type": PipelineExecutionKind.DAST,
+            "metric_descriptor": ExecutionMetricDescriptor(
+                label="partial",
+                operations=frozenset({"execute", "cancel"}),
+            ),
+            "cancellation_mode": ExecutionCancellationMode.IMMEDIATE,
+            "build_plan": lambda _self, _context: None,
+        })()
+
+        with self.assertRaises(IncompleteExecutionDriverError):
+            LaunchAdapterRegistry(partial)
 
     def test_execution_plan_is_frozen(self):
         with self.assertRaises(FrozenInstanceError):

@@ -1,42 +1,93 @@
 from unittest.mock import patch
 
 from django.urls import reverse
+from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
 from dojo.models import Product_Type_Member, Role
 from rest_framework.test import APIClient
 
+from aist.integrations.dast_config import DastTargetSnapshot
 from aist.models import (
     AISTApiToken,
     AISTPipeline,
     AISTStatus,
     ApiTokenScope,
     DastExecutionOutcome,
+    DastExecutionState,
+    DastIntegrationState,
+    DastIntegrationValidationState,
+    DastProjectBinding,
     Organization,
+    OrgIntegration,
+    OrgIntegrationType,
     PipelineExecutionType,
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
+from aist.services.dast_targets import refresh_dast_targets
 from aist.tasks import pipeline as pipeline_tasks
 from aist.test.test_api import AISTApiBase
+from aist.test.test_dast_target_models import _integration_config, _target_wire
 from aist.utils.pipeline import stop_pipeline
 
 
 class DastCancellationTests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.organization = Organization.objects.create(
+            name="DAST cancellation fixture organization",
+            product_type=self.prod_type,
+        )
+        integration = OrgIntegration.objects.create(
+            organization=self.organization,
+            integration_type=OrgIntegrationType.DAST,
+            name="DAST cancellation fixture",
+            config=_integration_config("dast-cancellation-public-id"),
+            secret="runtime-token",  # noqa: S106 -- test fixture
+            is_active=True,
+        )
+        now = timezone.now()
+        DastIntegrationState.objects.create(
+            integration=integration,
+            validation_state=DastIntegrationValidationState.READY,
+            validated_at=now,
+            contract_version="2.0",
+            capabilities_etag="cancellation-catalog",
+            capabilities_synced_at=now,
+        )
+        target = refresh_dast_targets(
+            integration,
+            (DastTargetSnapshot.from_snapshot(_target_wire("cancellation-api")),),
+            seen_at=now,
+        )[0]
+        self.binding = DastProjectBinding.objects.create(
+            project=self.project,
+            target=target,
+            source_repo_key="cancellation-api",
+            enabled=True,
+            autonomous_enabled=True,
+            parameter_snapshot={"depth": "deep"},
+        )
+
     def _pipeline_with_request(self, *, state=PipelineLaunchRequestState.DISPATCHED):
         pipeline = AISTPipeline.objects.create(
             id="dast-cancel-pipeline",
             project=self.project,
             trigger_project_version=self.pv,
             execution_type=PipelineExecutionType.DAST,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             run_task_id="dast-task-id",
-            external_run_id="provider-run-id",
-            external_log_cursor=4,
-            external_execution_outcome=DastExecutionOutcome.RUNNING,
+        )
+        DastExecutionState.objects.create(
+            pipeline=pipeline,
+            run_id="provider-run-id",
+            log_cursor=4,
+            outcome=DastExecutionOutcome.RUNNING,
         )
         request = PipelineLaunchRequest.objects.create(
             project=self.project,
             execution_type=PipelineExecutionType.DAST,
+            dast_binding=self.binding,
             trigger_project_version=self.pv,
             state=state,
             pipeline=pipeline,
@@ -54,12 +105,13 @@ class DastCancellationTests(AISTApiBase):
             stop_pipeline(pipeline)
 
         pipeline.refresh_from_db()
+        execution_state = pipeline.dast_execution_state
         request.refresh_from_db()
-        self.assertIsNotNone(pipeline.external_cancel_requested_at)
-        self.assertEqual(pipeline.external_execution_outcome, DastExecutionOutcome.STOP_PENDING)
-        self.assertEqual(pipeline.external_run_id, "provider-run-id")
-        self.assertEqual(pipeline.external_log_cursor, 4)
-        self.assertEqual(pipeline.status, AISTStatus.SAST_LAUNCHED)
+        self.assertIsNotNone(execution_state.cancel_requested_at)
+        self.assertEqual(execution_state.outcome, DastExecutionOutcome.STOP_PENDING)
+        self.assertEqual(execution_state.run_id, "provider-run-id")
+        self.assertEqual(execution_state.log_cursor, 4)
+        self.assertEqual(pipeline.status, AISTStatus.EXECUTING)
         self.assertEqual(pipeline.run_task_id, "dast-task-id")
         self.assertEqual(request.state, PipelineLaunchRequestState.DISPATCHED)
         cleanup.assert_called_once_with(pipeline.id)
@@ -76,9 +128,10 @@ class DastCancellationTests(AISTApiBase):
             stop_pipeline(pipeline)
 
         pipeline.refresh_from_db()
+        execution_state = pipeline.dast_execution_state
         request.refresh_from_db()
         self.assertEqual(request.state, PipelineLaunchRequestState.CANCELLED)
-        self.assertEqual(pipeline.external_execution_outcome, DastExecutionOutcome.CANCELLED_BEFORE_START)
+        self.assertEqual(execution_state.outcome, DastExecutionOutcome.CANCELLED_BEFORE_START)
         cleanup.assert_not_called()
         revoke.assert_called_once_with("dast-task-id")
         finish.assert_called_once_with(pipeline.id, degraded=True)
@@ -87,8 +140,10 @@ class DastCancellationTests(AISTApiBase):
         pipeline, request = self._pipeline_with_request()
         pipeline.status = AISTStatus.FINISHED
         pipeline.run_task_id = None
-        pipeline.external_execution_outcome = DastExecutionOutcome.TERMINAL
-        pipeline.save(update_fields=["status", "run_task_id", "external_execution_outcome", "updated"])
+        pipeline.save(update_fields=["status", "run_task_id", "updated"])
+        execution_state = pipeline.dast_execution_state
+        execution_state.outcome = DastExecutionOutcome.TERMINAL
+        execution_state.save(update_fields=["outcome", "updated"])
 
         with (
             patch("aist.utils.pipeline.cleanup_pipeline_containers") as cleanup,
@@ -97,9 +152,10 @@ class DastCancellationTests(AISTApiBase):
             stop_pipeline(pipeline)
 
         pipeline.refresh_from_db()
+        execution_state.refresh_from_db()
         request.refresh_from_db()
-        self.assertIsNone(pipeline.external_cancel_requested_at)
-        self.assertEqual(pipeline.external_execution_outcome, DastExecutionOutcome.TERMINAL)
+        self.assertIsNone(execution_state.cancel_requested_at)
+        self.assertEqual(execution_state.outcome, DastExecutionOutcome.TERMINAL)
         self.assertEqual(request.state, PipelineLaunchRequestState.DISPATCHED)
         cleanup.assert_not_called()
         revoke.assert_not_called()
@@ -121,7 +177,7 @@ class DastCancellationTests(AISTApiBase):
             project=self.other_project,
             trigger_project_version=self.other_pv,
             execution_type=PipelineExecutionType.DAST,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
         )
         reader_role, _created = Role.objects.get_or_create(
             id=Roles.Reader,
@@ -143,13 +199,9 @@ class DastCancellationTests(AISTApiBase):
 
     def test_read_only_pat_cannot_request_remote_stop(self):
         pipeline, _request = self._pipeline_with_request()
-        organization = Organization.objects.create(
-            name="DAST cancellation organization",
-            product_type=self.prod_type,
-        )
         _token, raw = AISTApiToken.issue(
             user=self.user,
-            organization=organization,
+            organization=self.organization,
             name="dast-cancel-read-only",
             scope=ApiTokenScope.READ_ONLY,
         )

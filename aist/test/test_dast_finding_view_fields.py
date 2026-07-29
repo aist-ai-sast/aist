@@ -136,7 +136,7 @@ class DastFindingViewFieldsTests(TestCase):
             id="dastview1",
             project=self.project,
             execution_type=PipelineExecutionType.MANUAL_IMPORT,
-            status=AISTStatus.FINISHED,
+            status=AISTStatus.ADMITTED,
             launch_data={"source": "manual_import", "dast_binding_id": binding.pk},
         )
         report_bytes = json.dumps(_terminal_payload()).encode()

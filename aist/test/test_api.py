@@ -2099,7 +2099,7 @@ class AISTUIApiTests(AISTApiBase):
             id="pipe-stop-1",
             project=self.project,
             project_version=self.pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             run_task_id="celery-1",
         )
         url = reverse("aist_api:pipeline_stop", kwargs={"pipeline_id": pipeline.id})

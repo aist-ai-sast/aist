@@ -154,14 +154,14 @@ class StandaloneDastOutcomeTests(AISTApiBase):
             project=self.project,
             trigger_project_version=self.pv,
             execution_type=PipelineExecutionType.DAST,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
         )
         self.other_pipeline = AISTPipeline.objects.create(
             id="dast-outcome-other",
             project=self.project,
             trigger_project_version=self.pv,
             execution_type=PipelineExecutionType.DAST,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
         )
 
     @staticmethod
@@ -238,4 +238,4 @@ class StandaloneDastOutcomeTests(AISTApiBase):
         self.other_pipeline.refresh_from_db()
         self.assertEqual(self.pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
         self.assertEqual(public_dast_outcome_code(self.pipeline), "POLICY_NO_ELIGIBLE_STAND")
-        self.assertEqual(self.other_pipeline.status, AISTStatus.SAST_LAUNCHED)
+        self.assertEqual(self.other_pipeline.status, AISTStatus.EXECUTING)

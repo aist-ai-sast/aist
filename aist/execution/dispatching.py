@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
@@ -8,6 +9,7 @@ from typing import TYPE_CHECKING
 from django.db import transaction
 from django.utils import timezone
 
+from aist.execution.contracts import ExecutionPlanError
 from aist.execution.launch_request import LaunchRequestSnapshotError, validated_secret_free_json
 from aist.execution.leases import acquire_execution_plan_lease, release_execution_lease
 from aist.execution.observability import observe_lease_decision, record_queue_event
@@ -27,6 +29,7 @@ from aist.models import (
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
+from aist.services.pipeline_lifecycle import transition_pipeline_status
 from aist.utils.pipeline import has_unfinished_pipeline
 
 if TYPE_CHECKING:
@@ -36,6 +39,7 @@ PLANNING_FAILED = "PLANNING_FAILED"
 _PLANNING_FAILURE_DETAIL = "The launch request could not be planned safely."
 _ERR_CLAIM = "Launch request is no longer owned by this dispatcher."
 _ERR_OUTBOX = "Launch request has an invalid persisted outbox payload."
+LOGGER = logging.getLogger(__name__)
 
 
 class LaunchPlanningStatus(StrEnum):
@@ -74,15 +78,21 @@ class LaunchPublishCommand:
     task_args: tuple[object, ...]
 
 
-def _mark_claim_failed(*, request_id: int, claim_owner: str) -> None:
+def _mark_claim_failed(
+    *,
+    request_id: int,
+    claim_owner: str,
+    code: str = PLANNING_FAILED,
+    detail: str = _PLANNING_FAILURE_DETAIL,
+) -> None:
     PipelineLaunchRequest.objects.filter(
         pk=request_id,
         state=PipelineLaunchRequestState.CLAIMED,
         claim_owner=claim_owner,
     ).update(
         state=PipelineLaunchRequestState.FAILED,
-        failure_code=PLANNING_FAILED,
-        failure_detail=_PLANNING_FAILURE_DETAIL,
+        failure_code=code[:64],
+        failure_detail=detail[:512],
         updated=timezone.now(),
     )
 
@@ -141,7 +151,7 @@ def _defer_capacity_blocked_claim(
         )
 
 
-def _persist_execution_plan(*, request_id: int, claim_owner: str, lease_id: int, plan) -> None:
+def _persist_execution_plan(*, request_id: int, claim_owner: str, lease_id: int, plan, adapter_registry) -> None:
     task_args = validated_secret_free_json(list(plan.task_args), label="task_args_snapshot")
     if not isinstance(task_args, list):
         raise LaunchRequestSnapshotError(_ERR_OUTBOX)
@@ -173,11 +183,7 @@ def _persist_execution_plan(*, request_id: int, claim_owner: str, lease_id: int,
                 pk=plan.effective_project_version_id,
                 project_id=request.project_id,
             )
-            if has_unfinished_pipeline(project_version) or AISTPipeline.objects.filter(
-                project_version=project_version,
-                status=AISTStatus.FINISHED,
-                run_task_id__isnull=False,
-            ).exists():
+            if has_unfinished_pipeline(project_version):
                 raise _ExecutionBusyError
 
         pipeline = AISTPipeline.objects.create(
@@ -186,11 +192,12 @@ def _persist_execution_plan(*, request_id: int, claim_owner: str, lease_id: int,
             project_version=project_version,
             trigger_project_version_id=plan.trigger_project_version_id,
             execution_type=plan.execution_type.value,
-            status=AISTStatus.FINISHED,
+            status=AISTStatus.ADMITTED,
             launch_data=dict(plan.initial_launch_data),
             run_task_id=str(request.task_id),
             pull_request_id=plan.pull_request_id,
         )
+        adapter_registry.initialize_pipeline(pipeline)
         lease.pipeline = pipeline
         lease.save(update_fields=["pipeline"])
         request.pipeline = pipeline
@@ -237,7 +244,16 @@ def plan_claimed_launch(
             )
         )
         plan = adapter_registry.build_plan(planning_context_from_launch_request(request))
+    except ExecutionPlanError as exc:
+        _mark_claim_failed(
+            request_id=request_id,
+            claim_owner=claim_owner,
+            code=exc.code,
+            detail=exc.safe_detail,
+        )
+        return LaunchPlanningResult(status=LaunchPlanningStatus.FAILED, request_id=request_id)
     except Exception:
+        LOGGER.exception("Unexpected launch planning failure (request_id=%s)", request_id)
         _mark_claim_failed(request_id=request_id, claim_owner=claim_owner)
         return LaunchPlanningResult(status=LaunchPlanningStatus.FAILED, request_id=request_id)
 
@@ -261,12 +277,23 @@ def plan_claimed_launch(
             claim_owner=claim_owner,
             lease_id=lease.pk,
             plan=plan,
+            adapter_registry=adapter_registry,
         )
     except _ExecutionBusyError:
         release_execution_lease(lease_id=lease.pk, request_id=request_id)
         _defer_capacity_blocked_claim(request_id=request_id, claim_owner=claim_owner)
         return LaunchPlanningResult(status=LaunchPlanningStatus.BUSY, request_id=request_id)
+    except ExecutionPlanError as exc:
+        release_execution_lease(lease_id=lease.pk, request_id=request_id)
+        _mark_claim_failed(
+            request_id=request_id,
+            claim_owner=claim_owner,
+            code=exc.code,
+            detail=exc.safe_detail,
+        )
+        return LaunchPlanningResult(status=LaunchPlanningStatus.FAILED, request_id=request_id)
     except Exception:
+        LOGGER.exception("Unexpected launch plan persistence failure (request_id=%s)", request_id)
         release_execution_lease(lease_id=lease.pk, request_id=request_id)
         _mark_claim_failed(request_id=request_id, claim_owner=claim_owner)
         return LaunchPlanningResult(status=LaunchPlanningStatus.FAILED, request_id=request_id)
@@ -319,6 +346,7 @@ def accept_published_launch(*, pipeline_id: str, task_id: str | None) -> LaunchA
             request.state = PipelineLaunchRequestState.DISPATCHED
             request.dispatched_at = timezone.now()
             request.save(update_fields=["state", "dispatched_at", "updated"])
+            transition_pipeline_status(pipeline_id, AISTStatus.EXECUTING)
             return LaunchAcceptance.ACCEPTED
         if request.state == PipelineLaunchRequestState.DISPATCHED:
             return LaunchAcceptance.DUPLICATE

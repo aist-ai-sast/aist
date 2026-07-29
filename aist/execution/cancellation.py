@@ -3,7 +3,8 @@ from __future__ import annotations
 from django.db import transaction
 from django.utils import timezone
 
-from aist.models import PipelineExecutionLease, PipelineLaunchRequest, PipelineLaunchRequestState
+from aist.models import AISTStatus, PipelineExecutionLease, PipelineLaunchRequest, PipelineLaunchRequestState
+from aist.services.pipeline_lifecycle import transition_pipeline_status
 
 # Requests in these states have not yet been handed to a worker; cancelling here only
 # needs to flip the state and release any lease it already holds. DISPATCHED requests
@@ -27,13 +28,13 @@ def cancel_launch_request(*, request_id: int, now=None) -> bool:
     """
     cancel_time = now or timezone.now()
     with transaction.atomic():
-        exists = (
+        launch_request = (
             PipelineLaunchRequest.objects
             .select_for_update()
             .filter(pk=request_id, state__in=CANCELLABLE_STATES)
-            .exists()
+            .first()
         )
-        if not exists:
+        if launch_request is None:
             return False
         PipelineExecutionLease.objects.select_for_update().filter(
             request_id=request_id,
@@ -43,4 +44,9 @@ def cancel_launch_request(*, request_id: int, now=None) -> bool:
             pk=request_id,
             state__in=CANCELLABLE_STATES,
         ).update(state=PipelineLaunchRequestState.CANCELLED, updated=cancel_time)
+        if launch_request.pipeline_id is not None:
+            transition_pipeline_status(
+                launch_request.pipeline_id,
+                AISTStatus.FINISHED_WITH_WARNINGS,
+            )
         return bool(updated)

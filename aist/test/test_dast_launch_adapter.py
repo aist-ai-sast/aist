@@ -16,7 +16,7 @@ from aist.execution.dast import (
 from aist.execution.dispatching import plan_claimed_launch
 from aist.execution.enqueue import LaunchPrincipal, enqueue_pipeline_launch
 from aist.execution.sast import planning_context_from_launch_request
-from aist.integrations.dast_config import DastTargetSnapshot
+from aist.integrations.dast_config import DastConfigError, DastTargetSnapshot
 from aist.models import (
     AISTProjectLaunchConfig,
     DastIntegrationState,
@@ -27,6 +27,7 @@ from aist.models import (
     OrgIntegrationType,
     PipelineExecutionType,
 )
+from aist.pipeline_args import PipelineArguments
 from aist.services.dast_targets import refresh_dast_targets
 from aist.tasks import pipeline_dispatcher
 from aist.test.test_api import AISTApiBase
@@ -74,18 +75,28 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
             project=self.project,
             execution_type=PipelineExecutionType.DAST,
             dast_binding=self.binding,
+            trigger_project_version=self.pv,
             name="DAST adapter config",
             params={"depth": "deep"},
         )
         self.adapter = DastPipelineLaunchAdapter()
 
     def _request(self, *, config=None, raw_params=None):
+        launch_config = config or self.config
+        arguments = (
+            PipelineArguments.for_dast(
+                project=self.project,
+                binding=launch_config.dast_binding,
+                trigger_project_version=launch_config.trigger_project_version,
+                raw_params=raw_params,
+            )
+            if raw_params is not None
+            else PipelineArguments.from_launch_config(launch_config)
+        )
         return enqueue_pipeline_launch(
-            project=self.project,
+            arguments=arguments,
             principal=LaunchPrincipal.for_schedule(organization=self.organization),
-            raw_params=raw_params or {},
-            launch_config=config or self.config,
-            trigger_project_version=self.pv,
+            launch_config=launch_config,
         ).request
 
     def _plan(self, request):
@@ -135,6 +146,7 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
             project=self.project,
             execution_type=PipelineExecutionType.DAST,
             dast_binding=second_binding,
+            trigger_project_version=self.pv,
             name="Second DAST adapter config",
             params={"depth": "deep"},
         )
@@ -150,6 +162,7 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
             project=self.project,
             execution_type=PipelineExecutionType.DAST,
             dast_binding=self.binding,
+            trigger_project_version=self.pv,
             name="Light DAST adapter config",
             params={"depth": "light"},
         )
@@ -181,23 +194,13 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
         self.state.refresh_from_db()
         self.assertEqual(self.state.sync_error_code, DAST_CAPABILITY_REVISION_MISMATCH)
 
-    def test_missing_trigger_and_untrusted_parameter_fields_fail_closed(self):
-        missing_trigger = enqueue_pipeline_launch(
-            project=self.project,
-            principal=LaunchPrincipal.for_schedule(organization=self.organization),
-            raw_params={},
-            launch_config=self.config,
-        ).request
-        with self.assertRaisesRegex(ExecutionPlanError, "trigger version"):
-            self._plan(missing_trigger)
-
+    def test_untrusted_parameter_fields_fail_closed(self):
         type(self.config).objects.filter(pk=self.config.pk).update(
             params={"depth": "deep", "resource_key": "attacker", "gateway_url": "https://evil.example"},
         )
         self.config.refresh_from_db()
-        request = self._request()
-        with self.assertRaisesRegex(ExecutionPlanError, "invalid immutable provider snapshot"):
-            self._plan(request)
+        with self.assertRaisesRegex(DastConfigError, "parameter_schema"):
+            self._request()
 
     def test_adapter_has_no_runtime_gateway_client_surface(self):
         self.assertFalse(hasattr(dast_module, "DastGatewayClient"))
@@ -207,11 +210,10 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
 
     def test_dispatcher_registers_only_database_identity_for_dast_task(self):
         request = self._request()
-        publisher = pipeline_dispatcher._PUBLISH_TASKS[
-            PipelineTaskName.RUN_PIPELINE_EXECUTION.value
-        ]
-
-        self.assertEqual(publisher.name, PipelineTaskName.RUN_PIPELINE_EXECUTION.value)
+        self.assertEqual(
+            pipeline_dispatcher.run_pipeline_execution.name,
+            PipelineTaskName.RUN_PIPELINE_EXECUTION.value,
+        )
         claim_owner = "dast-adapter-test"
         type(request).objects.filter(pk=request.pk).update(
             state="CLAIMED",

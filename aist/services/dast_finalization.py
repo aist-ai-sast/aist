@@ -22,6 +22,7 @@ from aist.models import (
 )
 from aist.parser_overrides import DAST_SCAN_TYPE
 from aist.services.dast_source_versions import resolve_dast_source_version
+from aist.services.pipeline_lifecycle import transition_pipeline_status
 from aist.services.pipeline_results import (
     attach_findings_to_project_version,
     finish_or_schedule_pipeline_results,
@@ -134,7 +135,8 @@ def _verify_pipeline_binding(
         if report.correlation_id != pipeline.id:
             msg = "DAST report correlation does not match the autonomous pipeline."
             raise DastFinalizationError(msg)
-        if pipeline.external_run_id and pipeline.external_run_id != report.run_id:
+        execution_state = pipeline.dast_execution_state
+        if execution_state.run_id and execution_state.run_id != report.run_id:
             msg = "DAST report run does not match the autonomous pipeline."
             raise DastFinalizationError(msg)
 
@@ -163,7 +165,7 @@ def finalize_dast_report(
         pipeline = (
             AISTPipeline.objects
             .select_for_update(of=("self",))
-            .select_related("project__repository", "trigger_project_version")
+            .select_related("project__repository", "trigger_project_version", "dast_execution_state")
             .get(pk=pipeline_id)
         )
         _verify_pipeline_binding(pipeline=pipeline, binding=persisted_binding, report=report)
@@ -178,6 +180,8 @@ def finalize_dast_report(
         )
         if existing is not None:
             return existing
+        if pipeline.status == AISTStatus.ADMITTED:
+            pipeline = transition_pipeline_status(pipeline.pk, AISTStatus.EXECUTING).pipeline
 
         repository = pipeline.project.repository
         branch_tag = None

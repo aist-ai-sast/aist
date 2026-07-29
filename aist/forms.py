@@ -5,7 +5,8 @@ import json
 from django import forms
 
 from aist.ai_filter import validate_and_normalize_filter
-from aist.models import AISTProject, AISTProjectVersion, VersionType
+from aist.integrations.dast_readiness import check_dast_launch_readiness
+from aist.models import AISTProject, AISTProjectVersion, DastProjectBinding, VersionType
 from aist.pipeline_args import PipelineArguments
 from aist.utils.pipeline import has_unfinished_pipeline
 from aist.utils.pipeline_imports import _load_analyzers_config
@@ -273,6 +274,96 @@ class AISTPipelineRunForm(_AISTPipelineArgsBaseForm):
         proj: AISTProject = self.cleaned_data["project"]
         # Use shared collector; this keeps PipelineArguments.normalize_params as SSOT
         return self.get_params_payload(project=proj)
+
+
+class DastPipelineRunForm(forms.Form):
+
+    """Validate an ephemeral DAST launch without creating a saved preset."""
+
+    project = forms.ModelChoiceField(
+        queryset=AISTProject.objects.none(),
+        label="Project",
+        required=True,
+    )
+    dast_binding = forms.ModelChoiceField(
+        queryset=DastProjectBinding.objects.none(),
+        label="DAST target binding",
+        required=True,
+    )
+    trigger_project_version = forms.ModelChoiceField(
+        queryset=AISTProjectVersion.objects.none(),
+        label="Git source version",
+        required=True,
+    )
+    parameters = forms.JSONField(
+        label="Target parameters",
+        required=False,
+        initial=dict,
+        widget=forms.Textarea(attrs={"rows": 10, "class": "form-control font-monospace"}),
+        help_text="JSON object validated against the selected target's current parameter schema.",
+    )
+
+    def __init__(self, *args, project_queryset=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        projects = project_queryset if project_queryset is not None else AISTProject.objects.none()
+        self.fields["project"].queryset = projects
+        self.fields["project"].widget.attrs.update({"class": "form-select"})
+        project_ids = projects.values_list("pk", flat=True)
+        self.fields["dast_binding"].queryset = (
+            DastProjectBinding.objects
+            .filter(project_id__in=project_ids, enabled=True)
+            .select_related("project__product", "target")
+            .order_by("project__product__name", "target__display_name")
+        )
+        self.fields["dast_binding"].widget.attrs.update({"class": "form-select"})
+        self.fields["trigger_project_version"].queryset = (
+            AISTProjectVersion.objects
+            .filter(
+                project_id__in=project_ids,
+                version_type__in=[VersionType.GIT_BRANCH, VersionType.GIT_HASH],
+            )
+            .select_related("project__product")
+            .order_by("project__product__name", "-updated")
+        )
+        self.fields["trigger_project_version"].widget.attrs.update({"class": "form-select"})
+        self.arguments: PipelineArguments | None = None
+
+    def clean(self):
+        cleaned = super().clean()
+        project = cleaned.get("project")
+        binding = cleaned.get("dast_binding")
+        trigger = cleaned.get("trigger_project_version")
+        if not project or not binding or not trigger:
+            return cleaned
+        if binding.project_id != project.pk:
+            self.add_error("dast_binding", "The DAST binding must belong to the selected project.")
+            return cleaned
+        if trigger.project_id != project.pk:
+            self.add_error("trigger_project_version", "The Git source version must belong to the selected project.")
+            return cleaned
+        try:
+            arguments = PipelineArguments.for_dast(
+                project=project,
+                binding=binding,
+                trigger_project_version=trigger,
+                raw_params=cleaned.get("parameters") or {},
+            )
+        except (TypeError, ValueError) as exc:
+            self.add_error("parameters", str(exc))
+            return cleaned
+        readiness = check_dast_launch_readiness(arguments)
+        if not readiness.ready:
+            detail = "; ".join(issue.detail for issue in readiness.issues)
+            self.add_error(None, detail or "The selected DAST binding is not ready.")
+            return cleaned
+        self.arguments = arguments
+        return cleaned
+
+    def get_arguments(self) -> PipelineArguments:
+        if self.arguments is None:
+            msg = "DAST form must be valid before reading launch arguments."
+            raise ValueError(msg)
+        return self.arguments
 
 
 class AISTLaunchConfigForm(_AISTPipelineArgsBaseForm):

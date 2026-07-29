@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime  # noqa: TC003
+from datetime import datetime
 
 from croniter import croniter
 from django.db import transaction
@@ -25,6 +25,7 @@ from aist.models import (
     AISTProjectLaunchConfig,
     LaunchSchedule,
 )
+from aist.pipeline_args import PipelineArguments
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,12 @@ LAUNCH_SCHEDULE_API_CHOICES = LaunchScheduleApiChoices(
         "-next_tick",
     ],
 )
+
+
+def _ensure_aware(value: datetime) -> datetime:
+    if timezone.is_naive(value):
+        return timezone.make_aware(value, timezone.get_default_timezone())
+    return value
 
 
 class LaunchRunOnceHeadersSerializer(serializers.Serializer):
@@ -79,6 +86,8 @@ class LaunchScheduleSerializer(serializers.ModelSerializer):
     next_tick_human = serializers.SerializerMethodField()
     timezone = serializers.SerializerMethodField()
     server_now = serializers.SerializerMethodField()
+    effective_capacity = serializers.SerializerMethodField()
+    capacity_policy = serializers.SerializerMethodField()
 
     class Meta:
         model = LaunchSchedule
@@ -88,6 +97,12 @@ class LaunchScheduleSerializer(serializers.ModelSerializer):
             "enabled",
             "max_concurrent_runs",
             "last_run_at",
+            "next_run_at",
+            "last_attempt_at",
+            "last_error_code",
+            "last_error_detail",
+            "effective_capacity",
+            "capacity_policy",
 
             "project_id",
             "project_name",
@@ -209,6 +224,12 @@ class LaunchScheduleSerializer(serializers.ModelSerializer):
     def get_server_now(self, obj) -> datetime:
         return timezone.now()
 
+    def get_effective_capacity(self, obj) -> int:
+        return 1 if obj.launch_config.execution_type == "DAST" else obj.max_concurrent_runs
+
+    def get_capacity_policy(self, obj) -> str:
+        return "DAST_INTEGRATION_SINGLE_SLOT" if obj.launch_config.execution_type == "DAST" else "SCHEDULE"
+
 
 class LaunchConfigScheduleWriteSerializer(serializers.ModelSerializer):
     class Meta:
@@ -249,6 +270,12 @@ class LaunchConfigScheduleWriteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(msg)
         if v > 8:
             msg = "max_concurrent_runs must be <= 8."
+            raise serializers.ValidationError(msg)
+        config = self.context.get("launch_config")
+        if config is None and self.instance is not None:
+            config = self.instance.launch_config
+        if config is not None and config.execution_type == "DAST" and v != 1:
+            msg = "DAST schedules currently support exactly one concurrent run per integration."
             raise serializers.ValidationError(msg)
         return v
 
@@ -292,7 +319,7 @@ class LaunchConfigScheduleAPI(AISTAPIView):
     )
     def put(self, request, project_id: int, config_id: int, *args, **kwargs):
         config = self._resolve_config(project_id=project_id, config_id=config_id)
-        serializer = LaunchConfigScheduleWriteSerializer(data=request.data)
+        serializer = LaunchConfigScheduleWriteSerializer(data=request.data, context={"launch_config": config})
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
             locked_config = (
@@ -300,9 +327,15 @@ class LaunchConfigScheduleAPI(AISTAPIView):
                 .select_for_update()
                 .get(pk=config.pk, project_id=project_id)
             )
+            defaults = dict(serializer.validated_data)
+            defaults["next_run_at"] = (
+                _ensure_aware(croniter(defaults["cron_expression"], timezone.now()).get_next(datetime))
+                if defaults.get("enabled", True)
+                else None
+            )
             obj, created = LaunchSchedule.objects.update_or_create(
                 launch_config=locked_config,
-                defaults=serializer.validated_data,
+                defaults=defaults,
             )
         return Response(
             LaunchScheduleSerializer(obj).data,
@@ -318,9 +351,22 @@ class LaunchConfigScheduleAPI(AISTAPIView):
     def patch(self, request, project_id: int, config_id: int, *args, **kwargs):
         config = self._resolve_config(project_id=project_id, config_id=config_id)
         schedule = self._schedule(config)
-        serializer = LaunchConfigScheduleWriteSerializer(schedule, data=request.data, partial=True)
+        serializer = LaunchConfigScheduleWriteSerializer(
+            schedule,
+            data=request.data,
+            partial=True,
+            context={"launch_config": config},
+        )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        values = dict(serializer.validated_data)
+        cron_expression = values.get("cron_expression", schedule.cron_expression)
+        enabled = values.get("enabled", schedule.enabled)
+        values["next_run_at"] = (
+            _ensure_aware(croniter(cron_expression, timezone.now()).get_next(datetime))
+            if enabled
+            else None
+        )
+        serializer.save(**values)
         return Response(LaunchScheduleSerializer(schedule).data)
 
     @extend_schema(
@@ -565,9 +611,8 @@ class LaunchScheduleRunOnceAPI(AISTAPIView):
         key_serializer.is_valid(raise_exception=True)
         try:
             q = enqueue_pipeline_launch(
-                project=project,
+                arguments=PipelineArguments.from_launch_config(obj.launch_config),
                 principal=principal,
-                raw_params={},
                 schedule=obj,
                 launch_config=obj.launch_config,
                 client_request_key=key_serializer.validated_data.get("client_request_key"),

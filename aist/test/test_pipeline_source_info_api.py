@@ -102,7 +102,7 @@ class PipelineSourceInfoAPITests(AISTApiBase):
             id="pipe-src-nopath",
             project=self.project,
             project_version=self.pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
             launch_data={},
         )
 

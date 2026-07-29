@@ -127,7 +127,7 @@ class ImportReportTaskTests(TestCase):
             id="importtest1",
             project=self.project,
             execution_type=PipelineExecutionType.MANUAL_IMPORT,
-            status=AISTStatus.FINISHED,
+            status=AISTStatus.ADMITTED,
             launch_data={
                 "source": "manual_import",
                 "scan_type": DAST_SCAN_TYPE,

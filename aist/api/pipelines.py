@@ -6,6 +6,7 @@ import re
 import time
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime  # noqa: TC003 -- drf-spectacular resolves serializer type hints at runtime
 from io import BytesIO, StringIO
 from operator import itemgetter
 from typing import TYPE_CHECKING
@@ -42,7 +43,8 @@ from aist.logging_transport import (
     get_pipeline_log_path,
     get_redis,
 )
-from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, TestDeduplicationProgress
+from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, DastExecutionState, TestDeduplicationProgress
+from aist.pipeline_args import PipelineArguments
 from aist.services.dast_outcomes import public_dast_outcome_code
 from aist.utils.export import _build_ai_export_rows
 from aist.utils.pipeline import (
@@ -96,18 +98,45 @@ class PipelineResponseSerializer(serializers.Serializer):
     execution_type = serializers.CharField()
     status = serializers.CharField()
     run_task_id = serializers.CharField(allow_null=True)
-    external_run_id = serializers.CharField(allow_null=True)
-    external_log_cursor = serializers.IntegerField()
-    external_execution_outcome = serializers.CharField()
+    external_run_id = serializers.SerializerMethodField()
+    external_log_cursor = serializers.SerializerMethodField()
+    external_execution_outcome = serializers.SerializerMethodField()
     dast_outcome_code = serializers.SerializerMethodField()
-    external_execution_deadline = serializers.DateTimeField(allow_null=True)
-    external_cancel_requested_at = serializers.DateTimeField(allow_null=True)
+    external_execution_deadline = serializers.SerializerMethodField()
+    external_cancel_requested_at = serializers.SerializerMethodField()
     response_from_ai = serializers.JSONField(allow_null=True)
     created = serializers.DateTimeField()
     updated = serializers.DateTimeField()
 
     def get_dast_outcome_code(self, obj: AISTPipeline) -> str | None:
         return public_dast_outcome_code(obj)
+
+    @staticmethod
+    def _dast_state(obj: AISTPipeline):
+        try:
+            return obj.dast_execution_state
+        except DastExecutionState.DoesNotExist:
+            return None
+
+    def get_external_run_id(self, obj: AISTPipeline) -> str | None:
+        state = self._dast_state(obj)
+        return state.run_id if state is not None else None
+
+    def get_external_log_cursor(self, obj: AISTPipeline) -> int:
+        state = self._dast_state(obj)
+        return state.log_cursor if state is not None else 0
+
+    def get_external_execution_outcome(self, obj: AISTPipeline) -> str:
+        state = self._dast_state(obj)
+        return state.outcome if state is not None else ""
+
+    def get_external_execution_deadline(self, obj: AISTPipeline) -> datetime | None:
+        state = self._dast_state(obj)
+        return state.deadline if state is not None else None
+
+    def get_external_cancel_requested_at(self, obj: AISTPipeline) -> datetime | None:
+        state = self._dast_state(obj)
+        return state.cancel_requested_at if state is not None else None
 
 
 class PipelineStopResponseSerializer(serializers.Serializer):
@@ -233,9 +262,8 @@ class PipelineStartAPI(AISTAPIView):
         )
         try:
             launch_request = enqueue_pipeline_launch(
-                project=project,
+                arguments=PipelineArguments.for_sast(project=project, raw_params=raw),
                 principal=principal,
-                raw_params=raw,
                 client_request_key=launch_request_headers(request).get("client_request_key"),
             ).request
         except LaunchEnqueueError as exc:
@@ -294,7 +322,7 @@ class PipelineListAPI(AISTAuthzMixin, generics.ListAPIView):
             data=self.request.query_params,
             queryset=(
                 self.authorized_queryset()
-                .select_related("project", "project_version")
+                .select_related("project", "project_version", "dast_execution_state")
                 .order_by("-created")
             ),
             request=self.request,
@@ -847,10 +875,11 @@ class PipelineStopAPI(AISTAPIView):
     def post(self, request, pipeline_id: str):
         pipeline = self.resolve(id=pipeline_id)
         stop_pipeline(pipeline)
-        pipeline.refresh_from_db(fields=["external_execution_outcome", "status"])
+        pipeline.refresh_from_db(fields=["status"])
+        execution_state = getattr(pipeline, "dast_execution_state", None)
         return Response({
             "ok": True,
-            "state": pipeline.external_execution_outcome or pipeline.status,
+            "state": (execution_state.outcome if execution_state is not None else "") or pipeline.status,
         })
 
 

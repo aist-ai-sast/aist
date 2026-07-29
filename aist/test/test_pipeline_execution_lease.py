@@ -25,7 +25,11 @@ from aist.execution.leases import (
 from aist.models import (
     AISTProject,
     AISTProjectVersion,
+    DastProjectBinding,
+    DastTarget,
     Organization,
+    OrgIntegration,
+    OrgIntegrationType,
     PipelineExecutionLease,
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
@@ -104,17 +108,35 @@ class ExecutionPlanLeaseTests(AISTApiBase):
             name="Execution plan lease organization",
             product_type=self.prod_type,
         )
+        integration = OrgIntegration.objects.create(
+            organization=self.organization,
+            integration_type=OrgIntegrationType.DAST,
+            name="Lease test DAST integration",
+        )
+        target = DastTarget.objects.create(
+            integration=integration,
+            provider_id="lease-target",
+            display_name="Lease target",
+            contract_revision="2.0",
+            capability_revision="lease-capability",
+            schema_digest="lease-schema",
+            parameter_schema={"type": "object"},
+            repository_keys=["repository"],
+            autonomous_ready=True,
+            last_seen_at=timezone.now(),
+        )
+        self.dast_binding = DastProjectBinding.objects.create(
+            project=self.project,
+            target=target,
+            source_repo_key="repository",
+        )
 
     def _plan(self, *, execution_type, resource_key, resource_limit):
         is_sast = execution_type == PipelineExecutionKind.SAST
         return ExecutionPlan(
             execution_type=execution_type,
-            task_name=(
-                PipelineTaskName.RUN_SAST_PIPELINE
-                if is_sast
-                else PipelineTaskName.RUN_PIPELINE_EXECUTION
-            ),
-            task_args=({},),
+            task_name=PipelineTaskName.RUN_PIPELINE_EXECUTION,
+            task_args=(),
             project_id=self.project.pk,
             trigger_project_version_id=None if is_sast else self.pv.pk,
             effective_version_policy=(
@@ -138,6 +160,7 @@ class ExecutionPlanLeaseTests(AISTApiBase):
         return PipelineLaunchRequest.objects.create(
             project=self.project,
             execution_type=execution_type.value,
+            dast_binding=self.dast_binding if execution_type == PipelineExecutionKind.DAST else None,
             trigger_project_version=self.pv if execution_type == PipelineExecutionKind.DAST else None,
             state=PipelineLaunchRequestState.CLAIMED,
             claim_owner=owner,
@@ -228,10 +251,33 @@ class PipelineExecutionLeaseConcurrencyTests(TransactionTestCase):
             version="main",
             version_type=VersionType.GIT_BRANCH,
         )
+        integration = OrgIntegration.objects.create(
+            organization=self.organization,
+            integration_type=OrgIntegrationType.DAST,
+            name="Concurrent lease DAST integration",
+        )
+        target = DastTarget.objects.create(
+            integration=integration,
+            provider_id="concurrent-lease-target",
+            display_name="Concurrent lease target",
+            contract_revision="2.0",
+            capability_revision="concurrent-lease-capability",
+            schema_digest="concurrent-lease-schema",
+            parameter_schema={"type": "object"},
+            repository_keys=["repository"],
+            autonomous_ready=True,
+            last_seen_at=timezone.now(),
+        )
+        self.dast_binding = DastProjectBinding.objects.create(
+            project=self.project,
+            target=target,
+            source_repo_key="repository",
+        )
         self.request_ids = [
             PipelineLaunchRequest.objects.create(
                 project=self.project,
                 execution_type=PipelineExecutionKind.DAST.value,
+                dast_binding=self.dast_binding,
                 trigger_project_version=self.project_version,
                 state=PipelineLaunchRequestState.CLAIMED,
                 claim_owner=self.CLAIM_OWNER,
@@ -244,7 +290,7 @@ class PipelineExecutionLeaseConcurrencyTests(TransactionTestCase):
         return ExecutionPlan(
             execution_type=PipelineExecutionKind.DAST,
             task_name=PipelineTaskName.RUN_PIPELINE_EXECUTION,
-            task_args=({},),
+            task_args=(),
             project_id=self.project.pk,
             trigger_project_version_id=self.project_version.pk,
             effective_version_policy=EffectiveVersionPolicy.RESOLVE_FROM_EXECUTION_RESULT,

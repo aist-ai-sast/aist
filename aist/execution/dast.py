@@ -7,6 +7,8 @@ from django.db import transaction
 from aist.execution.coalescing import canonical_coalesce_key
 from aist.execution.contracts import (
     EffectiveVersionPolicy,
+    ExecutionCancellationMode,
+    ExecutionMetricDescriptor,
     ExecutionPlan,
     ExecutionPlanError,
     LaunchPlanningContext,
@@ -15,7 +17,14 @@ from aist.execution.contracts import (
 )
 from aist.integrations.dast_config import DastBindingParameters, DastConfigError, DastTargetSnapshot
 from aist.integrations.dast_readiness import check_dast_binding_readiness
-from aist.models import AISTProjectVersion, DastIntegrationState, PipelineLaunchRequest
+from aist.models import (
+    AISTProjectVersion,
+    DastExecutionOutcome,
+    DastExecutionState,
+    DastIntegrationState,
+    PipelineLaunchRequest,
+    PipelineLaunchRequestState,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -35,6 +44,7 @@ def build_dast_coalesce_key(
     project_id: int,
     binding_id: int,
     integration_id: int,
+    trigger_project_version_id: int,
     params_snapshot: Mapping[str, object],
     capability_snapshot: Mapping[str, object],
 ) -> str:
@@ -45,6 +55,7 @@ def build_dast_coalesce_key(
         executor_identity={
             "binding_id": binding_id,
             "integration_id": integration_id,
+            "trigger_project_version_id": trigger_project_version_id,
         },
         params_snapshot=params_snapshot,
         capability_snapshot=capability_snapshot,
@@ -64,6 +75,43 @@ def _mark_capability_resync_required(integration_id: int) -> None:
 
 class DastPipelineLaunchAdapter:
     execution_type = PipelineExecutionKind.DAST
+    cancellation_mode = ExecutionCancellationMode.COOPERATIVE
+    metric_descriptor = ExecutionMetricDescriptor(
+        label="dast",
+        operations=frozenset({"execute", "cancel", "recover"}),
+    )
+
+    @staticmethod
+    def initialize_pipeline(pipeline) -> None:
+        DastExecutionState.objects.create(pipeline=pipeline)
+
+    @staticmethod
+    def allows_duplicate_delivery(*, pipeline_id: str, task_id: str | None, retries: int) -> bool:
+        if retries < 1 or task_id is None:
+            return False
+        return DastExecutionState.objects.filter(
+            pipeline_id=pipeline_id,
+            pipeline__run_task_id=str(task_id),
+            pipeline__launch_request__state=PipelineLaunchRequestState.DISPATCHED,
+            outcome__in=[
+                DastExecutionOutcome.STOP_PENDING,
+                DastExecutionOutcome.UNREACHABLE,
+            ],
+        ).exists()
+
+    @staticmethod
+    def should_recover(pipeline) -> bool:
+        return DastExecutionState.objects.filter(
+            pipeline=pipeline,
+            outcome__in=[
+                DastExecutionOutcome.STOP_PENDING,
+                DastExecutionOutcome.UNREACHABLE,
+            ],
+        ).exists()
+
+    @staticmethod
+    def invoke(runtime, pipeline_id: str):
+        return runtime.run_dast(pipeline_id)
 
     def build_plan(self, context: LaunchPlanningContext) -> ExecutionPlan:
         if context.execution_type != self.execution_type:
@@ -129,13 +177,10 @@ class DastPipelineLaunchAdapter:
 
         params_snapshot = frozen_parameters.to_snapshot()
         capability_snapshot = frozen_target.to_snapshot()
-        coalesce_key = build_dast_coalesce_key(
-            project_id=request.project_id,
-            binding_id=binding.pk,
-            integration_id=binding.target.integration_id,
-            params_snapshot=params_snapshot,
-            capability_snapshot=capability_snapshot,
-        )
+        coalesce_key = request.coalesce_key
+        if not coalesce_key:
+            detail = "DAST launch request is missing its frozen execution identity."
+            raise ExecutionPlanError(detail)
         initial_launch_data = request.get_initial_launch_data_snapshot()
         initial_launch_data["dast_execution"] = {
             "binding_id": binding.pk,

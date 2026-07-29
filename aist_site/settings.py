@@ -197,6 +197,15 @@ LOGIN_EXEMPT_URLS += (  # noqa: F405
 
 CELERY_TASK_IGNORE_RESULT = False
 AIST_PIPELINE_DISPATCH_BATCH_SIZE = env.int("AIST_PIPELINE_DISPATCH_BATCH_SIZE", default=50)  # noqa: F405
+AIST_EXECUTION_LEASE_TTL_SECONDS = env.int("AIST_EXECUTION_LEASE_TTL_SECONDS", default=900)  # noqa: F405
+AIST_EXECUTION_LEASE_HEARTBEAT_GRACE_SECONDS = env.int(  # noqa: F405
+    "AIST_EXECUTION_LEASE_HEARTBEAT_GRACE_SECONDS",
+    default=60,
+)
+AIST_EXECUTION_RECONCILIATION_INTERVAL_SECONDS = env.int(  # noqa: F405
+    "AIST_EXECUTION_RECONCILIATION_INTERVAL_SECONDS",
+    default=600,
+)
 
 # Add AIST Celery schedules.
 CELERY_BEAT_SCHEDULE.update(  # noqa: F405
@@ -217,7 +226,7 @@ CELERY_BEAT_SCHEDULE.update(  # noqa: F405
         },
         "aist-reconcile-orphans-safety-net": {
             "task": "aist.tasks.reconciliation.reconcile_recent_orphans",
-            "schedule": timedelta(minutes=10),
+            "schedule": timedelta(seconds=AIST_EXECUTION_RECONCILIATION_INTERVAL_SECONDS),
             "kwargs": {"hours": 24, "batch_size": 200, "dry_run": False},
         },
         # Launch readiness rejects a DAST binding once its catalog passes the 24h freshness

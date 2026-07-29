@@ -8,11 +8,13 @@ from aist.integrations.dast_config import DastTargetSnapshot
 from aist.models import (
     AISTProject,
     AISTProjectLaunchConfig,
+    AISTProjectVersion,
     DastProjectBinding,
     Organization,
     OrgIntegration,
     OrgIntegrationType,
     PipelineExecutionType,
+    VersionType,
 )
 from aist.services.dast_targets import refresh_dast_targets
 from aist.test.test_dast_target_models import _integration_config, _target_wire
@@ -30,6 +32,11 @@ class LaunchConfigExecutionTargetTests(TestCase):
             sla_configuration=sla,
         )
         self.project = AISTProject.objects.create(product=product)
+        self.trigger = AISTProjectVersion.objects.create(
+            project=self.project,
+            version="main",
+            version_type=VersionType.GIT_BRANCH,
+        )
         integration = OrgIntegration.objects.create(
             organization=organization,
             integration_type=OrgIntegrationType.DAST,
@@ -61,6 +68,7 @@ class LaunchConfigExecutionTargetTests(TestCase):
             name="DAST",
             execution_type=PipelineExecutionType.DAST,
             dast_binding=self.binding,
+            trigger_project_version=self.trigger,
             params={"depth": "light"},
         )
         sast.full_clean()
@@ -90,6 +98,7 @@ class LaunchConfigExecutionTargetTests(TestCase):
                 name="DAST with analyzers",
                 execution_type=PipelineExecutionType.DAST,
                 dast_binding=self.binding,
+                trigger_project_version=self.trigger,
                 params={"analyzers": ["semgrep"], "depth": "light"},
             ),
         )
@@ -113,11 +122,17 @@ class LaunchConfigExecutionTargetTests(TestCase):
             sla_configuration=self.project.product.sla_configuration,
         )
         other_project = AISTProject.objects.create(product=other_product)
+        other_trigger = AISTProjectVersion.objects.create(
+            project=other_project,
+            version="main",
+            version_type=VersionType.GIT_BRANCH,
+        )
         cross_project = AISTProjectLaunchConfig(
             project=other_project,
             name="Cross project DAST",
             execution_type=PipelineExecutionType.DAST,
             dast_binding=self.binding,
+            trigger_project_version=other_trigger,
             params={"depth": "light"},
         )
         with self.assertRaises(ValidationError):
@@ -128,6 +143,7 @@ class LaunchConfigExecutionTargetTests(TestCase):
                 name="Direct cross project DAST",
                 execution_type=PipelineExecutionType.DAST,
                 dast_binding=self.binding,
+                trigger_project_version=other_trigger,
                 params={"depth": "light"},
             )
 
@@ -138,6 +154,7 @@ class LaunchConfigExecutionTargetTests(TestCase):
             name="Disabled DAST",
             execution_type=PipelineExecutionType.DAST,
             dast_binding=self.binding,
+            trigger_project_version=self.trigger,
             params={"depth": "light"},
         )
         with self.assertRaises(ValidationError):

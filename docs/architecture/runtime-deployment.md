@@ -52,6 +52,10 @@ workspace plus builder and analyzer containers. A standalone provider run
 creates its connector. When private connectivity is selected, that operation
 also receives an execution-specific VPN sidecar or a warm scoped proxy.
 
+The shared pipeline execution package is loaded by the workers; it is not an
+additional long-lived Compose service. Its registry selects the SAST runtime or
+standalone-provider runtime that creates the operation containers.
+
 Selecting a VPN route is fail-closed: if its usable configuration is absent,
 the operation fails instead of silently using the host's direct route.
 
@@ -74,4 +78,4 @@ The Docker socket is a privileged host boundary: workers and the local AI
 bridge can control containers on that host. Production deployments should
 isolate those services, restrict deployable images, and limit access to the
 socket. See [security boundaries](../security/threat-register.md) and
-[SAST pipeline runtime](sast-pipeline-runtime.md).
+[pipeline execution runtime](sast-pipeline-runtime.md).

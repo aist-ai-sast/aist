@@ -1,19 +1,35 @@
-# SAST pipeline runtime
+# Pipeline execution runtime
 
-The SAST runtime turns one selected project version into analyzer reports that
-AIST can import. It owns the isolated workspace and analyzer containers for one
-run; it does not own launch authorization, finding review, or AI disposition.
+The `sast-pipeline` package is the worker's container-execution boundary for
+SAST and standalone providers such as DAST. It is not a separate long-lived
+service. AIST owns durable authorization, admission, lifecycle state, and result
+import; the package owns provider invocation, operation-container cleanup, and
+bounded runtime outcomes.
 
-![SAST runtime responsibilities](../assets/sast-pipeline-runtime.svg)
+![AIST control plane and pipeline execution runtime](../assets/sast-pipeline-runtime.svg)
 
-## Create one run workspace
+## Hand one durable execution to a worker
 
-The pipeline worker creates an execution-specific workspace and output
-directory. It supplies the selected source version and resolved run parameters
-to the SAST runtime. Output is partitioned by pipeline so concurrent runs do not
-write to the same report location.
+AIST first uses its execution-driver registry to validate the selected target,
+acquire capacity, and persist an **Admitted** pipeline with a recoverable publish
+intent. The broker message contains only the pipeline identity. A worker accepts
+one matching delivery, moves the pipeline to **Executing**, and reconstructs the
+frozen execution input from PostgreSQL.
 
-## Build and analyze
+This keeps tenant authority, credentials, parameters, and provider checkpoints
+out of the broker payload. A duplicate or stale delivery cannot start an
+unrelated execution.
+
+## Select the runtime path
+
+Inside the worker, the AIST driver selects the lifecycle behavior for the
+pipeline type. The execution package then uses its own registry to invoke one
+runtime path:
+
+- **SAST** creates an execution-specific workspace and output directory, runs
+  the builder, then fans out to the selected analyzer containers;
+- **DAST** creates a connector container that starts or resumes one external
+  provider run and returns a bounded outcome plus its recovery checkpoint.
 
 The builder prepares source and dependencies in a container selected for the
 project. Analyzer containers then use the prepared workspace and the
@@ -26,21 +42,26 @@ workspace and do not automatically inherit that private network path.
 
 ## Hand reports back to AIST
 
-Analyzers write reports to the run output directory. The platform importer
-validates each supported report, records its tests on the pipeline, and creates
-or updates findings for the selected project version.
+SAST analyzers write reports to the run output directory. A standalone provider
+returns its typed result through its connector. The platform importer validates
+the selected format, records tests on the pipeline, and creates or updates
+findings for the effective project version.
 
-The SAST runtime finishes after report hand-off and container cleanup. The AIST
-control plane then owns deduplication, enrichment, regression detection, review,
-and AI triage.
+After report hand-off and container cleanup, AIST owns deduplication, enrichment,
+regression detection, review, and AI triage.
 
-## Failure and cleanup
+## Recover without changing the boundary
 
-Containers and temporary paths are scoped to one pipeline. On completion,
-cancellation, or handled failure, the runtime stops the containers it started
-and returns a bounded outcome to the worker. Durable cancellation and recovery
-remain platform responsibilities because they must survive a runtime or worker
-restart.
+The launch reconciler repairs stale dispatcher claims, durable publish intents,
+and execution leases from PostgreSQL. If an accepted DAST task disappears while
+the provider outcome remains recoverable, AIST republishes the same generic task
+with the stored checkpoint. A lost SAST task cannot safely resume midway and
+finishes with warnings instead.
+
+Containers and temporary paths remain scoped to one pipeline. SAST cancellation
+stops local work immediately. DAST cancellation persists intent first, then the
+connector carries the stop request across the provider boundary until a terminal
+outcome is observed.
 
 See [pipeline execution](../product/pipeline-execution.md) for the user-visible
 lifecycle and [VPN-routed operations](../data-flows/vpn-routed-operations.md)

@@ -212,6 +212,9 @@
                                     </div>
 
                                     <div class="queue-filters__right">
+                                        <button type="button" class="btn btn-success btn-sm" id="btn-create-dast-preset">
+                                            {% trans "Create DAST preset" %}
+                                        </button>
                                         <span class="text-muted small">
                                             {% trans "Click a row to view params and actions. Secrets are hidden." %}
                                         </span>
@@ -272,6 +275,23 @@
                                                 </option>
                                             {% endfor %}
                                         </select>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label class="col-sm-2 control-label"
+                                           for="form-dast-binding">{% trans "DAST target binding" %}</label>
+                                    <div class="col-sm-6">
+                                        <select id="form-dast-binding"
+                                                class="form-control selectpicker"
+                                                data-live-search="true"
+                                                data-width="100%"
+                                                disabled>
+                                            <option value="">{% trans "Select project first" %}</option>
+                                        </select>
+                                        <span class="help-block">
+                                            {% trans "For DAST, select the target binding to filter launch configs. Leave All / SAST selected for SAST schedules." %}
+                                        </span>
                                     </div>
                                 </div>
 
@@ -369,6 +389,47 @@
             </div>
         </div>
     </div>
+    <div class="modal fade" id="modal-create-dast-preset" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                    <h4 class="modal-title">{% trans "Create saved DAST preset" %}</h4>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-danger" id="dast-preset-error" style="display:none;"></div>
+                    <p class="text-muted small">{% trans "Choose a synchronized target binding and Git source version. Creating a preset does not start a pipeline." %}</p>
+                    <div class="form-group"><label for="dast-preset-project">{% trans "Project" %}</label>
+                        <select id="dast-preset-project" class="form-control">
+                            {% for p in projects %}<option value="{{ p.id }}">{{ p.product.name }} — {{ p.organization.name }} (#{{ p.id }})</option>{% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group"><label for="dast-preset-name">{% trans "Name" %}</label><input id="dast-preset-name" class="form-control" maxlength="128"></div>
+                    <div class="form-group">
+                        <label for="dast-preset-binding">{% trans "DAST target binding" %}</label>
+                        <select id="dast-preset-binding" class="form-control" disabled>
+                            <option value="">{% trans "Select project first" %}</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="dast-preset-trigger">{% trans "Git source version" %}</label>
+                        <select id="dast-preset-trigger" class="form-control" disabled>
+                            <option value="">{% trans "Select project first" %}</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="dast-preset-params">{% trans "Target parameters (JSON)" %}</label>
+                        <textarea id="dast-preset-params" class="form-control" rows="10" spellcheck="false">{}</textarea>
+                        <div id="dast-preset-params-help" class="help-block"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">{% trans "Cancel" %}</button>
+                    <button type="button" class="btn btn-primary" id="btn-save-dast-preset">{% trans "Save preset" %}</button>
+                </div>
+            </div>
+        </div>
+    </div>
     <div class="modal fade" id="modal-edit-launch-config" tabindex="-1" role="dialog" aria-hidden="true">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">
@@ -383,6 +444,17 @@
                     <p class="text-muted small">
                         {% trans "Edit JSON object with name, description, is_default, and params." %}
                     </p>
+                    <div id="lc-edit-dast-fields" style="display:none;">
+                        <div class="form-group">
+                            <label for="lc-edit-dast-binding">{% trans "DAST target binding" %}</label>
+                            <select id="lc-edit-dast-binding" class="form-control"></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="lc-edit-trigger-version">{% trans "Git source version" %}</label>
+                            <select id="lc-edit-trigger-version" class="form-control"></select>
+                        </div>
+                        <div id="lc-edit-dast-params-help" class="help-block"></div>
+                    </div>
                     <textarea id="lc-edit-json"
                               class="form-control"
                               rows="14"
@@ -622,10 +694,13 @@
             var URL_QUEUE_DELETE_TPL = "{{ api_queue_delete_template }}";
             var URL_BULK_DISABLE = "{{ api_bulk_disable_url }}";
             var URL_PROJECT_LAUNCH_CONFIGS_TPL = "{{ api_project_launch_configs_template }}";
+            var URL_PROJECT_DAST_BINDINGS_TPL = "{{ api_project_dast_bindings_template }}";
+            var URL_PROJECT_META_TPL = "{{ api_project_meta_template }}";
             var URL_LAUNCH_CONFIGS_DASHBOARD = "{{ api_launch_configs_dashboard_url }}";
             var URL_LAUNCH_CONFIG_ACTION_DETAIL_TPL = "{{ api_launch_config_action_detail_template }}";
             var URL_LAUNCH_CONFIG_ACTION_CREATE_TPL = "{{ api_launch_config_action_create_template }}";
             var URL_LAUNCH_CONFIG_DELETE_TPL = "{{ api_launch_config_delete_template }}";
+            var URL_LAUNCH_CONFIG_START_TPL = "{{ api_launch_config_start_template }}";
             var URL_SCHEDULE_RUN_ONCE_TPL = "{{ api_schedule_run_once_template }}";
             var URL_PIPELINE_DETAIL_TPL = "{{ ui_pipeline_detail_template }}";
             // Translated UI strings (keep all user-facing text in one place).
@@ -633,6 +708,8 @@
             var TXT_SELECT_PROJECT_FIRST = '{% trans "Select project first" %}';
             var TXT_NO_LAUNCH_CONFIGS = '{% trans "No launch configs for this project" %}';
             var TXT_SELECT_LAUNCH_CONFIG = '{% trans "Select launch config" %}';
+            var TXT_SELECT_DAST_BINDING = '{% trans "Select DAST target binding" %}';
+            var TXT_SELECT_GIT_VERSION = '{% trans "Select Git source version" %}';
 
             function launchConfigScheduleUrl(projectId, configId) {
                 return URL_LAUNCH_CONFIG_SCHEDULE_TPL
@@ -720,6 +797,7 @@
             // CREATE FORM: Launch configs dropdown
             // ---------------------------
             var cachedLaunchConfigsByProject = {}; // project_id -> array
+            var cachedDastInputsByProject = {}; // project_id -> {bindings, versions}
 
             function escapeHtml(s) {
                 return String(s || "")
@@ -757,9 +835,97 @@
                 }
             }
 
+            function dastBindingLabel(binding) {
+                var target = binding && binding.target ? binding.target : {};
+                var label = target.display_name || target.provider_id || ("Binding #" + binding.id);
+                if (binding.source_repo_key) label += " — " + binding.source_repo_key;
+                return label;
+            }
+
+            function describeTargetParameters(binding) {
+                if (!binding || !binding.target) return "";
+                var schema = binding.target.parameter_schema || {};
+                var properties = schema.properties || {};
+                var required = Array.isArray(schema.required) ? schema.required : [];
+                var fields = Object.keys(properties).map(function (name) {
+                    var definition = properties[name] || {};
+                    var type = definition.type || (definition.enum ? "enum" : "value");
+                    var suffix = required.indexOf(name) >= 0 ? ", required" : ", optional";
+                    if (Array.isArray(definition.enum)) suffix += ", one of: " + definition.enum.join(", ");
+                    return name + " (" + type + suffix + ")";
+                });
+                var parts = [];
+                parts.push(fields.length ? "Allowed fields: " + fields.join("; ") + "." : "This target accepts an empty JSON object.");
+                parts.push("Provider defaults: " + JSON.stringify(binding.target.provider_defaults || {}));
+                return parts.join(" ");
+            }
+
+            function loadProjectDastInputs(projectId) {
+                projectId = String(projectId || "").trim();
+                if (!projectId) return Promise.resolve({bindings: [], versions: []});
+                if (cachedDastInputsByProject[projectId]) {
+                    return Promise.resolve(cachedDastInputsByProject[projectId]);
+                }
+                var bindingsUrl = URL_PROJECT_DAST_BINDINGS_TPL.replace("{project_id}", projectId);
+                var metaUrl = URL_PROJECT_META_TPL.replace("{project_id}", projectId);
+                return Promise.all([
+                    fetch(bindingsUrl, {credentials: "same-origin"}).then(function (response) {
+                        if (!response.ok) throw new Error("Failed to load DAST bindings");
+                        return response.json();
+                    }),
+                    fetch(metaUrl, {credentials: "same-origin"}).then(function (response) {
+                        if (!response.ok) throw new Error("Failed to load project versions");
+                        return response.json();
+                    })
+                ]).then(function (responses) {
+                    var bindings = parseListResponse(responses[0]).filter(function (binding) {
+                        return !!binding.enabled;
+                    });
+                    var versions = (responses[1].versions || []).filter(function (version) {
+                        return !version.version_type || version.version_type === "GIT_BRANCH" || version.version_type === "GIT_HASH";
+                    });
+                    var result = {bindings: bindings, versions: versions};
+                    cachedDastInputsByProject[projectId] = result;
+                    return result;
+                });
+            }
+
+            function setDastSelectOptions($binding, $version, inputs, selectedBindingId, selectedVersionId) {
+                $binding.empty().append('<option value="">' + escapeHtml(TXT_SELECT_DAST_BINDING) + "</option>");
+                inputs.bindings.forEach(function (binding) {
+                    $binding.append('<option value="' + binding.id + '">' + escapeHtml(dastBindingLabel(binding)) + "</option>");
+                });
+                $binding.prop("disabled", inputs.bindings.length === 0);
+                if (selectedBindingId) $binding.val(String(selectedBindingId));
+
+                $version.empty().append('<option value="">' + escapeHtml(TXT_SELECT_GIT_VERSION) + "</option>");
+                inputs.versions.forEach(function (version) {
+                    $version.append('<option value="' + version.id + '">' + escapeHtml(version.label || ("Version #" + version.id)) + "</option>");
+                });
+                $version.prop("disabled", inputs.versions.length === 0);
+                if (selectedVersionId) $version.val(String(selectedVersionId));
+            }
+
+            function setScheduleBindingSelect(inputs, selectedValue) {
+                var $select = $("#form-dast-binding");
+                $select.empty().append('<option value="SAST">SAST (no DAST binding)</option>');
+                inputs.bindings.forEach(function (binding) {
+                    $select.append('<option value="' + binding.id + '">DAST · ' + escapeHtml(dastBindingLabel(binding)) + "</option>");
+                });
+                $select.prop("disabled", false).val(selectedValue ? String(selectedValue) : "SAST");
+                ensureSelectPicker($select);
+                refreshLaunchConfigSelectpicker($select);
+            }
+
             function setLaunchConfigsSelect(items, emptyText) {
                 var sel = $("#form-launch-config");
                 sel.empty();
+
+                var executionTarget = String($("#form-dast-binding").val() || "SAST");
+                items = (items || []).filter(function (cfg) {
+                    if (executionTarget === "SAST") return cfg.execution_type !== "DAST";
+                    return cfg.execution_type === "DAST" && String(cfg.dast_binding) === executionTarget;
+                });
 
                 if (!items || items.length === 0) {
                     sel.append('<option value="">' + escapeHtml(emptyText || TXT_NO_LAUNCH_CONFIGS) + '</option>');
@@ -772,6 +938,10 @@
                 sel.append('<option value="">' + escapeHtml(TXT_SELECT_LAUNCH_CONFIG) + '</option>');
                 items.forEach(function (cfg) {
                     var label = (cfg.name ? cfg.name : ("#" + cfg.id));
+                    if (cfg.execution_type === "DAST") {
+                        label = "DAST · " + (cfg.dast_target_label || ("binding #" + cfg.dast_binding)) +
+                            (cfg.dast_source_repository ? " — " + cfg.dast_source_repository : "") + " · " + label;
+                    }
                     if (cfg.is_default) label += " (default)";
                     sel.append('<option value="' + cfg.id + '">' + escapeHtml(label) + '</option>');
                 });
@@ -823,15 +993,27 @@
             function onProjectChanged() {
                 // For bootstrap-select, use the underlying <select> value after it syncs.
                 var projectId = $("#form-project").val();
-                loadLaunchConfigsForProject(projectId);
+                loadProjectDastInputs(projectId).then(function (inputs) {
+                    setScheduleBindingSelect(inputs, "SAST");
+                    loadLaunchConfigsForProject(projectId);
+                }).catch(function (error) {
+                    console.error(error);
+                    setScheduleBindingSelect({bindings: [], versions: []}, "SAST");
+                    loadLaunchConfigsForProject(projectId);
+                });
             }
 
             // Support both plain select and bootstrap-select event
             $("#form-project").on("changed.bs.select", onProjectChanged);
             $("#form-project").on("change", onProjectChanged);
+            $("#form-dast-binding").on("changed.bs.select change", function () {
+                var projectId = String($("#form-project").val() || "");
+                setLaunchConfigsSelect(cachedLaunchConfigsByProject[projectId] || []);
+            });
 
             // Ensure pickers are initialized/synced (prevents "UI shows one item, value is another")
             ensureSelectPicker($("#form-project"));
+            ensureSelectPicker($("#form-dast-binding"));
 
             // ---------------------------
             // DataTables: move built-in controls into our filter toolbars
@@ -1362,6 +1544,7 @@
             var btnSaveLaunchConfigJson = $("#btn-save-launch-config-json");
             var editingLaunchConfigId = null;
             var editingLaunchProjectId = null;
+            var editingLaunchConfigType = null;
             var editLaunchActionModal = $("#modal-edit-launch-config-action");
             var editLaunchActionJson = $("#lc-action-edit-json");
             var editLaunchActionError = $("#lc-action-edit-error");
@@ -1487,8 +1670,37 @@
                 editLaunchConfigError.hide().text("");
                 editingLaunchConfigId = cfg.id;
                 editingLaunchProjectId = projectId;
+                editingLaunchConfigType = cfg.execution_type;
+                $("#lc-edit-dast-fields").toggle(cfg.execution_type === "DAST");
+                if (cfg.execution_type === "DAST") {
+                    $("#lc-edit-dast-binding, #lc-edit-trigger-version").prop("disabled", true).empty();
+                    $("#lc-edit-dast-params-help").text("Loading target schema and Git versions...");
+                    loadProjectDastInputs(projectId).then(function (inputs) {
+                        setDastSelectOptions(
+                            $("#lc-edit-dast-binding"),
+                            $("#lc-edit-trigger-version"),
+                            inputs,
+                            cfg.dast_binding,
+                            cfg.trigger_project_version_id
+                        );
+                        var binding = inputs.bindings.find(function (item) {
+                            return String(item.id) === String(cfg.dast_binding);
+                        });
+                        $("#lc-edit-dast-params-help").text(describeTargetParameters(binding));
+                    }).catch(function (error) {
+                        $("#lc-edit-dast-params-help").text(String(error));
+                    });
+                }
                 editLaunchConfigModal.modal("show");
             }
+
+            $("#lc-edit-dast-binding").on("change", function () {
+                var inputs = cachedDastInputsByProject[String(editingLaunchProjectId)] || {bindings: []};
+                var binding = inputs.bindings.find(function (item) {
+                    return String(item.id) === String($("#lc-edit-dast-binding").val());
+                });
+                $("#lc-edit-dast-params-help").text(describeTargetParameters(binding));
+            });
 
             function findLaunchConfigAction(configId, actionId) {
                 var cfg = launchConfigsById[String(configId)];
@@ -1625,8 +1837,13 @@
                             var cfgLabel = cfg.name || ("#" + cfg.id);
                             var defLabel = cfg.is_default ? '<span class="label label-success">Default</span>' : "";
                             var actionsSummary = formatActionSummary(cfg.actions || []);
+                            var readinessIssues = cfg.readiness && cfg.readiness.issues ? cfg.readiness.issues : [];
+                            var readinessReason = readinessIssues.map(function (issue) { return issue.detail || issue.code; }).join("; ");
+                            var runDisabled = cfg.execution_type === "DAST" && (!cfg.readiness || !cfg.readiness.ready);
                             var manage = '' +
                                 '<div class="btn-group btn-group-xs" role="group">' +
+                                '<button class="btn btn-xs btn-primary act-lc-run" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '" title="' + escapeHtml(readinessReason || "Run now") + '"' + (runDisabled ? ' disabled' : '') + '>Run now</button>' +
+                                '<button class="btn btn-xs btn-info act-lc-schedule" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '">Schedule</button>' +
                                 '<button class="btn btn-xs btn-success act-lc-action-add" data-project-id="' + cfg.project + '" data-config-id="' + cfg.id + '">Add action</button>' +
                                 '<button class="btn btn-xs btn-default act-lc-edit" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '">Edit JSON</button>' +
                                 '<button class="btn btn-xs btn-danger act-lc-delete" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '">Delete</button>' +
@@ -1724,6 +1941,129 @@
                 openLaunchConfigEditor(cfg, projectId);
             });
 
+            $("#tbl-launch-configs tbody").on("click", "button.act-lc-run", function () {
+                var configId = $(this).data("id");
+                var projectId = $(this).data("project-id");
+                var url = URL_LAUNCH_CONFIG_START_TPL
+                    .replace("{project_id}", String(projectId))
+                    .replace("{config_id}", String(configId));
+                fetch(url, {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: Object.assign({"Content-Type": "application/json"}, csrfHeaders()),
+                    body: "{}"
+                }).then(function (response) {
+                    return response.json().then(function (data) { return {ok: response.ok, data: data}; });
+                }).then(function (result) {
+                    if (!result.ok) throw new Error(result.data.detail || JSON.stringify(result.data));
+                    showToast("Launch request #" + result.data.id + " queued.", "success");
+                    loadQueue();
+                }).catch(function (error) { showToast("Run now failed: " + error, "danger"); });
+            });
+
+            $("#tbl-launch-configs tbody").on("click", "button.act-lc-schedule", function () {
+                var configId = String($(this).data("id"));
+                var projectId = String($(this).data("project-id"));
+                $('a[data-toggle="tab"][href="#tab-create"]').tab("show");
+                $("#form-project").val(projectId);
+                refreshLaunchConfigSelectpicker($("#form-project"));
+                var selectedConfig = launchConfigsById[configId];
+                loadProjectDastInputs(projectId).then(function (inputs) {
+                    var targetValue = selectedConfig && selectedConfig.execution_type === "DAST"
+                        ? selectedConfig.dast_binding
+                        : "SAST";
+                    setScheduleBindingSelect(inputs, targetValue);
+                    loadLaunchConfigsForProject(projectId);
+                });
+                var attempts = 0;
+                var selectConfig = window.setInterval(function () {
+                    attempts += 1;
+                    if ($("#form-launch-config option[value='" + configId + "']").length || attempts > 20) {
+                        window.clearInterval(selectConfig);
+                        $("#form-launch-config").val(configId);
+                        refreshLaunchConfigSelectpicker($("#form-launch-config"));
+                    }
+                }, 50);
+            });
+
+            $("#btn-create-dast-preset").on("click", function () {
+                $("#dast-preset-error").hide().text("");
+                $("#modal-create-dast-preset").modal("show");
+                loadDastPresetInputs($("#dast-preset-project").val());
+            });
+
+            function loadDastPresetInputs(projectId) {
+                var $binding = $("#dast-preset-binding");
+                var $version = $("#dast-preset-trigger");
+                $binding.prop("disabled", true).empty().append('<option value="">Loading...</option>');
+                $version.prop("disabled", true).empty().append('<option value="">Loading...</option>');
+                $("#dast-preset-params-help").text("");
+                loadProjectDastInputs(projectId).then(function (inputs) {
+                    setDastSelectOptions($binding, $version, inputs, null, null);
+                    if (inputs.bindings.length) {
+                        $binding.val(String(inputs.bindings[0].id)).trigger("change");
+                    }
+                    if (inputs.versions.length) $version.val(String(inputs.versions[0].id));
+                }).catch(function (error) {
+                    $("#dast-preset-error").text(String(error)).show();
+                });
+            }
+
+            $("#dast-preset-project").on("change", function () {
+                loadDastPresetInputs($(this).val());
+            });
+
+            $("#dast-preset-binding").on("change", function () {
+                var projectId = String($("#dast-preset-project").val() || "");
+                var inputs = cachedDastInputsByProject[projectId] || {bindings: []};
+                var selected = inputs.bindings.find(function (binding) {
+                    return String(binding.id) === String($("#dast-preset-binding").val());
+                });
+                $("#dast-preset-params-help").text(describeTargetParameters(selected));
+                if (selected) {
+                    $("#dast-preset-params").val(JSON.stringify(selected.target.provider_defaults || {}, null, 2));
+                }
+            });
+
+            $("#btn-save-dast-preset").on("click", function () {
+                var projectId = String($("#dast-preset-project").val() || "");
+                var bindingId = String($("#dast-preset-binding").val() || "");
+                var triggerVersionId = String($("#dast-preset-trigger").val() || "");
+                var payload;
+                if (!projectId || !bindingId || !triggerVersionId) {
+                    $("#dast-preset-error").text("Project, DAST target binding, and Git source version are required.").show();
+                    return;
+                }
+                try {
+                    payload = {
+                        execution_type: "DAST",
+                        name: String($("#dast-preset-name").val() || "").trim(),
+                        description: "",
+                        is_default: false,
+                        dast_binding_id: Number(bindingId),
+                        trigger_project_version_id: Number(triggerVersionId),
+                        params: JSON.parse(String($("#dast-preset-params").val() || "{}"))
+                    };
+                } catch (error) {
+                    $("#dast-preset-error").text("Invalid parameters JSON: " + error).show();
+                    return;
+                }
+                var url = URL_PROJECT_LAUNCH_CONFIGS_TPL.replace("{project_id}", projectId);
+                fetch(url, {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: Object.assign({"Content-Type": "application/json"}, csrfHeaders()),
+                    body: JSON.stringify(payload)
+                }).then(function (response) {
+                    return response.json().then(function (data) { return {ok: response.ok, data: data}; });
+                }).then(function (result) {
+                    if (!result.ok) throw new Error(JSON.stringify(result.data));
+                    $("#modal-create-dast-preset").modal("hide");
+                    loadLaunchConfigs();
+                    showToast("DAST preset created.", "success");
+                }).catch(function (error) { $("#dast-preset-error").text(String(error)).show(); });
+            });
+
             $("#tbl-launch-configs tbody").on("click", "button.act-lc-action-edit", function () {
                 var actionId = $(this).data("action-id");
                 var configId = $(this).data("config-id");
@@ -1806,6 +2146,16 @@
                 if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
                     editLaunchConfigError.text("JSON must be an object.").show();
                     return;
+                }
+                if (editingLaunchConfigType === "DAST") {
+                    var bindingId = String($("#lc-edit-dast-binding").val() || "");
+                    var triggerVersionId = String($("#lc-edit-trigger-version").val() || "");
+                    if (!bindingId || !triggerVersionId) {
+                        editLaunchConfigError.text("DAST target binding and Git source version are required.").show();
+                        return;
+                    }
+                    payload.dast_binding_id = Number(bindingId);
+                    payload.trigger_project_version_id = Number(triggerVersionId);
                 }
                 var url = URL_LAUNCH_CONFIG_DELETE_TPL
                     .replace("{project_id}", String(editingLaunchProjectId))
@@ -2003,6 +2353,9 @@
             // ---------------------------
             function resetCreateForm() {
                 $("#form-project").val("");
+                $("#form-dast-binding").empty()
+                    .append('<option value="">' + TXT_SELECT_PROJECT_FIRST + "</option>")
+                    .prop("disabled", true);
                 $("#form-launch-config").empty()
                     .append('<option value="">' + TXT_SELECT_PROJECT_FIRST + "</option>")
                     .prop("disabled", true);
@@ -2015,6 +2368,7 @@
 
                 if (typeof ensureSelectPicker === "function") {
                     ensureSelectPicker($("#form-project"));
+                    ensureSelectPicker($("#form-dast-binding"));
                     ensureSelectPicker($("#form-launch-config"));
                 }
             }
@@ -2092,6 +2446,7 @@
 
             $('a[data-toggle="tab"][href="#tab-create"]').on("shown.bs.tab", function () {
                 ensureSelectPicker($("#form-project"));
+                ensureSelectPicker($("#form-dast-binding"));
                 ensureSelectPicker($("#form-launch-config"));
             });
 

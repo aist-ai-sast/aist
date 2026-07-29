@@ -1,35 +1,80 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="430" viewBox="0 0 1160 430" role="img" aria-labelledby="title desc">
-  <title id="title">Scheduled pipeline launch lifecycle</title>
-  <desc id="desc">A due schedule tick creates a durable launch request. Admission revalidates authority and readiness and checks capacity. A busy request remains pending and retries. A ready request creates a pipeline and runs it. Equivalent pending requests are coalesced and retained as superseded history.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="570" viewBox="0 0 1260 570" role="img" aria-labelledby="title desc">
+  <title id="title">Durable scheduled pipeline launch lifecycle</title>
+  <desc id="desc">A due schedule reserves its next tick before creating a durable launch request. The dispatcher revalidates authority and readiness, acquires capacity, and atomically creates an admitted pipeline with a publish intent. Broker publication is recoverable, and worker acceptance moves the request to dispatched and the pipeline to executing.</desc>
   <defs>
-    <style>text{font-family:Arial,sans-serif;fill:#17212b}.title{font-size:22px;font-weight:700}.name{font-size:15px;font-weight:700}.detail{font-size:12.5px;fill:#52616b}.box{stroke:#52616b;stroke-width:1.5;rx:12}.flow{fill:none;stroke:#596a78;stroke-width:2;marker-end:url(#arrow)}.return{fill:none;stroke:#9e751d;stroke-width:1.8;stroke-dasharray:7 5;marker-end:url(#arrow)}</style>
-    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#596a78"/></marker>
+    <marker id="arrow" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0 0L9 4L0 8Z" fill="#596a78"/></marker>
+    <style>text{font-family:Arial,sans-serif;fill:#17212b}.title{font-size:24px;font-weight:700}.head{font-size:16px;font-weight:700;text-anchor:middle}.body{font-size:13px;fill:#52616b;text-anchor:middle}.foot{font-size:13px;fill:#52616b}.box{stroke:#52616b;stroke-width:1.6}.flow{fill:none;stroke:#596a78;stroke-width:2.1;marker-end:url(#arrow)}.retry{fill:none;stroke:#9e751d;stroke-width:1.8;stroke-dasharray:7 5;marker-end:url(#arrow)}.recover{fill:none;stroke:#7d69aa;stroke-width:1.8;stroke-dasharray:7 5;marker-end:url(#arrow)}</style>
   </defs>
-  <rect width="1160" height="430" fill="#fbfcfd"/>
-  <text x="40" y="46" class="title">One schedule tick becomes one durable request before a pipeline exists</text>
+  <rect width="1260" height="570" fill="#fbfcfd"/>
+  <text x="40" y="46" class="title">One schedule tick follows a durable path to execution</text>
+  <text x="40" y="72" class="foot">The due tick, request, capacity lease, pipeline, and publish intent remain observable across retries.</text>
 
-  <rect x="40" y="112" width="180" height="78" class="box" fill="#f4efff"/>
-  <text x="65" y="143" class="name">Schedule tick</text><text x="65" y="166" class="detail">saved launch configuration</text>
-  <rect x="285" y="112" width="200" height="78" class="box" fill="#edf5ff"/>
-  <text x="310" y="143" class="name">Launch request</text><text x="310" y="166" class="detail">durable waiting state</text>
-  <rect x="550" y="100" width="235" height="102" class="box" fill="#fff8e8"/>
-  <text x="575" y="132" class="name">Admission</text><text x="575" y="155" class="detail">authority · readiness</text><text x="575" y="176" class="detail">priority · capacity</text>
-  <rect x="860" y="112" width="130" height="78" class="box" fill="#eaf8f1"/>
-  <text x="885" y="143" class="name">Pipeline</text><text x="885" y="166" class="detail">created once</text>
-  <rect x="1040" y="112" width="90" height="78" class="box" fill="#eaf8f1"/>
-  <text x="1063" y="143" class="name">Run</text><text x="1057" y="166" class="detail">worker</text>
-  <path d="M220 151L285 151" class="flow"/><path d="M485 151L550 151" class="flow"/><path d="M785 151L860 151" class="flow"/><path d="M990 151L1040 151" class="flow"/>
+  <rect x="40" y="120" width="160" height="86" rx="12" class="box" fill="#f4efff" stroke="#7d69aa"/>
+  <text x="120" y="151" class="head">Due tick</text>
+  <text x="120" y="176" class="body">enabled schedule</text>
+  <text x="120" y="195" class="body">indexed next-run time</text>
 
-  <rect x="560" y="270" width="215" height="72" class="box" fill="#fff8e8"/>
-  <text x="585" y="299" class="name">Wait and retry</text><text x="585" y="322" class="detail">pending until capacity or expiry</text>
-  <path d="M668 202L668 270" class="return"/>
-  <path d="M560 306L385 306L385 190" class="return"/>
+  <rect x="240" y="120" width="175" height="86" rx="12" class="box" fill="#f4efff" stroke="#7d69aa"/>
+  <text x="327" y="151" class="head">Reserve next tick</text>
+  <text x="327" y="176" class="body">row-locked claim</text>
+  <text x="327" y="195" class="body">prevents duplicate ticks</text>
 
-  <rect x="40" y="266" width="365" height="84" class="box" fill="#ffffff"/>
-  <text x="65" y="296" class="name">Equivalent pending request</text>
-  <text x="65" y="319" class="detail">one request remains pending; replaced requests</text>
-  <text x="65" y="338" class="detail">remain visible as superseded history</text>
-  <path d="M300 266L350 190" class="return"/>
+  <rect x="455" y="120" width="175" height="86" rx="12" class="box" fill="#edf5ff"/>
+  <text x="542" y="151" class="head">Pending request</text>
+  <text x="542" y="176" class="body">frozen launch input</text>
+  <text x="542" y="195" class="body">priority · eligible time</text>
 
-  <text x="40" y="397" class="detail">Run once enters the same lifecycle without changing the schedule's cron expression or last processed tick.</text>
+  <rect x="670" y="120" width="190" height="86" rx="12" class="box" fill="#fff8e8" stroke="#9e751d"/>
+  <text x="765" y="151" class="head">Claim and validate</text>
+  <text x="765" y="176" class="body">authority · readiness</text>
+  <text x="765" y="195" class="body">one dispatcher owner</text>
+
+  <rect x="900" y="120" width="150" height="86" rx="12" class="box" fill="#fff8e8" stroke="#9e751d"/>
+  <text x="975" y="151" class="head">Capacity</text>
+  <text x="975" y="176" class="body">acquire lease</text>
+  <text x="975" y="195" class="body">or bounded backoff</text>
+
+  <rect x="1090" y="110" width="135" height="106" rx="12" class="box" fill="#eaf8f1" stroke="#4d9874"/>
+  <text x="1157" y="141" class="head">Plan</text>
+  <text x="1157" y="166" class="body">Admitted pipeline</text>
+  <text x="1157" y="186" class="body">lease + outbox</text>
+  <text x="1157" y="206" class="body">one transaction</text>
+
+  <path d="M200 163H240M415 163H455M630 163H670M860 163H900M1050 163H1090" class="flow"/>
+
+  <rect x="945" y="300" width="220" height="86" rx="12" class="box" fill="#f4efff" stroke="#7d69aa"/>
+  <text x="1055" y="331" class="head">Publish generic task</text>
+  <text x="1055" y="356" class="body">pipeline identity only</text>
+  <text x="1055" y="375" class="body">safe outbox republish</text>
+  <path d="M1157 216V260H1055V300" class="flow"/>
+
+  <rect x="945" y="435" width="220" height="86" rx="12" class="box" fill="#eaf8f1" stroke="#4d9874"/>
+  <text x="1055" y="466" class="head">Worker accepts</text>
+  <text x="1055" y="491" class="body">request → Dispatched</text>
+  <text x="1055" y="510" class="body">pipeline → Executing</text>
+  <path d="M1055 386V435" class="flow"/>
+
+  <rect x="635" y="300" width="220" height="86" rx="12" class="box" fill="#fff8e8" stroke="#9e751d"/>
+  <text x="745" y="331" class="head">Wait for capacity</text>
+  <text x="745" y="356" class="body">return to Pending</text>
+  <text x="745" y="375" class="body">retry until expiry</text>
+  <path d="M975 206V250H745V300" class="retry"/>
+  <path d="M745 386V420H600V250H542V206" class="retry"/>
+
+  <rect x="345" y="300" width="230" height="86" rx="12" class="box" fill="#fff0f0" stroke="#b86161"/>
+  <text x="460" y="331" class="head">Admission rejected</text>
+  <text x="460" y="356" class="body">retain canonical due tick</text>
+  <text x="460" y="375" class="body">store bounded error</text>
+  <path d="M765 206V250H460V300" class="retry"/>
+
+  <rect x="40" y="300" width="245" height="86" rx="12" class="box" fill="#ffffff"/>
+  <text x="162" y="331" class="head">Equivalent request</text>
+  <text x="162" y="356" class="body">newest remains Pending</text>
+  <text x="162" y="375" class="body">replaced intent → Superseded</text>
+  <path d="M162 300V230H542V206" class="recover"/>
+
+  <path d="M1165 343H1200V260H1157V216" class="recover"/>
+  <text x="1178" y="405" class="body" style="text-anchor:end">reconciliation repairs stalled publish state</text>
+
+  <text x="40" y="545" class="foot">Run once starts at Pending without changing the schedule's cron expression or recorded tick.</text>
 </svg>

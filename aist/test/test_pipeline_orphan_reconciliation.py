@@ -14,12 +14,13 @@ from dojo.models import DojoMeta, Engagement, Finding, Test, Test_Type
 
 from aist.execution.dispatching import LaunchAcceptance
 from aist.models import AISTPipeline, AISTStatus, PipelineLaunchRequest, PipelineLaunchRequestState
-from aist.tasks.pipeline import postprocess_findings, run_sast_pipeline
+from aist.tasks.pipeline import postprocess_findings, run_pipeline_execution
 from aist.tasks.reconciliation import (
     _recover_stuck_dedup_pipelines,
     _recover_stuck_enrich_pipelines,
     reconcile_recent_orphans_task,
 )
+from aist.test.pipeline_execution_helpers import run_persisted_sast_pipeline
 from aist.test.test_api import AISTApiBase
 from aist.utils.pipeline import finish_pipeline
 from aist.utils.reconciliation import reconcile_pipeline_orphans, safe_attach_findings_to_version
@@ -146,26 +147,29 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             status=AISTStatus.FINISHED,
         )
         with (
-            patch("aist.tasks.pipeline.PipelineArguments.from_dict", return_value=self._pipeline_params(self.pv.id)),
+            patch(
+                "aist.tasks.pipeline.PipelineArguments.from_dict",
+                return_value=SimpleNamespace(sast=self._pipeline_params(self.pv.id)),
+            ),
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
             patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
             patch(
-                "aist.tasks.pipeline.configure_project_run_analyses",
-                return_value={
+                "aist.tasks.pipeline.execute_pipeline",
+                return_value=SimpleNamespace(launch_data={
                     "git": {},
                     "output_dir": "/aist-output",
                     "project_path": "/aist-project",
                     "trim_path": "",
                     "tmp_analyzer_config_path": "/aist-analyzers.yml",
-                },
+                }),
             ),
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[SimpleNamespace(test_id=dd_test.id)]),
             patch("aist.tasks.pipeline.postprocess_findings", side_effect=RuntimeError("forced crash")),
             self.assertRaises(RuntimeError),
         ):
-            run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id})
+            run_persisted_sast_pipeline(pipeline, {"project_id": self.project.id})
 
         pipeline.refresh_from_db()
         self.assertTrue(pipeline.tests.filter(id=dd_test.id).exists())
@@ -178,7 +182,7 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             id="pipe-duplicate-workspace-1",
             project=self.project,
             project_version=self.pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
         )
         with tempfile.TemporaryDirectory() as base:
             run_dir = Path(base) / "test_product" / "main" / "runs" / pipeline.id
@@ -188,15 +192,12 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             with (
                 self.settings(AIST_PROJECTS_BUILD_DIR=base),
                 patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
+                patch(
+                    "aist.tasks.pipeline.accept_published_launch",
+                    return_value=LaunchAcceptance.DUPLICATE,
+                ),
             ):
-                run_sast_pipeline.run(
-                    pipeline.id,
-                    {
-                        "project_id": self.project.id,
-                        "project_name": "test_product",
-                        "project_version": {"version": "main"},
-                    },
-                )
+                run_pipeline_execution.run(pipeline.id)
 
             self.assertTrue((run_dir / "keep.txt").exists())
 

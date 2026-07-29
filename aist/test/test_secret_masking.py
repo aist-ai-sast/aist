@@ -231,7 +231,7 @@ class ActionRunMaskingTests(AISTApiBase):
             id="pipe-mask-action",
             project=self.project,
             project_version=self.pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
         )
 
         _update_action_run(

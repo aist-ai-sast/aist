@@ -40,9 +40,10 @@ role-based access control (RBAC) and resource attributes:
 | Internal service principal | Pipeline and AI callbacks that are not tenant-user CRUD | `INTERNAL_SERVICE`: authenticated superuser via session or stock DRF token; AIST PATs are rejected |
 | `PUBLIC` endpoint mode | Login, self-scoped account/token operations, callbacks with their own validation, or non-tenant reference data | Does **not** mean every endpoint is anonymous; its explicit authentication and validation still apply |
 
-`aist-service` is the provisioned internal-service account. The implemented
-permission checks the authenticated account's `is_superuser` property; it does
-not currently require that exact username. See [Current limitations](#current-limitations).
+`aist-service` is the provisioned internal-service account. Internal-service
+authorization checks the authenticated account's `is_superuser` property; it
+does not require that exact username. See
+[Current limitations](#current-limitations).
 
 ## Role capability matrix
 

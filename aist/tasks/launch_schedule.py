@@ -1,90 +1,117 @@
 import logging
+from dataclasses import dataclass
+from datetime import datetime
 
 from celery import shared_task
+from croniter import croniter
+from django.db import transaction
 from django.utils import timezone
 
 from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
 from aist.models import (
     LaunchSchedule,
 )
+from aist.pipeline_args import PipelineArguments
 
 logger = logging.getLogger("aist")
+_SCHEDULE_BATCH_SIZE = 100
+
+
+@dataclass(frozen=True, slots=True)
+class _DueScheduleClaim:
+    schedule_id: int
+    due_time: datetime
+
+
+def _claim_due_schedule(*, now: datetime, exclude_ids: set[int]) -> _DueScheduleClaim | None:
+    with transaction.atomic():
+        sched = (
+            LaunchSchedule.objects
+            .select_for_update(skip_locked=True)
+            .select_related("launch_config")
+            .filter(enabled=True, next_run_at__isnull=False, next_run_at__lte=now)
+            .exclude(pk__in=exclude_ids)
+            .order_by("next_run_at", "pk")
+            .first()
+        )
+        if sched is None:
+            return None
+        due_time = sched.next_run_at
+        try:
+            next_run_at = croniter(sched.cron_expression, due_time).get_next(datetime)
+            if timezone.is_naive(next_run_at):
+                next_run_at = timezone.make_aware(next_run_at, timezone.get_default_timezone())
+        except Exception:
+            sched.next_run_at = None
+            sched.last_attempt_at = now
+            sched.last_error_code = "INVALID_CRON"
+            sched.last_error_detail = "The stored cron expression is invalid; update the schedule."
+            sched.save(update_fields=[
+                "next_run_at",
+                "last_attempt_at",
+                "last_error_code",
+                "last_error_detail",
+            ])
+            return _DueScheduleClaim(schedule_id=0, due_time=due_time)
+        # Reserving the next tick makes this due slot invisible to another beat
+        # worker while admission runs. Failure restores the canonical due tick.
+        sched.next_run_at = next_run_at
+        sched.last_attempt_at = now
+        sched.save(update_fields=["next_run_at", "last_attempt_at"])
+        return _DueScheduleClaim(schedule_id=sched.pk, due_time=due_time)
 
 
 @shared_task(name="aist.tasks.launch_schedule.process_launch_schedules")
 def process_launch_schedules(async_user=None):
+    del async_user
     now = timezone.now()
-
-    schedules = (
-        LaunchSchedule.objects
-        .select_related("launch_config")
-        .all()
-    )
-
-    for sched in schedules:
-        if not sched.enabled:
+    processed = 0
+    attempted_ids: set[int] = set()
+    while processed < _SCHEDULE_BATCH_SIZE:
+        claim = _claim_due_schedule(now=now, exclude_ids=attempted_ids)
+        if claim is None:
+            break
+        processed += 1
+        if claim.schedule_id == 0:
             continue
-
-        try:
-            next_time = sched.get_next_run_time(now=now)
-        except Exception:
-            logger.exception(
-                "LaunchSchedule[%s] invalid cron_expression=%r (now=%s). Skipping.",
-                sched.id,
-                sched.cron_expression,
-                now,
+        attempted_ids.add(claim.schedule_id)
+        sched = (
+            LaunchSchedule.objects
+            .select_related(
+                "launch_config__project__product__prod_type__aist_organization",
+                "launch_config__trigger_project_version",
+                "launch_config__dast_binding__target__integration__dast_state",
+                "launch_config__dast_binding__target__integration__vpn_integration__vpn_secret",
             )
-            continue
-
-        due_time = next_time  # get_next_run_time now returns the most recent due tick <= now
-
-        last = sched.last_run_at
-        if last and timezone.is_naive(last):
-            last = timezone.make_aware(last, timezone.get_default_timezone())
-
-        # already processed this tick
-        if last and due_time <= last:
-            logger.info(
-                "LaunchSchedule[%s] not due: due_time=%s last_run_at=%s now=%s cron=%r",
-                sched.id,
-                due_time,
-                last,
-                now,
-                sched.cron_expression,
-            )
-            continue
-
-        project = sched.launch_config.project
-
-        # Resolve config
+            .get(pk=claim.schedule_id)
+        )
         config = sched.launch_config
-
-        # Enqueue one item per due schedule tick (project-only).
+        project = config.project
         try:
             enqueue_pipeline_launch(
-                project=project,
+                arguments=PipelineArguments.from_launch_config(config),
                 principal=LaunchPrincipal.for_schedule(organization=project.organization),
-                raw_params={},
                 schedule=sched,
                 launch_config=config,
-                client_request_key=f"schedule:{sched.pk}:{due_time.isoformat()}",
+                client_request_key=f"schedule:{sched.pk}:{claim.due_time.isoformat()}",
             )
-        except LaunchEnqueueError:
-            logger.exception(
-                "LaunchSchedule[%s] could not freeze a valid launch request for due_time=%s.",
+        except LaunchEnqueueError as exc:
+            LaunchSchedule.objects.filter(pk=sched.pk).update(
+                next_run_at=claim.due_time,
+                last_attempt_at=now,
+                last_error_code=exc.code,
+                last_error_detail=exc.safe_detail,
+            )
+            logger.warning(
+                "LaunchSchedule[%s] admission rejected for due_time=%s code=%s.",
                 sched.id,
-                due_time,
+                claim.due_time,
+                exc.code,
             )
             continue
-
-        logger.info(
-            "LaunchSchedule[%s] enqueued PipelineLaunchRequest for project=%s launch_config=%s next_time=%s now=%s",
-            sched.id,
-            project.id,
-            config.id,
-            next_time,
-            now,
+        LaunchSchedule.objects.filter(pk=sched.pk).update(
+            last_run_at=claim.due_time,
+            last_attempt_at=now,
+            last_error_code="",
+            last_error_detail="",
         )
-
-        sched.last_run_at = now
-        sched.save(update_fields=["last_run_at"])

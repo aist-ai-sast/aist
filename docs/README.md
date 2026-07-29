@@ -46,7 +46,7 @@ distinguishes synchronized providers from link-only providers.
 ## Understand architecture and data flow
 
 - [Runtime deployment](architecture/runtime-deployment.md)
-- [SAST pipeline runtime](architecture/sast-pipeline-runtime.md)
+- [Pipeline execution runtime](architecture/sast-pipeline-runtime.md)
 - [Source file access](data-flows/source-file-access.md)
 - [AI triage execution](data-flows/ai-triage-execution.md)
 - [VPN-routed operations](data-flows/vpn-routed-operations.md)

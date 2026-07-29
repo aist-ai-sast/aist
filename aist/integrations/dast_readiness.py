@@ -8,14 +8,16 @@ from urllib.parse import urlsplit
 
 from django.utils import timezone
 
-from aist.integrations.dast_config import DastConfigError
+from aist.integrations.dast_config import DastBindingParameters, DastConfigError
 from aist.models import (
     DastIntegrationState,
     DastIntegrationValidationState,
     DastProjectBinding,
     OrgIntegrationType,
     OrgIntegrationVPNSecret,
+    VersionType,
 )
+from aist.pipeline_args import DastPipelineArguments
 
 DAST_CATALOG_MAX_AGE = timedelta(hours=24)
 DAST_CONTRACT_MAJOR = 2
@@ -51,6 +53,9 @@ class DastReadinessCode(StrEnum):
     VPN_CREDENTIALS_MISSING = "VPN_CREDENTIALS_MISSING"
     VPN_USER_PASSWORD_INCOMPLETE = "VPN_USER_PASSWORD_INCOMPLETE"  # noqa: S105 -- reason code
     PRIVATE_GATEWAY_REQUIRES_VPN = "PRIVATE_GATEWAY_REQUIRES_VPN"
+    SOURCE_VERSION_INVALID = "SOURCE_VERSION_INVALID"
+    LAUNCH_PARAMETERS_INVALID = "LAUNCH_PARAMETERS_INVALID"
+    CAPABILITY_SNAPSHOT_STALE = "CAPABILITY_SNAPSHOT_STALE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +86,6 @@ def check_dast_binding_readiness(
     *,
     now: datetime | None = None,
     catalog_max_age: timedelta = DAST_CATALOG_MAX_AGE,
-    require_autonomous: bool = True,
 ) -> DastReadinessResult:
     """Evaluate one binding without network I/O or secret-bearing output."""
     checked_at = now or timezone.now()
@@ -125,9 +129,9 @@ def check_dast_binding_readiness(
         add(DastReadinessCode.BINDING_DISABLED, "This DAST target binding is disabled.")
     if not target.is_available:
         add(DastReadinessCode.TARGET_UNAVAILABLE, "The selected DAST target is no longer available.")
-    if require_autonomous and not binding.autonomous_enabled:
+    if not binding.autonomous_enabled:
         add(DastReadinessCode.AUTONOMOUS_POLICY_DISABLED, "Autonomous DAST execution is disabled for this binding.")
-    if (require_autonomous or binding.autonomous_enabled) and not target.autonomous_ready:
+    if not target.autonomous_ready:
         add(DastReadinessCode.AUTONOMOUS_TARGET_NOT_READY, "The selected target is not autonomous-ready.")
 
     target_snapshot = None
@@ -185,6 +189,42 @@ def check_dast_binding_readiness(
             "A private DAST gateway requires an active same-organization VPN with credentials.",
         )
 
+    return DastReadinessResult(ready=not issues, issues=tuple(issues), checked_at=checked_at)
+
+
+def check_dast_launch_readiness(arguments, *, now: datetime | None = None) -> DastReadinessResult:
+    """Evaluate a complete ephemeral or saved DAST launch input without network I/O."""
+    if not isinstance(arguments.payload, DastPipelineArguments):
+        msg = "DAST launch readiness requires DAST pipeline arguments."
+        raise TypeError(msg)
+    payload = arguments.payload
+    base = check_dast_binding_readiness(payload.binding, now=now)
+    issues = list(base.issues)
+
+    def add(code: DastReadinessCode, detail: str) -> None:
+        if all(issue.code != code for issue in issues):
+            issues.append(DastReadinessIssue(code=code, detail=detail))
+
+    trigger = payload.trigger_project_version
+    if trigger.project_id != arguments.project.pk or trigger.version_type not in {
+        VersionType.GIT_BRANCH,
+        VersionType.GIT_HASH,
+    }:
+        add(DastReadinessCode.SOURCE_VERSION_INVALID, "Select a Git branch or Git hash from this project.")
+    try:
+        current_target = payload.binding.target.get_snapshot()
+        DastBindingParameters.from_snapshot(payload.parameters, target=current_target)
+        if current_target.to_snapshot() != payload.capability:
+            add(
+                DastReadinessCode.CAPABILITY_SNAPSHOT_STALE,
+                "The DAST target capability changed; rebuild the launch input.",
+            )
+    except DastConfigError:
+        add(
+            DastReadinessCode.LAUNCH_PARAMETERS_INVALID,
+            "The launch parameters no longer match the DAST target schema.",
+        )
+    checked_at = now or timezone.now()
     return DastReadinessResult(ready=not issues, issues=tuple(issues), checked_at=checked_at)
 
 

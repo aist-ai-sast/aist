@@ -16,6 +16,10 @@ class DastConfigError(ValueError):
     pass
 
 
+class DastSecretParameterSchemaError(DastConfigError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class DastOnboardingBundle:
 
@@ -263,6 +267,7 @@ class DastTargetSnapshot:
 
         parameter_schema = cls._strict_parameter_schema(snapshot["parameter_schema"])
         provider_defaults = cls._json_object(snapshot["defaults"], "defaults")
+        cls._reject_credential_parameters(parameter_schema, provider_defaults)
         cls._validate_parameters(parameter_schema, provider_defaults, "defaults")
         repository_keys = snapshot["repository_keys"]
         if (
@@ -336,6 +341,37 @@ class DastTargetSnapshot:
             msg = "parameter_schema is not a valid Draft 2020-12 schema."
             raise DastConfigError(msg) from exc
         return schema
+
+    @classmethod
+    def _reject_credential_parameters(cls, schema: dict[str, Any], defaults: dict[str, Any]) -> None:
+        credential_names = {
+            "api_key",
+            "apikey",
+            "auth_token",
+            "credential",
+            "credentials",
+            "password",
+            "passwd",
+            "private_key",
+            "secret",
+            "token",
+        }
+
+        def contains_credential_key(value: Any) -> bool:
+            if not isinstance(value, dict):
+                return False
+            for key, nested in value.items():
+                normalized = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+                if normalized in credential_names:
+                    return True
+                if contains_credential_key(nested):
+                    return True
+            return False
+
+        properties = schema.get("properties")
+        if contains_credential_key(properties) or contains_credential_key(defaults):
+            msg = "DAST launch parameter schema cannot contain credential-shaped fields."
+            raise DastSecretParameterSchemaError(msg)
 
     @staticmethod
     def _validate_parameters(schema: dict[str, Any], parameters: dict[str, Any], field: str) -> None:

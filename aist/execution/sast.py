@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 from aist.execution.coalescing import canonical_coalesce_key
 from aist.execution.contracts import (
     EffectiveVersionPolicy,
+    ExecutionCancellationMode,
+    ExecutionMetricDescriptor,
     ExecutionPlan,
     ExecutionPlanError,
     LaunchAuthority,
@@ -121,6 +123,29 @@ def planning_context_from_launch_request(request: PipelineLaunchRequest) -> Laun
 
 class SastPipelineLaunchAdapter:
     execution_type = PipelineExecutionKind.SAST
+    cancellation_mode = ExecutionCancellationMode.IMMEDIATE
+    metric_descriptor = ExecutionMetricDescriptor(
+        label="sast",
+        operations=frozenset({"execute", "cancel"}),
+    )
+
+    @staticmethod
+    def initialize_pipeline(pipeline) -> None:
+        del pipeline
+
+    @staticmethod
+    def allows_duplicate_delivery(*, pipeline_id: str, task_id: str | None, retries: int) -> bool:
+        del pipeline_id, task_id, retries
+        return False
+
+    @staticmethod
+    def should_recover(pipeline) -> bool:
+        del pipeline
+        return False
+
+    @staticmethod
+    def invoke(runtime, pipeline_id: str):
+        return runtime.run_sast(pipeline_id)
 
     def build_plan(self, context: LaunchPlanningContext) -> ExecutionPlan:
         if context.execution_type != self.execution_type:
@@ -174,19 +199,16 @@ class SastPipelineLaunchAdapter:
             except PullRequest.DoesNotExist as exc:
                 raise ExecutionPlanError(_ERR_PULL_REQUEST) from exc
 
-        coalesce_key = build_sast_coalesce_key(
-            project_id=request.project_id,
-            effective_project_version_id=project_version.id,
-            params_snapshot=params,
-            initial_launch_data_snapshot=initial_launch_data,
-            schedule=schedule,
-        )
+        coalesce_key = request.coalesce_key
+        if not coalesce_key:
+            detail = "SAST launch request is missing its frozen execution identity."
+            raise ExecutionPlanError(detail)
         if request.launch_config_id is not None:
             params["launch_config_id"] = request.launch_config_id
         return ExecutionPlan(
             execution_type=self.execution_type,
-            task_name=PipelineTaskName.RUN_SAST_PIPELINE,
-            task_args=(params,),
+            task_name=PipelineTaskName.RUN_PIPELINE_EXECUTION,
+            task_args=(),
             project_id=request.project_id,
             trigger_project_version_id=None,
             effective_version_policy=EffectiveVersionPolicy.PRESELECT_EFFECTIVE_VERSION,

@@ -42,7 +42,7 @@ class BuildAgentRuntimeEnvTests(AISTApiBase):
             id="pipe-build-agent-env",
             project=self.project,
             project_version=self.branch_pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
         )
 
     # ------------------------------------------------------------------ #
@@ -180,7 +180,7 @@ class BuildDiffEnvBackwardCompatTests(AISTApiBase):
             id="pipe-back-compat",
             project=self.project,
             project_version=self.branch_pv,
-            status=AISTStatus.SAST_LAUNCHED,
+            status=AISTStatus.EXECUTING,
         )
 
     def test_build_diff_env_returns_same_dict_as_unified_builder(self):

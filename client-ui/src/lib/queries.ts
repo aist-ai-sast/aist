@@ -102,7 +102,7 @@ type ProductSummaryApi = {
 };
 
 type ProjectMetaApi = {
-  versions: { id: string; label: string }[];
+  versions: { id: string; label: string; version_type?: "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH" }[];
 };
 
 type PipelineApi = {

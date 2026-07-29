@@ -4,39 +4,31 @@ import uuid
 from celery import shared_task
 from django.conf import settings
 
-from aist.execution.adapters import LaunchAdapterRegistry
 from aist.execution.claiming import claim_next_launch_request, revalidate_claimed_authority
-from aist.execution.contracts import PipelineTaskName
-from aist.execution.dast import DastPipelineLaunchAdapter
 from aist.execution.dispatching import (
     LaunchPlanningStatus,
     LaunchPublishCommand,
     plan_claimed_launch,
     prepare_launch_publish,
 )
-from aist.execution.sast import SastPipelineLaunchAdapter
+from aist.execution.registry import execution_driver_registry
 from aist.models import PipelineLaunchRequest, PipelineLaunchRequestState
-from aist.tasks.pipeline import run_pipeline_execution, run_sast_pipeline
+from aist.tasks.pipeline import run_pipeline_execution
 
 logger = logging.getLogger("aist")
-launch_adapter_registry = LaunchAdapterRegistry(
-    SastPipelineLaunchAdapter(),
-    DastPipelineLaunchAdapter(),
-)
-_PUBLISH_TASKS = {
-    PipelineTaskName.RUN_SAST_PIPELINE.value: run_sast_pipeline,
-    PipelineTaskName.RUN_PIPELINE_EXECUTION.value: run_pipeline_execution,
-}
+launch_adapter_registry = execution_driver_registry
 _MAX_DISPATCH_BATCH_SIZE = 200
 
 
 def _publish(command: LaunchPublishCommand) -> None:
-    task = _PUBLISH_TASKS.get(command.task_name)
-    if task is None:
-        message = f"No publisher registered for task {command.task_name}."
+    if command.task_name != run_pipeline_execution.name:
+        message = f"Invalid generic execution task {command.task_name}."
         raise ValueError(message)
-    task.apply_async(
-        args=(command.pipeline_id, *command.task_args),
+    if command.task_args:
+        message = "Generic execution messages may contain only pipeline_id."
+        raise ValueError(message)
+    run_pipeline_execution.apply_async(
+        args=(command.pipeline_id,),
         task_id=command.task_id,
     )
 

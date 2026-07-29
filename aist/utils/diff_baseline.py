@@ -15,9 +15,8 @@ from __future__ import annotations
 from django.conf import settings
 from django.db.models import Q
 
-from aist.models import AISTPipeline, AISTStatus, VersionType
-
-_TERMINAL_SUCCESS_STATUSES = (AISTStatus.FINISHED, AISTStatus.FINISHED_WITH_WARNINGS)
+from aist.models import AISTPipeline, VersionType
+from aist.services.pipeline_lifecycle import SUCCESSFUL_PIPELINE_STATUSES
 
 
 def _positive_int_setting(name: str) -> int:
@@ -65,7 +64,7 @@ def get_prior_successful_commit(pipeline: AISTPipeline) -> str | None:
         AISTPipeline.objects
         .filter(
             project_id=pipeline.project_id,
-            status__in=_TERMINAL_SUCCESS_STATUSES,
+            status__in=SUCCESSFUL_PIPELINE_STATUSES,
         )
         .exclude(id=pipeline.id)
         .filter(

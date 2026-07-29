@@ -115,7 +115,7 @@ class CleanupTerminalProjectBuildPathTests(AISTApiBase):
                 id="pipe-keep-active",
                 project=self.project,
                 project_version=self.pv,
-                status=AISTStatus.SAST_LAUNCHED,
+                status=AISTStatus.EXECUTING,
             )
             AISTPipeline.objects.create(
                 id="pipe-drop-finished",

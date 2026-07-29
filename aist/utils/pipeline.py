@@ -11,19 +11,26 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
+from aist.execution.contracts import ExecutionCancellationMode
 from aist.execution.observability import AuditContext, audit_event
+from aist.execution.registry import execution_driver_registry
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import uninstall_pipeline_file_logging
 from aist.models import (
     AISTPipeline,
     AISTStatus,
     DastExecutionOutcome,
-    PipelineExecutionLease,
+    DastExecutionState,
     PipelineExecutionType,
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
-from aist.signals import pipeline_finished, pipeline_status_changed
+from aist.services.pipeline_lifecycle import (
+    TERMINAL_PIPELINE_STATUSES,
+    is_terminal_pipeline_status,
+    transition_pipeline_status,
+)
+from aist.signals import pipeline_finished
 from aist.utils.pipeline_imports import cleanup_pipeline_containers
 from aist.utils.reconciliation import reconcile_pipeline_orphans
 
@@ -32,11 +39,7 @@ BUILD_DIR_WARNING = "AIST_PROJECTS_BUILD_DIR is not set"
 
 
 def get_terminal_pipeline_statuses() -> set[str]:
-    return {AISTStatus.FINISHED, AISTStatus.FINISHED_WITH_WARNINGS}
-
-
-def is_terminal_pipeline_status(status: str) -> bool:
-    return status in get_terminal_pipeline_statuses()
+    return set(TERMINAL_PIPELINE_STATUSES)
 
 
 def has_unfinished_pipeline(project_version) -> bool:
@@ -139,32 +142,18 @@ def set_pipeline_status(
     *,
     update_fields_extra: list[str] | None = None,
 ) -> bool:
-    old_status = pipeline.status
-    if old_status == new_status:
-        return False
-
-    pipeline.status = new_status
-    update_fields = {"status", "updated"}
-    if is_terminal_pipeline_status(new_status):
-        # Clear run_task_id on completion so the dispatcher's race-window guard
-        # can distinguish completed pipelines from newly dispatched ones.
-        pipeline.run_task_id = None
-        update_fields.add("run_task_id")
-        PipelineExecutionLease.objects.filter(
-            pipeline=pipeline,
-            released_at__isnull=True,
-        ).update(released_at=timezone.now())
-    if update_fields_extra:
-        update_fields.update(update_fields_extra)
-    pipeline.save(update_fields=sorted(update_fields))
-
-    transaction.on_commit(lambda: pipeline_status_changed.send(
-        sender=type(pipeline),
-        pipeline_id=pipeline.id,
-        old_status=old_status,
-        new_status=new_status,
-    ))
-    return True
+    extras = update_fields_extra or []
+    result = transition_pipeline_status(
+        pipeline.pk,
+        new_status,
+        field_updates={field: getattr(pipeline, field) for field in extras},
+        update_fields=extras,
+    )
+    pipeline.status = result.pipeline.status
+    pipeline.started = result.pipeline.started
+    pipeline.finished_at = result.pipeline.finished_at
+    pipeline.run_task_id = result.pipeline.run_task_id
+    return result.changed
 
 
 def finish_pipeline(pipeline_id: str, *, degraded: bool = False) -> None:
@@ -221,7 +210,7 @@ def create_pipeline_object(
     project_version,
     pull_request,
     *,
-    status: str = AISTStatus.FINISHED,
+    status: str = AISTStatus.ADMITTED,
     execution_type: str = PipelineExecutionType.SAST,
     trigger_project_version=None,
 ):
@@ -255,7 +244,8 @@ def stop_pipeline(pipeline: AISTPipeline) -> None:
     Revokes both the run and deduplication watcher tasks (if present),
     tears down any related containers.
     """
-    if pipeline.execution_type == PipelineExecutionType.DAST:
+    driver = execution_driver_registry.resolve(pipeline.execution_type)
+    if driver.cancellation_mode == ExecutionCancellationMode.COOPERATIVE:
         _request_dast_pipeline_stop(pipeline.id)
         return
 
@@ -286,20 +276,17 @@ def _request_dast_pipeline_stop(pipeline_id: str) -> None:
         pipeline = AISTPipeline.objects.select_for_update().get(pk=pipeline_id)
         if is_terminal_pipeline_status(pipeline.status):
             return
-        if pipeline.external_cancel_requested_at is None:
-            pipeline.external_cancel_requested_at = timezone.now()
-        pipeline.external_execution_outcome = DastExecutionOutcome.STOP_PENDING
-        pipeline.save(update_fields=[
-            "external_cancel_requested_at",
-            "external_execution_outcome",
-            "updated",
-        ])
+        execution_state = DastExecutionState.objects.select_for_update().get(pipeline=pipeline)
+        if execution_state.cancel_requested_at is None:
+            execution_state.cancel_requested_at = timezone.now()
+        execution_state.outcome = DastExecutionOutcome.STOP_PENDING
+        execution_state.save(update_fields=["cancel_requested_at", "outcome", "updated"])
         task_id = pipeline.run_task_id
         if launch_request is not None and launch_request.state != PipelineLaunchRequestState.DISPATCHED:
             launch_request.state = PipelineLaunchRequestState.CANCELLED
             launch_request.save(update_fields=["state", "updated"])
-            pipeline.external_execution_outcome = DastExecutionOutcome.CANCELLED_BEFORE_START
-            pipeline.save(update_fields=["external_execution_outcome", "updated"])
+            execution_state.outcome = DastExecutionOutcome.CANCELLED_BEFORE_START
+            execution_state.save(update_fields=["outcome", "updated"])
             finish_without_provider = True
         else:
             transaction.on_commit(lambda: cleanup_pipeline_containers(pipeline_id))

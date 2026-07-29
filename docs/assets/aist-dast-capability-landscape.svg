@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1100" height="960" viewBox="0 0 1100 960" role="img" aria-labelledby="title desc">
  <title id="title">AIST and DAST product responsibilities, architecture, integrations, and deployment</title>
- <desc id="desc">AIST aggregates and manages imported security findings using an application built on DefectDojo and the separately maintained sast-pipeline execution product. DAST independently tests deployed systems and owns its evidence and reports. Each product has its own runtime and integrations.</desc>
+ <desc id="desc">AIST aggregates and manages imported security findings using an application built on DefectDojo and a shared pipeline execution package loaded by its workers. DAST independently tests deployed systems and owns its evidence and reports. The products have separate deployments and integrations.</desc>
  <defs>
   <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#52616b"/></marker>
   <style>
@@ -37,10 +37,10 @@
  <rect x="55" y="270" width="220" height="82" class="box" fill="#eaf8f1"/>
  <g color="#287955"><use href="#layers" x="72" y="287" width="24" height="24"/></g><text x="108" y="299" class="t">DefectDojo foundation</text><text x="72" y="327" class="s">Findings · tests · parsers</text><text x="72" y="346" class="xs">Embedded, not a remote service</text>
  <rect x="295" y="270" width="220" height="82" class="box" fill="#fff8e8"/>
- <g color="#9e751d"><use href="#container" x="312" y="287" width="24" height="24"/></g><text x="348" y="299" class="t">sast-pipeline product</text><text x="312" y="327" class="s">Builder + analyzer containers</text><text x="312" y="346" class="xs">Separate lifecycle, tightly coupled</text>
+ <g color="#9e751d"><use href="#container" x="312" y="287" width="24" height="24"/></g><text x="348" y="299" class="t">Execution package</text><text x="312" y="327" class="s">SAST + standalone containers</text><text x="312" y="346" class="xs">Loaded by Celery workers</text>
  <text x="55" y="388" class="sh">Product flow</text>
  <rect x="55" y="405" width="92" height="58" class="box" fill="#fff"/><text x="76" y="430" class="t">Onboard</text><text x="71" y="451" class="xs">source</text>
- <rect x="169" y="405" width="92" height="58" class="box" fill="#fff"/><text x="190" y="430" class="t">Execute</text><text x="184" y="451" class="xs">analyzers</text>
+ <rect x="169" y="405" width="92" height="58" class="box" fill="#fff"/><text x="190" y="430" class="t">Execute</text><text x="184" y="451" class="xs">runtimes</text>
  <rect x="283" y="405" width="92" height="58" class="box" fill="#fff"/><text x="302" y="430" class="t">Prepare</text><text x="296" y="451" class="xs">findings</text>
  <rect x="397" y="405" width="118" height="58" class="box" fill="#fff"/><text x="421" y="430" class="t">Review</text><text x="410" y="451" class="xs">and remediate</text>
  <path d="M147 434h22M261 434h22M375 434h22" class="line"/>

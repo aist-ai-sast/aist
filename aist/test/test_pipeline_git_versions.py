@@ -9,7 +9,7 @@ from dojo.models import Engagement, Finding, Test, Test_Type
 
 from aist.execution.dispatching import LaunchAcceptance
 from aist.models import AISTPipeline, AISTProjectVersion, VersionType
-from aist.tasks.pipeline import run_sast_pipeline
+from aist.test.pipeline_execution_helpers import run_persisted_sast_pipeline
 from aist.test.test_api import AISTApiBase
 
 
@@ -60,7 +60,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
             patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
-            patch("aist.tasks.pipeline.configure_project_run_analyses") as mock_configure,
+            patch("aist.tasks.pipeline.execute_pipeline") as mock_configure,
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[]),
         ):
             mock_from_dict.return_value = SimpleNamespace(
@@ -81,9 +81,10 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                     "log_level": "INFO",
                 },
             )
+            mock_from_dict.return_value = SimpleNamespace(sast=mock_from_dict.return_value)
 
             with self.assertRaises(ValueError):
-                run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id})
+                run_persisted_sast_pipeline(pipeline, {"project_id": self.project.id})
 
             mock_configure.assert_not_called()
 
@@ -107,7 +108,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
             patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
-            patch("aist.tasks.pipeline.configure_project_run_analyses") as mock_configure,
+            patch("aist.tasks.pipeline.execute_pipeline") as mock_configure,
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[]),
         ):
             project_version_state = {"id": branch.id, "version": "main", "type": VersionType.GIT_BRANCH}
@@ -159,15 +160,16 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                     "log_level": "INFO",
                 },
             )
-            mock_configure.return_value = {
+            mock_from_dict.return_value = SimpleNamespace(sast=mock_from_dict.return_value)
+            mock_configure.return_value = SimpleNamespace(launch_data={
                 "git": {"resolved_commit": resolved_commit},
                 "output_dir": "/aist-output",
                 "project_path": "/aist-project",
                 "trim_path": "",
                 "tmp_analyzer_config_path": "/aist-analyzers.yml",
-            }
+            })
 
-            run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id})
+            run_persisted_sast_pipeline(pipeline, {"project_id": self.project.id})
 
         pipeline.refresh_from_db()
         branch.refresh_from_db()
@@ -217,7 +219,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
             patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
-            patch("aist.tasks.pipeline.configure_project_run_analyses") as mock_configure,
+            patch("aist.tasks.pipeline.execute_pipeline") as mock_configure,
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[SimpleNamespace(test_id=dd_test.id)]),
             patch("aist.tasks.pipeline.postprocess_findings", return_value=SimpleNamespace()) as mock_postprocess,
         ):
@@ -270,15 +272,16 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                     "log_level": "INFO",
                 },
             )
-            mock_configure.return_value = {
+            mock_from_dict.return_value = SimpleNamespace(sast=mock_from_dict.return_value)
+            mock_configure.return_value = SimpleNamespace(launch_data={
                 "git": {"resolved_commit": resolved_commit},
                 "output_dir": "/aist-output",
                 "project_path": "/aist-project",
                 "trim_path": "",
                 "tmp_analyzer_config_path": "/aist-analyzers.yml",
-            }
+            })
 
-            run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id})
+            run_persisted_sast_pipeline(pipeline, {"project_id": self.project.id})
 
         pipeline.refresh_from_db()
         branch.refresh_from_db()
@@ -333,7 +336,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
             patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
-            patch("aist.tasks.pipeline.configure_project_run_analyses") as mock_configure,
+            patch("aist.tasks.pipeline.execute_pipeline") as mock_configure,
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[SimpleNamespace(test_id=dd_test.id)]),
             patch("aist.tasks.pipeline.postprocess_findings", return_value=SimpleNamespace()) as mock_postprocess,
             patch("aist.tasks.pipeline.Finding.objects.filter") as mock_finding_filter,
@@ -393,15 +396,16 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                     "log_level": "INFO",
                 },
             )
-            mock_configure.return_value = {
+            mock_from_dict.return_value = SimpleNamespace(sast=mock_from_dict.return_value)
+            mock_configure.return_value = SimpleNamespace(launch_data={
                 "git": {"resolved_commit": resolved_commit},
                 "output_dir": "/aist-output",
                 "project_path": "/aist-project",
                 "trim_path": "",
                 "tmp_analyzer_config_path": "/aist-analyzers.yml",
-            }
+            })
 
-            run_sast_pipeline.run(pipeline.id, {"project_id": self.project.id})
+            run_persisted_sast_pipeline(pipeline, {"project_id": self.project.id})
 
         pipeline.refresh_from_db()
         branch.refresh_from_db()

@@ -12,6 +12,7 @@ from aist.execution.contracts import (
 )
 from aist.execution.sast import (
     SastPipelineLaunchAdapter,
+    build_sast_coalesce_key,
     planning_context_from_launch_request,
 )
 from aist.models import (
@@ -62,6 +63,12 @@ class SastPipelineLaunchAdapterTests(AISTApiBase):
             authority_kind=authority_kind,
             requester=requester,
             params_snapshot=params,
+            coalesce_key=build_sast_coalesce_key(
+                project_id=self.project.pk,
+                effective_project_version_id=self.pv.pk,
+                params_snapshot=params,
+                schedule=schedule,
+            ),
         )
 
     @patch("aist.execution.sast.PipelineArguments.normalize_params")
@@ -106,7 +113,7 @@ class SastPipelineLaunchAdapterTests(AISTApiBase):
                 plan = SastPipelineLaunchAdapter().build_plan(planning_context_from_launch_request(request))
 
                 self.assertEqual(plan.execution_type, PipelineExecutionKind.SAST)
-                self.assertEqual(plan.task_name, PipelineTaskName.RUN_SAST_PIPELINE)
+                self.assertEqual(plan.task_name, PipelineTaskName.RUN_PIPELINE_EXECUTION)
                 self.assertEqual(plan.project_id, self.project.id)
                 self.assertIsNone(plan.trigger_project_version_id)
                 self.assertEqual(plan.effective_project_version_id, self.pv.id)
@@ -116,7 +123,7 @@ class SastPipelineLaunchAdapterTests(AISTApiBase):
                 self.assertTrue(plan.coalesce_key.startswith("sast:v1:"))
                 coalesce_keys.append(plan.coalesce_key)
                 self.assertEqual(plan.initial_launch_data, {})
-                self.assertEqual(plan.task_args[0], {**normalized, "launch_config_id": request.launch_config_id})
+                self.assertEqual(plan.task_args, ())
                 self.assertEqual(plan.authority.source, LaunchSource(origin))
                 self.assertEqual(plan.authority.kind, LaunchAuthorityKind(authority_kind))
                 self.assertEqual(plan.authority.requester_id, requester.id if requester else None)
@@ -142,6 +149,12 @@ class SastPipelineLaunchAdapterTests(AISTApiBase):
             requester=self.user,
             params_snapshot=params,
             initial_launch_data_snapshot=initial_launch_data,
+            coalesce_key=build_sast_coalesce_key(
+                project_id=self.project.pk,
+                effective_project_version_id=self.pv.pk,
+                params_snapshot=params,
+                initial_launch_data_snapshot=initial_launch_data,
+            ),
         )
 
         plan = SastPipelineLaunchAdapter().build_plan(planning_context_from_launch_request(request))
@@ -149,7 +162,7 @@ class SastPipelineLaunchAdapterTests(AISTApiBase):
         self.assertEqual(plan.resource_limit, 1)
         self.assertEqual(plan.resource_key, f"sast-project:{self.project.id}")
         self.assertEqual(plan.initial_launch_data, initial_launch_data)
-        self.assertNotIn("launch_config_id", plan.task_args[0])
+        self.assertEqual(plan.task_args, ())
         self.assertEqual(plan.effective_project_version_id, self.pv.id)
 
     def test_two_schedules_do_not_share_a_resource_key_or_capacity(self):
@@ -195,6 +208,11 @@ class SastPipelineLaunchAdapterTests(AISTApiBase):
                 "project_version": {"id": other_pv.id},
                 "log_level": "INFO",
             },
+            coalesce_key=build_sast_coalesce_key(
+                project_id=other_project.pk,
+                effective_project_version_id=other_pv.pk,
+                params_snapshot={"project_version": {"id": other_pv.id}, "log_level": "INFO"},
+            ),
         )
         own_project_request = PipelineLaunchRequest.objects.create(
             project=self.project,
@@ -205,6 +223,11 @@ class SastPipelineLaunchAdapterTests(AISTApiBase):
                 "project_version": {"id": self.pv.id},
                 "log_level": "INFO",
             },
+            coalesce_key=build_sast_coalesce_key(
+                project_id=self.project.pk,
+                effective_project_version_id=self.pv.pk,
+                params_snapshot={"project_version": {"id": self.pv.id}, "log_level": "INFO"},
+            ),
         )
 
         other_plan = SastPipelineLaunchAdapter().build_plan(planning_context_from_launch_request(other_project_request))

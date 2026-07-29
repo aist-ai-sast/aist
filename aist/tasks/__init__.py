@@ -10,7 +10,7 @@ from aist.tasks.enrich import (
 )
 from aist.tasks.launch_schedule import process_launch_schedules
 from aist.tasks.logs import flush_logs_once
-from aist.tasks.pipeline import reconcile_dast_execution, run_pipeline_execution, run_sast_pipeline
+from aist.tasks.pipeline import run_pipeline_execution
 from aist.tasks.pipeline_dispatcher import dispatch_queued_pipelines
 from aist.tasks.reconciliation import reconcile_pipeline_orphans_task, reconcile_recent_orphans_task
 from aist.tasks.validate import (
@@ -33,14 +33,12 @@ __all__ = [
     "push_request_to_ai",
     "push_request_to_local_triage",
     "reap_egress",
-    "reconcile_dast_execution",
     "reconcile_deduplication",
     "reconcile_pipeline_orphans_task",
     "reconcile_recent_orphans_task",
     "refresh_dast_capability_catalogs",
     "report_enrich_done",
     "run_pipeline_execution",
-    "run_sast_pipeline",
     "sync_all_work_item_providers",
     "sync_dast_capabilities",
     "sync_work_item_provider",

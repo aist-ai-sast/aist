@@ -15,8 +15,6 @@ DOCUMENTS = tuple(
 READER_DOCUMENTS = (
     PROJECT_ROOT / "README.md",
     PROJECT_ROOT / "SECURITY.md",
-    PROJECT_ROOT / "AGENTS.md",
-    PROJECT_ROOT / "CLAUDE.md",
     *DOCUMENTS,
 )
 MARKDOWN_LINK = re.compile(r"!?(?:\[[^]]*])\(([^)]+)\)")

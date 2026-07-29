@@ -1,6 +1,7 @@
 """Django checks for AIST security and execution-runtime invariants."""
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import yaml
@@ -9,6 +10,9 @@ from django.core.checks import Error, Tags, register
 from django.db import OperationalError, ProgrammingError
 from dojo.models import Global_Role
 
+from aist.execution.contracts import PipelineExecutionKind
+from aist.execution.leases import DEFAULT_EXECUTION_LEASE_POLICY
+from aist.execution.registry import execution_driver_registry
 from aist.models import PipelineExecutionLease
 
 AIST_EXECUTION_CHECK_TAG = "aist_execution"
@@ -94,6 +98,29 @@ def validate_execution_runtime(app_configs, **kwargs):
             Error(
                 "The generic execution lease uniqueness constraint is missing.",
                 id="aist.E006",
+            ),
+        ]
+    reconciliation_interval = timedelta(
+        seconds=getattr(settings, "AIST_EXECUTION_RECONCILIATION_INTERVAL_SECONDS", 600),
+    )
+    if DEFAULT_EXECUTION_LEASE_POLICY.ttl <= (
+        reconciliation_interval + DEFAULT_EXECUTION_LEASE_POLICY.heartbeat_grace
+    ):
+        return [
+            Error(
+                "Execution lease TTL must exceed reconciliation cadence plus heartbeat grace.",
+                id="aist.E007",
+            ),
+        ]
+    try:
+        for execution_type in PipelineExecutionKind:
+            execution_driver_registry.resolve(execution_type)
+    except LookupError as exc:
+        return [
+            Error(
+                "AIST execution driver registry is incomplete.",
+                hint=str(exc),
+                id="aist.E008",
             ),
         ]
     return []

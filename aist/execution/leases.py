@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -39,8 +40,10 @@ class ExecutionLeasePolicy:
 
 
 DEFAULT_EXECUTION_LEASE_POLICY = ExecutionLeasePolicy(
-    ttl=timedelta(minutes=5),
-    heartbeat_grace=timedelta(minutes=1),
+    ttl=timedelta(seconds=getattr(settings, "AIST_EXECUTION_LEASE_TTL_SECONDS", 900)),
+    heartbeat_grace=timedelta(
+        seconds=getattr(settings, "AIST_EXECUTION_LEASE_HEARTBEAT_GRACE_SECONDS", 60),
+    ),
 )
 
 
