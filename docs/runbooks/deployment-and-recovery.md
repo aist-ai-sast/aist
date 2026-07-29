@@ -27,6 +27,21 @@ Routine application releases use:
 ./scripts/deploy-prod.sh
 ```
 
+Before the first production start, replace every development credential default
+in the Compose environment. At minimum, set unique values for:
+
+```dotenv
+DD_SECRET_KEY=<long-random-django-secret>
+DD_CREDENTIAL_AES_256_KEY=<32-byte-random-key>
+FIELD_ENCRYPTION_KEY=<deployment-specific-field-encryption-key>
+AIST_SERVICE_TOKEN=<random-internal-service-token>
+MCP_AUTH_TOKEN=<random-mcp-client-token>
+```
+
+Keep these values in the deployment secret store, not in the repository. Rotating
+an encryption key requires a data migration or restore plan; replacing it without
+that plan can make stored credentials unreadable.
+
 ## Preserve database state
 
 Set an explicit host path for PostgreSQL data in the deployment environment:
@@ -86,6 +101,10 @@ docker compose --env-file .env ps
 docker compose --env-file .env logs --tail=200
 docker compose --env-file .env exec -T nginx nginx -t
 ```
+
+The required long-lived services are Nginx, Django, PostgreSQL, Valkey, Celery
+Beat, Celery workers, the context-extractor MCP service, and the local AI bridge.
+The deployment wrapper fails if any of them is absent after startup.
 
 For certificate validation:
 

@@ -3,16 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from django.db.models import Count, DateTimeField, OuterRef, Q, Subquery
-from dojo.authorization.roles_permissions import Permissions
+from dojo.models import Finding
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
 from rest_framework.response import Response
 
 from aist.api.common import API_SEVERITY_VALUES, compute_risk_score, empty_severity_counts
 from aist.api.schema import AISTApiTag
-from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.models import AISTPipeline, AISTProject
-from aist.queries import get_authorized_findings
 
 
 class AISTProductSummaryRowSerializer(serializers.Serializer):
@@ -49,8 +48,10 @@ class AISTProductSummaryAPI(AISTAPIView):
 
         product_ids = [project.product_id for project in projects]
 
-        findings = get_authorized_findings(
-            Permissions.Finding_View, user=request.user,
+        findings = queryset_for_action(
+            resource=Finding,
+            action=Action.FINDING_READ,
+            user=request.user,
         ).filter(
             test__engagement__product_id__in=product_ids,
         )

@@ -12,7 +12,13 @@ DOCUMENTS = tuple(
     for path in sorted((PROJECT_ROOT / "docs").rglob("*.md"))
     if "plans" not in path.relative_to(PROJECT_ROOT / "docs").parts
 )
-READER_DOCUMENTS = (PROJECT_ROOT / "README.md", PROJECT_ROOT / "SECURITY.md", *DOCUMENTS)
+READER_DOCUMENTS = (
+    PROJECT_ROOT / "README.md",
+    PROJECT_ROOT / "SECURITY.md",
+    PROJECT_ROOT / "AGENTS.md",
+    PROJECT_ROOT / "CLAUDE.md",
+    *DOCUMENTS,
+)
 MARKDOWN_LINK = re.compile(r"!?(?:\[[^]]*])\(([^)]+)\)")
 MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 HTML_ANCHOR = re.compile(r"\b(?:id|name)=[\"']([^\"']+)[\"']")

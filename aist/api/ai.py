@@ -11,10 +11,9 @@ from rest_framework import serializers
 from rest_framework.response import Response
 
 from aist.api.schema import AISTApiTag
-from aist.authz import ACTION_PERMISSIONS, INTERNAL_SERVICE, Action, AISTAPIView, ResourcePolicy
+from aist.authz import INTERNAL_SERVICE, Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline, AISTStatus
-from aist.queries import get_authorized_aist_pipelines
 from aist.tasks import push_request_to_ai, push_request_to_local_triage
 from aist.tasks.ai import _resolve_triage_type
 from aist.utils.ai_response import sync_ai_finding_responses
@@ -155,8 +154,10 @@ class AIPipelineCallbackAPI(AISTAPIView):
         tags=[AISTApiTag.AI.value],
     )
     def post(self, request, pipeline_id: str):
-        pipeline = get_authorized_aist_pipelines(
-            ACTION_PERMISSIONS[Action.PRODUCT_READ], user=request.user,
+        pipeline = queryset_for_action(
+            resource=AISTPipeline,
+            action=Action.PRODUCT_READ,
+            user=request.user,
         ).filter(id=pipeline_id).first()
         if pipeline is None:
             return Response({"detail": "Pipeline not found"}, status=404)
@@ -217,8 +218,10 @@ class LocalTriageCompleteAPI(AISTAPIView):
         tags=[AISTApiTag.AI.value],
     )
     def post(self, request, pipeline_id: str):
-        pipeline = get_authorized_aist_pipelines(
-            ACTION_PERMISSIONS[Action.PRODUCT_READ], user=request.user,
+        pipeline = queryset_for_action(
+            resource=AISTPipeline,
+            action=Action.PRODUCT_READ,
+            user=request.user,
         ).filter(id=pipeline_id).first()
         if pipeline is None:
             return Response({"detail": "Pipeline not found"}, status=404)

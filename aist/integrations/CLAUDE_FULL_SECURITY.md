@@ -62,15 +62,15 @@ analyzer applicable to enterprise codebases without runaway cost.
 
 ## Required env / settings
 
-| Setting                       | Type     | Default     | Purpose                                                    |
-|-------------------------------|----------|-------------|------------------------------------------------------------|
-| `CLAUDE_CODE_OAUTH_TOKEN`     | env      | —           | Set on the bridge container; auth for `claude -p`.         |
-| `AIST_LOCAL_TRIAGE_BRIDGE_SOCKET` | env  | `/run/claude-bridge/bridge.sock` | Bridge Unix socket path.                  |
-| `AIST_LOCAL_TRIAGE_TIMEOUT`   | env      | `1800`      | Bridge timeout (seconds).                                  |
-| `AGENT_FULL_MAX_FILES`        | Django   | `1500`      | Hard cap on candidate file count.                          |
-| `AGENT_FULL_MAX_BYTES`        | Django   | `8_000_000` | Hard cap on aggregate candidate-body bytes.                |
-| `AGENT_FULL_MAX_FILE_BYTES`   | Django   | `200_000`   | Per-file size cap; oversized files are silently dropped.   |
-| `AGENT_FULL_MAX_FINDINGS`     | Django   | `50`        | Hard cap on emitted findings.                              |
+| Setting | Compose default | Standalone fallback | Purpose |
+|---|---:|---:|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | — | Bridge authentication for `claude -p` |
+| `AIST_LOCAL_TRIAGE_BRIDGE_SOCKET` | `/run/claude-bridge/bridge.sock` | `/run/claude-bridge/bridge.sock` | Bridge Unix socket path |
+| `AIST_LOCAL_TRIAGE_TIMEOUT` | `10_800` | `1_800` | Bridge timeout in seconds |
+| `AGENT_FULL_MAX_FILES` | `16_000` | `1_500` | Candidate file-count cap |
+| `AGENT_FULL_MAX_BYTES` | `100_000_000` | `8_000_000` | Aggregate candidate-body cap |
+| `AGENT_FULL_MAX_FILE_BYTES` | `300_000` | `200_000` | Per-file size cap; oversized files are skipped |
+| `AGENT_FULL_MAX_FINDINGS` | `50` | `50` | Emitted-finding cap |
 
 The four `AGENT_FULL_*` settings have docker-compose env pass-through on
 `uwsgi` and `celeryworker` services. Override at deploy time via plain env.
@@ -84,9 +84,9 @@ Per-project limits live in the `AISTProject.profile` JSON field under
 {
   "agent_analyzers": {
     "full_security": {
-      "max_files": 1500,
-      "max_bytes": 8000000,
-      "max_file_bytes": 200000,
+      "max_files": 16000,
+      "max_bytes": 100000000,
+      "max_file_bytes": 300000,
       "max_findings": 50
     }
   }

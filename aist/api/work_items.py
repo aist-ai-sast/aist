@@ -6,14 +6,13 @@ from urllib.parse import urlparse
 
 from celery.result import AsyncResult
 from django.shortcuts import get_object_or_404
-from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.response import Response
 
 from aist.api.schema import AISTApiTag
-from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.models import (
     Organization,
     OrgIntegration,
@@ -23,7 +22,6 @@ from aist.models import (
     WorkItemProviderType,
     WorkItemStatusCategory,
 )
-from aist.queries import get_authorized_work_item_providers
 from aist.tasks.work_items import sync_work_item_link, sync_work_item_provider
 from aist.work_items.backends import get_backend
 
@@ -185,16 +183,23 @@ class WorkItemLinkCreateSerializer(serializers.ModelSerializer):
             "title",
         ]
 
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get("request")
+        if request is not None and request.user.is_authenticated:
+            fields["provider"].queryset = queryset_for_action(
+                resource=WorkItemProvider,
+                action=Action.ORG_READ,
+                user=request.user,
+            )
+        else:
+            fields["provider"].queryset = WorkItemProvider.objects.none()
+        return fields
+
     def validate(self, attrs):
         provider = attrs.get("provider")
         request = self.context["request"]
         if provider is not None:
-            allowed = get_authorized_work_item_providers(
-                Permissions.Product_Type_Manage_Members,
-                user=request.user,
-            ).filter(pk=provider.pk).exists()
-            if not allowed:
-                raise serializers.ValidationError({"provider": "Provider is not available."})
             finding = self.context["finding"]
             finding_organization_id = (
                 Organization.objects
@@ -212,8 +217,9 @@ class WorkItemLinkCreateSerializer(serializers.ModelSerializer):
             except Exception:
                 url_host = ""
             if url_host:
-                providers = get_authorized_work_item_providers(
-                    Permissions.Product_Type_Manage_Members,
+                providers = queryset_for_action(
+                    resource=WorkItemProvider,
+                    action=Action.ORG_READ,
                     user=request.user,
                 ).exclude(base_url="")
                 for candidate in providers:

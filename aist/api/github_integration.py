@@ -15,10 +15,6 @@ from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django_github_app.models import Installation
-from dojo.authorization.authorization import (
-    user_has_permission_or_403,
-)
-from dojo.authorization.roles_permissions import Permissions
 from dojo.models import DojoMeta, Product
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
@@ -27,7 +23,7 @@ from rest_framework.response import Response
 
 from aist.api.projects import _create_initial_script
 from aist.api.schema import AISTApiTag
-from aist.authz import PUBLIC, Action, AISTAPIView, ResourcePolicy
+from aist.authz import PUBLIC, Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import (
     AISTProject,
@@ -38,7 +34,6 @@ from aist.models import (
     ScmType,
     VersionType,
 )
-from aist.queries import get_authorized_aist_organizations, get_authorized_aist_projects
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 STATE_SALT = "aist.github.connect"
@@ -236,10 +231,13 @@ class GithubConnectCallbackAPI(AISTAPIView):
             if state.project_id is None:
                 raise serializers.ValidationError({"state": "project_id is required in project_link flow."})
             project = get_object_or_404(
-                get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
+                queryset_for_action(
+                    resource=AISTProject,
+                    action=Action.PROJECT_OPERATE,
+                    user=request.user,
+                ),
                 id=state.project_id,
             )
-            user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
             cache.set(_project_installation_cache_key(request.user.id, project.id), installation_id, timeout=1800)
             target = reverse("aist:aist_project_update", kwargs={"project_id": project.id})
             return redirect(f"{target}?github_installation_id={installation_id}")
@@ -536,12 +534,12 @@ def _build_install_redirect_url(state: str) -> str:
 
 
 def _get_authorized_organizations_for_import(user):
-    return get_authorized_aist_organizations(Permissions.Product_Type_Add_Product, user=user)
+    return queryset_for_action(resource=Organization, action=Action.PROJECT_CREATE, user=user)
 
 
 def _get_organization_for_import_or_403(user, organization_id: int) -> Organization:
     org = get_object_or_404(
-        get_authorized_aist_organizations(Permissions.Product_Type_Add_Product, user=user),
+        queryset_for_action(resource=Organization, action=Action.PROJECT_CREATE, user=user),
         id=organization_id,
     )
 

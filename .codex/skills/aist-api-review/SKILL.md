@@ -19,30 +19,36 @@ For each changed ViewSet or APIView in `aist/api/`:
 
 ### 1. Organization isolation (critical)
 
-Check `get_queryset()`:
-- Does it filter by organization for non-superusers?
-- Is the superuser bypass present?
+Check the central authorization contract:
+- Does the endpoint inherit from `AISTAPIView` or `AISTAuthzMixin`?
+- Does it declare a `ResourcePolicy` for the object it resolves?
+- Do object lookups use `resolve()` and additional resource lookups use
+  `authorized_queryset(resource=..., action=...)`?
+- Is each resource registered in `RESOURCE_GETTERS`?
 
 Required pattern:
 ```python
-def get_queryset(self):
-    qs = ModelName.objects.all()
-    if self.request.user.is_superuser:
-        return qs
-    return qs.filter(project__organization=self.request.user.aist_organization)
+class ExampleAPI(AISTAPIView):
+    authz = ResourcePolicy(
+        resource=AISTProject,
+        read=Action.PRODUCT_READ,
+        write=Action.PROJECT_OPERATE,
+    )
+
+    def get(self, request, project_id):
+        project = self.resolve(pk=project_id)
 ```
 
-If `get_queryset()` is missing or does not filter — flag as **CRITICAL**.
+If an org-owned object can be resolved outside that layer — flag as **CRITICAL**.
 
 Check that no nested object lookup bypasses the org scope
 (e.g., fetching a `Finding` by `id` alone without verifying it belongs to the user's org).
 
-### 2. Permission classes
+### 2. Named actions
 
-- Does the ViewSet declare `permission_classes`?
-- Do they match the pattern of adjacent endpoints in the same file?
-- Read-only endpoints should use at minimum `IsAuthenticated`.
-- Write endpoints should require appropriate write permissions.
+- Does the policy use the correct reader/writer/maintainer action tier?
+- Are direct `Permissions.*` references absent from `aist/api/`?
+- Is `ACTION_PERMISSIONS` used only in `aist/authz/policy.py`?
 
 ### 3. Serializer usage
 
@@ -51,11 +57,11 @@ Check that no nested object lookup bypasses the org scope
   All input must go through a serializer.
 - Does the serializer validate required fields explicitly?
 
-### 4. Superuser visibility
+### 4. Superuser and token visibility
 
 - Can a superuser see all data across organizations?
-- Is the bypass in `get_queryset()` and NOT in `perform_create` / `perform_update`
-  (which should still set org from the request user for create operations)?
+- Is bypass/token restriction implemented by the registered query getter rather
+  than a view or serializer branch?
 
 ### 5. Consistency
 

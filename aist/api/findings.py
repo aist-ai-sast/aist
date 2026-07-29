@@ -13,7 +13,6 @@ from django.http import HttpResponse
 from django.utils import timezone
 from django_filters import rest_framework as django_filters
 from dojo.api_v2 import serializers as dojo_serializers
-from dojo.authorization.roles_permissions import Permissions
 from dojo.filters import ApiFindingFilter
 from dojo.finding import helper as finding_helper
 from dojo.models import Finding, Notes, Risk_Acceptance
@@ -28,7 +27,7 @@ from aist.api.common import API_SEVERITY_VALUES
 from aist.api.finding_event_stream import FindingEventStream
 from aist.api.schema import AISTApiTag
 from aist.api.work_items import WorkItemLinkInlineSerializer
-from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.findings_bulk_lock import (
     acquire_bulk_locks,
     get_locked_finding_ids,
@@ -36,7 +35,6 @@ from aist.findings_bulk_lock import (
     release_bulk_locks,
 )
 from aist.models import AISTAIFindingResponse, AISTPipeline, VersionType
-from aist.queries import get_authorized_aist_pipelines
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +169,11 @@ class AISTFindingFilter(ApiFindingFilter):
         if not pipeline_id:
             return queryset
         pipeline = (
-            get_authorized_aist_pipelines(Permissions.Product_View, user=self.request.user)
+            queryset_for_action(
+                resource=AISTPipeline,
+                action=Action.PRODUCT_READ,
+                user=self.request.user,
+            )
             .filter(id=pipeline_id)
             .first()
         )

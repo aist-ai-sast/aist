@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from django.db import transaction
 from django_filters import rest_framework as django_filters
-from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.response import Response
@@ -15,7 +14,7 @@ from aist.api.launch_requests import (
     launch_request_response,
 )
 from aist.api.schema import AISTApiTag
-from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
 from aist.integrations.dast_config import DastBindingParameters, DastConfigError
 from aist.integrations.dast_readiness import check_dast_binding_readiness
@@ -29,7 +28,6 @@ from aist.models import (
     PipelineExecutionType,
 )
 from aist.pipeline_args import PipelineArguments
-from aist.queries import get_authorized_aist_project_versions
 
 
 class LaunchConfigSerializer(serializers.ModelSerializer):
@@ -151,8 +149,9 @@ class LaunchConfigStartRequestSerializer(serializers.Serializer):
         request = self.context.get("request")
         project = self.context.get("project")
         if request is not None and project is not None:
-            fields["project_version_id"].queryset = get_authorized_aist_project_versions(
-                Permissions.Product_Edit,
+            fields["project_version_id"].queryset = queryset_for_action(
+                resource=AISTProjectVersion,
+                action=Action.PROJECT_OPERATE,
                 user=request.user,
             ).filter(project=project)
         return fields

@@ -30,12 +30,11 @@ from rest_framework.views import APIView
 
 from aist.authz.permissions import IsInternalService
 from aist.authz.policy import (
-    ACTION_PERMISSIONS,
     INTERNAL_SERVICE,
-    RESOURCE_GETTERS,
     Action,
     ResourcePolicy,
     is_valid_authz,
+    queryset_for_action,
 )
 
 
@@ -94,17 +93,21 @@ class AISTAuthzMixin:
             msg = "authorized_queryset_for_request() requires a ResourcePolicy `authz`."
             raise ImproperlyConfigured(msg)
         resolved_resource = resource or self.authz.resource
+        resolved_action = action
+        if resolved_action is None:
+            resolved_action = (
+                self.authz.read
+                if self.request.method.upper() in {"GET", "HEAD", "OPTIONS"}
+                else self.authz.write
+            )
         try:
-            getter = RESOURCE_GETTERS[resolved_resource]
+            return queryset_for_action(
+                resource=resolved_resource,
+                action=resolved_action,
+                user=self.request.user,
+            )
         except KeyError as exc:
-            msg = f"No org-scoped getter registered for {resolved_resource.__name__}"
-            raise ImproperlyConfigured(msg) from exc
-        permission = (
-            ACTION_PERMISSIONS[action]
-            if action is not None
-            else self.authz.permission_for(self.request.method)
-        )
-        return getter(permission, user=self.request.user)
+            raise ImproperlyConfigured(str(exc)) from exc
 
     def authorized_queryset_for_request(self):
         """Backward-compatible spelling used by the first migration batch."""

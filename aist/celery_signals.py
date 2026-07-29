@@ -219,6 +219,65 @@ def _update_action_run(
         locked.save(update_fields=["launch_data", "updated"])
 
 
+def _claim_action_run(
+    pipeline_id: str,
+    *,
+    key: str,
+    action_type: str,
+    trigger_status: str,
+    source: str,
+) -> bool:
+    """Atomically claim one action attempt; an existing key is never run again."""
+    with transaction.atomic():
+        locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
+        if not locked:
+            return False
+        ld = PipelineLaunchData(locked.launch_data)
+        runs = ld.action_runs
+        if any(run.get("key") == key for run in runs):
+            return False
+        runs.append({
+            "key": key,
+            "action_type": action_type,
+            "trigger_status": trigger_status,
+            "source": source,
+            "status": "pending",
+            "error": "",
+            "updated_at": timezone.now().isoformat(),
+        })
+        ld.action_runs = runs
+        locked.launch_data = ld.as_dict()
+        locked.save(update_fields=["launch_data", "updated"])
+        return True
+
+
+def _launch_config_action_payloads(
+    pipeline: AISTPipeline,
+    *,
+    launch_config_id: int,
+    trigger_status: str,
+) -> list[dict]:
+    snapshot = PipelineLaunchData(pipeline.launch_data).launch_config_actions
+    if snapshot is not None:
+        return [
+            payload
+            for payload in snapshot
+            if isinstance(payload, dict) and payload.get("trigger_status") == trigger_status
+        ]
+    return [
+        {
+            "id": str(action.pk),
+            "trigger_status": action.trigger_status,
+            "action_type": action.action_type,
+            "config": action.config or {},
+        }
+        for action in AISTLaunchConfigAction.objects.filter(
+            launch_config_id=launch_config_id,
+            trigger_status=trigger_status,
+        ).order_by("pk")
+    ]
+
+
 def _mark_one_off_done(pipeline_id: str, action_id: str) -> None:
     with transaction.atomic():
         locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
@@ -243,20 +302,24 @@ def on_pipeline_status_changed(sender, pipeline_id=None, old_status=None, new_st
 
     launch_config_id = _get_launch_config_id_from_pipeline(pipeline)
     if launch_config_id:
-        actions = AISTLaunchConfigAction.objects.filter(
+        action_payloads = _launch_config_action_payloads(
+            pipeline,
             launch_config_id=launch_config_id,
             trigger_status=new_status,
         )
-        for action in actions:
+        for action_payload in action_payloads:
+            action = build_one_off_action(action_payload)
+            if not action:
+                continue
             key = f"lc:{action.id}:{new_status}"
-            _update_action_run(
+            if not _claim_action_run(
                 pipeline_id=pipeline_id,
                 key=key,
                 action_type=action.action_type,
                 trigger_status=new_status,
                 source="launch_config",
-                status="pending",
-            )
+            ):
+                continue
             handler = get_action_handler(action)
             if not handler:
                 _update_action_run(
@@ -326,14 +389,14 @@ def on_pipeline_status_changed(sender, pipeline_id=None, old_status=None, new_st
             _mark_one_off_done(pipeline_id, action_id)
             continue
 
-        _update_action_run(
+        if not _claim_action_run(
             pipeline_id=pipeline_id,
             key=key,
             action_type=action_obj.action_type,
             trigger_status=new_status,
             source="one_off",
-            status="pending",
-        )
+        ):
+            continue
         handler = get_action_handler(action_obj)
         if not handler:
             _update_action_run(

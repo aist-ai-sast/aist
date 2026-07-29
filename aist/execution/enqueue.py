@@ -22,6 +22,7 @@ from aist.execution.retry import DEFAULT_LAUNCH_RETRY_POLICY
 from aist.execution.sast import build_sast_coalesce_key, resolve_effective_sast_schedule
 from aist.models import (
     AISTApiToken,
+    AISTLaunchConfigAction,
     AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectVersion,
@@ -192,6 +193,18 @@ def _snapshots_for_launch(
     return LaunchRequestSnapshots.from_values(params=params, capability=capability)
 
 
+def _launch_config_actions_snapshot(launch_config: AISTProjectLaunchConfig) -> list[dict]:
+    return [
+        {
+            "id": str(action.pk),
+            "trigger_status": action.trigger_status,
+            "action_type": action.action_type,
+            "config": deepcopy(action.config or {}),
+        }
+        for action in AISTLaunchConfigAction.objects.filter(launch_config=launch_config).order_by("pk")
+    ]
+
+
 def _matches_existing(existing: PipelineLaunchRequest, values: dict[str, object]) -> bool:
     comparable_fields = (
         "origin",
@@ -257,6 +270,16 @@ def enqueue_pipeline_launch(
         raise LaunchEnqueueError(str(exc)) from exc
     if not isinstance(initial_launch_data_snapshot, dict):
         raise LaunchEnqueueError(_ERR_INITIAL_LAUNCH_DATA)
+    initial_launch_data_snapshot.pop("launch_config_actions", None)
+    if launch_config is not None:
+        initial_launch_data_snapshot["launch_config_actions"] = _launch_config_actions_snapshot(launch_config)
+        try:
+            initial_launch_data_snapshot = validated_secret_free_json(
+                initial_launch_data_snapshot,
+                label="initial_launch_data_snapshot",
+            )
+        except (LaunchRequestSnapshotError, TypeError, ValueError) as exc:
+            raise LaunchEnqueueError(str(exc)) from exc
     coalesce_key = None
     if execution_type == PipelineExecutionKind.SAST:
         coalesce_key = build_sast_coalesce_key(

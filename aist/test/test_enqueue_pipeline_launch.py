@@ -19,6 +19,7 @@ from aist.execution.enqueue import (
 from aist.execution.sast import SastPipelineLaunchAdapter, planning_context_from_launch_request
 from aist.models import (
     AISTApiToken,
+    AISTLaunchConfigAction,
     AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectVersion,
@@ -175,6 +176,30 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
                 client_request_key="launch-data-secret",
                 initial_launch_data={"one_off_actions": [{"config": {"api_token": "secret"}}]},
             )
+
+    def test_launch_config_actions_are_frozen_in_the_request(self):
+        action = AISTLaunchConfigAction.objects.create(
+            launch_config=self.config,
+            trigger_status="FINISHED",
+            action_type=AISTLaunchConfigAction.ActionType.WRITE_LOG,
+            config={"level": "INFO", "description": "Original"},
+        )
+
+        request = enqueue_pipeline_launch(
+            project=self.project,
+            principal=LaunchPrincipal.for_user(
+                organization=self.organization,
+                requester=self.user,
+            ),
+            raw_params={},
+            launch_config=self.config,
+        ).request
+        action.config = {"level": "ERROR", "description": "Changed later"}
+        action.save(update_fields=["config", "updated"])
+
+        snapshot = request.initial_launch_data_snapshot["launch_config_actions"]
+        self.assertEqual(snapshot[0]["id"], str(action.pk))
+        self.assertEqual(snapshot[0]["config"]["description"], "Original")
 
     def test_principal_and_relations_are_server_validated(self):
         other_organization = Organization.objects.create(

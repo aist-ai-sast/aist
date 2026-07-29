@@ -3,8 +3,6 @@ from __future__ import annotations
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
-from dojo.authorization.authorization import user_has_permission_or_403
-from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Product, SLA_Configuration
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
@@ -18,13 +16,12 @@ from aist.api.project_versions import (
     _serialize_version_script,
 )
 from aist.api.schema import AISTApiTag
-from aist.authz import Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy
+from aist.authz import Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy, queryset_for_action
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.integrations.claude import claude_auth_env
 from aist.integrations.resolver import resolve_integration
 from aist.models import AISTProject, AISTProjectScript, Organization, OrgIntegrationType
 from aist.profile import ProjectProfile
-from aist.queries import get_authorized_aist_organizations
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 # Script content hard cap: 256 KB is more than enough for any real entrypoint script.
@@ -140,8 +137,9 @@ class AISTProjectCreateRequestSerializer(serializers.Serializer):
         fields = super().get_fields()
         request = self.context.get("request")
         if request and getattr(request, "user", None) and request.user.is_authenticated:
-            fields["organization_id"].queryset = get_authorized_aist_organizations(
-                Permissions.Product_Type_Add_Product,
+            fields["organization_id"].queryset = queryset_for_action(
+                resource=Organization,
+                action=Action.PROJECT_CREATE,
                 user=request.user,
             )
         return fields
@@ -238,7 +236,6 @@ class AISTProjectListAPI(AISTAuthzMixin, generics.ListAPIView):
 
         org = serializer.validated_data["organization_id"]
         product_type = org.ensure_product_type()
-        user_has_permission_or_403(request.user, product_type, Permissions.Product_Type_Add_Product)
 
         product_name = serializer.validated_data["product_name"]
         default_sla = SLA_Configuration.objects.order_by("id").first()
@@ -255,7 +252,7 @@ class AISTProjectListAPI(AISTAuthzMixin, generics.ListAPIView):
         )
 
         if not created_product:
-            user_has_permission_or_403(request.user, product, Permissions.Product_Edit)
+            self.resolve(action=Action.PROJECT_OPERATE, resource=Product, pk=product.pk)
             if product.prod_type_id != product_type.id:
                 msg = "Product already exists in another organization product type."
                 return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)

@@ -169,6 +169,16 @@ class PipelineLaunchData:
         self._data["action_runs"] = value
 
     @property
+    def launch_config_actions(self) -> list[dict] | None:
+        """Frozen launch-config actions, or ``None`` for a legacy pipeline."""
+        value = self._data.get("launch_config_actions")
+        return value if isinstance(value, list) else None
+
+    @launch_config_actions.setter
+    def launch_config_actions(self, value: list[dict]) -> None:
+        self._data["launch_config_actions"] = value
+
+    @property
     def one_off_actions(self) -> list[dict]:
         return self._data.get("one_off_actions") or []
 

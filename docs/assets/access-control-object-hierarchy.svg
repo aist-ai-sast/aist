@@ -156,8 +156,8 @@
 
   <rect class="box" x="736" y="616" width="180" height="64" rx="11" fill="#fff" stroke="#9e751d"/>
   <use href="#ico-list" x="748" y="630" width="20" height="20" color="#9e751d"/>
-  <text class="head" x="826" y="644">LaunchQueue</text>
-  <text class="body" x="826" y="664">queued execution</text>
+  <text class="head" x="826" y="644">Launch request</text>
+  <text class="body" x="826" y="664">durable admission intent</text>
   <path class="ownership" d="M492 562L780 616"/>
 
   <rect class="box" x="500" y="716" width="180" height="64" rx="11" fill="#fff" stroke="#9e751d"/>

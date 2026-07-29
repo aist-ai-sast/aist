@@ -16,14 +16,11 @@ Forbidden forms in ``aist/api/*.py``:
    central authz layer.
 4. ``authz = PUBLIC``, anywhere in ``aist/api/*.py``.
 
-Checks 1-2 keep an empty allowlist — a new hit there is always a fresh regression, never
-legitimate. Checks 3-4 use ``KNOWN_TENANT_AUTHZ_VIOLATIONS``: most of the codebase predates
-the ``ResourcePolicy``/``Action`` framework and still uses the older direct-``Permissions``
-convention, and a few files (login, CWE reference data, self-service tokens) are
-legitimately public forever, not "debt" to burn down — so an empty allowlist there would
-just flag pre-existing, often-correct code. ``dast_targets.py`` and ``org_integrations.py``
-are the one part of the surface that must stay at zero: they hold tenant credentials and
-gateway configuration, so they may never be added back to the allowlist.
+Checks 1-2 keep an empty allowlist — a new hit there is always a fresh regression. Checks
+3-4 retain a narrow allowlist for deliberate public/self-service endpoints and remaining
+direct tenant lookups. Direct ``Permissions.*`` use has no allowlist and is forbidden for
+the entire package. ``dast_targets.py`` and ``org_integrations.py`` must stay fully clean:
+they hold tenant credentials and gateway configuration.
 """
 from __future__ import annotations
 
@@ -61,36 +58,54 @@ _PUBLIC_AUTHZ = re.compile(r"\bauthz\s*=\s*PUBLIC\b")
 
 KNOWN_VIOLATIONS = set()
 
-# Pre-existing uses of the older direct-Permissions/get()/PUBLIC style, not yet migrated to
-# ResourcePolicy — or, for account.py/cwe.py/tokens.py, intentionally-permanent public or
-# self-service surface. See the module docstring for why this allowlist is not empty.
+# Deliberate PUBLIC endpoints or remaining direct tenant lookups. Raw Permissions are
+# checked separately and can never be allowlisted.
 KNOWN_TENANT_AUTHZ_VIOLATIONS = {
-    "account.py", "calendar_events.py", "cwe.py", "findings.py", "gerrit_integration.py",
-    "github_integration.py", "gitlab_integration.py", "launch_configs.py", "launch_schedules.py",
-    "organizations.py", "pipelines.py", "product_summaries.py", "project_versions.py",
-    "projects.py", "report_import.py", "tags.py", "timeline_events.py", "tokens.py", "work_items.py",
+    "account.py", "cwe.py", "github_integration.py", "launch_schedules.py", "organizations.py",
+    "project_versions.py", "tokens.py",
 }
+
+
+def _api_python_files():
+    return _API_DIR.rglob("*.py")
+
+
+def _relative_path(path: Path) -> str:
+    return path.relative_to(_API_DIR).as_posix()
 
 
 def _files_with_violations() -> set[str]:
     offenders = set()
-    for path in _API_DIR.glob("*.py"):
+    for path in _api_python_files():
         text = path.read_text(encoding="utf-8")
         if _RAW_REQUEST_DATA.search(text) or _RAW_LOOKUP.search(text):
-            offenders.add(path.name)
+            offenders.add(_relative_path(path))
     return offenders
 
 
 def _files_with_tenant_authz_violations() -> set[str]:
     offenders = set()
-    for path in _API_DIR.glob("*.py"):
+    for path in _api_python_files():
         text = path.read_text(encoding="utf-8")
         if _RAW_TENANT_GET.search(text) or _RAW_PERMISSION.search(text) or _PUBLIC_AUTHZ.search(text):
-            offenders.add(path.name)
+            offenders.add(_relative_path(path))
     return offenders
 
 
 class AuthzLintTests(SimpleTestCase):
+
+    def test_api_uses_named_actions_instead_of_defectdojo_permissions(self):
+        offenders = {
+            _relative_path(path)
+            for path in _api_python_files()
+            if _RAW_PERMISSION.search(path.read_text(encoding="utf-8"))
+        }
+        self.assertEqual(
+            offenders,
+            set(),
+            "aist/api must express authorization through Action values; direct "
+            f"DefectDojo Permissions references remain in: {sorted(offenders)}",
+        )
 
     def test_no_new_forbidden_patterns(self):
         offenders = _files_with_violations()

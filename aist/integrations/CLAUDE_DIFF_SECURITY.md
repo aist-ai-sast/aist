@@ -26,7 +26,7 @@ agent-bridge plumbing and may run together in the same pipeline.
    prepared analyzers config and runs every enabled `type: agent-bridge`
    analyzer through the bridge `/analyze-sync` endpoint over the Unix socket
    `$AIST_LOCAL_TRIAGE_BRIDGE_SOCKET` (default
-   `/tmp/aist/triage-bridge.sock`).
+   `/run/claude-bridge/bridge.sock`).
 4. The bridge runs `claude -p` with the
    [`aist-diff-security-review` skill](../../.codex/skills/aist-diff-security-review/SKILL.md).
    The skill resolves the BASE fallback chain (see below), computes the
@@ -65,16 +65,15 @@ reachable commit:
 
 - `CLAUDE_CODE_OAUTH_TOKEN` — set on the bridge container; auth for
   `claude -p`. The diff analyzer does NOT introduce any new secret.
-- `AIST_LOCAL_TRIAGE_BRIDGE_SOCKET` — Unix socket path. Default
-  `/tmp/aist/triage-bridge.sock`. Used by `agent_bridge_runner` →
-  bridge.
-- `AIST_LOCAL_TRIAGE_TIMEOUT` — seconds. Default 1800. Bridge enforces
-  this internally; the sync invoker uses `AIST_LOCAL_TRIAGE_TIMEOUT + 60`
-  as its HTTP timeout.
-- `CLAUDE_DIFF_MAX_FILES` — Django setting. Default 200. Max changed
-  files analyzed per run.
-- `CLAUDE_DIFF_MAX_BYTES` — Django setting. Default 1_000_000. Max bytes
-  of unified diff text.
+- `AIST_LOCAL_TRIAGE_BRIDGE_SOCKET` — Unix socket path. The Compose deployment
+  uses `/run/claude-bridge/bridge.sock`.
+- `AIST_LOCAL_TRIAGE_TIMEOUT` — seconds. Compose defaults to 10,800; the
+  standalone Django fallback is 1,800. The bridge enforces this limit and the
+  synchronous client allows an additional 60 seconds for the HTTP exchange.
+- `CLAUDE_DIFF_MAX_FILES` — maximum changed files analyzed per run. Compose
+  defaults to 1,500; the standalone Django fallback is 200.
+- `CLAUDE_DIFF_MAX_BYTES` — maximum bytes of unified diff text. Compose
+  defaults to 6,000,000; the standalone Django fallback is 1,000,000.
 
 ## Enable / disable
 

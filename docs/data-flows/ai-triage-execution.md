@@ -26,7 +26,8 @@ the pipeline with a visible degraded outcome.
 Local mode resolves the project's Claude integration and source path, then asks
 the local AI bridge to start an isolated CLI operation through the shared Unix
 socket. Missing credentials or a rejected bridge request becomes a visible
-pipeline failure rather than an unauthenticated fallback.
+degraded outcome with diagnostic context rather than an unauthenticated
+fallback.
 
 ## Persist the verdict
 

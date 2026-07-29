@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from django.core.cache import cache
-from dojo.authorization.roles_permissions import Permissions
+from dojo.models import Finding
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers
 from rest_framework.response import Response
 
 from aist.api.schema import AISTApiTag
-from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.models import AISTProject
-from aist.queries import get_authorized_aist_projects, get_authorized_findings
 
 
 class AvailableFindingTagsAPI(AISTAPIView):
@@ -26,8 +25,9 @@ class AvailableFindingTagsAPI(AISTAPIView):
             fields = super().get_fields()
             request = self.context.get("request")
             if request and getattr(request, "user", None) and request.user.is_authenticated:
-                fields["project_id"].queryset = get_authorized_aist_projects(
-                    Permissions.Product_View,
+                fields["project_id"].queryset = queryset_for_action(
+                    resource=AISTProject,
+                    action=Action.PRODUCT_READ,
                     user=request.user,
                 )
             return fields
@@ -53,7 +53,11 @@ class AvailableFindingTagsAPI(AISTAPIView):
         if cached is not None:
             return Response({"tags": cached})
 
-        findings = get_authorized_findings(Permissions.Finding_View, user=request.user)
+        findings = queryset_for_action(
+            resource=Finding,
+            action=Action.FINDING_READ,
+            user=request.user,
+        )
         if project:
             findings = findings.filter(test__engagement__product_id=project.product_id)
         tags = (

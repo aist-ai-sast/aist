@@ -281,6 +281,20 @@ class VpnSidecarContextSecurityTests(AISTApiBase):
         integration = SimpleNamespace(vpn_secret=secret)
         return ResolvedIntegration(integration=integration, config={})
 
+    def test_selected_vpn_without_configuration_fails_closed(self):
+        from aist.integrations.resolver import ResolvedIntegration  # noqa: PLC0415
+        from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
+
+        resolved = ResolvedIntegration(
+            integration=SimpleNamespace(vpn_secret=None),
+            config={},
+        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "no usable OpenVPN configuration",
+        ), vpn_sidecar_context(resolved, execution_id="missing-config"):
+            pass  # pragma: no cover
+
     @patch("aist.utils.vpn._build_vpn_sidecar_if_needed")
     @patch("subprocess.run")
     def test_docker_run_failure_raises_runtime_error_not_called_process_error(

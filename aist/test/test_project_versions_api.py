@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import io
 import json
+import tempfile
 import zipfile
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.http import Http404
 from django.urls import reverse
 
+from aist.api.files import ProjectVersionFileBlobAPI
 from aist.models import AISTProjectScript, AISTProjectVersion, RepositoryInfo, ScmType, VersionType
 from aist.test.test_api import AISTApiBase
 
@@ -29,6 +34,29 @@ class ProjectVersionsAPITests(AISTApiBase):
             for name, content in files.items():
                 zf.writestr(name, content)
         return buf.getvalue()
+
+    def test_local_file_rejects_parent_directory_escape(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            extraction_root = Path(tmp_dir) / "extracted"
+            extraction_root.mkdir()
+            outside_file = Path(tmp_dir) / "outside.py"
+            outside_file.write_text("secret", encoding="utf-8")
+            project_version = SimpleNamespace(ensure_extracted=lambda: extraction_root)
+
+            with self.assertRaises(Http404):
+                ProjectVersionFileBlobAPI._return_local_file(project_version, "../outside.py")
+
+    def test_local_file_rejects_symlink_escape(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            extraction_root = Path(tmp_dir) / "extracted"
+            extraction_root.mkdir()
+            outside_file = Path(tmp_dir) / "outside.py"
+            outside_file.write_text("secret", encoding="utf-8")
+            (extraction_root / "linked.py").symlink_to(outside_file)
+            project_version = SimpleNamespace(ensure_extracted=lambda: extraction_root)
+
+            with self.assertRaises(Http404):
+                ProjectVersionFileBlobAPI._return_local_file(project_version, "linked.py")
 
     def test_create_version_file_hash_and_blob(self):
         url = reverse("aist_api:project_version_create", kwargs={"project_id": self.project.id})

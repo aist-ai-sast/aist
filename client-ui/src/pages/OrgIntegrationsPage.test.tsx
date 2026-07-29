@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -70,6 +71,20 @@ vi.mock("../lib/mutations", () => ({
 
 import OrgIntegrationsPage from "./OrgIntegrationsPage";
 
+function renderPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <OrgIntegrationsPage />
+    </QueryClientProvider>,
+  );
+}
+
 describe("OrgIntegrationsPage — DAST integration", () => {
   beforeEach(() => {
     mockIntegrations = [];
@@ -85,7 +100,7 @@ describe("OrgIntegrationsPage — DAST integration", () => {
   });
 
   it("shows Gateway URL and Integrator Token fields when DAST is selected", () => {
-    render(<OrgIntegrationsPage />);
+    renderPage();
 
     const orgIntegrationsSection = screen.getByText("Org Integrations").closest("section")!;
     fireEvent.click(within(orgIntegrationsSection).getByRole("button", { name: /add/i }));
@@ -111,7 +126,7 @@ describe("OrgIntegrationsPage — DAST integration", () => {
       },
     ];
 
-    render(<OrgIntegrationsPage />);
+    renderPage();
 
     expect(screen.getByText("DAST")).toBeInTheDocument();
     expect(screen.getByText("Primary DAST gateway")).toBeInTheDocument();
@@ -120,7 +135,7 @@ describe("OrgIntegrationsPage — DAST integration", () => {
   });
 
   it("imports a versioned bundle and clears token-bearing UI and mutation state after submit", async () => {
-    render(<OrgIntegrationsPage />);
+    renderPage();
     const section = screen.getByText("Org Integrations").closest("section")!;
     fireEvent.click(within(section).getByRole("button", { name: /add/i }));
     const typeSelect = within(section).getByText("Type").closest("div")!;
@@ -170,7 +185,7 @@ describe("OrgIntegrationsPage — DAST integration", () => {
       },
     ];
 
-    render(<OrgIntegrationsPage />);
+    renderPage();
     const section = screen.getByText("Org Integrations").closest("section")!;
     fireEvent.click(within(section).getByRole("button", { name: /edit/i }));
     fireEvent.change(within(section).getByPlaceholderText("e.g. Production"), {
@@ -205,7 +220,7 @@ describe("OrgIntegrationsPage — DAST integration", () => {
       },
     ];
 
-    render(<OrgIntegrationsPage />);
+    renderPage();
     const section = screen.getByText("Org Integrations").closest("section")!;
     fireEvent.click(within(section).getByRole("button", { name: /edit/i }));
     const save = within(section).getByRole("button", { name: "Save changes" });
@@ -232,7 +247,7 @@ describe("OrgIntegrationsPage — DAST integration", () => {
     ];
     canManage = false;
 
-    render(<OrgIntegrationsPage />);
+    renderPage();
 
     expect(screen.getByText("Primary DAST gateway")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add|edit|delete|validate/i })).not.toBeInTheDocument();
@@ -296,7 +311,7 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
   }
 
   it("submits the complete provider-defaulted schema object", async () => {
-    render(<OrgIntegrationsPage />);
+    renderPage();
     const section = selectProject();
     fireEvent.click(within(section).getByRole("button", { name: /add/i }));
 
@@ -331,7 +346,7 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
         readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
       },
     ];
-    render(<OrgIntegrationsPage />);
+    renderPage();
     const section = screen.getByText("DAST Target Bindings").closest("section")!;
 
     expect(within(section).getByText("Binding management is available to the organization administrator.")).toBeInTheDocument();
@@ -352,7 +367,7 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
         readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
       },
     ];
-    render(<OrgIntegrationsPage />);
+    renderPage();
     const section = selectProject();
 
     fireEvent.click(within(section).getByRole("button", { name: "Create launch config" }));
@@ -381,7 +396,7 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
       },
     ];
 
-    render(<OrgIntegrationsPage />);
+    renderPage();
     fireEvent.click(screen.getByRole("button", { name: /Synchronize/ }));
 
     await waitFor(() => expect(syncCapabilitiesMutateAsync).toHaveBeenCalledWith(7));
@@ -401,7 +416,7 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
       },
     ];
 
-    render(<OrgIntegrationsPage />);
+    renderPage();
 
     expect(screen.queryByRole("button", { name: /Synchronize/ })).not.toBeInTheDocument();
   });
@@ -419,7 +434,7 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
       },
     ];
 
-    render(<OrgIntegrationsPage />);
+    renderPage();
 
     expect(screen.queryByRole("button", { name: /Synchronize/ })).not.toBeInTheDocument();
   });

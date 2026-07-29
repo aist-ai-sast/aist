@@ -17,6 +17,7 @@ from aist.authz.policy import (
     Action,
     ResourcePolicy,
     is_valid_authz,
+    queryset_for_action,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "IsInternalService",
     "ResourcePolicy",
     "is_valid_authz",
+    "queryset_for_action",
 ]

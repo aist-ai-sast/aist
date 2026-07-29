@@ -15,6 +15,7 @@ from aist.forms import AISTPipelineRunForm
 from aist.models import (
     AISTPipeline,
     AISTProject,
+    AISTProjectLaunchConfig,
     AISTProjectVersion,
     AISTStatus,
     Organization,
@@ -229,3 +230,47 @@ class OneOffActionsTests(TestCase):
         done_ids = set(pipeline.launch_data.get("one_off_actions_done") or [])
         self.assertEqual(done_ids, {"a1"})
         self.assertEqual(handler.calls, 1)
+
+    @patch("aist.celery_signals.get_action_handler")
+    def test_launch_config_action_uses_snapshot_and_runs_once(self, mock_get_handler):
+        class DummyHandler:
+            def __init__(self):
+                self.calls = 0
+
+            def run(self, **_kwargs):
+                self.calls += 1
+
+        handler = DummyHandler()
+        mock_get_handler.return_value = handler
+        config = AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            name="Snapshot config",
+            params={"project_version": {"id": self.pv.pk}},
+        )
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-config-action",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.SAST_LAUNCHED,
+            launch_data={
+                "launch_config_id": str(config.pk),
+                "launch_config_actions": [{
+                    "id": "frozen-action",
+                    "trigger_status": AISTStatus.FINISHED,
+                    "action_type": "WRITE_LOG",
+                    "config": {"description": "Frozen"},
+                }],
+            },
+        )
+
+        for _ in range(2):
+            on_pipeline_status_changed(
+                sender=AISTPipeline,
+                pipeline_id=pipeline.id,
+                old_status=AISTStatus.SAST_LAUNCHED,
+                new_status=AISTStatus.FINISHED,
+            )
+
+        pipeline.refresh_from_db()
+        self.assertEqual(handler.calls, 1)
+        self.assertEqual(pipeline.launch_data["action_runs"][0]["status"], "performed")

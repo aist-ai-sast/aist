@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, serializers
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response  # noqa: TC002
 
 from aist.api.schema import AISTApiTag
-from aist.authz import PUBLIC, AISTAuthzMixin
+from aist.authz import PUBLIC, Action, AISTAuthzMixin, queryset_for_action
 from aist.models import Organization
-from aist.queries import get_authorized_aist_organizations, get_visible_aist_organizations
+from aist.queries import get_visible_aist_organizations
 
 
 class AISTOrganizationSerializer(serializers.ModelSerializer):
@@ -49,8 +48,10 @@ class OrganizationCreateAPI(AISTAuthzMixin, generics.ListCreateAPIView):
     def get_queryset(self):
         manage = self.request.query_params.get("manage", "").lower() == "true"
         if manage:
-            return get_authorized_aist_organizations(
-                Permissions.Product_Type_Manage_Members, user=self.request.user,
+            return queryset_for_action(
+                resource=Organization,
+                action=Action.ORG_MANAGE,
+                user=self.request.user,
             ).order_by("name")
         # Listing (non-manage) drives navigation, so it must include restricted
         # members who only hold per-project grants in the organization.

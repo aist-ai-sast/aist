@@ -23,7 +23,7 @@ docker compose --env-file "${COMPOSE_ENV_FILE}" up -d --build
 echo "== Running containers =="
 docker compose --env-file "${COMPOSE_ENV_FILE}" ps --status running
 
-required_services=(nginx uwsgi postgres valkey celeryworker celerybeat)
+required_services=(nginx uwsgi postgres valkey celeryworker celerybeat context-extractor-mcp claude-bridge)
 running_services="$(docker compose --env-file "${COMPOSE_ENV_FILE}" ps --status running --services)"
 for service in "${required_services[@]}"; do
   if ! grep -qx "${service}" <<<"${running_services}"; then

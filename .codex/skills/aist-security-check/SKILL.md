@@ -21,12 +21,13 @@ Run each check for every changed file. Skip checks that are not applicable to th
 
 ### Check 1 — Organization isolation (`aist/` files only)
 
-**What to find:** QuerySets returned without org filter.
+**What to find:** org-owned resources resolved outside the central authz layer.
 
 Grep for:
-- `.objects.all()` not followed by `.filter(` on the same or next line
-- `.objects.filter(` that does NOT include `organization` anywhere in the chain
-- `get_queryset` method that returns early without org filter for non-superusers
+- `Permissions.*` anywhere under `aist/api/`
+- raw model-manager lookups by identifier in endpoints
+- `get_object_or_404(Model, ...)` for an org-owned model
+- endpoints missing `ResourcePolicy`, `PUBLIC`, or `INTERNAL_SERVICE`
 
 **Flag as CRITICAL if:**
 - A ViewSet's `get_queryset()` can return objects from another org for a regular user.
@@ -34,11 +35,15 @@ Grep for:
 
 **Correct pattern:**
 ```python
-def get_queryset(self):
-    qs = Model.objects.all()
-    if self.request.user.is_superuser:
-        return qs
-    return qs.filter(project__organization=self.request.user.aist_organization)
+class ExampleAPI(AISTAPIView):
+    authz = ResourcePolicy(
+        resource=AISTProject,
+        read=Action.PRODUCT_READ,
+        write=Action.PROJECT_OPERATE,
+    )
+
+    def get(self, request, project_id):
+        project = self.resolve(pk=project_id)
 ```
 
 ---
@@ -66,7 +71,7 @@ call the same validation before opening any file.
 **What to find:** Views or endpoints without authentication.
 
 In `aist/api/` files:
-- ViewSets missing `permission_classes`
+- endpoints missing a valid `authz` declaration
 - `permission_classes = []` or `permission_classes = [AllowAny]` on non-public endpoints
 
 In `context_extractor_service/mcp_server.py`:

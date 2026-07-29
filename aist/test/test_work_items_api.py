@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -281,6 +283,56 @@ class WorkItemLinkCRUDTests(WorkItemBaseTestCase):
         self.assertEqual(patched.status_code, 200, patched.data)
         self.assertEqual(self.client.delete(self._link_detail_url(link_id)).status_code, 204)
 
+    @patch("aist.api.work_items.sync_work_item_link.delay")
+    def test_writer_can_create_link_with_visible_provider(self, mock_sync):
+        self._set_role(Roles.Writer, "Writer")
+        provider = WorkItemProvider.objects.create(
+            organization=self.org,
+            provider_type=WorkItemProviderType.JIRA,
+            name="Writer-visible Jira",
+        )
+
+        created = self.client.post(
+            self._links_url(),
+            {
+                "provider": provider.pk,
+                "external_key": "SEC-7",
+                "external_url": "https://jira.example.com/browse/SEC-7",
+            },
+            format="json",
+        )
+
+        self.assertEqual(created.status_code, 201, created.data)
+        self.assertEqual(created.data["provider"], provider.pk)
+        mock_sync.assert_called_once()
+
+    def test_writer_cannot_resolve_provider_from_another_organization(self):
+        self._set_role(Roles.Writer, "Writer")
+        other_product_type = Product_Type.objects.create(name="Other WI PT")
+        other_organization = Organization.objects.create(
+            name="Other WI Org",
+            product_type=other_product_type,
+        )
+        other_provider = WorkItemProvider.objects.create(
+            organization=other_organization,
+            provider_type=WorkItemProviderType.JIRA,
+            name="Other Jira",
+        )
+
+        response = self.client.post(
+            self._links_url(),
+            {
+                "provider": other_provider.pk,
+                "external_key": "OTHER-1",
+                "external_url": "https://jira.example.com/browse/OTHER-1",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("provider", response.data)
+        self.assertFalse(WorkItemLink.objects.filter(finding=self.finding).exists())
+
     def test_list_links_empty(self):
         response = self.client.get(self._links_url())
         self.assertEqual(response.status_code, 200)
@@ -306,7 +358,8 @@ class WorkItemLinkCRUDTests(WorkItemBaseTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("external_url", response.data)
 
-    def test_create_link_with_provider(self):
+    @patch("aist.api.work_items.sync_work_item_link.delay")
+    def test_create_link_with_provider(self, mock_sync):
         provider = WorkItemProvider.objects.create(
             organization=self.org,
             provider_type=WorkItemProviderType.JIRA,
@@ -323,6 +376,7 @@ class WorkItemLinkCRUDTests(WorkItemBaseTestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data["provider"], provider.pk)
         self.assertEqual(response.data["provider_name"], "Jira provider")
+        mock_sync.assert_called_once()
 
     def test_duplicate_manual_link_same_key_is_rejected(self):
         WorkItemLink.objects.create(

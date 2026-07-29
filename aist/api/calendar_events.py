@@ -10,7 +10,6 @@ from croniter import croniter
 from django.db.models import Count
 from django.urls import reverse
 from django.utils import timezone
-from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
@@ -27,14 +26,9 @@ from aist.api.calendar_domain import (
 from aist.api.common import CommaSeparatedListField, TimezoneNameField
 from aist.api.finding_event_stream import FindingEventStream
 from aist.api.schema import AISTApiTag
-from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.launch_data import PipelineLaunchData
-from aist.queries import (
-    get_authorized_aist_launch_schedules,
-    get_authorized_aist_pipelines,
-    get_authorized_aist_projects,
-    get_authorized_findings,
-)
+from aist.models import AISTPipeline, AISTProject, LaunchSchedule
 from aist.utils.project_version_refs import resolve_project_version_git_refs
 
 if TYPE_CHECKING:
@@ -239,16 +233,28 @@ class CalendarEventFactory:
 
 class CalendarEventsRepository:
     def __init__(self, *, user, project_filter: set[int]):
-        self.projects = get_authorized_aist_projects(Permissions.Product_View, user=user).select_related("product")
-        self.pipelines = get_authorized_aist_pipelines(Permissions.Product_View, user=user).select_related(
+        self.projects = queryset_for_action(
+            resource=AISTProject,
+            action=Action.PRODUCT_READ,
+            user=user,
+        ).select_related("product")
+        self.pipelines = queryset_for_action(
+            resource=AISTPipeline,
+            action=Action.PRODUCT_READ,
+            user=user,
+        ).select_related(
             "project",
             "project__product",
         )
-        self.schedules = get_authorized_aist_launch_schedules(Permissions.Product_View, user=user).select_related(
+        self.schedules = queryset_for_action(
+            resource=LaunchSchedule,
+            action=Action.PRODUCT_READ,
+            user=user,
+        ).select_related(
             "launch_config__project",
             "launch_config__project__product",
         )
-        self.findings = get_authorized_findings(Permissions.Finding_View, user=user)
+        self.findings = queryset_for_action(resource=Finding, action=Action.FINDING_READ, user=user)
 
         if project_filter:
             self.projects = self.projects.filter(id__in=project_filter)

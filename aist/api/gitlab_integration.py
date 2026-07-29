@@ -1,10 +1,6 @@
 from __future__ import annotations
 
 from django.db import transaction
-from dojo.authorization.authorization import (
-    user_has_permission_or_403,
-)
-from dojo.authorization.roles_permissions import Permissions
 from dojo.models import DojoMeta, Product
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
@@ -124,7 +120,7 @@ class ImportProjectFromGitlabAPI(AISTAPIView):
             defaults={"prod_type": product_type, "description": description},
         )
         if not created_product:
-            user_has_permission_or_403(request.user, product, Permissions.Product_Edit)
+            self.resolve(action=Action.PROJECT_OPERATE, resource=Product, pk=product.pk)
             if product.prod_type_id != product_type.id:
                 msg = "Product already exists under another product type. Move it first or choose another organization."
                 return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)

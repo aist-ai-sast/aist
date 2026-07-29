@@ -543,9 +543,9 @@ def vpn_sidecar_context(
 
     vpn_secret = getattr(resolved.integration, "vpn_secret", None)
     if not vpn_secret or not vpn_secret.ovpn_content:
-        logger.warning("execution=%s vpn=skipped reason=no_ovpn_content", execution_id)
-        yield None, None
-        return
+        logger.error("execution=%s vpn=failed reason=no_ovpn_content", execution_id)
+        msg = "The selected VPN integration has no usable OpenVPN configuration."
+        raise RuntimeError(msg)
 
     container_name = vpn_sidecar_container_name(execution_id)
 

@@ -42,10 +42,15 @@ An AIST personal access token belongs to one user and one organization. Its
 authority is the intersection of that organization, method scope, expiry and
 revocation state, and the owner's current role and project access.
 
-Queued work does not inherit unrestricted worker authority. Before a delayed
-operation crosses an execution or external-provider boundary, AIST re-resolves
+Durable launch requests do not inherit unrestricted worker authority. Before a
+user- or token-originated launch crosses an execution boundary, AIST re-resolves
 the stored tenant-owned objects and revalidates the authority represented by the
-request. Revoked or inconsistent authority fails the operation.
+request. Revoked or inconsistent authority fails that launch.
+
+System-produced maintenance and synchronization tasks have no user authority to
+replay. They still re-resolve tenant-owned records and preserve organization
+relationships, but their permission comes from the narrowly defined system task,
+not from an end-user session.
 
 ## External integrations
 

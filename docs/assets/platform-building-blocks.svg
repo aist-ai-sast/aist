@@ -1,51 +1,54 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="740" viewBox="0 0 1160 740" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="760" viewBox="0 0 1160 760" role="img" aria-labelledby="title desc">
   <title id="title">AIST platform building blocks</title>
-  <desc id="desc">The React client uses the Django control plane. Django and workers share PostgreSQL durable state. Django and Celery Beat publish work through Valkey to workers. Workers invoke the SAST runtime, standalone provider connectors, or the local AI bridge.</desc>
+  <desc id="desc">Product requests enter React and Django. PostgreSQL stores durable state, Valkey transports tasks from Django and Celery Beat to workers, and workers coordinate SAST, provider, context extraction, and local AI execution boundaries.</desc>
   <defs>
-    <style>
-      text{font-family:Arial,sans-serif;fill:#17212b}.title{font-size:22px;font-weight:700}.group{font-size:18px;font-weight:700}.name{font-size:15px;font-weight:700}.detail{font-size:13px;fill:#52616b}.box{stroke:#52616b;stroke-width:1.5;rx:12}.lane{fill:#f7f9fb;stroke:#d4dce3;stroke-width:1.5;rx:16}.flow{fill:none;stroke:#596a78;stroke-width:2;marker-end:url(#arrow)}.async{fill:none;stroke:#7d69aa;stroke-width:2;marker-end:url(#arrow)}.control{fill:none;stroke:#8b98a4;stroke-width:1.8;stroke-dasharray:7 5;marker-end:url(#arrow)}
-    </style>
+    <style>text{font-family:Arial,sans-serif;fill:#17212b}.title{font-size:22px;font-weight:700}.group{font-size:17px;font-weight:700}.name{font-size:14px;font-weight:700}.detail{font-size:12px;fill:#52616b}.lane{fill:#f7f9fb;stroke:#d4dce3;stroke-width:1.5;rx:16}.box{stroke:#52616b;stroke-width:1.5;rx:11}.flow{fill:none;stroke:#596a78;stroke-width:2;marker-end:url(#arrow)}.queue{fill:none;stroke:#7d69aa;stroke-width:2;marker-end:url(#arrow)}.boundary{fill:none;stroke:#8b98a4;stroke-width:1.8;stroke-dasharray:7 5;marker-end:url(#arrow)}</style>
     <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#596a78"/></marker>
   </defs>
-  <rect width="1160" height="740" fill="#fbfcfd"/>
-  <text x="50" y="48" class="title">AIST platform building blocks</text>
-  <text x="50" y="72" class="detail">Solid paths are product requests or durable data access; purple paths carry queued work; dashed paths cross an execution boundary.</text>
+  <rect width="1160" height="760" fill="#fbfcfd"/>
+  <text x="50" y="45" class="title">AIST platform building blocks</text>
+  <text x="50" y="68" class="detail">Solid: request or durable state · purple: queued work · dashed: execution or analysis boundary</text>
 
-  <rect x="40" y="98" width="1080" height="128" class="lane"/>
-  <text x="65" y="128" class="group">Experience and control plane</text>
-  <rect x="85" y="150" width="240" height="58" class="box" fill="#edf5ff"/>
-  <text x="110" y="177" class="name">React client</text><text x="110" y="197" class="detail">product experience</text>
-  <rect x="445" y="150" width="300" height="58" class="box" fill="#edf5ff"/>
-  <text x="470" y="177" class="name">Django control plane</text><text x="470" y="197" class="detail">API · authorization · workflow</text>
-  <path d="M325 179L445 179" class="flow"/><text x="360" y="167" class="detail">HTTP</text>
+  <rect x="40" y="92" width="1080" height="125" class="lane"/>
+  <text x="65" y="120" class="group">Product experience and control plane</text>
+  <rect x="165" y="143" width="230" height="55" class="box" fill="#edf5ff"/>
+  <text x="188" y="167" class="name">React client</text><text x="188" y="187" class="detail">product interaction</text>
+  <rect x="595" y="143" width="300" height="55" class="box" fill="#edf5ff"/>
+  <text x="618" y="167" class="name">Django control plane</text><text x="618" y="187" class="detail">API · authorization · workflow</text>
+  <path d="M395 171H595" class="flow"/><text x="470" y="159" class="detail">HTTP</text>
 
-  <rect x="40" y="252" width="1080" height="142" class="lane"/>
-  <text x="65" y="282" class="group">Durable coordination</text>
-  <rect x="220" y="306" width="280" height="68" class="box" fill="#eaf8f1"/>
-  <text x="245" y="334" class="name">PostgreSQL</text><text x="245" y="356" class="detail">tenant, product, and execution state</text>
-  <rect x="660" y="306" width="280" height="68" class="box" fill="#fff8e8"/>
-  <text x="685" y="334" class="name">Valkey</text><text x="685" y="356" class="detail">Celery task transport</text>
-  <path d="M535 208L405 306" class="flow"/><text x="418" y="255" class="detail">read / write</text>
-  <path d="M650 208L770 306" class="async"/><text x="690" y="255" class="detail">enqueue</text>
+  <rect x="40" y="238" width="1080" height="145" class="lane"/>
+  <text x="65" y="268" class="group">Durable coordination</text>
+  <rect x="220" y="295" width="275" height="65" class="box" fill="#eaf8f1"/>
+  <text x="243" y="321" class="name">PostgreSQL</text><text x="243" y="343" class="detail">tenant, product, launch, pipeline, finding state</text>
+  <rect x="665" y="295" width="275" height="65" class="box" fill="#fff8e8"/>
+  <text x="688" y="321" class="name">Valkey</text><text x="688" y="343" class="detail">Celery delivery, not product history</text>
+  <path d="M670 198L430 295" class="flow"/><text x="500" y="255" class="detail">read / write</text>
+  <path d="M780 198L820 295" class="queue"/><text x="815" y="255" class="detail">enqueue</text>
 
-  <rect x="40" y="420" width="1080" height="280" class="lane"/>
-  <text x="65" y="450" class="group">Background work and execution boundaries</text>
-  <rect x="90" y="480" width="180" height="66" class="box" fill="#f4efff"/>
-  <text x="115" y="508" class="name">Celery Beat</text><text x="115" y="530" class="detail">recurring producers</text>
-  <rect x="470" y="480" width="200" height="66" class="box" fill="#f4efff"/>
-  <text x="495" y="508" class="name">Celery workers</text><text x="495" y="530" class="detail">queued operations</text>
-  <path d="M180 480L180 402L720 402L720 374" class="async"/>
-  <path d="M800 374L800 458L650 458L650 480" class="async"/>
-  <path d="M490 480L360 374" class="flow"/><text x="375" y="430" class="detail">read / persist outcome</text>
+  <rect x="40" y="405" width="1080" height="315" class="lane"/>
+  <text x="65" y="435" class="group">Background work</text>
+  <rect x="105" y="468" width="185" height="60" class="box" fill="#f4efff"/>
+  <text x="128" y="493" class="name">Celery Beat</text><text x="128" y="514" class="detail">recurring producers</text>
+  <rect x="488" y="468" width="185" height="60" class="box" fill="#f4efff"/>
+  <text x="511" y="493" class="name">Celery workers</text><text x="511" y="514" class="detail">orchestration and outcomes</text>
+  <path d="M198 468V442H790V360" class="queue"/>
+  <path d="M815 360V448H620V468" class="queue"/>
+  <path d="M515 468L400 360" class="flow"/>
 
-  <rect x="225" y="590" width="210" height="72" class="box" fill="#fff0f0"/>
-  <text x="250" y="618" class="name">SAST runtime</text><text x="250" y="640" class="detail">workspace · builder · analyzers</text>
-  <rect x="475" y="590" width="210" height="72" class="box" fill="#fff0f0"/>
-  <text x="500" y="614" class="name">Provider connector</text><text x="500" y="636" class="detail">standalone execution</text><text x="500" y="653" class="detail">for example DAST</text>
-  <rect x="725" y="590" width="210" height="72" class="box" fill="#fff0f0"/>
-  <text x="750" y="614" class="name">Local AI bridge</text><text x="750" y="636" class="detail">Unix socket</text><text x="750" y="653" class="detail">isolated CLI run</text>
-  <path d="M550 546L550 565L330 565L330 590" class="control"/>
-  <path d="M570 546L570 590" class="control"/>
-  <path d="M590 546L590 575L830 575L830 590" class="control"/>
-  <text x="225" y="684" class="detail">Execution runtimes return reports or verdicts; PostgreSQL remains the product source of truth.</text>
+  <text x="65" y="570" class="group">Execution and analysis boundaries</text>
+  <rect x="70" y="600" width="220" height="70" class="box" fill="#fff0f0"/>
+  <text x="92" y="627" class="name">SAST runtime</text><text x="92" y="648" class="detail">workspace · builder · analyzers</text>
+  <rect x="330" y="600" width="220" height="70" class="box" fill="#fff0f0"/>
+  <text x="352" y="627" class="name">Provider connector</text><text x="352" y="648" class="detail">standalone execution, for example DAST</text>
+  <rect x="590" y="600" width="220" height="70" class="box" fill="#fff0f0"/>
+  <text x="612" y="627" class="name">Local AI bridge</text><text x="612" y="648" class="detail">Unix socket · isolated CLI run</text>
+  <rect x="850" y="600" width="240" height="70" class="box" fill="#fff0f0"/>
+  <text x="872" y="627" class="name">Context extractor MCP</text><text x="872" y="648" class="detail">authorized read-only source analysis</text>
+  <path d="M535 528L180 600" class="boundary"/>
+  <path d="M558 528L440 600" class="boundary"/>
+  <path d="M603 528L700 600" class="boundary"/>
+  <path d="M810 635H850" class="boundary"/><text x="816" y="622" class="detail">tools</text>
+  <path d="M970 600V555H745V198" class="flow"/><text x="864" y="550" class="detail">resolve pipeline via internal API</text>
+  <text x="70" y="700" class="detail">Execution services return reports or verdicts through platform boundaries; PostgreSQL remains authoritative.</text>
 </svg>

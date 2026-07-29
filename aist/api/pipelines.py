@@ -14,7 +14,6 @@ from django.db import close_old_connections
 from django.db.models import Count
 from django.http import HttpResponse, HttpResponseBadRequest, StreamingHttpResponse
 from django_filters import rest_framework as django_filters
-from dojo.authorization.roles_permissions import Permissions
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from openpyxl import Workbook
 from rest_framework import generics, serializers, status
@@ -31,7 +30,7 @@ from aist.api.launch_requests import (
     launch_request_response,
 )
 from aist.api.schema import AISTApiTag
-from aist.authz import ACTION_PERMISSIONS, INTERNAL_SERVICE, Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy
+from aist.authz import INTERNAL_SERVICE, Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy, queryset_for_action
 from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import (
@@ -44,7 +43,6 @@ from aist.logging_transport import (
     get_redis,
 )
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, TestDeduplicationProgress
-from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_project_versions
 from aist.services.dast_outcomes import public_dast_outcome_code
 from aist.utils.export import _build_ai_export_rows
 from aist.utils.pipeline import (
@@ -85,8 +83,9 @@ class PipelineStartRequestSerializer(serializers.Serializer):
         fields = super().get_fields()
         request = self.context.get("request")
         if request and getattr(request, "user", None) and request.user.is_authenticated:
-            fields["project_version_id"].queryset = get_authorized_aist_project_versions(
-                Permissions.Product_Edit,
+            fields["project_version_id"].queryset = queryset_for_action(
+                resource=AISTProjectVersion,
+                action=Action.PROJECT_OPERATE,
                 user=request.user,
             )
         return fields
@@ -1013,7 +1012,7 @@ class PipelineSourceInfoAPI(AISTAPIView):
     )
     def get(self, request, pipeline_id: str):
         pipeline = (
-            get_authorized_aist_pipelines(ACTION_PERMISSIONS[Action.PRODUCT_READ], user=request.user)
+            queryset_for_action(resource=AISTPipeline, action=Action.PRODUCT_READ, user=request.user)
             .select_related("project__product")
             .filter(id=pipeline_id)
             .first()

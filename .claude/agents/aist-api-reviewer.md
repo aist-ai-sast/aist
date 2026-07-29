@@ -17,25 +17,28 @@ For each changed ViewSet or APIView:
 
 ### 1. Organization isolation — CRITICAL
 
-`get_queryset()` must exist and follow this exact pattern:
+Every tenant endpoint must inherit from `AISTAPIView` or `AISTAuthzMixin` and
+declare a `ResourcePolicy`:
 ```python
-def get_queryset(self):
-    qs = Model.objects.all()
-    if self.request.user.is_superuser:
-        return qs
-    return qs.filter(project__organization=self.request.user.aist_organization)
+class ExampleAPI(AISTAPIView):
+    authz = ResourcePolicy(
+        resource=AISTProject,
+        read=Action.PRODUCT_READ,
+        write=Action.PROJECT_OPERATE,
+    )
 ```
 
 Flag CRITICAL if:
-- `get_queryset()` is missing entirely
-- No org filter for non-superusers
-- No superuser bypass
-- Custom actions (`@action`) fetch by pk without verifying org membership
+- `authz` is missing or does not match the owned resource
+- an object is fetched by raw model manager or unscoped `get_object_or_404`
+- an additional resource bypasses `authorized_queryset(resource=..., action=...)`
+- `Permissions.*` appears directly in `aist/api/`
 
-### 2. Permission classes — ERROR
+### 2. Named actions — ERROR
 
-- Is `permission_classes` declared on the ViewSet?
-- Is it consistent with neighboring endpoints in the same file?
+- Do read and write methods use the appropriate named `Action`?
+- Does the resource have a getter in `RESOURCE_GETTERS`?
+- Is role-to-permission mapping confined to `aist/authz/policy.py`?
 
 Read the file and compare with 2-3 adjacent ViewSets.
 Flag ERROR if missing or inconsistent.

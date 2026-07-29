@@ -117,8 +117,13 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
         if root is None:
             raise Http404(ERR_FILE_NOT_FOUND_IN_ARCHIVE)
 
+        root = root.resolve()
         safe_rel = subpath.lstrip("/").replace("\\", "/")
         file_path = (root / safe_rel).resolve()
+        try:
+            file_path.relative_to(root)
+        except ValueError as exc:
+            raise Http404(ERR_FILE_NOT_FOUND_IN_ARCHIVE) from exc
         if not file_path.exists() or not file_path.is_file():
             raise Http404(ERR_FILE_NOT_FOUND_IN_ARCHIVE)
 

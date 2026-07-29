@@ -57,6 +57,7 @@ class Action(Enum):
     FINDING_READ = "finding_read"
     TEST_READ = "test_read"
     ENGAGEMENT_READ = "engagement_read"
+    ORG_READ = "org_read"
     ORG_MANAGE_READ = "org_manage_read"
 
     # Write ladder.
@@ -75,6 +76,7 @@ ACTION_PERMISSIONS: dict[Action, int] = {
     Action.FINDING_READ: Permissions.Finding_View,
     Action.TEST_READ: Permissions.Test_View,
     Action.ENGAGEMENT_READ: Permissions.Engagement_View,
+    Action.ORG_READ: Permissions.Product_Type_View,
     Action.ORG_MANAGE_READ: Permissions.Product_Type_Manage_Members,
     Action.FINDING_EDIT: Permissions.Finding_Edit,
     Action.RISK_ACCEPT: Permissions.Risk_Acceptance,
@@ -83,6 +85,16 @@ ACTION_PERMISSIONS: dict[Action, int] = {
     Action.ORG_MANAGE: Permissions.Product_Type_Manage_Members,
     Action.OWNER_GRANT: Permissions.Product_Type_Member_Add_Owner,
 }
+
+
+def queryset_for_action(*, resource: type[Model], action: Action, user) -> QuerySet:
+    """Return one tenant-scoped resource queryset through the central action map."""
+    try:
+        getter = RESOURCE_GETTERS[resource]
+    except KeyError as exc:
+        msg = f"No org-scoped getter registered for {resource.__name__}"
+        raise KeyError(msg) from exc
+    return getter(ACTION_PERMISSIONS[action], user=user)
 
 
 # Resource model → the org-scoped queryset getter that enforces tenant isolation.
@@ -139,7 +151,8 @@ class ResourcePolicy:
         return ACTION_PERMISSIONS[action]
 
     def queryset_for(self, method: str, user) -> QuerySet:
-        return self.getter(self.permission_for(method), user=user)
+        action = self.read if (method or "").upper() in _SAFE_METHODS else self.write
+        return queryset_for_action(resource=self.resource, action=action, user=user)
 
 
 class _AuthzMarker:

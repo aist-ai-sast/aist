@@ -51,6 +51,7 @@ class ActionPermissionTableTests(SimpleTestCase):
         self.assertEqual(ACTION_PERMISSIONS[Action.FINDING_READ], Permissions.Finding_View)
         self.assertEqual(ACTION_PERMISSIONS[Action.TEST_READ], Permissions.Test_View)
         self.assertEqual(ACTION_PERMISSIONS[Action.ENGAGEMENT_READ], Permissions.Engagement_View)
+        self.assertEqual(ACTION_PERMISSIONS[Action.ORG_READ], Permissions.Product_Type_View)
 
     def test_every_action_has_a_permission(self):
         for action in Action:

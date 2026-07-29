@@ -45,27 +45,37 @@ Data flow, runtime deployment, and per-domain component ownership:
 [platform building blocks](docs/architecture/platform-building-blocks.md),
 [runtime deployment](docs/architecture/runtime-deployment.md).
 Key models (`Organization`, `AISTProject`, `AISTProjectVersion`, `AISTPipeline`,
-`ProcessedFinding`, `AISTAIFindingResponse`) live in `aist/models.py` — see
-[platform building blocks](docs/architecture/platform-building-blocks.md#key-models) for
-what each owns.
+`ProcessedFinding`, `AISTAIFindingResponse`) live in `aist/models.py`. The
+[platform building blocks](docs/architecture/platform-building-blocks.md) explain
+their runtime owners without duplicating a source-symbol inventory.
 
 ## Security rules
 
 **Organization isolation — highest priority.**
 
-Every QuerySet touching org-owned data MUST be scoped. Required pattern in `get_queryset()`:
+Every API endpoint that touches an org-owned resource MUST declare a
+`ResourcePolicy` and inherit from `AISTAPIView` or `AISTAuthzMixin`. Resolve
+objects through the central scoped queryset:
 
 ```python
-def get_queryset(self):
-    qs = Model.objects.all()
-    if self.request.user.is_superuser:
-        return qs
-    return qs.filter(
-        project__product__prod_type__aist_organization=self.request.user.aist_organization,
+class ExampleAPI(AISTAPIView):
+    authz = ResourcePolicy(
+        resource=AISTProject,
+        read=Action.PRODUCT_READ,
+        write=Action.PROJECT_OPERATE,
     )
+
+    def get(self, request, project_id):
+        project = self.resolve(pk=project_id)
 ```
 
-- Never use `.all()` without org filter on org-owned models.
+- Never fetch an org-owned API object by raw model manager and identifier.
+- `aist/authz/policy.py` is the only API-layer mapping from named `Action` values
+  to DefectDojo `Permissions`. Direct `Permissions.*` use in `aist/api/` is
+  forbidden and enforced recursively by `test_authz_lint.py`.
+- For an additional resource inside one endpoint, use
+  `self.authorized_queryset(resource=..., action=...)` or the central
+  `queryset_for_action(...)` helper. Do not recreate role filtering in a serializer.
 - Org hierarchy: User → OrgMembership → Organization → ProductType → Product → AISTProject → AISTPipeline → Finding.
   Cross-org access is absolutely prohibited even through nested lookups. For full members,
   project overrides can only narrow the organization role. Restricted members receive no
@@ -77,11 +87,13 @@ def get_queryset(self):
   Before adding any file-reading code, check the existing path guard in `mcp_server.py`.
 - Docker in `sast-pipeline`: no `privileged: true`, no `network_mode: host` without
   explicit documented justification.
-- For every ApiView class inherit from AuthorizedQuerySetMixin before APIView
+- `PUBLIC` and `INTERNAL_SERVICE` are explicit exceptional policies, not substitutes
+  for tenant scoping.
 
 **Security checklist — verify before finalizing any change:**
 
-- [ ] New QuerySets in `aist/` have org filter + superuser bypass in `get_queryset()`.
+- [ ] Every org-owned API object is resolved through `ResourcePolicy` and a registered getter.
+- [ ] No direct `Permissions.*` reference exists under `aist/api/`.
 - [ ] No cross-org access possible through nested object lookups.
 - [ ] No `request.data` accessed directly in views — must go through serializer.
 - [ ] No `.raw()` or `cursor.execute()` with f-strings or string concatenation.
@@ -100,9 +112,12 @@ def get_queryset(self):
 
 - AIST REST API lives in `aist/api/`. Each domain has its own file.
   Always check a neighboring file before writing a new ViewSet.
-- Always override `get_queryset()` — never rely on class-level queryset alone.
+- Declare `authz = ResourcePolicy(...)` on every tenant endpoint. Generic views
+  return `authorized_queryset_for_request()` from `get_queryset()`; plain views
+  use `resolve()` and `authorized_queryset()`.
 - Serializers validate ALL input. Views only call service/model methods.
-- Superuser bypass goes in `get_queryset()`, not in `perform_create`/`perform_update`.
+- Superuser and token behavior belongs in the registered query getter, not in a view
+  or serializer branch.
 - `sast-pipeline` REST client: reuse `DefectDojoClient` session (has retry/backoff).
   Never add bare `requests.get()` calls.
 
@@ -120,8 +135,8 @@ def get_queryset(self):
 
 ### `aist/` (core platform)
 - **Model change** → check `aist/migrations/`, run `makemigrations` inside Docker.
-- **API regression** → check: org filter in `get_queryset()`, serializer field list,
-  `permission_classes` consistent with neighboring endpoints in the same file.
+- **API regression** → check: `ResourcePolicy`, named `Action`, registered scoped
+  getter, serializer field list, and neighboring endpoint behavior.
 - **Celery task regression** → verify task is idempotent; handles `None` pipeline gracefully.
 - **Deduplication regression** → `aist/dedupe/` — finding hash fields drive dedup;
   if a model field changed, hash computation likely needs updating.

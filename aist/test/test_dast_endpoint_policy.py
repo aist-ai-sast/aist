@@ -61,7 +61,7 @@ class DastEndpointPolicyTests(SimpleTestCase):
     def test_vpn_routed_name_with_an_oversized_answer_set_is_refused(self):
         # Checking only the first answers would let whoever owns the zone pad the set with harmless
         # records until a forbidden one falls outside the window, defeating the denial above.
-        padded = tuple(f"93.184.216.{octet}" for octet in range(1, 40)) + ("127.0.0.1",)
+        padded = (*(f"93.184.216.{octet}" for octet in range(1, 40)), "127.0.0.1")
         policy = DastEndpointPolicy(trusted_vpn=True, resolver=lambda _host, _port: padded)
 
         with self.assertRaises(DastEndpointPolicyError):

@@ -19,6 +19,10 @@ class ProductionDeployScriptTests(SimpleTestCase):
     def test_deploy_checks_required_services_migrations_and_generic_execution_runtime(self):
         script = (PROJECT_ROOT / "scripts" / "deploy-prod.sh").read_text(encoding="utf-8")
 
-        self.assertIn("required_services=(nginx uwsgi postgres valkey celeryworker celerybeat)", script)
+        self.assertIn(
+            "required_services=(nginx uwsgi postgres valkey celeryworker celerybeat "
+            "context-extractor-mcp claude-bridge)",
+            script,
+        )
         self.assertIn("python3 manage.py migrate --check", script)
         self.assertIn("python3 manage.py check --deploy --tag aist_execution", script)

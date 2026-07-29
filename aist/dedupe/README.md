@@ -1,10 +1,10 @@
 # AIST Canonical Deduplication
 
-Cross-scanner deduplication for SAST findings. Standard DefectDojo deduplication
+Location- and evidence-based deduplication for supported SAST findings. Standard DefectDojo deduplication
 relies on hash codes or unique tool IDs, which are scanner-specific and do not
 work across scanners. This module identifies the same vulnerability reported at the
-same location by different scanners — without requiring them to agree on rule names
-or CWE numbers.
+same location, commonly by different scanners, without making scanner identity part
+of the matching rule.
 
 ## Supported scan types
 
@@ -57,6 +57,7 @@ Each finding is reduced to a scanner-agnostic `CanonicalSignature`:
 | `normalized_rule` | `vuln_id_from_tool` (or `title`) lower-cased, non-alphanumeric → `_`, with cross-scanner aliases applied |
 | `component_name` | lower-cased component name |
 | `component_version` | lower-cased component version |
+| `title_tokens` | normalized content words after generic security terms are removed |
 
 #### Vulnerability families
 
@@ -90,9 +91,10 @@ against every predecessor. The score is the sum of matched evidence:
 | **Family match** | +3 | Both share the same non-`UNKNOWN` family |
 | **Rule key match** | +2 | Normalized rule keys are equal (after cross-scanner aliasing) |
 | **Component match** | +1 | `component_name` or `component_version` is the same |
+| **Title overlap** | +1 | At least 3 content tokens overlap with Jaccard similarity ≥ 0.4 |
 
 **Anti-spam guard:** if the only positive evidence is a family match where *both*
-families are inferred (no explicit CWE, no rule match, no component match), the
+families are inferred (no explicit CWE, no rule, component, or title match), the
 score is zeroed out and the verdict is `NO_MATCH`. This prevents weak family
 signals from polluting the candidate list.
 
@@ -100,7 +102,7 @@ signals from polluting the candidate list.
 
 | Score | Verdict | Meaning |
 |---|---|---|
-| ≥ `AUTO_THRESHOLD` | **DUPLICATE** | High confidence — same vulnerability, different scanner |
+| ≥ `AUTO_THRESHOLD` | **DUPLICATE** | Matching evidence reached the automatic threshold |
 | ≥ `CANDIDATE_MIN` and < `AUTO_THRESHOLD` | **CANDIDATE** | Possible duplicate — human review recommended |
 | < `CANDIDATE_MIN` | **NO_MATCH** | Not related |
 
@@ -184,7 +186,7 @@ Snyk Code finding (new):
 | CWE 321 ≠ 547 | +0 |
 | Family HARDCODED_SECRET == HARDCODED_SECRET | +3 |
 | Rule key alias `secret_jwt_or_noncrypto_hardcoded` == same | +2 |
-| **Total** | **5 → capped to score, verdict DUPLICATE** |
+| **Total** | **5** |
 
 Verdict: **DUPLICATE**.
 
@@ -229,7 +231,7 @@ Both map to family `PATH_TRAVERSAL` (family_match → +3), but:
 - CWE is `None` on both → both use inferred CWE 22
 - No explicit CWE → `cwe_inferred = True` for both
 - Rule keys differ → +0
-- No component → +0
+- No component or strong title overlap → +0
 
 Anti-spam guard fires: family match with both sides inferred, no other evidence.
 Score reset to 0. Verdict: **NO_MATCH**.

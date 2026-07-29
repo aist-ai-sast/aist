@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from django.utils import timezone
-from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
@@ -18,8 +17,7 @@ from aist.api.common import CommaSeparatedListField, TimezoneNameField
 from aist.api.finding_event_stream import FindingEventStream
 from aist.api.finding_history import history_events_with_users
 from aist.api.schema import AISTApiTag
-from aist.authz import Action, AISTAPIView, ResourcePolicy
-from aist.queries import get_authorized_findings
+from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -85,8 +83,9 @@ class FindingTimelineQuerySerializer(serializers.Serializer):
         fields = super().get_fields()
         request = self.context.get("request")
         if request and getattr(request, "user", None) and request.user.is_authenticated:
-            fields["finding_id"].queryset = get_authorized_findings(
-                Permissions.Finding_View,
+            fields["finding_id"].queryset = queryset_for_action(
+                resource=Finding,
+                action=Action.FINDING_READ,
                 user=request.user,
             )
         return fields
@@ -119,7 +118,7 @@ class FindingTimelineRowSerializer(serializers.Serializer):
 
 
 class AISTFindingTimelineAPI(AISTAPIView):
-    # Read-only aggregation; scopes findings internally via get_authorized_findings.
+    # Read-only aggregation; scopes findings through the central Action policy.
     authz = ResourcePolicy(resource=Finding, read=Action.FINDING_READ, write=Action.PROJECT_OPERATE)
 
     @staticmethod
@@ -252,7 +251,11 @@ class AISTFindingTimelineAPI(AISTAPIView):
         if not params.is_valid():
             return Response(params.errors, status=status.HTTP_400_BAD_REQUEST)
         # Fix #2: build authorized findings directly instead of reaching into serializer internals
-        authorized_findings = get_authorized_findings(Permissions.Finding_View, user=request.user)
+        authorized_findings = queryset_for_action(
+            resource=Finding,
+            action=Action.FINDING_READ,
+            user=request.user,
+        )
 
         # Fix #3: use purpose-built context instead of the calendar one
         context = _build_timeline_context(params.validated_data)

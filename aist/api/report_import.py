@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.db import transaction
-from dojo.authorization.roles_permissions import Permissions
 from dojo.tools import factory
 from dojo.utils import is_scan_file_too_large
 from drf_spectacular.utils import OpenApiResponse, extend_schema
@@ -16,14 +15,13 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
 from aist.api.schema import AISTApiTag
-from aist.authz import Action, AISTAPIView, ResourcePolicy
+from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.integrations.dast_report import (
     DastReportValidationError,
     validate_manual_dast_terminal_result_bytes,
 )
 from aist.models import AISTProject, DastProjectBinding, PipelineExecutionType
 from aist.parser_overrides import DAST_SCAN_TYPE
-from aist.queries import get_authorized_aist_projects, get_authorized_dast_project_bindings
 from aist.tasks.report_import import import_report
 from aist.utils.pipeline import create_pipeline_object
 from aist.utils.report_import import (
@@ -45,28 +43,30 @@ class _ScanTypeFieldMixin:
 
 
 class _ProjectFieldMixin:
-    project_permission: str
+    project_action: Action
 
     def get_fields(self):
         fields = super().get_fields()
         request = self.context.get("request")
         if request and getattr(request, "user", None) and request.user.is_authenticated:
-            fields["project_id"].queryset = get_authorized_aist_projects(
-                self.project_permission,
+            fields["project_id"].queryset = queryset_for_action(
+                resource=AISTProject,
+                action=self.project_action,
                 user=request.user,
             )
         return fields
 
 
 class _DastBindingFieldMixin:
-    project_permission: str
+    project_action: Action
 
     def get_fields(self):
         fields = super().get_fields()
         request = self.context.get("request")
         if request and getattr(request, "user", None) and request.user.is_authenticated:
-            fields["binding_id"].queryset = get_authorized_dast_project_bindings(
-                self.project_permission,
+            fields["binding_id"].queryset = queryset_for_action(
+                resource=DastProjectBinding,
+                action=self.project_action,
                 user=request.user,
             )
         return fields
@@ -108,7 +108,7 @@ class PipelineImportValidateRequestSerializer(
     _ScanTypeFieldMixin,
     serializers.Serializer,
 ):
-    project_permission = Permissions.Product_View
+    project_action = Action.PRODUCT_READ
 
     file = serializers.FileField()
     project_id = serializers.PrimaryKeyRelatedField(
@@ -141,7 +141,7 @@ class PipelineImportRequestSerializer(
     _ScanTypeFieldMixin,
     serializers.Serializer,
 ):
-    project_permission = Permissions.Product_Edit
+    project_action = Action.PROJECT_OPERATE
 
     file = serializers.FileField()
     project_id = serializers.PrimaryKeyRelatedField(
