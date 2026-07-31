@@ -148,6 +148,15 @@ class BootstrapDemoAccessCommandTests(TestCase):
             self.assertGreaterEqual(dast_bindings.count(), 1)
             self.assertFalse(dast_bindings.filter(enabled=False).exists())
             self.assertTrue(dast_bindings.filter(autonomous_enabled=True).exists())
+            # Demo target parameters must mirror the real DAST provider contract (a single
+            # "depth" enum field, default "light") rather than inventing schema fields that
+            # don't exist in the actual product.
+            for binding in dast_bindings:
+                self.assertEqual(
+                    set(binding.target.parameter_schema["properties"]),
+                    {"depth"},
+                )
+                self.assertEqual(binding.target.provider_defaults, {"depth": "light"})
 
             dast_configs = AISTProjectLaunchConfig.objects.filter(
                 project=project,

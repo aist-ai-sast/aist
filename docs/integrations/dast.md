@@ -4,8 +4,6 @@ The DAST integration connects one AIST organization to an external DAST
 gateway. It supports autonomous scans and manual result import without making
 DAST part of the SAST analyzer fan-out.
 
-![AIST and DAST service boundary](../assets/aist-dast-service-boundary.svg)
-
 ## Responsibility boundary
 
 | AIST owns | DAST owns |
@@ -59,10 +57,13 @@ and optional CA are loaded only at execution time from the integration.
 
 ## Autonomous execution
 
-An authorized start enters the normal durable launch lifecycle. After a worker
+An authorized start enters the normal durable launch lifecycle; see
+[how one autonomous run crosses the boundary](../product-architecture/README.md#how-one-autonomous-run-crosses-the-boundary)
+for the full connector-to-gateway walkthrough with its diagram. After a worker
 accepts the generic pipeline task, the shared execution runtime starts the DAST
-connector container. The connector starts and observes the provider run, while
-AIST retains cancellation intent, pipeline state, and the final import decision.
+connector container, which loads this integration's gateway URL and service
+token and starts, observes, and can cancel the provider run. AIST retains
+cancellation intent, pipeline state, and the final import decision throughout.
 
 Before importing a terminal result, AIST verifies the expected provider run,
 target binding, source revision, result format, and nested report. Invalid,

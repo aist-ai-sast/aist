@@ -101,6 +101,17 @@ class SecretsMaskingUtilsTests(AISTApiBase):
             },
         )
 
+    def test_mask_sensitive_data_preserves_dast_binding_source_repo_key(self):
+        payload = {
+            "id": 5,
+            "source_repo_key": "api-frontend",
+            "enabled": True,
+        }
+
+        masked = mask_sensitive_data(payload)
+
+        self.assertEqual(masked["source_repo_key"], "api-frontend")
+
     def test_mask_sensitive_data_masks_raw_vpn_secret_fields_if_they_appear(self):
         payload = {
             "vpn_secret": {

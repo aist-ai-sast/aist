@@ -1,0 +1,56 @@
+<script>
+    (function () {
+        "use strict";
+        if (window.AISTDastParamsHint) return;
+
+        function escapeHtml(s) {
+            return String(s == null ? "" : s)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function describeFields(schema) {
+            schema = schema || {};
+            var properties = schema.properties || {};
+            var required = Array.isArray(schema.required) ? schema.required : [];
+            return Object.keys(properties).map(function (name) {
+                var definition = properties[name] || {};
+                var type = definition.type || (definition.enum ? "enum" : "value");
+                var descriptor = type + (required.indexOf(name) >= 0 ? ", required" : ", optional");
+                if (Array.isArray(definition.enum)) descriptor += ", one of: " + definition.enum.join(", ");
+                return {name: name, descriptor: descriptor};
+            });
+        }
+
+        // Renders a DAST target's parameter schema as a short field list plus a formatted
+        // JSON defaults block, instead of one dense sentence with an inline JSON blob.
+        // `el` is a plain DOM element. `schemaAndDefaults` is {schema, defaults}, or
+        // null/undefined to clear the hint.
+        function render(el, schemaAndDefaults) {
+            if (!el) return;
+            if (!schemaAndDefaults) {
+                el.innerHTML = "";
+                return;
+            }
+            var fields = describeFields(schemaAndDefaults.schema);
+            var html = "";
+            if (fields.length) {
+                html += '<div class="small text-muted mb-1">Allowed fields:</div><ul class="small text-muted mb-2 ps-3">';
+                fields.forEach(function (field) {
+                    html += "<li><code>" + escapeHtml(field.name) + "</code> (" + escapeHtml(field.descriptor) + ")</li>";
+                });
+                html += "</ul>";
+            } else {
+                html += '<div class="small text-muted mb-2">This target accepts an empty JSON object.</div>';
+            }
+            html += '<div class="small text-muted">Provider defaults:</div><pre class="small mb-0">' +
+                escapeHtml(JSON.stringify(schemaAndDefaults.defaults || {}, null, 2)) + "</pre>";
+            el.innerHTML = html;
+        }
+
+        window.AISTDastParamsHint = {describeFields: describeFields, render: render};
+    })();
+</script>

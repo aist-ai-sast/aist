@@ -38,6 +38,8 @@ content processed by scan workloads.
 
 ## Public and private records
 
+![AIST public threat register](../assets/threat-register.svg)
+
 Public documentation should state stable security properties, trust boundaries,
 and durable limitations that help administrators deploy and use AIST safely. It
 must not publish an unpatched exploit path or work-in-progress remediation.

@@ -14,6 +14,7 @@
             <div class="col-sm-9">
                 {{ field }}
                 {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% if field.name == "dast_binding" %}<div id="dast-start-params-help"></div>{% endif %}
                 {% for error in field.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
             </div>
         </div>
@@ -27,3 +28,119 @@
         <button type="submit" class="btn btn-primary">Queue DAST pipeline</button>
     </div>
 </form>
+
+{% include "aist/_dast_target_params_hint_js.html" %}
+<script>
+    (function () {
+        "use strict";
+        if (window.__AIST_DAST_FORM_BOOTED__) return;
+        window.__AIST_DAST_FORM_BOOTED__ = true;
+
+        function main() {
+            var form = document.getElementById("dast-pipeline-run-form");
+            if (!form) return;
+
+            var selProject = form.querySelector('select[name="project"]');
+            var selBinding = form.querySelector('select[name="dast_binding"]');
+            var selVersion = form.querySelector('select[name="trigger_project_version"]');
+            var paramsHelp = document.getElementById("dast-start-params-help");
+            if (!selProject || !selBinding || !selVersion) return;
+
+            // Capture the full server-rendered option list once; filtering rebuilds each
+            // select from this snapshot instead of hiding options in place, since
+            // bootstrap-select does not reliably reflect in-place option/attribute changes
+            // (see the same destroy-and-rebuild approach in _pipeline_run_js.html).
+            function snapshotOptions(select) {
+                return Array.prototype.map.call(select.querySelectorAll("option"), function (opt) {
+                    return {
+                        value: opt.value,
+                        label: opt.textContent,
+                        projectId: opt.getAttribute("data-project") || "",
+                        meta: opt.getAttribute("data-meta"),
+                    };
+                });
+            }
+
+            var allBindingOptions = snapshotOptions(selBinding);
+            var allVersionOptions = snapshotOptions(selVersion);
+
+            function hasSelectpicker() {
+                return !!(window.jQuery && window.jQuery.fn && window.jQuery.fn.selectpicker);
+            }
+
+            function isSelectpickerApplied(el) {
+                if (!hasSelectpicker()) return false;
+                var $ = window.jQuery;
+                return !!($(el).data("selectpicker")) || $(el).parent().hasClass("bootstrap-select");
+            }
+
+            function rebuildSelect(select, options, projectId, selectedValue) {
+                var usingPlugin = isSelectpickerApplied(select);
+                var $ = window.jQuery;
+                var filtered = options.filter(function (opt) {
+                    return !opt.value || !projectId || opt.projectId === String(projectId);
+                });
+
+                if (usingPlugin) {
+                    try { $(select).selectpicker("destroy"); } catch (e) { /* not yet initialized */ }
+                }
+
+                select.innerHTML = "";
+                filtered.forEach(function (opt) {
+                    var el = new Option(opt.label, opt.value);
+                    if (opt.meta) el.setAttribute("data-meta", opt.meta);
+                    select.add(el);
+                });
+                select.disabled = !projectId || filtered.length <= 1;
+                if (selectedValue && filtered.some(function (o) { return o.value === selectedValue; })) {
+                    select.value = selectedValue;
+                } else if (projectId && filtered.length > 1) {
+                    select.value = filtered[1].value;
+                } else {
+                    select.value = "";
+                }
+
+                if (usingPlugin) {
+                    $(select).selectpicker();
+                    $(select).selectpicker("render").selectpicker("refresh");
+                }
+            }
+
+            function renderParamsHint() {
+                var opt = selBinding.options[selBinding.selectedIndex];
+                var raw = opt ? opt.getAttribute("data-meta") : null;
+                var meta = null;
+                if (raw) {
+                    try { meta = JSON.parse(raw); } catch (e) { meta = null; }
+                }
+                window.AISTDastParamsHint.render(paramsHelp, meta);
+            }
+
+            function onBindingChange() {
+                renderParamsHint();
+            }
+
+            function onProjectChange() {
+                var projectId = selProject.value;
+                rebuildSelect(selBinding, allBindingOptions, projectId, null);
+                rebuildSelect(selVersion, allVersionOptions, projectId, null);
+                onBindingChange();
+            }
+
+            selProject.addEventListener("change", onProjectChange);
+            selBinding.addEventListener("change", onBindingChange);
+            if (hasSelectpicker()) {
+                window.jQuery(selProject).on("changed.bs.select", onProjectChange);
+                window.jQuery(selBinding).on("changed.bs.select", onBindingChange);
+            }
+
+            onProjectChange();
+        }
+
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", main);
+        } else {
+            main();
+        }
+    })();
+</script>

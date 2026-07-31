@@ -5,9 +5,11 @@ import json
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
+from dojo.models import Product
 
 from aist.integrations.dast_config import DastTargetSnapshot
 from aist.models import (
+    AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectVersion,
     DastIntegrationState,
@@ -99,6 +101,51 @@ class DastStartViewTests(AISTApiBase):
         self.assertEqual(first.status_code, 302)
         self.assertEqual(second.status_code, 302)
         self.assertEqual(PipelineLaunchRequest.objects.count(), 1)
+
+    def test_dast_form_options_are_human_readable_and_project_scoped(self):
+        response = self.client.get(reverse("aist:start_pipeline"), {"execution_type": "DAST"})
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        # Human-readable label (target display name + repo key), not the model's
+        # default __str__ ("DAST binding[<project_id>:<target_id>]") that gave the
+        # operator no way to tell bindings apart across projects.
+        self.assertIn("start-api API", content)
+        self.assertNotIn(f"DAST binding[{self.project.pk}:{self.target.pk}]", content)
+        # Each option carries a data-project attribute so the page's cascading JS
+        # can filter the binding/version lists down to the selected project.
+        self.assertIn(f'data-project="{self.project.pk}"', content)
+
+    def test_dast_launch_rejects_binding_from_a_different_project(self):
+        second_product = Product.objects.create(
+            name="Second product, same team",
+            description="desc",
+            prod_type=self.prod_type,
+            sla_configuration_id=self.sla.id,
+        )
+        other_binding_project = AISTProject.objects.create(
+            product=second_product,
+            supported_languages=["python"],
+            compilable=False,
+            profile={},
+        )
+        other_binding = DastProjectBinding.objects.create(
+            project=other_binding_project,
+            target=self.target,
+            source_repo_key="start-api",
+            enabled=True,
+            autonomous_enabled=True,
+            parameter_snapshot={"depth": "light"},
+        )
+
+        response = self.client.post(
+            reverse("aist:start_pipeline"),
+            self._payload(dast_binding=other_binding.pk),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "must belong to the selected project")
+        self.assertFalse(PipelineLaunchRequest.objects.exists())
 
     def test_dast_launch_rejects_file_source_disabled_binding_and_actions(self):
         file_version = AISTProjectVersion.objects.create(

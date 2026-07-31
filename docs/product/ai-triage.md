@@ -16,11 +16,12 @@ findings after post-processing, applies the saved filter for the execution
 backend, and excludes findings that already have an analyzer-produced AI
 verdict.
 
-The execution backend is resolved independently: a per-launch override takes
-priority over the project profile. AIST supports an n8n webhook and a local
-Claude bridge. The selection trigger, backend override, and filter snapshot are
-recorded with the run, so a later project-profile change does not rewrite a
-completed run.
+The execution backend is resolved independently of the selection trigger: a
+per-launch override takes priority over the project profile. AIST supports two
+backends — an **n8n webhook** and a **local Claude bridge** — and either
+selection trigger can use either backend. The selection trigger, backend
+override, and filter snapshot are recorded with the run, so a later
+project-profile change does not rewrite a completed run.
 
 ## Receive and retain a verdict
 

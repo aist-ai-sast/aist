@@ -610,24 +610,22 @@ class Command(BaseCommand):
             ]
             for organization in organizations
         }
+        # Matches the real DAST target contract: every currently wired provider target
+        # (dast/targets/*/target.yaml in the DAST repo) publishes this exact single-field
+        # schema and the same "light" default -- there is no real per-target variation to
+        # demonstrate here, so the demo schema mirrors reality rather than inventing one.
         parameter_schema = {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "scan_profile": {
+                "depth": {
                     "type": "string",
-                    "title": "Scan profile",
-                    "enum": ["quick", "full"],
-                },
-                "max_depth": {
-                    "type": "integer",
-                    "title": "Maximum crawl depth",
-                    "minimum": 1,
-                    "maximum": 10,
+                    "title": "Scan depth",
+                    "enum": ["light", "deep"],
                 },
             },
-            "required": ["scan_profile", "max_depth"],
+            "required": ["depth"],
         }
         for organization_index, organization in enumerate(organizations, start=1):
             organization_key = organization.name.lower().replace(" ", "-")
@@ -668,8 +666,8 @@ class Command(BaseCommand):
             targets: list[DastTarget] = []
             for target_index, (target_key, display_name, defaults) in enumerate(
                 (
-                    ("browser", "Customer web application", {"scan_profile": "full", "max_depth": 6}),
-                    ("api", "Public API surface", {"scan_profile": "quick", "max_depth": 3}),
+                    ("browser", "Customer web application", {"depth": "light"}),
+                    ("api", "Public API surface", {"depth": "light"}),
                 ),
                 start=1,
             ):

@@ -17,3 +17,14 @@ element of its diagram. Never turn documentation into a change report,
 test-evidence dump, source-symbol inventory, drafting note, or public
 vulnerability record. If no durable reader knowledge changed, leave reader
 documentation unchanged.
+
+A pass that touches, removes, or replaces any diagram is not finished until
+the SKILL.md diagram-diff (for an edited SVG) or section-coverage check (for a
+new one) and the orphan-asset scan have run. "Concise" is a rule about prose,
+not about how many icons or labeled relationships a diagram carries — do not
+thin out a diagram's content to make a page shorter.
+
+If a diagram needs a color legend to be readable, add icons instead of the
+legend — search `docs/assets/*.svg` for an existing `ico-*` symbol for the
+same concept before drawing a new one, so the same idea looks the same across
+every diagram.

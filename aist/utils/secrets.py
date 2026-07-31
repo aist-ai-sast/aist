@@ -110,6 +110,8 @@ def mask_sensitive_text(text: str) -> str:
 # and non-secret metadata from OrgIntegrationVPNSecretSerializer.
 # "can_create_write_token" — a boolean capability hint on /me/ (AISTMeSerializer),
 # not a token or any part of one.
+# "source_repo_key" — a DastProjectBinding's plain repository slug (DastProjectBindingSerializer),
+# not a credential; matches only because it contains the substring "key".
 _NON_SENSITIVE_KEYS: frozenset[str] = frozenset(
     {
         "key",
@@ -123,6 +125,7 @@ _NON_SENSITIVE_KEYS: frozenset[str] = frozenset(
         "tls_key_type",
         "has_client_key",
         "can_create_write_token",
+        "source_repo_key",
     },
 )
 

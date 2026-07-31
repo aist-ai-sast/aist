@@ -681,6 +681,7 @@
         }
     </style>
 
+    {% include "aist/_dast_target_params_hint_js.html" %}
     <script>
         (function () {
             // ---------------------------
@@ -842,22 +843,13 @@
                 return label;
             }
 
-            function describeTargetParameters(binding) {
-                if (!binding || !binding.target) return "";
-                var schema = binding.target.parameter_schema || {};
-                var properties = schema.properties || {};
-                var required = Array.isArray(schema.required) ? schema.required : [];
-                var fields = Object.keys(properties).map(function (name) {
-                    var definition = properties[name] || {};
-                    var type = definition.type || (definition.enum ? "enum" : "value");
-                    var suffix = required.indexOf(name) >= 0 ? ", required" : ", optional";
-                    if (Array.isArray(definition.enum)) suffix += ", one of: " + definition.enum.join(", ");
-                    return name + " (" + type + suffix + ")";
-                });
-                var parts = [];
-                parts.push(fields.length ? "Allowed fields: " + fields.join("; ") + "." : "This target accepts an empty JSON object.");
-                parts.push("Provider defaults: " + JSON.stringify(binding.target.provider_defaults || {}));
-                return parts.join(" ");
+            // Shared with the /aist/start/ DAST form via _dast_target_params_hint_js.html
+            // so the "schema -> human hint" rendering exists in exactly one place.
+            function renderTargetParametersHelp($el, binding) {
+                var schemaAndDefaults = (binding && binding.target)
+                    ? {schema: binding.target.parameter_schema, defaults: binding.target.provider_defaults}
+                    : null;
+                window.AISTDastParamsHint.render($el.get(0), schemaAndDefaults);
             }
 
             function loadProjectDastInputs(projectId) {
@@ -904,6 +896,14 @@
                 });
                 $version.prop("disabled", inputs.versions.length === 0);
                 if (selectedVersionId) $version.val(String(selectedVersionId));
+
+                // bootstrap-select renders a separate shadow dropdown from the <select>'s options
+                // at init time; without an explicit refresh it keeps showing whatever was there
+                // when it was first initialized (see base.html's global `$('select').selectpicker()`).
+                ensureSelectPicker($binding);
+                ensureSelectPicker($version);
+                refreshLaunchConfigSelectpicker($binding);
+                refreshLaunchConfigSelectpicker($version);
             }
 
             function setScheduleBindingSelect(inputs, selectedValue) {
@@ -1674,6 +1674,8 @@
                 $("#lc-edit-dast-fields").toggle(cfg.execution_type === "DAST");
                 if (cfg.execution_type === "DAST") {
                     $("#lc-edit-dast-binding, #lc-edit-trigger-version").prop("disabled", true).empty();
+                    refreshLaunchConfigSelectpicker($("#lc-edit-dast-binding"));
+                    refreshLaunchConfigSelectpicker($("#lc-edit-trigger-version"));
                     $("#lc-edit-dast-params-help").text("Loading target schema and Git versions...");
                     loadProjectDastInputs(projectId).then(function (inputs) {
                         setDastSelectOptions(
@@ -1686,7 +1688,7 @@
                         var binding = inputs.bindings.find(function (item) {
                             return String(item.id) === String(cfg.dast_binding);
                         });
-                        $("#lc-edit-dast-params-help").text(describeTargetParameters(binding));
+                        renderTargetParametersHelp($("#lc-edit-dast-params-help"), binding);
                     }).catch(function (error) {
                         $("#lc-edit-dast-params-help").text(String(error));
                     });
@@ -1699,7 +1701,7 @@
                 var binding = inputs.bindings.find(function (item) {
                     return String(item.id) === String($("#lc-edit-dast-binding").val());
                 });
-                $("#lc-edit-dast-params-help").text(describeTargetParameters(binding));
+                renderTargetParametersHelp($("#lc-edit-dast-params-help"), binding);
             });
 
             function findLaunchConfigAction(configId, actionId) {
@@ -1997,13 +1999,14 @@
                 var $version = $("#dast-preset-trigger");
                 $binding.prop("disabled", true).empty().append('<option value="">Loading...</option>');
                 $version.prop("disabled", true).empty().append('<option value="">Loading...</option>');
-                $("#dast-preset-params-help").text("");
+                refreshLaunchConfigSelectpicker($binding);
+                refreshLaunchConfigSelectpicker($version);
+                $("#dast-preset-params-help").empty();
                 loadProjectDastInputs(projectId).then(function (inputs) {
-                    setDastSelectOptions($binding, $version, inputs, null, null);
-                    if (inputs.bindings.length) {
-                        $binding.val(String(inputs.bindings[0].id)).trigger("change");
-                    }
-                    if (inputs.versions.length) $version.val(String(inputs.versions[0].id));
+                    var firstBindingId = inputs.bindings.length ? String(inputs.bindings[0].id) : null;
+                    var firstVersionId = inputs.versions.length ? String(inputs.versions[0].id) : null;
+                    setDastSelectOptions($binding, $version, inputs, firstBindingId, firstVersionId);
+                    if (firstBindingId) $binding.trigger("change");
                 }).catch(function (error) {
                     $("#dast-preset-error").text(String(error)).show();
                 });
@@ -2019,7 +2022,7 @@
                 var selected = inputs.bindings.find(function (binding) {
                     return String(binding.id) === String($("#dast-preset-binding").val());
                 });
-                $("#dast-preset-params-help").text(describeTargetParameters(selected));
+                renderTargetParametersHelp($("#dast-preset-params-help"), selected);
                 if (selected) {
                     $("#dast-preset-params").val(JSON.stringify(selected.target.provider_defaults || {}, null, 2));
                 }

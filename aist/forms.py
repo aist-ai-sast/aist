@@ -276,6 +276,31 @@ class AISTPipelineRunForm(_AISTPipelineArgsBaseForm):
         return self.get_params_payload(project=proj)
 
 
+class ProjectScopedSelect(forms.Select):
+
+    """
+    Select widget that stamps data-project (and optional data-meta JSON) attributes onto
+    each <option>, so client-side JS can filter options to the chosen project and render a
+    per-option hint without a second round trip to the server.
+    """
+
+    def __init__(self, *args, option_project_ids=None, option_meta=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._option_project_ids = option_project_ids or {}
+        self._option_meta = option_meta or {}
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex=subindex, attrs=attrs)
+        key = str(value)
+        project_id = self._option_project_ids.get(key)
+        if project_id is not None:
+            option["attrs"]["data-project"] = str(project_id)
+        meta = self._option_meta.get(key)
+        if meta is not None:
+            option["attrs"]["data-meta"] = json.dumps(meta)
+        return option
+
+
 class DastPipelineRunForm(forms.Form):
 
     """Validate an ephemeral DAST launch without creating a saved preset."""
@@ -289,11 +314,13 @@ class DastPipelineRunForm(forms.Form):
         queryset=DastProjectBinding.objects.none(),
         label="DAST target binding",
         required=True,
+        help_text="Only bindings for the selected project are usable; pick a project first.",
     )
     trigger_project_version = forms.ModelChoiceField(
         queryset=AISTProjectVersion.objects.none(),
         label="Git source version",
         required=True,
+        help_text="Only Git versions for the selected project are usable; pick a project first.",
     )
     parameters = forms.JSONField(
         label="Target parameters",
@@ -309,14 +336,34 @@ class DastPipelineRunForm(forms.Form):
         self.fields["project"].queryset = projects
         self.fields["project"].widget.attrs.update({"class": "form-select"})
         project_ids = projects.values_list("pk", flat=True)
-        self.fields["dast_binding"].queryset = (
+
+        bindings_qs = (
             DastProjectBinding.objects
             .filter(project_id__in=project_ids, enabled=True)
             .select_related("project__product", "target")
             .order_by("project__product__name", "target__display_name")
         )
-        self.fields["dast_binding"].widget.attrs.update({"class": "form-select"})
-        self.fields["trigger_project_version"].queryset = (
+        bindings = list(bindings_qs)
+        self.fields["dast_binding"].label_from_instance = lambda b: (
+            f"{b.project.product.name} · {b.target.display_name or b.target.provider_id} — {b.source_repo_key}"
+        )
+        # The widget must be swapped in before `.queryset` is assigned: the queryset
+        # property setter is what pushes rendered choices onto `field.widget`, and it
+        # only reaches whichever widget instance is current at that moment.
+        self.fields["dast_binding"].widget = ProjectScopedSelect(
+            attrs={"class": "form-select"},
+            option_project_ids={str(b.pk): b.project_id for b in bindings},
+            option_meta={
+                str(b.pk): {
+                    "schema": b.target.parameter_schema or {},
+                    "defaults": b.target.provider_defaults or {},
+                }
+                for b in bindings
+            },
+        )
+        self.fields["dast_binding"].queryset = bindings_qs
+
+        versions_qs = (
             AISTProjectVersion.objects
             .filter(
                 project_id__in=project_ids,
@@ -325,7 +372,15 @@ class DastPipelineRunForm(forms.Form):
             .select_related("project__product")
             .order_by("project__product__name", "-updated")
         )
-        self.fields["trigger_project_version"].widget.attrs.update({"class": "form-select"})
+        versions = list(versions_qs)
+        self.fields["trigger_project_version"].label_from_instance = lambda v: (
+            f"{v.project.product.name} · {v.version} ({v.get_version_type_display()})"
+        )
+        self.fields["trigger_project_version"].widget = ProjectScopedSelect(
+            attrs={"class": "form-select"},
+            option_project_ids={str(v.pk): v.project_id for v in versions},
+        )
+        self.fields["trigger_project_version"].queryset = versions_qs
         self.arguments: PipelineArguments | None = None
 
     def clean(self):

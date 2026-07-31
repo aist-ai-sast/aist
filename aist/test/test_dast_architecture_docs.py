@@ -136,6 +136,17 @@ class DocumentationQualityTests(SimpleTestCase):
                 violations.append(str(svg.relative_to(PROJECT_ROOT)))
         self.assertEqual(violations, [])
 
+    def test_reader_diagrams_are_referenced_from_documentation(self):
+        reader_text = "\n".join(
+            document.read_text(encoding="utf-8") for document in READER_DOCUMENTS
+        )
+        orphaned = [
+            str(svg.relative_to(PROJECT_ROOT))
+            for svg in sorted((PROJECT_ROOT / "docs/assets").glob("*.svg"))
+            if svg.name not in reader_text
+        ]
+        self.assertEqual(orphaned, [])
+
     def test_dast_is_one_standalone_provider_in_the_common_catalog(self):
         catalog_path = PROJECT_ROOT / "sast-combinator/sast-pipeline/pipeline/config/analyzers.yaml"
         analyzers = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))["analyzers"]

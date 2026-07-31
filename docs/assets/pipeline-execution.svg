@@ -1,97 +1,157 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="670" viewBox="0 0 1500 670" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="700" viewBox="0 0 1500 700" role="img" aria-labelledby="title desc">
   <title id="title">AIST pipeline execution lifecycle</title>
-  <desc id="desc">Every interactive, configured, scheduled, or webhook start creates a durable launch request. Admission acquires capacity and creates an admitted pipeline with a durable publish intent. A worker accepts one generic task, moves the pipeline to executing, selects SAST or DAST, imports results, and prepares findings for review.</desc>
+  <desc id="desc">Every interactive, configured, scheduled, or webhook start creates a durable launch request. Admission acquires capacity and creates an admitted pipeline with a durable publish intent, delivered through a retryable broker. A worker accepts one generic task, moves the pipeline to executing, selects SAST or DAST, imports results — or imports a manually uploaded report that skips analyzer execution — and prepares findings for human or AI-assisted review.</desc>
   <defs>
     <marker id="arrow" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0 0L9 4L0 8Z" fill="#596a78"/></marker>
-    <style>text{font-family:Arial,sans-serif;fill:#17212b}.title{font-size:26px;font-weight:700}.zone-title{font-size:15px;font-weight:700;fill:#52616b}.head{font-size:17px;font-weight:700;text-anchor:middle}.body{font-size:13px;fill:#52616b;text-anchor:middle}.foot{font-size:13px;fill:#52616b}.zone{fill:#f7f9fb;stroke:#d4dce3;stroke-width:1.5}.box{stroke:#52616b;stroke-width:1.7}.flow{fill:none;stroke:#596a78;stroke-width:2.2;marker-end:url(#arrow)}.join{fill:none;stroke:#7d69aa;stroke-width:1.8;stroke-dasharray:7 5;marker-end:url(#arrow)}</style>
+    <style>
+      text{font-family:Arial,sans-serif;fill:#17212b}
+      .title{font-size:26px;font-weight:700}
+      .zone-title{font-size:15px;font-weight:700;fill:#52616b}
+      .head{font-size:17px;font-weight:700;text-anchor:middle}
+      .body{font-size:13px;fill:#52616b;text-anchor:middle}
+      .foot{font-size:13px;fill:#52616b}
+      .zone{fill:#f7f9fb;stroke:#d4dce3;stroke-width:1.5}
+      .box{stroke:#52616b;stroke-width:1.7}
+      .flow{fill:none;stroke:#596a78;stroke-width:2.2;marker-end:url(#arrow)}
+      .join{fill:none;stroke:#7d69aa;stroke-width:1.8;stroke-dasharray:7 5;marker-end:url(#arrow)}
+      .badge{font-size:12px;font-weight:700;fill:#fff;text-anchor:middle}
+      .edge{font-size:11.5px;fill:#52616b}
+      .chip{fill:#ffffff;fill-opacity:.9;stroke:#d4dce3;stroke-width:1}
+    </style>
+    <symbol id="ico-bolt" viewBox="0 0 24 24"><path d="M13 2L5 14h6l-1 8 9-13h-6V2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="ico-clipboard" viewBox="0 0 24 24"><path d="M8 5H5v16h14V5h-3M9 3h6v4H9V3zM8 12h8M8 16h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="ico-filter" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 4h18l-7 8v6l-4 2v-8z"/></symbol>
+    <symbol id="ico-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="ico-send" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></symbol>
+    <symbol id="ico-queue" viewBox="0 0 24 24"><rect x="2" y="4" width="15" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="2" y="10" width="15" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="2" y="16" width="15" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 5v14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="ico-play" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/><path fill="currentColor" stroke="none" d="M10 8l6 4-6 4z"/></symbol>
+    <symbol id="ico-refresh" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></symbol>
+    <symbol id="ico-bug" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 9V7a3 3 0 1 1 6 0v2M8 9h8a4 4 0 0 1 4 4v3a6 6 0 0 1-12 0v-3a4 4 0 0 1 4-4zM3 13h4M17 13h4M5.5 8l2 1.8M18.5 8l-2 1.8M5.5 19l2-1.8M18.5 19l-2-1.8"/></symbol>
+    <symbol id="ico-radar" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 12l6-6" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></symbol>
+    <symbol id="ico-download" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>
+    <symbol id="ico-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 16l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="ico-check-circle" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM7.5 12l3 3 6-6.5"/></symbol>
+    <symbol id="ico-eye" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="ico-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 15v6h16v-6" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
   </defs>
-  <rect width="1500" height="670" fill="#ffffff"/>
+  <rect width="1500" height="700" fill="#ffffff"/>
   <text x="45" y="45" class="title">Pipeline execution</text>
-  <text x="45" y="72" class="foot">Durable admission is separate from worker execution; PostgreSQL remains authoritative across broker retries.</text>
+  <text x="45" y="70" class="foot">Durable admission is separate from worker execution; PostgreSQL remains authoritative across broker retries.</text>
 
-  <rect x="35" y="100" width="1430" height="205" rx="16" class="zone"/>
-  <text x="58" y="128" class="zone-title">DURABLE ADMISSION</text>
+  <rect x="35" y="112" width="1430" height="205" rx="16" class="zone"/>
+  <text x="58" y="140" class="zone-title">DURABLE ADMISSION</text>
 
-  <rect x="65" y="160" width="175" height="92" rx="12" class="box" fill="#edf5ff"/>
-  <text x="152" y="191" class="head">Start</text>
-  <text x="152" y="216" class="body">direct · saved · schedule</text>
-  <text x="152" y="236" class="body">verified SCM event</text>
+  <rect class="box" x="65" y="172" width="175" height="92" rx="12" fill="#eef2f6" stroke="#667681"/>
+  <circle cx="62" cy="172" r="11" fill="#667681"/><text class="badge" x="62" y="176">1</text>
+  <text class="head" x="152" y="203">Start</text>
+  <text class="body" x="152" y="228">direct · saved · schedule</text>
+  <text class="body" x="152" y="248">verified SCM event</text>
+  <circle cx="243" cy="172" r="11" class="chip"/><g color="#667681"><use href="#ico-bolt" x="235" y="164" width="16" height="16"/></g>
 
-  <rect x="285" y="160" width="185" height="92" rx="12" class="box" fill="#fff8e8"/>
-  <text x="377" y="191" class="head">Launch request</text>
-  <text x="377" y="216" class="body">secret-free frozen intent</text>
-  <text x="377" y="236" class="body">waiting and retry state</text>
+  <rect class="box" x="285" y="172" width="185" height="92" rx="12" fill="#edf5ff" stroke="#315f9c"/>
+  <circle cx="282" cy="172" r="11" fill="#315f9c"/><text class="badge" x="282" y="176">2</text>
+  <text class="head" x="377" y="203">Launch request</text>
+  <text class="body" x="377" y="228">secret-free frozen intent</text>
+  <text class="body" x="377" y="248">waiting and retry state</text>
+  <circle cx="473" cy="172" r="11" class="chip"/><g color="#315f9c"><use href="#ico-clipboard" x="465" y="164" width="16" height="16"/></g>
 
-  <rect x="515" y="150" width="205" height="112" rx="12" class="box" fill="#fff8e8"/>
-  <text x="617" y="182" class="head">Admission</text>
-  <text x="617" y="207" class="body">authority · readiness</text>
-  <text x="617" y="227" class="body">capacity lease · plan</text>
-  <text x="617" y="247" class="body">coalesce duplicates</text>
+  <rect class="box" x="515" y="162" width="205" height="112" rx="12" fill="#edf5ff" stroke="#315f9c"/>
+  <circle cx="512" cy="162" r="11" fill="#315f9c"/><text class="badge" x="512" y="166">3</text>
+  <text class="head" x="617" y="194">Admission</text>
+  <text class="body" x="617" y="219">authority · readiness</text>
+  <text class="body" x="617" y="239">capacity lease · plan</text>
+  <text class="body" x="617" y="259">coalesce duplicates</text>
+  <circle cx="723" cy="162" r="11" class="chip"/><g color="#315f9c"><use href="#ico-filter" x="715" y="154" width="16" height="16"/></g>
 
-  <rect x="765" y="150" width="205" height="112" rx="12" class="box" fill="#f4efff" stroke="#7d69aa"/>
-  <text x="867" y="182" class="head">Admitted pipeline</text>
-  <text x="867" y="207" class="body">capacity already held</text>
-  <text x="867" y="227" class="body">not started yet</text>
-  <text x="867" y="247" class="body">durable run history</text>
+  <rect class="box" x="765" y="162" width="205" height="112" rx="12" fill="#f4efff" stroke="#7d69aa"/>
+  <circle cx="762" cy="162" r="11" fill="#7d69aa"/><text class="badge" x="762" y="166">4</text>
+  <text class="head" x="867" y="194">Admitted pipeline</text>
+  <text class="body" x="867" y="219">capacity already held</text>
+  <text class="body" x="867" y="239">not started yet</text>
+  <text class="body" x="867" y="259">durable run history</text>
+  <circle cx="973" cy="162" r="11" class="chip"/><g color="#7d69aa"><use href="#ico-database" x="965" y="154" width="16" height="16"/></g>
 
-  <rect x="1015" y="160" width="190" height="92" rx="12" class="box" fill="#eaf8f1" stroke="#4d9874"/>
-  <text x="1110" y="191" class="head">Publish intent</text>
-  <text x="1110" y="216" class="body">recoverable outbox</text>
-  <text x="1110" y="236" class="body">pipeline identity only</text>
+  <rect class="box" x="1015" y="172" width="190" height="92" rx="12" fill="#edf5ff" stroke="#315f9c"/>
+  <circle cx="1012" cy="172" r="11" fill="#315f9c"/><text class="badge" x="1012" y="176">5</text>
+  <text class="head" x="1110" y="203">Publish intent</text>
+  <text class="body" x="1110" y="228">recoverable outbox</text>
+  <text class="body" x="1110" y="248">pipeline identity only</text>
+  <circle cx="1208" cy="172" r="11" class="chip"/><g color="#315f9c"><use href="#ico-send" x="1200" y="164" width="16" height="16"/></g>
 
-  <rect x="1250" y="160" width="175" height="92" rx="12" class="box" fill="#f4efff" stroke="#7d69aa"/>
-  <text x="1337" y="191" class="head">Broker delivery</text>
-  <text x="1337" y="216" class="body">generic worker task</text>
-  <text x="1337" y="236" class="body">safe to republish</text>
+  <rect class="box" x="1250" y="172" width="175" height="92" rx="12" fill="#eef2f6" stroke="#667681"/>
+  <circle cx="1247" cy="172" r="11" fill="#667681"/><text class="badge" x="1247" y="176">6</text>
+  <text class="head" x="1337" y="203">Broker delivery</text>
+  <text class="body" x="1337" y="228">generic worker task</text>
+  <text class="body" x="1337" y="248">safe to republish</text>
+  <circle cx="1428" cy="172" r="11" class="chip"/><g color="#667681"><use href="#ico-queue" x="1420" y="164" width="16" height="16"/></g>
 
-  <path d="M240 206H285M470 206H515M720 206H765M970 206H1015M1205 206H1250" class="flow"/>
+  <path d="M240 218H285M470 218H515M720 218H765M970 218H1015M1205 218H1250" class="flow"/>
 
-  <rect x="35" y="330" width="1430" height="285" rx="16" class="zone"/>
-  <text x="58" y="358" class="zone-title">EXECUTE AND PREPARE RESULTS</text>
+  <rect x="35" y="342" width="1430" height="285" rx="16" class="zone"/>
+  <text x="58" y="370" class="zone-title">EXECUTE AND PREPARE RESULTS</text>
 
-  <rect x="65" y="405" width="180" height="92" rx="12" class="box" fill="#f4efff" stroke="#7d69aa"/>
-  <text x="155" y="436" class="head">Worker accepts</text>
-  <text x="155" y="461" class="body">matching delivery once</text>
-  <text x="155" y="481" class="body">pipeline → Executing</text>
+  <!-- Zone 2 deliberately reads right → left, so the drop from "Broker delivery" lands
+       straight down instead of crossing the whole canvas. -->
+  <path class="flow" d="M1337 264V417"/>
 
-  <rect x="290" y="405" width="190" height="92" rx="12" class="box" fill="#f4efff" stroke="#7d69aa"/>
-  <text x="385" y="436" class="head">Runtime registry</text>
-  <text x="385" y="461" class="body">reload frozen state</text>
-  <text x="385" y="481" class="body">select execution path</text>
+  <rect class="box" x="1250" y="417" width="175" height="92" rx="12" fill="#eef2f6" stroke="#667681"/>
+  <circle cx="1247" cy="417" r="11" fill="#667681"/><text class="badge" x="1247" y="421">7</text>
+  <text class="head" x="1337" y="448">Worker accepts</text>
+  <text class="body" x="1337" y="473">matching delivery once</text>
+  <text class="body" x="1337" y="493">pipeline → Executing</text>
+  <circle cx="1428" cy="417" r="11" class="chip"/><g color="#667681"><use href="#ico-play" x="1420" y="409" width="16" height="16"/></g>
 
-  <rect x="525" y="370" width="175" height="82" rx="12" class="box" fill="#fff8e8" stroke="#9e751d"/>
-  <text x="612" y="402" class="head">SAST</text>
-  <text x="612" y="427" class="body">workspace · analyzers</text>
-  <rect x="525" y="485" width="175" height="82" rx="12" class="box" fill="#eaf3f7" stroke="#3f7d92"/>
-  <text x="612" y="517" class="head">DAST</text>
-  <text x="612" y="542" class="body">connector · gateway</text>
+  <rect class="box" x="1015" y="417" width="190" height="92" rx="12" fill="#eef2f6" stroke="#667681"/>
+  <circle cx="1012" cy="417" r="11" fill="#667681"/><text class="badge" x="1012" y="421">8</text>
+  <text class="head" x="1110" y="448">Runtime registry</text>
+  <text class="body" x="1110" y="473">reload frozen state</text>
+  <text class="body" x="1110" y="493">select execution path</text>
+  <circle cx="1208" cy="417" r="11" class="chip"/><g color="#667681"><use href="#ico-refresh" x="1200" y="409" width="16" height="16"/></g>
 
-  <rect x="760" y="405" width="175" height="92" rx="12" class="box" fill="#eaf8f1" stroke="#4d9874"/>
-  <text x="847" y="436" class="head">Import</text>
-  <text x="847" y="461" class="body">validate result</text>
-  <text x="847" y="481" class="body">tests · findings</text>
+  <rect class="box" x="765" y="382" width="205" height="82" rx="12" fill="#fff8e8" stroke="#9e751d"/>
+  <text class="head" x="867" y="414">SAST</text>
+  <text class="body" x="867" y="439">workspace · analyzers</text>
+  <circle cx="973" cy="382" r="11" class="chip"/><g color="#9e751d"><use href="#ico-bug" x="965" y="374" width="16" height="16"/></g>
+  <rect class="box" x="765" y="497" width="205" height="82" rx="12" fill="#eaf3f7" stroke="#3f7d92"/>
+  <text class="head" x="867" y="529">DAST</text>
+  <text class="body" x="867" y="554">connector · gateway</text>
+  <circle cx="973" cy="497" r="11" class="chip"/><g color="#3f7d92"><use href="#ico-radar" x="965" y="489" width="16" height="16"/></g>
 
-  <rect x="980" y="405" width="190" height="92" rx="12" class="box" fill="#eaf8f1" stroke="#4d9874"/>
-  <text x="1075" y="436" class="head">Post-process</text>
-  <text x="1075" y="461" class="body">deduplicate · enrich</text>
-  <text x="1075" y="481" class="body">identify regressions</text>
+  <rect class="box" x="515" y="417" width="205" height="92" rx="12" fill="#eaf8f1" stroke="#4d9874"/>
+  <circle cx="512" cy="417" r="11" fill="#4d9874"/><text class="badge" x="512" y="421">9</text>
+  <text class="head" x="617" y="448">Import</text>
+  <text class="body" x="617" y="473">validate result</text>
+  <text class="body" x="617" y="493">tests · findings</text>
+  <circle cx="723" cy="417" r="11" class="chip"/><g color="#4d9874"><use href="#ico-download" x="715" y="409" width="16" height="16"/></g>
 
-  <rect x="1215" y="370" width="205" height="82" rx="12" class="box" fill="#eaf8f1" stroke="#4d9874"/>
-  <text x="1317" y="402" class="head">Finished</text>
-  <text x="1317" y="427" class="body">no findings or warning</text>
-  <rect x="1215" y="485" width="205" height="82" rx="12" class="box" fill="#f4efff" stroke="#7d69aa"/>
-  <text x="1317" y="517" class="head">Review</text>
-  <text x="1317" y="542" class="body">human or AI-assisted</text>
+  <rect class="box" x="285" y="417" width="185" height="92" rx="12" fill="#eaf8f1" stroke="#4d9874"/>
+  <circle cx="282" cy="417" r="12.5" fill="#4d9874"/><text class="badge" x="282" y="421">10</text>
+  <text class="head" x="377" y="448">Post-process</text>
+  <text class="body" x="377" y="473">deduplicate · enrich</text>
+  <text class="body" x="377" y="493">identify regressions</text>
+  <circle cx="473" cy="417" r="11" class="chip"/><g color="#4d9874"><use href="#ico-layers" x="465" y="409" width="16" height="16"/></g>
 
-  <path d="M1337 252V292H155V405" class="flow"/>
-  <path d="M245 451H290M480 435C500 425 505 411 525 411M480 467C500 480 505 526 525 526" class="flow"/>
-  <path d="M700 411C730 411 730 435 760 435M700 526C730 526 730 467 760 467" class="flow"/>
-  <path d="M935 451H980M1170 435C1190 425 1195 411 1215 411M1170 467C1190 480 1195 526 1215 526" class="flow"/>
+  <rect class="box" x="65" y="382" width="175" height="82" rx="12" fill="#eaf8f1" stroke="#4d9874"/>
+  <text class="head" x="152" y="414">Finished</text>
+  <text class="body" x="152" y="439">no findings or warning</text>
+  <circle cx="243" cy="382" r="11" class="chip"/><g color="#4d9874"><use href="#ico-check-circle" x="235" y="374" width="16" height="16"/></g>
+  <rect class="box" x="65" y="497" width="175" height="82" rx="12" fill="#f4efff" stroke="#7d69aa"/>
+  <text class="head" x="152" y="529">Review</text>
+  <text class="body" x="152" y="554">human or AI-assisted</text>
+  <circle cx="243" cy="497" r="11" class="chip"/><g color="#7d69aa"><use href="#ico-eye" x="235" y="489" width="16" height="16"/></g>
 
-  <rect x="760" y="535" width="175" height="55" rx="11" class="box" fill="#edf5ff"/>
-  <text x="847" y="558" class="head" style="font-size:15px">Manual import</text>
-  <text x="847" y="578" class="body">validated report</text>
-  <path d="M935 562H950V497H900" class="join"/>
+  <path d="M1250 463H1205" class="flow"/>
+  <path d="M1015 447C995 437 990 423 970 423M1015 479C995 489 990 538 970 538" class="flow"/>
+  <path d="M765 423C745 423 740 447 720 447M765 538C745 538 740 479 720 479" class="flow"/>
+  <path d="M515 463H470" class="flow"/>
+  <path d="M285 447C265 437 260 423 240 423M285 479C265 489 260 538 240 538" class="flow"/>
 
-  <text x="45" y="646" class="foot">A failure after pipeline creation ends in Finished with warnings; the pipeline, logs, and available outcome remain in history.</text>
+  <rect x="515" y="547" width="205" height="55" rx="11" class="box" fill="#edf5ff" stroke="#5c83b6" stroke-dasharray="6 4"/>
+  <text class="head" x="617" y="569" style="font-size:15px">Manual import</text>
+  <text class="body" x="617" y="589">validated report, no analyzer run</text>
+  <circle cx="723" cy="547" r="11" class="chip"/><g color="#5c83b6"><use href="#ico-upload" x="715" y="539" width="16" height="16"/></g>
+  <path d="M617 547V509" class="join"/>
+  <text class="edge" x="632" y="530">skips analyzer execution</text>
+
+  <text x="45" y="668" class="foot">A failure after pipeline creation ends in Finished with warnings; the pipeline, logs, and available outcome remain in history.</text>
 </svg>
