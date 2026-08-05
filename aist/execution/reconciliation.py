@@ -69,6 +69,7 @@ class LaunchReconciliationStats:
     released_leases: int = 0
     reconciled_dead_tasks: int = 0
     resumed_executions: int = 0
+    handed_off_executions: int = 0
     renewed_live_leases: int = 0
     skipped_live_owners: int = 0
 
@@ -306,6 +307,12 @@ def _reconcile_locked_request(
         stats.released_leases += released
         if released:
             _audit_request(request, code=TERMINAL_LEASE_RELEASED, detail=_TERMINAL_RELEASE_DETAIL)
+        return
+    if pipeline.run_task_id is None:
+        # Execution finished and handed off to the async dedup stage: a ready task is
+        # expected here, not dead. Capacity stays held until the pipeline is terminal.
+        stats.handed_off_executions += 1
+        stats.renewed_live_leases += _renew_leases(leases, now=now, policy=lease_policy)
         return
     if observed_task_state not in states.READY_STATES:
         # The execution is still alive, so its capacity is legitimately held. Renew the lease

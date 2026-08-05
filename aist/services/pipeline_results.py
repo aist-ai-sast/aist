@@ -51,10 +51,12 @@ def schedule_pipeline_postprocessing(pipeline_id: str, log_level: str, *, dedup_
     with transaction.atomic():
         pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
         pipeline.watch_dedup_task_id = task_id
+        # Execution is over; the rest is async work owned by watch_dedup_task_id.
+        pipeline.run_task_id = None
         set_pipeline_status(
             pipeline,
             AISTStatus.WAITING_DEDUPLICATION_TO_FINISH,
-            update_fields_extra=["watch_dedup_task_id"],
+            update_fields_extra=["watch_dedup_task_id", "run_task_id"],
         )
         if dedup_task is not None:
             publish = partial(

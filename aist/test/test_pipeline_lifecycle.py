@@ -11,6 +11,7 @@ from aist.models import (
     PipelineLaunchRequest,
 )
 from aist.services.pipeline_lifecycle import PipelineTransitionError, transition_pipeline_status
+from aist.services.pipeline_results import schedule_pipeline_postprocessing
 from aist.test.test_api import AISTApiBase
 
 
@@ -39,6 +40,17 @@ class PipelineLifecycleTests(AISTApiBase):
         terminal = transition_pipeline_status(pipeline.pk, AISTStatus.FINISHED)
         self.assertIsNotNone(terminal.pipeline.finished_at)
         self.assertIsNone(terminal.pipeline.run_task_id)
+
+    def test_deduplication_handoff_releases_execution_task_ownership(self):
+        """After the execution task hands findings to dedup, it no longer owns the pipeline."""
+        pipeline = self._pipeline(status=AISTStatus.UPLOADING_RESULTS)
+
+        schedule_pipeline_postprocessing(pipeline.pk, "INFO")
+
+        pipeline.refresh_from_db()
+        self.assertEqual(pipeline.status, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
+        self.assertIsNone(pipeline.run_task_id)
+        self.assertTrue(pipeline.watch_dedup_task_id)
 
     def test_terminal_pipeline_cannot_return_to_active_state_and_releases_lease(self):
         pipeline = self._pipeline(status=AISTStatus.EXECUTING)

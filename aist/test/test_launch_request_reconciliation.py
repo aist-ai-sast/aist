@@ -306,6 +306,33 @@ class LaunchRequestReconciliationTests(AISTApiBase):
             task_id=pipeline.run_task_id,
         )
 
+    def test_pipeline_waiting_for_deduplication_is_not_reconciled_as_dead(self):
+        """
+        A successful execution task is READY while the pipeline waits for dedup/enrich.
+        That hand-off must not be reconciled as a dead execution, or the pipeline is forced
+        terminal and the enrichment stage (path/severity exclusion) is cut short.
+        """
+        now = timezone.now()
+        request = self._request(state=PipelineLaunchRequestState.DISPATCHED)
+        pipeline = self._attach_outbox_pipeline(request, status=AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
+        pipeline.run_task_id = None
+        pipeline.watch_dedup_task_id = "watch-task-id"
+        pipeline.save(update_fields=["run_task_id", "watch_dedup_task_id", "updated"])
+        lease = self._lease(request, pipeline=pipeline, now=now)
+
+        stats = reconcile_launch_requests(now=now, task_state_getter=lambda _task_id: "SUCCESS")
+
+        request.refresh_from_db()
+        pipeline.refresh_from_db()
+        lease.refresh_from_db()
+        self.assertEqual(pipeline.status, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
+        self.assertNotIn("execution_reconciliation", pipeline.launch_data or {})
+        self.assertNotEqual(request.failure_code, DEAD_EXECUTION_TASK)
+        self.assertIsNone(lease.released_at)
+        self.assertEqual(lease.heartbeat_at, now)
+        self.assertEqual(stats["handed_off_executions"], 1)
+        self.assertEqual(stats["reconciled_dead_tasks"], 0)
+
     def test_terminal_pipeline_leftover_lease_is_released_idempotently(self):
         now = timezone.now()
         request = self._request(state=PipelineLaunchRequestState.DISPATCHED)
