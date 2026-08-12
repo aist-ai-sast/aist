@@ -319,8 +319,11 @@ class DastPipelineRunForm(forms.Form):
     trigger_project_version = forms.ModelChoiceField(
         queryset=AISTProjectVersion.objects.none(),
         label="Git source version",
-        required=True,
-        help_text="Only Git versions for the selected project are usable; pick a project first.",
+        required=False,
+        help_text=(
+            "Only Git versions for the selected project are usable; pick a project first. "
+            "Required unless the selected binding's target declares no repository requirement."
+        ),
     )
     parameters = forms.JSONField(
         label="Target parameters",
@@ -357,6 +360,7 @@ class DastPipelineRunForm(forms.Form):
                 str(b.pk): {
                     "schema": b.target.parameter_schema or {},
                     "defaults": b.target.provider_defaults or {},
+                    "requiresSourceRepository": b.requires_source_repository,
                 }
                 for b in bindings
             },
@@ -388,13 +392,25 @@ class DastPipelineRunForm(forms.Form):
         project = cleaned.get("project")
         binding = cleaned.get("dast_binding")
         trigger = cleaned.get("trigger_project_version")
-        if not project or not binding or not trigger:
+        if not project or not binding:
             return cleaned
         if binding.project_id != project.pk:
             self.add_error("dast_binding", "The DAST binding must belong to the selected project.")
             return cleaned
-        if trigger.project_id != project.pk:
-            self.add_error("trigger_project_version", "The Git source version must belong to the selected project.")
+        if binding.requires_source_repository:
+            if not trigger:
+                self.add_error("trigger_project_version", "This field is required.")
+                return cleaned
+            if trigger.project_id != project.pk:
+                self.add_error(
+                    "trigger_project_version", "The Git source version must belong to the selected project.",
+                )
+                return cleaned
+        elif trigger:
+            self.add_error(
+                "trigger_project_version",
+                "This target has no repository requirement; clear the Git source version.",
+            )
             return cleaned
         try:
             arguments = PipelineArguments.for_dast(

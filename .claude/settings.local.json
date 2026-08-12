@@ -2,6 +2,8 @@
   "permissions": {
     "allow": [
       "Bash",
+      "Edit",
+      "Write",
       "WebFetch(domain:github.com)",
       "WebSearch",
       "WebFetch(domain:docs.n8n.io)",

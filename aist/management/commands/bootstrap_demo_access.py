@@ -46,6 +46,7 @@ from aist.models import (
     PipelineLaunchRequestState,
     VersionType,
 )
+from aist.integrations.dast_config import DastLaunchRequirement
 
 
 @dataclass(frozen=True, slots=True)
@@ -664,10 +665,20 @@ class Command(BaseCommand):
 
             repository_keys = project_slugs_by_organization[organization.name]
             targets: list[DastTarget] = []
-            for target_index, (target_key, display_name, defaults) in enumerate(
+            for target_index, (target_key, display_name, defaults, launch_requirements, target_repository_keys) in enumerate(
                 (
-                    ("browser", "Customer web application", {"depth": "light"}),
-                    ("api", "Public API surface", {"depth": "light"}),
+                    (
+                        "browser", "Customer web application", {"depth": "light"},
+                        [DastLaunchRequirement.REPOSITORY_TRIGGER.value], repository_keys,
+                    ),
+                    (
+                        "api", "Public API surface", {"depth": "light"},
+                        [DastLaunchRequirement.REPOSITORY_TRIGGER.value], repository_keys,
+                    ),
+                    # Sourceless scenario: a perimeter/blackbox scan of a fixed public
+                    # surface, not tied to any commit — mirrors the shipped
+                    # `dast/targets/perimeter/target.yaml` provider target.
+                    ("perimeter", "Public perimeter surface", {"depth": "light"}, [], []),
                 ),
                 start=1,
             ):
@@ -681,7 +692,8 @@ class Command(BaseCommand):
                         "schema_digest": f"sha256:demo-{organization_index}-{target_key}-schema-v1",
                         "parameter_schema": parameter_schema,
                         "provider_defaults": defaults,
-                        "repository_keys": repository_keys,
+                        "repository_keys": target_repository_keys,
+                        "launch_requirements": launch_requirements,
                         "autonomous_ready": True,
                         "is_available": True,
                         "last_seen_at": now - timedelta(minutes=target_index),
@@ -924,11 +936,13 @@ class Command(BaseCommand):
         launch_configs: list[AISTProjectLaunchConfig] = []
         for target_index, target in enumerate(targets, start=1):
             parameters = dict(target.provider_defaults)
+            requires_source = target.get_snapshot().launch_requirements.requires_repository()
+            binding_trigger_version = trigger_version if requires_source else None
             binding, _ = DastProjectBinding.objects.update_or_create(
                 project=project,
                 target=target,
                 defaults={
-                    "source_repo_key": spec.slug,
+                    "source_repo_key": spec.slug if requires_source else "",
                     "enabled": True,
                     "parameter_snapshot": parameters,
                     "autonomous_enabled": True,
@@ -944,7 +958,7 @@ class Command(BaseCommand):
                 defaults={
                     "execution_type": PipelineExecutionType.DAST,
                     "dast_binding": binding,
-                    "trigger_project_version": trigger_version,
+                    "trigger_project_version": binding_trigger_version,
                     "description": f"Demo DAST preset for {spec.slug} on {target.display_name}",
                     "params": parameters,
                     "is_default": False,
@@ -952,7 +966,7 @@ class Command(BaseCommand):
             )
             launch_config.execution_type = PipelineExecutionType.DAST
             launch_config.dast_binding = binding
-            launch_config.trigger_project_version = trigger_version
+            launch_config.trigger_project_version = binding_trigger_version
             launch_config.description = f"Demo DAST preset for {spec.slug} on {target.display_name}"
             launch_config.params = parameters
             launch_config.is_default = False
@@ -1109,7 +1123,7 @@ class Command(BaseCommand):
         *,
         pipeline_id: str,
         project: AISTProject,
-        project_version: AISTProjectVersion,
+        project_version: AISTProjectVersion | None,
         trigger_project_version: AISTProjectVersion | None,
         execution_type: str,
         started,
@@ -1155,6 +1169,9 @@ class Command(BaseCommand):
             binding = bindings[binding_index]
             launch_config = launch_configs[binding_index]
             project_version = release_version if sequence % 2 == 0 else main_version
+            requires_source = binding.requires_source_repository
+            pipeline_version = project_version if requires_source else None
+            pipeline_trigger_version = project_version if requires_source else None
             started = now - timedelta(days=day_offset, minutes=sequence * 11)
             finished_at = started + timedelta(minutes=18 + sequence * 4)
             finding_id, dojo_test = self._ensure_dast_demo_finding(
@@ -1174,8 +1191,8 @@ class Command(BaseCommand):
             pipeline = self._upsert_demo_pipeline(
                 pipeline_id=f"demo-{spec.slug}-dast-run-{sequence:02d}",
                 project=project,
-                project_version=project_version,
-                trigger_project_version=project_version,
+                project_version=pipeline_version,
+                trigger_project_version=pipeline_trigger_version,
                 execution_type=PipelineExecutionType.DAST,
                 started=started,
                 finished_at=finished_at,
@@ -1210,7 +1227,7 @@ class Command(BaseCommand):
                     "execution_type": PipelineExecutionType.DAST,
                     "project": project,
                     "dast_binding": binding,
-                    "trigger_project_version": project_version,
+                    "trigger_project_version": pipeline_trigger_version,
                     "schedule": launch_config.get_launch_schedule(),
                     "launch_config": launch_config,
                     "origin": PipelineLaunchOrigin.SCHEDULE,

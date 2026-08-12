@@ -38,15 +38,19 @@ worker task, and result-import boundary. Cancellation follows the selected
 driver: SAST stops locally, while DAST persists stop intent until the external
 provider reaches a terminal state.
 
-SAST has an effective source version at admission. DAST records the selected
-Git branch or hash as its trigger, then sets the effective version only after a
-validated provider result maps the bound repository identity to an actual
-commit. Manual DAST imports use the same result-to-binding mapping.
+SAST has an effective source version at admission. A DAST binding whose target
+requires a repository trigger records the selected Git branch or hash as its
+trigger, then sets the effective version only after a validated provider
+result maps the bound repository identity to an actual commit; a manual import
+against that binding uses the same result-to-binding mapping. A DAST binding
+whose target declares no repository requirement (a fixed-surface or
+declared-stand scenario) carries no trigger and never acquires an effective
+version — its pipeline and findings have no associated project version.
 
 The manual start page can build either a one-off SAST or DAST launch. A one-off
-DAST launch selects an enabled binding, an explicit Git source version, and
-target-schema-valid parameters in memory. It does not create or alter a saved
-launch configuration.
+DAST launch selects an enabled binding and target-schema-valid parameters in
+memory, plus an explicit Git source version when the binding's target requires
+one. It does not create or alter a saved launch configuration.
 
 ## Import a result
 

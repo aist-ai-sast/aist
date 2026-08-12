@@ -405,7 +405,7 @@ class SastPipelineArguments:
 class DastPipelineArguments:
     project: AISTProject
     binding: DastProjectBinding
-    trigger_project_version: AISTProjectVersion
+    trigger_project_version: AISTProjectVersion | None
     parameters: dict
     capability: dict
 
@@ -415,7 +415,7 @@ class DastPipelineArguments:
         *,
         project: AISTProject,
         binding: DastProjectBinding,
-        trigger_project_version: AISTProjectVersion,
+        trigger_project_version: AISTProjectVersion | None,
         raw_parameters: dict,
     ) -> DastPipelineArguments:
         if binding.project_id != project.pk:
@@ -424,11 +424,18 @@ class DastPipelineArguments:
         if not binding.enabled:
             msg = "DAST binding must be enabled."
             raise ValueError(msg)
-        if trigger_project_version.project_id != project.pk:
-            msg = "DAST trigger version must belong to the launch project."
-            raise ValueError(msg)
-        if trigger_project_version.version_type not in {VersionType.GIT_BRANCH, VersionType.GIT_HASH}:
-            msg = "DAST trigger version must be a Git branch or Git hash."
+        if binding.requires_source_repository:
+            if trigger_project_version is None:
+                msg = "DAST trigger version is required for this target."
+                raise ValueError(msg)
+            if trigger_project_version.project_id != project.pk:
+                msg = "DAST trigger version must belong to the launch project."
+                raise ValueError(msg)
+            if trigger_project_version.version_type not in {VersionType.GIT_BRANCH, VersionType.GIT_HASH}:
+                msg = "DAST trigger version must be a Git branch or Git hash."
+                raise ValueError(msg)
+        elif trigger_project_version is not None:
+            msg = "DAST trigger version is not accepted for a target with no repository requirement."
             raise ValueError(msg)
         target = binding.target.get_snapshot()
         parameters = DastBindingParameters.from_snapshot(
@@ -528,7 +535,7 @@ class PipelineArguments:
         *,
         project: AISTProject,
         binding: DastProjectBinding,
-        trigger_project_version: AISTProjectVersion,
+        trigger_project_version: AISTProjectVersion | None,
         raw_params: dict,
     ) -> PipelineArguments:
         return cls(
@@ -545,8 +552,11 @@ class PipelineArguments:
     def from_launch_config(cls, config: AISTProjectLaunchConfig) -> PipelineArguments:
         if config.execution_type == PipelineExecutionType.SAST:
             return cls.for_sast(project=config.project, raw_params=dict(config.params or {}))
-        if config.dast_binding_id is None or config.trigger_project_version_id is None:
-            msg = "DAST launch config requires a binding and trigger version."
+        if config.dast_binding_id is None:
+            msg = "DAST launch config requires a binding."
+            raise ValueError(msg)
+        if config.dast_binding.requires_source_repository and config.trigger_project_version_id is None:
+            msg = "DAST launch config requires a trigger version for this target."
             raise ValueError(msg)
         return cls.for_dast(
             project=config.project,

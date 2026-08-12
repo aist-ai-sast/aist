@@ -73,6 +73,7 @@ class ReportImportSerializerTestCase(TestCase):
             parameter_schema={"type": "object", "additionalProperties": False},
             provider_defaults={},
             repository_keys=["backend"],
+            launch_requirements=["repository-trigger"],
             autonomous_ready=True,
             last_seen_at=timezone.now(),
         )

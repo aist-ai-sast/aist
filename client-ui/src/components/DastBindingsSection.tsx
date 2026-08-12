@@ -30,10 +30,14 @@ type BindingFormState = {
   parameters: Record<string, unknown>;
 };
 
+function requiresSourceRepository(target: DastTarget): boolean {
+  return target.launch_requirements.includes("repository-trigger");
+}
+
 function initialBindingForm(target: DastTarget): BindingFormState {
   return {
     targetId: target.id,
-    sourceRepoKey: target.repository_keys[0] ?? "",
+    sourceRepoKey: requiresSourceRepository(target) ? target.repository_keys[0] ?? "" : "",
     enabled: true,
     autonomousEnabled: false,
     parameters: structuredClone(target.provider_defaults),
@@ -203,12 +207,14 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
                     .map((target) => ({ value: String(target.id), label: target.display_name }))}
                 />
               )}
-              <SelectField
-                label="Source repository"
-                value={formState.sourceRepoKey}
-                onChange={(value) => setFormState({ ...formState, sourceRepoKey: value })}
-                options={selectedTarget.repository_keys.map((key) => ({ value: key, label: key }))}
-              />
+              {requiresSourceRepository(selectedTarget) && (
+                <SelectField
+                  label="Source repository"
+                  value={formState.sourceRepoKey}
+                  onChange={(value) => setFormState({ ...formState, sourceRepoKey: value })}
+                  options={selectedTarget.repository_keys.map((key) => ({ value: key, label: key }))}
+                />
+              )}
               <label className="flex items-center gap-2 text-xs text-slate-300">
                 <input
                   type="checkbox"
@@ -247,7 +253,10 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
                   </button>
                   <button
                     type="submit"
-                    disabled={upsertBinding.isPending || !formState.sourceRepoKey}
+                    disabled={
+                      upsertBinding.isPending ||
+                      (requiresSourceRepository(selectedTarget) && !formState.sourceRepoKey)
+                    }
                     className="rounded-lg bg-brand-500 px-3 py-2 text-xs font-medium text-white disabled:opacity-50"
                   >
                     {upsertBinding.isPending ? "Saving..." : "Save binding"}

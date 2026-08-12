@@ -57,10 +57,7 @@ class DastReportExpectations:
             if not isinstance(value, str) or not _IDENTITY_RE.fullmatch(value):
                 msg = f"Expected {name} is invalid."
                 raise _error(msg)
-        if not self.allowed_repository_keys or any(
-            not _REPOSITORY_KEY_RE.fullmatch(key)
-            for key in self.allowed_repository_keys
-        ):
+        if any(not _REPOSITORY_KEY_RE.fullmatch(key) for key in self.allowed_repository_keys):
             msg = "Allowed DAST repository keys are invalid."
             raise _error(msg)
 
@@ -144,7 +141,15 @@ def _source_commits(
     *,
     allowed_repository_keys: frozenset[str],
 ) -> tuple[tuple[str, str], ...]:
-    if not isinstance(value, dict) or not value:
+    if not isinstance(value, dict):
+        msg = "DAST source_commits must be an object."
+        raise _error(msg)
+    if not allowed_repository_keys:
+        if value:
+            msg = "DAST source_commits must be empty for a target with no repository requirement."
+            raise _error(msg)
+        return ()
+    if not value:
         msg = "DAST source_commits must be a non-empty object."
         raise _error(msg)
     normalized: list[tuple[str, str]] = []

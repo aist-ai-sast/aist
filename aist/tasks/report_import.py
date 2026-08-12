@@ -188,7 +188,7 @@ def _process_dast_report_import(
         maximum_result_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
         maximum_report_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
     )
-    if report.source_commit_for(binding.source_repo_key) is None:
+    if binding.requires_source_repository and report.source_commit_for(binding.source_repo_key) is None:
         msg = "DAST report does not contain the binding source repository."
         raise ValueError(msg)
     uploader = get_user_model().objects.filter(pk=uploader_id).first()

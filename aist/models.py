@@ -810,7 +810,8 @@ class DastTarget(models.Model):
     schema_digest = models.CharField(max_length=96)
     parameter_schema = models.JSONField(default=dict)
     provider_defaults = models.JSONField(default=dict)
-    repository_keys = models.JSONField(default=list)
+    repository_keys = models.JSONField(default=list, blank=True)
+    launch_requirements = models.JSONField(default=list, blank=True)
     autonomous_ready = models.BooleanField(default=False)
     is_available = models.BooleanField(default=True)
     last_seen_at = models.DateTimeField()
@@ -839,6 +840,7 @@ class DastTarget(models.Model):
             "parameter_schema": self.parameter_schema,
             "defaults": self.provider_defaults,
             "repository_keys": self.repository_keys,
+            "launch_requirements": self.launch_requirements,
             "autonomous_ready": self.autonomous_ready,
         })
 
@@ -873,7 +875,7 @@ class DastProjectBinding(models.Model):
         on_delete=models.PROTECT,
         related_name="project_bindings",
     )
-    source_repo_key = models.CharField(max_length=128)
+    source_repo_key = models.CharField(max_length=128, blank=True, default="")
     enabled = models.BooleanField(default=True)
     parameter_snapshot = models.JSONField(default=dict, blank=True)
     autonomous_enabled = models.BooleanField(default=False)
@@ -898,6 +900,16 @@ class DastProjectBinding(models.Model):
             target=self.target.get_snapshot(),
         )
 
+    @property
+    def requires_source_repository(self) -> bool:
+        """Whether this binding's target scenario declares a REPOSITORY_TRIGGER requirement.
+
+        The single accessor every other DAST module asks instead of re-deriving the answer from
+        `repository_keys`/`source_repo_key` truthiness; see `aist/integrations/dast_config.py`'s
+        `DastLaunchRequirements`.
+        """
+        return self.target.get_snapshot().launch_requirements.requires_repository()
+
     def clean(self):
         super().clean()
         errors = {}
@@ -909,8 +921,11 @@ class DastProjectBinding(models.Model):
                 errors["target"] = "Binding target must belong to the active DAST integration."
             elif self.project_id and self.project.organization_id != integration.organization_id:
                 errors["target"] = "Binding project and DAST target must belong to the same organization."
-            if self.source_repo_key not in self.target.get_snapshot().repository_keys:
-                errors["source_repo_key"] = "Source repository key is not advertised by the DAST target."
+            if self.requires_source_repository:
+                if self.source_repo_key not in self.target.get_snapshot().repository_keys:
+                    errors["source_repo_key"] = "Source repository key is not advertised by the DAST target."
+            elif self.source_repo_key:
+                errors["source_repo_key"] = "Source repository key is not accepted by a target with no repository requirement."
             try:
                 self.get_parameters()
             except DastConfigError as exc:
@@ -1459,10 +1474,11 @@ class AISTPipeline(models.Model):
                         project_version__isnull=False,
                         trigger_project_version__isnull=True,
                     )
-                    | models.Q(
-                        execution_type=PipelineExecutionType.DAST,
-                        trigger_project_version__isnull=False,
-                    )
+                    # No nullness condition on trigger_project_version: whether a DAST run has one
+                    # depends on its binding's target requirement (dast_config.DastLaunchRequirements),
+                    # which this table cannot join against. That is checked earlier, with the binding
+                    # in scope, at PipelineLaunchRequest/AISTProjectLaunchConfig creation time.
+                    | models.Q(execution_type=PipelineExecutionType.DAST)
                     | models.Q(
                         execution_type=PipelineExecutionType.MANUAL_IMPORT,
                         trigger_project_version__isnull=True,
@@ -1487,9 +1503,6 @@ class AISTPipeline(models.Model):
                 errors["project_version"] = "SAST pipelines require an effective project version."
             if self.trigger_project_version_id:
                 errors["trigger_project_version"] = "SAST pipelines cannot have a DAST trigger version."
-        elif self.execution_type == PipelineExecutionType.DAST:
-            if not self.trigger_project_version_id:
-                errors["trigger_project_version"] = "DAST pipelines require a trigger project version."
         elif self.execution_type == PipelineExecutionType.MANUAL_IMPORT and self.trigger_project_version_id:
             errors["trigger_project_version"] = "Manual imports cannot have a DAST trigger version."
 
@@ -2043,10 +2056,12 @@ class PipelineLaunchRequest(models.Model):
                         dast_binding__isnull=True,
                         trigger_project_version__isnull=True,
                     )
+                    # Whether trigger_project_version must be set depends on the binding's target
+                    # requirement, which this constraint cannot join against; checked in clean()
+                    # instead, with the binding in scope.
                     | models.Q(
                         execution_type=PipelineExecutionType.DAST,
                         dast_binding__isnull=False,
-                        trigger_project_version__isnull=False,
                     )
                 ),
                 name="aist_launch_request_execution_target_valid",
@@ -2125,8 +2140,11 @@ class PipelineLaunchRequest(models.Model):
         elif self.execution_type == PipelineExecutionType.DAST:
             if not self.dast_binding_id:
                 errors["dast_binding"] = "DAST launch requests require a project binding."
-            if not self.trigger_project_version_id:
-                errors["trigger_project_version"] = "DAST launch requests require a Git trigger version."
+            elif self.dast_binding.requires_source_repository:
+                if not self.trigger_project_version_id:
+                    errors["trigger_project_version"] = "DAST launch requests require a Git trigger version."
+            elif self.trigger_project_version_id:
+                errors["trigger_project_version"] = "DAST launch request for a sourceless binding cannot select a trigger version."
 
         if errors:
             raise ValidationError(errors)
@@ -2238,10 +2256,12 @@ class AISTProjectLaunchConfig(models.Model):
                         dast_binding__isnull=True,
                         trigger_project_version__isnull=True,
                     )
+                    # Whether trigger_project_version must be set depends on the binding's target
+                    # requirement, which this constraint cannot join against; checked in clean()
+                    # instead, with the binding in scope.
                     | models.Q(
                         execution_type=PipelineExecutionType.DAST,
                         dast_binding__isnull=False,
-                        trigger_project_version__isnull=False,
                     )
                 ),
                 name="aist_launch_config_execution_target_valid",
@@ -2283,12 +2303,15 @@ class AISTProjectLaunchConfig(models.Model):
                 errors["dast_binding"] = "DAST binding must belong to the launch config project."
             elif not self.dast_binding.enabled:
                 errors["dast_binding"] = "DAST binding must be enabled."
-            if not self.trigger_project_version_id:
-                errors["trigger_project_version"] = "DAST launch config requires a Git trigger version."
-            elif self.trigger_project_version.project_id != self.project_id:
-                errors["trigger_project_version"] = "DAST trigger version must belong to the launch config project."
-            elif self.trigger_project_version.version_type not in {VersionType.GIT_BRANCH, VersionType.GIT_HASH}:
-                errors["trigger_project_version"] = "DAST trigger version must be a Git branch or Git hash."
+            if self.dast_binding_id and self.dast_binding.requires_source_repository:
+                if not self.trigger_project_version_id:
+                    errors["trigger_project_version"] = "DAST launch config requires a Git trigger version."
+                elif self.trigger_project_version.project_id != self.project_id:
+                    errors["trigger_project_version"] = "DAST trigger version must belong to the launch config project."
+                elif self.trigger_project_version.version_type not in {VersionType.GIT_BRANCH, VersionType.GIT_HASH}:
+                    errors["trigger_project_version"] = "DAST trigger version must be a Git branch or Git hash."
+            elif self.dast_binding_id and self.trigger_project_version_id:
+                errors["trigger_project_version"] = "DAST launch config for a sourceless binding cannot select a trigger version."
             if "analyzers" in self.params:
                 errors["params"] = "DAST launch config cannot contain SAST analyzers."
         else:

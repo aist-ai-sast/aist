@@ -46,6 +46,7 @@ def refresh_dast_targets(
                     "parameter_schema": wire_snapshot["parameter_schema"],
                     "provider_defaults": wire_snapshot["defaults"],
                     "repository_keys": list(snapshot.repository_keys),
+                    "launch_requirements": wire_snapshot["launch_requirements"],
                     "autonomous_ready": snapshot.autonomous_ready,
                     "is_available": True,
                     "last_seen_at": observed_at,

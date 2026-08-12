@@ -36,7 +36,10 @@ capability synchronization, and target-list endpoints under `/api/v2/aist/`.
 From the organization integration, select an available target and create a
 binding for the AIST project. Review:
 
-- the source-repository identity expected by the target;
+- the source-repository identity expected by the target, when it declares a
+  repository-trigger requirement; a target with no such requirement (a
+  fixed-surface or declared-stand scenario) is bound without one, and the
+  binding rejects a source identity if one is supplied;
 - the current capability revision and schema;
 - every required target parameter;
 - whether autonomous execution is allowed.
@@ -48,12 +51,14 @@ catalog and review the new snapshot instead of reusing stale defaults.
 ## Start once or create a launch configuration
 
 For a single run, open **Start pipeline**, select **DAST**, then choose the
-project, enabled binding, explicit Git source version, and target parameters.
-This path creates a durable request but does not save a preset.
+project, enabled binding, and target parameters, plus an explicit Git source
+version when the binding's target requires a repository trigger. This path
+creates a durable request but does not save a preset.
 
 For reuse or scheduling, create a DAST launch configuration in the launch
-dashboard. The preset stores its binding, Git trigger, and schema-validated
-parameters. Start it from the dashboard or enqueue it through the API:
+dashboard. The preset stores its binding and schema-validated parameters, and
+a Git trigger only when the binding's target requires one. Start it from the
+dashboard or enqueue it through the API:
 
 ```text
 POST projects/<project_id>/launch-configs/<config_id>/start/
@@ -109,10 +114,13 @@ In **Pipelines → Import**, select DAST, choose the enabled binding, upload the
 complete provider terminal result, and review the validation preview before
 confirming.
 
-AIST resolves the effective Git hash from the validated report entry matching
-the binding's repository identity; there is no separate revision field to
-override. Confirmation creates an import pipeline and repeats validation before
-findings are persisted.
+For a binding whose target requires a repository trigger, AIST resolves the
+effective Git hash from the validated report entry matching the binding's
+repository identity; there is no separate revision field to override, and a
+report with no matching entry is rejected. For a binding whose target has no
+repository requirement, the report must carry no repository identity and the
+import pipeline is created without a project version. Confirmation creates an
+import pipeline and repeats validation before findings are persisted.
 
 ## Rotate or disable access
 

@@ -164,7 +164,15 @@ class BootstrapDemoAccessCommandTests(TestCase):
             )
             self.assertEqual(dast_configs.count(), dast_bindings.count())
             self.assertFalse(dast_configs.filter(dast_binding__isnull=True).exists())
-            self.assertFalse(dast_configs.filter(trigger_project_version__isnull=True).exists())
+            # Exactly the bindings whose target has no repository requirement (the demo
+            # "perimeter" target) go without a trigger version; every other binding must have one.
+            for config in dast_configs:
+                self.assertEqual(
+                    config.trigger_project_version_id is None,
+                    not config.dast_binding.requires_source_repository,
+                )
+            self.assertTrue(dast_configs.filter(trigger_project_version__isnull=True).exists())
+            self.assertTrue(dast_configs.filter(trigger_project_version__isnull=False).exists())
 
             dast_pipelines = AISTPipeline.objects.filter(
                 project=project,
@@ -172,9 +180,16 @@ class BootstrapDemoAccessCommandTests(TestCase):
             )
             self.assertEqual(dast_pipelines.count(), 3)
             self.assertFalse(dast_pipelines.exclude(execution_type=PipelineExecutionType.DAST).exists())
-            self.assertFalse(dast_pipelines.filter(trigger_project_version__isnull=True).exists())
             self.assertTrue(all(pipeline.tests.exists() for pipeline in dast_pipelines))
             self.assertTrue(all(pipeline.launch_data.get("dast_binding_id") for pipeline in dast_pipelines))
+            for pipeline in dast_pipelines:
+                binding = DastProjectBinding.objects.get(pk=pipeline.launch_data["dast_binding_id"])
+                self.assertEqual(
+                    pipeline.trigger_project_version_id is None,
+                    not binding.requires_source_repository,
+                )
+            self.assertTrue(dast_pipelines.filter(trigger_project_version__isnull=True).exists())
+            self.assertTrue(dast_pipelines.filter(trigger_project_version__isnull=False).exists())
 
             manual_imports = AISTPipeline.objects.filter(
                 project=project,

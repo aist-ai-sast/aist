@@ -120,9 +120,14 @@ class PipelineImportAPITests(TestCase):
             contract_revision="2.0",
             capability_revision="sha256:import-capability",
             schema_digest="sha256:import-schema",
-            parameter_schema={"type": "object", "additionalProperties": False},
+            parameter_schema={
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": False,
+            },
             provider_defaults={},
             repository_keys=["backend"],
+            launch_requirements=["repository-trigger"],
             autonomous_ready=True,
             last_seen_at=timezone.now(),
         )

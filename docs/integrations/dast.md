@@ -22,9 +22,16 @@ selected on the DAST integration.
 2. Select an organization VPN when the gateway is on a private network.
 3. Validate gateway connectivity and credentials.
 4. Synchronize the provider's targets and capabilities.
-5. Bind an eligible target and source identity to one AIST project.
-6. Choose an explicit Git branch or commit and either create a reusable DAST
-   launch configuration or submit a one-off launch.
+5. Bind an eligible target to one AIST project. A target that declares a
+   repository-trigger requirement also needs a source identity for the
+   binding; a target with no such requirement (a fixed-surface or
+   declared-stand scenario) is bound without one, and the binding rejects a
+   source identity if one is supplied.
+6. For a target that requires a repository trigger, choose an explicit Git
+   branch or commit and either create a reusable DAST launch configuration or
+   submit a one-off launch. For a target with no repository requirement, the
+   launch configuration or one-off launch carries no trigger version at all —
+   there is nothing to choose.
 
 Only one DAST integration is active for an organization at a time; disabled
 records remain as history. The service token is write-only after import.
@@ -76,10 +83,14 @@ gateway. A user with project-operate permission selects an enabled binding,
 uploads the terminal result, reviews its validation preview, and confirms the
 import.
 
-AIST resolves the effective Git hash from the validated report entry whose
-repository identity matches the selected binding. It does not accept a separate
-client-supplied revision. Confirmation creates an import pipeline and applies
-the same result validation and finding lifecycle used by an autonomous result.
+For a binding whose target requires a repository trigger, AIST resolves the
+effective Git hash from the validated report entry whose repository identity
+matches the selected binding; it does not accept a separate client-supplied
+revision, and a report with no matching entry is rejected. For a binding whose
+target has no repository requirement, no repository identity is expected in
+the report and the import pipeline is created without a project version.
+Confirmation creates an import pipeline and applies the same result validation
+and finding lifecycle used by an autonomous result.
 
 ## Network and credentials
 

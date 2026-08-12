@@ -36,6 +36,7 @@ class DastTargetSerializer(serializers.ModelSerializer):
             "parameter_schema",
             "provider_defaults",
             "repository_keys",
+            "launch_requirements",
             "autonomous_ready",
             "is_available",
             "last_seen_at",

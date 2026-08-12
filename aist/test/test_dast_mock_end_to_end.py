@@ -106,6 +106,7 @@ class ContractFaithfulDastGateway:
                 },
                 "defaults": {"depth": "light"},
                 "repository_keys": ["backend"],
+                "launch_requirements": ["repository-trigger"],
                 "autonomous_ready": True,
             },
         )

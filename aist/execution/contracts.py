@@ -18,6 +18,7 @@ _ERR_COALESCE_KEY = "Execution plan coalesce key must not be empty."
 _ERR_EFFECTIVE_REQUIRED = "Preselected-version policy requires an effective project version."
 _ERR_RESULT_TRIGGER_REQUIRED = "Result-resolved version policy requires a trigger project version."
 _ERR_RESULT_VERSION = "Result-resolved version policy cannot preselect an effective version."
+_ERR_NO_VERSION_TRIGGER = "No-version policy cannot carry a trigger project version."
 _ERR_PULL_REQUEST = "Execution plan pull request id must be a positive integer."
 _ERR_METRIC_LABEL = "Execution metric label is invalid."
 _ERR_METRIC_OPERATIONS = "Execution metric operations are invalid."
@@ -52,6 +53,8 @@ class ExecutionMetricDescriptor:
 class EffectiveVersionPolicy(StrEnum):
     PRESELECT_EFFECTIVE_VERSION = "PRESELECT_EFFECTIVE_VERSION"
     RESOLVE_FROM_EXECUTION_RESULT = "RESOLVE_FROM_EXECUTION_RESULT"
+    #: Neither now nor later: a sourceless DAST run has no project-version concept at all.
+    NO_VERSION = "NO_VERSION"
 
 
 class LaunchSource(StrEnum):
@@ -150,5 +153,8 @@ class ExecutionPlan:
                 raise ExecutionPlanError(_ERR_EFFECTIVE_REQUIRED)
         elif self.effective_project_version_id is not None:
             raise ExecutionPlanError(_ERR_RESULT_VERSION)
-        elif self.trigger_project_version_id is None:
-            raise ExecutionPlanError(_ERR_RESULT_TRIGGER_REQUIRED)
+        elif self.effective_version_policy == EffectiveVersionPolicy.RESOLVE_FROM_EXECUTION_RESULT:
+            if self.trigger_project_version_id is None:
+                raise ExecutionPlanError(_ERR_RESULT_TRIGGER_REQUIRED)
+        elif self.trigger_project_version_id is not None:
+            raise ExecutionPlanError(_ERR_NO_VERSION_TRIGGER)

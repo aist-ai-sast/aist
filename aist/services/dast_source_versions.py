@@ -16,8 +16,13 @@ class DastSourceVersionError(ValueError):
 def resolve_dast_source_version(
     report: ValidatedDastReport,
     binding: DastProjectBinding,
-) -> AISTProjectVersion:
-    """Resolve one binding-selected actual commit without repository-name fallbacks."""
+) -> AISTProjectVersion | None:
+    """Resolve one binding-selected actual commit without repository-name fallbacks.
+
+    Returns None for a target with no repository requirement: such a report has no source
+    commit to resolve, by contract (`dast_report._source_commits` requires it be empty), and
+    there is no linked-repository requirement to check either.
+    """
     if not isinstance(report, ValidatedDastReport):
         msg = "DAST source resolution requires a validated report."
         raise DastSourceVersionError(msg)
@@ -37,6 +42,8 @@ def resolve_dast_source_version(
         if report.target_id != persisted_binding.target.provider_id:
             msg = "DAST report target does not match the source binding."
             raise DastSourceVersionError(msg)
+        if not persisted_binding.requires_source_repository:
+            return None
         if project.repository_id is None:
             msg = "The DAST source binding project has no linked repository."
             raise DastSourceVersionError(msg)

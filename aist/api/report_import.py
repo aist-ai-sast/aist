@@ -184,7 +184,7 @@ def _validated_manual_dast_report(uploaded_file, binding: DastProjectBinding):
         maximum_result_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
         maximum_report_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
     )
-    if report.source_commit_for(binding.source_repo_key) is None:
+    if binding.requires_source_repository and report.source_commit_for(binding.source_repo_key) is None:
         msg = "DAST report does not contain the binding source repository."
         raise DastReportValidationError(msg)
     return report

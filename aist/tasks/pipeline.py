@@ -132,10 +132,16 @@ def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
         if (
             binding is None
             or binding.project_id != pipeline.project_id
-            or pipeline.trigger_project_version_id is None
-            or pipeline.trigger_project_version.project_id != pipeline.project_id
             or binding.target.integration.organization_id != pipeline.project.organization_id
         ):
+            raise ValueError(_ERR_DAST_RUNTIME)
+        requires_repository = binding.requires_source_repository
+        if requires_repository and (
+            pipeline.trigger_project_version_id is None
+            or pipeline.trigger_project_version.project_id != pipeline.project_id
+        ):
+            raise ValueError(_ERR_DAST_RUNTIME)
+        if not requires_repository and pipeline.trigger_project_version_id is not None:
             raise ValueError(_ERR_DAST_RUNTIME)
         if not check_dast_binding_readiness(binding).ready:
             raise ValueError(_ERR_DAST_RUNTIME)
@@ -162,9 +168,13 @@ def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
             or capability.schema_digest != current_capability.schema_digest
         ):
             raise ValueError(_ERR_DAST_RUNTIME)
-        trigger = DastTrigger.from_project_version(
-            pipeline.trigger_project_version,
-            repository_key=binding.source_repo_key,
+        trigger = (
+            DastTrigger.from_project_version(
+                pipeline.trigger_project_version,
+                repository_key=binding.source_repo_key,
+            )
+            if requires_repository
+            else None
         )
         integration = binding.target.integration
         config = integration.get_dast_config()
@@ -191,7 +201,7 @@ def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
                 "correlation_id": pipeline.id,
                 "target_id": capability.provider_id,
                 "capability_revision": capability.capability_revision,
-                "trigger": trigger.to_wire(),
+                "trigger": trigger.to_wire() if trigger is not None else None,
                 "parameters": parameters.to_snapshot(),
             }),
             token=token,

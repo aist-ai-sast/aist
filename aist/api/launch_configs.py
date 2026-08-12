@@ -132,9 +132,14 @@ class LaunchConfigCreateRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError({"dast_binding_id": "DAST launch config requires an explicit binding."})
         if not binding.enabled:
             raise serializers.ValidationError({"dast_binding_id": "DAST binding must be enabled."})
-        if trigger is None:
+        if binding.requires_source_repository:
+            if trigger is None:
+                raise serializers.ValidationError({
+                    "trigger_project_version_id": "DAST launch config requires a Git trigger version.",
+                })
+        elif trigger is not None:
             raise serializers.ValidationError({
-                "trigger_project_version_id": "DAST launch config requires a Git trigger version.",
+                "trigger_project_version_id": "DAST launch config for a sourceless binding cannot select a trigger version.",
             })
         try:
             attrs["params"] = DastBindingParameters.from_snapshot(
@@ -203,9 +208,14 @@ class LaunchConfigUpdateRequestSerializer(serializers.ModelSerializer):
             })
         if not binding.enabled:
             raise serializers.ValidationError({"dast_binding_id": "DAST binding must be enabled."})
-        if trigger is None:
+        if binding.requires_source_repository:
+            if trigger is None:
+                raise serializers.ValidationError({
+                    "trigger_project_version_id": "DAST launch config requires a Git trigger version.",
+                })
+        elif trigger is not None:
             raise serializers.ValidationError({
-                "trigger_project_version_id": "DAST launch config requires a Git trigger version.",
+                "trigger_project_version_id": "DAST launch config for a sourceless binding cannot select a trigger version.",
             })
         try:
             attrs["params"] = DastBindingParameters.from_snapshot(

@@ -106,18 +106,33 @@
                 }
             }
 
-            function renderParamsHint() {
+            function selectedBindingMeta() {
                 var opt = selBinding.options[selBinding.selectedIndex];
                 var raw = opt ? opt.getAttribute("data-meta") : null;
-                var meta = null;
-                if (raw) {
-                    try { meta = JSON.parse(raw); } catch (e) { meta = null; }
+                if (!raw) return null;
+                try { return JSON.parse(raw); } catch (e) { return null; }
+            }
+
+            function toggleVersionField(meta) {
+                // Absent meta (no binding selected yet) defaults to required, the safer default.
+                var requiresSource = !meta || meta.requiresSourceRepository !== false;
+                var versionRow = selVersion.closest(".row");
+                if (versionRow) versionRow.style.display = requiresSource ? "" : "none";
+                if (!requiresSource) {
+                    selVersion.value = "";
+                    selVersion.disabled = true;
+                } else {
+                    selVersion.disabled = selVersion.options.length <= 1;
                 }
-                window.AISTDastParamsHint.render(paramsHelp, meta);
+                if (hasSelectpicker() && isSelectpickerApplied(selVersion)) {
+                    window.jQuery(selVersion).selectpicker("refresh");
+                }
             }
 
             function onBindingChange() {
-                renderParamsHint();
+                var meta = selectedBindingMeta();
+                window.AISTDastParamsHint.render(paramsHelp, meta);
+                toggleVersionField(meta);
             }
 
             function onProjectChange() {

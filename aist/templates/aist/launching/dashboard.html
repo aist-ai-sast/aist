@@ -843,6 +843,12 @@
                 return label;
             }
 
+            // Absent binding/target defaults to required, the safer default.
+            function bindingRequiresSourceRepository(binding) {
+                var launchRequirements = binding && binding.target ? binding.target.launch_requirements : null;
+                return !Array.isArray(launchRequirements) || launchRequirements.indexOf("repository-trigger") !== -1;
+            }
+
             // Shared with the /aist/start/ DAST form via _dast_target_params_hint_js.html
             // so the "schema -> human hint" rendering exists in exactly one place.
             function renderTargetParametersHelp($el, binding) {
@@ -1689,11 +1695,21 @@
                             return String(item.id) === String(cfg.dast_binding);
                         });
                         renderTargetParametersHelp($("#lc-edit-dast-params-help"), binding);
+                        toggleLcEditVersionField(binding);
                     }).catch(function (error) {
                         $("#lc-edit-dast-params-help").text(String(error));
                     });
                 }
                 editLaunchConfigModal.modal("show");
+            }
+
+            function toggleLcEditVersionField(binding) {
+                var requiresSource = bindingRequiresSourceRepository(binding);
+                var $version = $("#lc-edit-trigger-version");
+                var $row = $version.closest(".form-group");
+                $row.toggle(requiresSource);
+                if (!requiresSource) $version.val("");
+                refreshLaunchConfigSelectpicker($version);
             }
 
             $("#lc-edit-dast-binding").on("change", function () {
@@ -1702,6 +1718,7 @@
                     return String(item.id) === String($("#lc-edit-dast-binding").val());
                 });
                 renderTargetParametersHelp($("#lc-edit-dast-params-help"), binding);
+                toggleLcEditVersionField(binding);
             });
 
             function findLaunchConfigAction(configId, actionId) {
@@ -2016,6 +2033,15 @@
                 loadDastPresetInputs($(this).val());
             });
 
+            function toggleDastPresetVersionField(selected) {
+                var requiresSource = bindingRequiresSourceRepository(selected);
+                var $version = $("#dast-preset-trigger");
+                var $row = $version.closest(".form-group");
+                $row.toggle(requiresSource);
+                if (!requiresSource) $version.val("");
+                refreshLaunchConfigSelectpicker($version);
+            }
+
             $("#dast-preset-binding").on("change", function () {
                 var projectId = String($("#dast-preset-project").val() || "");
                 var inputs = cachedDastInputsByProject[projectId] || {bindings: []};
@@ -2023,6 +2049,7 @@
                     return String(binding.id) === String($("#dast-preset-binding").val());
                 });
                 renderTargetParametersHelp($("#dast-preset-params-help"), selected);
+                toggleDastPresetVersionField(selected);
                 if (selected) {
                     $("#dast-preset-params").val(JSON.stringify(selected.target.provider_defaults || {}, null, 2));
                 }
@@ -2032,9 +2059,15 @@
                 var projectId = String($("#dast-preset-project").val() || "");
                 var bindingId = String($("#dast-preset-binding").val() || "");
                 var triggerVersionId = String($("#dast-preset-trigger").val() || "");
+                var inputs = cachedDastInputsByProject[projectId] || {bindings: []};
+                var selectedBinding = inputs.bindings.find(function (binding) {
+                    return String(binding.id) === bindingId;
+                });
+                var requiresSource = bindingRequiresSourceRepository(selectedBinding);
                 var payload;
-                if (!projectId || !bindingId || !triggerVersionId) {
-                    $("#dast-preset-error").text("Project, DAST target binding, and Git source version are required.").show();
+                if (!projectId || !bindingId || (requiresSource && !triggerVersionId)) {
+                    $("#dast-preset-error").text("Project and DAST target binding are required"
+                        + (requiresSource ? ", along with a Git source version." : ".")).show();
                     return;
                 }
                 try {
@@ -2044,7 +2077,7 @@
                         description: "",
                         is_default: false,
                         dast_binding_id: Number(bindingId),
-                        trigger_project_version_id: Number(triggerVersionId),
+                        trigger_project_version_id: requiresSource ? Number(triggerVersionId) : null,
                         params: JSON.parse(String($("#dast-preset-params").val() || "{}"))
                     };
                 } catch (error) {
@@ -2153,12 +2186,18 @@
                 if (editingLaunchConfigType === "DAST") {
                     var bindingId = String($("#lc-edit-dast-binding").val() || "");
                     var triggerVersionId = String($("#lc-edit-trigger-version").val() || "");
-                    if (!bindingId || !triggerVersionId) {
-                        editLaunchConfigError.text("DAST target binding and Git source version are required.").show();
+                    var editInputs = cachedDastInputsByProject[String(editingLaunchProjectId)] || {bindings: []};
+                    var editSelectedBinding = editInputs.bindings.find(function (item) {
+                        return String(item.id) === bindingId;
+                    });
+                    var editRequiresSource = bindingRequiresSourceRepository(editSelectedBinding);
+                    if (!bindingId || (editRequiresSource && !triggerVersionId)) {
+                        editLaunchConfigError.text("DAST target binding is required"
+                            + (editRequiresSource ? ", along with a Git source version." : ".")).show();
                         return;
                     }
                     payload.dast_binding_id = Number(bindingId);
-                    payload.trigger_project_version_id = Number(triggerVersionId);
+                    payload.trigger_project_version_id = editRequiresSource ? Number(triggerVersionId) : null;
                 }
                 var url = URL_LAUNCH_CONFIG_DELETE_TPL
                     .replace("{project_id}", String(editingLaunchProjectId))

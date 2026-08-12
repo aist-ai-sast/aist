@@ -1081,6 +1081,7 @@ export type DastTarget = {
   parameter_schema: Record<string, unknown>;
   provider_defaults: Record<string, unknown>;
   repository_keys: string[];
+  launch_requirements: string[];
   autonomous_ready: boolean;
   is_available: boolean;
   last_seen_at: string;

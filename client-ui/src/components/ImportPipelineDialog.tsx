@@ -40,6 +40,8 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
     projectId ? Number(projectId) : undefined,
   );
   const enabledBindings = projectBindings.filter((binding) => binding.enabled);
+  const selectedBinding = enabledBindings.find((binding) => String(binding.id) === bindingId) ?? null;
+  const requiresSourceRepository = selectedBinding?.target.launch_requirements.includes("repository-trigger") ?? true;
   const validateMutation = useValidateImportPipeline();
   const importMutation = useImportPipeline();
   const statusQuery = usePipelineStatus(state === "progress" ? pipelineId : null);
@@ -117,7 +119,8 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
   }
 
   async function handleImport() {
-    if (!file || !projectId || !bindingId || !preview?.actual_source_commit) return;
+    if (!file || !projectId || !bindingId) return;
+    if (requiresSourceRepository && !preview?.actual_source_commit) return;
     try {
       const result = await importMutation.mutateAsync({
         file,
@@ -237,15 +240,23 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
               ))}
             </div>
 
-            <div className="flex flex-col gap-1 text-xs text-slate-400">
-              <span>Actual source commit</span>
-              <code className="break-all rounded-lg border border-night-500 bg-night-800 px-3 py-2 text-sm text-slate-100">
-                {preview.actual_source_commit || "—"}
-              </code>
-              <span className="text-[11px] text-slate-500">
-                Verified from the signed DAST result for the selected binding; it cannot be overridden.
-              </span>
-            </div>
+            {requiresSourceRepository ? (
+              <div className="flex flex-col gap-1 text-xs text-slate-400">
+                <span>Actual source commit</span>
+                <code className="break-all rounded-lg border border-night-500 bg-night-800 px-3 py-2 text-sm text-slate-100">
+                  {preview.actual_source_commit || "—"}
+                </code>
+                <span className="text-[11px] text-slate-500">
+                  Verified from the signed DAST result for the selected binding; it cannot be overridden.
+                </span>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1 text-xs text-slate-400">
+                <span className="text-[11px] text-slate-500">
+                  This target has no source repository requirement; the pipeline will not be linked to a project version.
+                </span>
+              </div>
+            )}
 
             <div className="flex justify-end gap-2">
               <button
@@ -257,7 +268,7 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
               </button>
               <button
                 type="button"
-                disabled={!preview.actual_source_commit || importMutation.isPending}
+                disabled={(requiresSourceRepository && !preview.actual_source_commit) || importMutation.isPending}
                 className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium text-night-900 transition disabled:cursor-not-allowed disabled:opacity-50 hover:bg-brand-500"
                 onClick={handleImport}
               >

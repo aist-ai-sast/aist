@@ -48,6 +48,7 @@ def _target(**overrides):
         },
         "defaults": {},
         "repository_keys": ["source"],
+        "launch_requirements": ["repository-trigger"],
         "autonomous_ready": True,
     }
     payload.update(overrides)

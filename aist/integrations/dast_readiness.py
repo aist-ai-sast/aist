@@ -152,7 +152,9 @@ def check_dast_binding_readiness(
                 DastReadinessCode.BINDING_PARAMETERS_INVALID,
                 "The saved target parameters no longer match the synchronized provider schema.",
             )
-        if binding.source_repo_key not in target_snapshot.repository_keys:
+        if target_snapshot.launch_requirements.requires_repository() and (
+            binding.source_repo_key not in target_snapshot.repository_keys
+        ):
             add(
                 DastReadinessCode.SOURCE_REPOSITORY_UNAVAILABLE,
                 "The selected source repository is not advertised by the DAST target.",
@@ -206,11 +208,14 @@ def check_dast_launch_readiness(arguments, *, now: datetime | None = None) -> Da
             issues.append(DastReadinessIssue(code=code, detail=detail))
 
     trigger = payload.trigger_project_version
-    if trigger.project_id != arguments.project.pk or trigger.version_type not in {
-        VersionType.GIT_BRANCH,
-        VersionType.GIT_HASH,
-    }:
-        add(DastReadinessCode.SOURCE_VERSION_INVALID, "Select a Git branch or Git hash from this project.")
+    if payload.binding.requires_source_repository:
+        if trigger is None or trigger.project_id != arguments.project.pk or trigger.version_type not in {
+            VersionType.GIT_BRANCH,
+            VersionType.GIT_HASH,
+        }:
+            add(DastReadinessCode.SOURCE_VERSION_INVALID, "Select a Git branch or Git hash from this project.")
+    elif trigger is not None:
+        add(DastReadinessCode.SOURCE_VERSION_INVALID, "This target has no repository requirement; clear the trigger version.")
     try:
         current_target = payload.binding.target.get_snapshot()
         DastBindingParameters.from_snapshot(payload.parameters, target=current_target)

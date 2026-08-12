@@ -193,13 +193,14 @@ def finalize_dast_report(
         repo_params = RepoParams(
             repo_url=repository.clone_url if repository else "",
             branch_tag=branch_tag,
-            commit_hash=version.version,
+            commit_hash=version.version if version is not None else None,
             scm_type=repository.type.lower() if repository else "generic",
             local_path=None,
         )
+        engagement_label = version.version[:12] if version is not None else report.run_id[:12]
         engagement = ensure_engagement(
             pipeline.project.product,
-            f"{DAST_SCAN_TYPE} {version.version[:12]}",
+            f"{DAST_SCAN_TYPE} {engagement_label}",
             repo_params,
             status="In Progress",
         )
@@ -213,7 +214,7 @@ def finalize_dast_report(
             lead=lead,
         )
         finding_ids = attach_findings_to_project_version(
-            project_version_id=version.pk,
+            project_version_id=version.pk if version is not None else None,
             finding_ids=[finding.pk for finding in findings],
             logger=logger,
         )
@@ -225,7 +226,7 @@ def finalize_dast_report(
                 "run_id": report.run_id,
                 "correlation_id": report.correlation_id,
                 "report_sha256": report_sha256,
-                "project_version_id": version.pk,
+                "project_version_id": version.pk if version is not None else None,
                 "test_id": test_obj.pk,
                 "finding_ids": finding_ids,
             },

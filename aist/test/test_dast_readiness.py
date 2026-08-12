@@ -44,6 +44,7 @@ def _target_snapshot() -> DastTargetSnapshot:
         },
         "defaults": {},
         "repository_keys": ["source"],
+        "launch_requirements": ["repository-trigger"],
         "autonomous_ready": True,
     })
 

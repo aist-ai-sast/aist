@@ -141,14 +141,18 @@ class DastPipelineLaunchAdapter:
             codes = ", ".join(issue.code.value for issue in readiness.issues)
             message = f"DAST launch is not ready: {codes}."
             raise ExecutionPlanError(message)
-        try:
-            trigger_version = AISTProjectVersion.objects.get(
-                pk=request.trigger_project_version_id,
-                project_id=request.project_id,
-                project__product__prod_type__aist_organization__id=context.authority.organization_id,
-            )
-        except (AISTProjectVersion.DoesNotExist, TypeError, ValueError) as exc:
-            raise ExecutionPlanError(_ERR_TRIGGER) from exc
+        trigger_version = None
+        if binding.requires_source_repository:
+            try:
+                trigger_version = AISTProjectVersion.objects.get(
+                    pk=request.trigger_project_version_id,
+                    project_id=request.project_id,
+                    project__product__prod_type__aist_organization__id=context.authority.organization_id,
+                )
+            except (AISTProjectVersion.DoesNotExist, TypeError, ValueError) as exc:
+                raise ExecutionPlanError(_ERR_TRIGGER) from exc
+        elif request.trigger_project_version_id is not None:
+            raise ExecutionPlanError(_ERR_TRIGGER)
 
         try:
             frozen_target = DastTargetSnapshot.from_snapshot(request.get_snapshots().capability_snapshot())
@@ -195,8 +199,12 @@ class DastPipelineLaunchAdapter:
             task_name=PipelineTaskName.RUN_PIPELINE_EXECUTION,
             task_args=(),
             project_id=request.project_id,
-            trigger_project_version_id=trigger_version.pk,
-            effective_version_policy=EffectiveVersionPolicy.RESOLVE_FROM_EXECUTION_RESULT,
+            trigger_project_version_id=trigger_version.pk if trigger_version is not None else None,
+            effective_version_policy=(
+                EffectiveVersionPolicy.RESOLVE_FROM_EXECUTION_RESULT
+                if binding.requires_source_repository
+                else EffectiveVersionPolicy.NO_VERSION
+            ),
             effective_project_version_id=None,
             resource_key=f"dast-integration:{binding.target.integration_id}",
             resource_limit=1,

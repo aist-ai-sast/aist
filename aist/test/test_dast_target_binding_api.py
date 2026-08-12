@@ -47,6 +47,7 @@ def _target(provider_id="app"):
         },
         "defaults": {},
         "repository_keys": ["source"],
+        "launch_requirements": ["repository-trigger"],
         "autonomous_ready": True,
     })
 

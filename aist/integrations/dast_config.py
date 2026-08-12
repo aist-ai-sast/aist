@@ -5,6 +5,7 @@ import re
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, ClassVar
 from urllib.parse import urlsplit, urlunsplit
 
@@ -18,6 +19,43 @@ class DastConfigError(ValueError):
 
 class DastSecretParameterSchemaError(DastConfigError):
     pass
+
+
+class DastLaunchRequirement(StrEnum):
+    """One prerequisite a DAST target's scenario declares, mirrored from the provider's own
+    wire vocabulary (its `dastlib.scenarios.base.LaunchRequirement`). AIST only ever asks
+    `requires_repository()`; the other two are carried for the same reason the provider carries
+    all three on one target — so a future AIST behavior keyed on them is a new accessor here, not
+    a new wire field.
+    """
+
+    REPOSITORY_TRIGGER = "repository-trigger"
+    DECLARED_STANDS = "declared-stands"
+    OPERATOR_SELECTS_WORKLIST = "operator-selects-worklist"
+
+
+@dataclass(frozen=True, slots=True)
+class DastLaunchRequirements:
+    """The complete prerequisite set a DAST target's scenario declares."""
+
+    values: frozenset[DastLaunchRequirement] = field(default_factory=frozenset)
+
+    @classmethod
+    def from_wire(cls, values: object) -> DastLaunchRequirements:
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            msg = "launch_requirements must be a list of strings."
+            raise DastConfigError(msg)
+        try:
+            return cls(frozenset(DastLaunchRequirement(value) for value in values))
+        except ValueError as exc:
+            msg = f"launch_requirements contains an unknown value: {exc}"
+            raise DastConfigError(msg) from exc
+
+    def to_wire(self) -> list[str]:
+        return sorted(value.value for value in self.values)
+
+    def requires_repository(self) -> bool:
+        return DastLaunchRequirement.REPOSITORY_TRIGGER in self.values
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +262,7 @@ class DastTargetSnapshot:
     parameter_schema: dict[str, Any]
     provider_defaults: dict[str, Any]
     repository_keys: tuple[str, ...]
+    launch_requirements: DastLaunchRequirements
     autonomous_ready: bool
 
     _FIELDS = frozenset(
@@ -236,6 +275,7 @@ class DastTargetSnapshot:
             "parameter_schema",
             "defaults",
             "repository_keys",
+            "launch_requirements",
             "autonomous_ready",
         },
     )
@@ -269,13 +309,15 @@ class DastTargetSnapshot:
         provider_defaults = cls._json_object(snapshot["defaults"], "defaults")
         cls._reject_credential_parameters(parameter_schema, provider_defaults)
         cls._validate_parameters(parameter_schema, provider_defaults, "defaults")
+        launch_requirements = DastLaunchRequirements.from_wire(snapshot["launch_requirements"])
         repository_keys = snapshot["repository_keys"]
-        if (
-            not isinstance(repository_keys, list)
-            or not repository_keys
-            or any(not isinstance(key, str) or not key.strip() for key in repository_keys)
+        if not isinstance(repository_keys, list) or any(
+            not isinstance(key, str) or not key.strip() for key in repository_keys
         ):
-            msg = "repository_keys must be a non-empty list of non-blank strings."
+            msg = "repository_keys must be a list of non-blank strings."
+            raise DastConfigError(msg)
+        if launch_requirements.requires_repository() and not repository_keys:
+            msg = "repository_keys must be non-empty when the target requires a repository trigger."
             raise DastConfigError(msg)
         normalized_repository_keys = tuple(dict.fromkeys(key.strip() for key in repository_keys))
         autonomous_ready = snapshot["autonomous_ready"]
@@ -308,6 +350,7 @@ class DastTargetSnapshot:
             parameter_schema=parameter_schema,
             provider_defaults=provider_defaults,
             repository_keys=normalized_repository_keys,
+            launch_requirements=launch_requirements,
             autonomous_ready=autonomous_ready,
         )
 
@@ -391,6 +434,7 @@ class DastTargetSnapshot:
             "parameter_schema": deepcopy(self.parameter_schema),
             "defaults": deepcopy(self.provider_defaults),
             "repository_keys": list(self.repository_keys),
+            "launch_requirements": self.launch_requirements.to_wire(),
             "autonomous_ready": self.autonomous_ready,
         }
 

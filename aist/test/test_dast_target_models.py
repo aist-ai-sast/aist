@@ -38,6 +38,7 @@ def _target_wire(provider_id="app", **overrides):
         "parameter_schema": _parameter_schema(),
         "defaults": {"depth": "light"},
         "repository_keys": [provider_id, f"{provider_id}-frontend"],
+        "launch_requirements": ["repository-trigger"],
         "autonomous_ready": True,
     }
     payload.update(overrides)
