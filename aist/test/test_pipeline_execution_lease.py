@@ -122,6 +122,7 @@ class ExecutionPlanLeaseTests(AISTApiBase):
             schema_digest="lease-schema",
             parameter_schema={"type": "object"},
             repository_keys=["repository"],
+            launch_requirements=["repository-trigger"],
             autonomous_ready=True,
             last_seen_at=timezone.now(),
         )
@@ -265,6 +266,7 @@ class PipelineExecutionLeaseConcurrencyTests(TransactionTestCase):
             schema_digest="concurrent-lease-schema",
             parameter_schema={"type": "object"},
             repository_keys=["repository"],
+            launch_requirements=["repository-trigger"],
             autonomous_ready=True,
             last_seen_at=timezone.now(),
         )

@@ -67,7 +67,7 @@ class PipelineExecutionTypeTests(TestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             invalid.save()
 
-    def test_dast_requires_trigger_version_and_allows_unresolved_effective_version(self):
+    def test_dast_allows_present_or_absent_trigger_version_and_unresolved_effective_version(self):
         pipeline = AISTPipeline(
             id="dast-valid",
             project=self.project,
@@ -81,15 +81,17 @@ class PipelineExecutionTypeTests(TestCase):
         pipeline.full_clean()
         pipeline.save(update_fields=["project_version"])
 
-        invalid = AISTPipeline(
-            id="dast-no-trigger",
+        # AISTPipeline has no dast_binding reference, so it cannot tell whether a given
+        # run's binding required a repository trigger -- that invariant is enforced earlier,
+        # at PipelineLaunchRequest/AISTProjectLaunchConfig validation time, where the binding
+        # is in scope. A sourceless DAST pipeline (no trigger version at all) is valid here.
+        sourceless = AISTPipeline(
+            id="dast-sourceless",
             project=self.project,
             execution_type=PipelineExecutionType.DAST,
         )
-        with self.assertRaises(ValidationError):
-            invalid.full_clean()
-        with self.assertRaises(IntegrityError), transaction.atomic():
-            invalid.save()
+        sourceless.full_clean()
+        sourceless.save()
 
     def test_pipeline_cannot_mix_sast_and_dast_source_semantics(self):
         pipeline = AISTPipeline(
