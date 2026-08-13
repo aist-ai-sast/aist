@@ -76,7 +76,6 @@ class LaunchRequestReconciliationTests(AISTApiBase):
             target=target,
             source_repo_key="reconciliation-api",
             enabled=True,
-            autonomous_enabled=True,
             parameter_snapshot={"depth": "deep"},
         )
 

@@ -44,11 +44,16 @@ def build_dast_coalesce_key(
     project_id: int,
     binding_id: int,
     integration_id: int,
-    trigger_project_version_id: int,
+    trigger_project_version_id: int | None,
     params_snapshot: Mapping[str, object],
     capability_snapshot: Mapping[str, object],
 ) -> str:
-    """Build the trusted identity for equivalent launches of one DAST binding."""
+    """
+    Build the trusted identity for equivalent launches of one DAST binding.
+
+    ``trigger_project_version_id`` is None for a target that declares no repository trigger;
+    it stays part of the identity so a sourceless launch never collides with a source-based one.
+    """
     return canonical_coalesce_key(
         execution_type=PipelineExecutionKind.DAST,
         project_id=project_id,

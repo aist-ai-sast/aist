@@ -1,7 +1,11 @@
 export type RiskState = "risk_accepted" | "under_review" | "mitigated";
 export type Severity = "Critical" | "High" | "Medium" | "Low" | "Info";
 export type AIVerdict = "true_positive" | "false_positive" | "uncertain";
-export type ProjectVersionType = "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH";
+/**
+ * DAST_TARGET stands for a scan target rather than a revision: it is created by the import that
+ * produces its findings and is never selectable as the source of an analysis run.
+ */
+export type ProjectVersionType = "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH" | "DAST_TARGET";
 
 export type WorkItemStatusCategory = "OPEN" | "IN_PROGRESS" | "DONE" | "CANCELLED" | "UNKNOWN";
 

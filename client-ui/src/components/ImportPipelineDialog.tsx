@@ -3,6 +3,7 @@ import { useDropzone } from "react-dropzone";
 
 import { toUserMessage } from "../lib/api";
 import { severityBadgeClass } from "../lib/badgeStyles";
+import { dastBindingLabel, targetRequiresSourceRepository } from "../lib/dast";
 import { useImportPipeline, useValidateImportPipeline } from "../lib/mutations";
 import type { ImportPipelinePreview } from "../lib/mutations";
 import { usePipelineStatus, useProjectDastBindings, useProjects } from "../lib/queries";
@@ -41,7 +42,7 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
   );
   const enabledBindings = projectBindings.filter((binding) => binding.enabled);
   const selectedBinding = enabledBindings.find((binding) => String(binding.id) === bindingId) ?? null;
-  const requiresSourceRepository = selectedBinding?.target.launch_requirements.includes("repository-trigger") ?? true;
+  const requiresSourceRepository = selectedBinding ? targetRequiresSourceRepository(selectedBinding.target) : true;
   const validateMutation = useValidateImportPipeline();
   const importMutation = useImportPipeline();
   const statusQuery = usePipelineStatus(state === "progress" ? pipelineId : null);
@@ -167,7 +168,7 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
               onChange={handleBindingChange}
               options={enabledBindings.map((binding) => ({
                 value: String(binding.id),
-                label: `${binding.target.display_name} · ${binding.source_repo_key}`,
+                label: dastBindingLabel(binding),
               }))}
               placeholder={bindingsLoading ? "Loading DAST targets…" : "Select the bound DAST target"}
               disabled={!projectId || bindingsLoading || enabledBindings.length === 0}

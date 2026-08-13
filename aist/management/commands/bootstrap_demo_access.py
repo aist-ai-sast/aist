@@ -945,7 +945,6 @@ class Command(BaseCommand):
                     "source_repo_key": spec.slug if requires_source else "",
                     "enabled": True,
                     "parameter_snapshot": parameters,
-                    "autonomous_enabled": True,
                 },
             )
             binding.full_clean()

@@ -354,9 +354,20 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
     },
     provider_defaults: { mode: "fast", label: "baseline", count: 2, advanced: false },
     repository_keys: ["source"],
+    launch_requirements: ["repository-trigger"],
     autonomous_ready: true,
     is_available: true,
     last_seen_at: "2026-07-25T00:00:00Z",
+  };
+
+  // The second shape of target: the provider scans a running system and declares no repository.
+  const perimeterTarget = {
+    ...target,
+    id: 6,
+    provider_id: "perimeter",
+    display_name: "External perimeter",
+    repository_keys: [],
+    launch_requirements: [],
   };
 
   beforeEach(() => {
@@ -431,7 +442,6 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
       source_repo_key: "source",
       enabled: true,
       parameter_snapshot: { mode: "fast", label: "baseline", count: 2, advanced: false },
-      autonomous_enabled: false,
     });
   });
 
@@ -445,7 +455,6 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
         source_repo_key: "source",
         enabled: true,
         parameter_snapshot: {},
-        autonomous_enabled: false,
         readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
       },
     ];
@@ -466,7 +475,6 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
         source_repo_key: "source",
         enabled: true,
         parameter_snapshot: { mode: "fast", label: "baseline", count: 2, advanced: false },
-        autonomous_enabled: true,
         readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
       },
     ];
@@ -491,7 +499,6 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
         source_repo_key: "source",
         enabled: true,
         parameter_snapshot: {},
-        autonomous_enabled: false,
         readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
       },
     ];
@@ -505,6 +512,76 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
     expect(section.textContent).not.toContain("cap-7");
   });
 
+  it("summarises a perimeter binding without an empty source-repository line", () => {
+    mockDastBindings = [
+      {
+        id: 12,
+        project: 9,
+        target: perimeterTarget,
+        source_repo_key: "",
+        enabled: true,
+        parameter_snapshot: {},
+        readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
+      },
+    ];
+    renderPage();
+    const section = selectProject();
+
+    expect(within(section).getByText("External perimeter")).toBeInTheDocument();
+    expect(within(section).queryByText(/Source repository/)).not.toBeInTheDocument();
+    // Readiness means "this binding can launch" — nothing about launching without an operator.
+    expect(within(section).getByText("Ready to launch")).toBeInTheDocument();
+  });
+
+  it("offers no source-repository selector when editing a perimeter binding", () => {
+    mockDastTargets = [perimeterTarget];
+    mockDastBindings = [
+      {
+        id: 12,
+        project: 9,
+        target: perimeterTarget,
+        source_repo_key: "",
+        enabled: true,
+        parameter_snapshot: { mode: "fast", label: "baseline", count: 2, advanced: false },
+        readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
+      },
+    ];
+    renderPage();
+    const section = selectProject();
+    fireEvent.click(within(section).getByRole("button", { name: "Edit" }));
+
+    expect(within(section).queryByText("Source repository")).not.toBeInTheDocument();
+    expect(within(section).getByRole("button", { name: "Save binding" })).toBeEnabled();
+  });
+
+  it("renders provider-schema fields through the app's own field components", () => {
+    mockDastBindings = [
+      {
+        id: 11,
+        project: 9,
+        target,
+        source_repo_key: "source",
+        enabled: true,
+        parameter_snapshot: { mode: "fast", label: "baseline", count: 2, advanced: false },
+        readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
+      },
+    ];
+    renderPage();
+    const section = selectProject();
+    fireEvent.click(within(section).getByRole("button", { name: "Edit" }));
+
+    // An enum field is the app's Radix select — a button trigger with a portalled menu, the
+    // same control every other select in the app uses, not a native dropdown drawn by the OS.
+    const mode = within(section).getByRole("combobox", { name: /Mode/ });
+    expect(mode.tagName).toBe("BUTTON");
+    // A boolean field is the shared checkbox, and a text field is the shared input.
+    expect(within(section).getByLabelText("Advanced")).toHaveAttribute("type", "checkbox");
+    expect(within(section).getByLabelText("Label").tagName).toBe("INPUT");
+    // Raw enum values reach the operator readable, not as bare identifiers.
+    fireEvent.click(mode);
+    expect(screen.getByRole("option", { name: "Fast" })).toBeInTheDocument();
+  });
+
   it("keeps binding metadata controls out of the provider-schema form so RJSF styling cannot reflow them", () => {
     mockDastBindings = [
       {
@@ -514,7 +591,6 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
         source_repo_key: "source",
         enabled: true,
         parameter_snapshot: { mode: "fast", label: "baseline", count: 2, advanced: false },
-        autonomous_enabled: false,
         readiness: { ready: true, issues: [], checked_at: "2026-07-25T00:00:00Z" },
       },
     ];
@@ -523,11 +599,10 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
     fireEvent.click(within(section).getByRole("button", { name: "Edit" }));
 
     const schemaForm = section.querySelector("form")!;
-    for (const name of ["Enabled", "Allow autonomous launches"]) {
-      const checkbox = within(section).getByLabelText(name);
-      expect(checkbox).toBeInTheDocument();
-      expect(schemaForm.contains(checkbox)).toBe(false);
-    }
+    const enabled = within(section).getByLabelText("Enabled");
+    expect(enabled).toBeInTheDocument();
+    expect(schemaForm.contains(enabled)).toBe(false);
+    expect(within(section).queryByLabelText("Allow autonomous launches")).not.toBeInTheDocument();
     // The provider-schema fields themselves must stay inside the RJSF form.
     expect(schemaForm.contains(within(section).getByLabelText(/Label/))).toBe(true);
   });

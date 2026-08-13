@@ -12,6 +12,7 @@ from aist.integrations.dast_report import ValidatedDastReport
 from aist.internal_upload import ensure_engagement, import_scan_file_via_default_importer
 from aist.launch_data import PipelineLaunchData
 from aist.models import (
+    SOURCELESS_VERSION_TYPES,
     AISTPipeline,
     AISTProjectVersion,
     AISTStatus,
@@ -21,7 +22,7 @@ from aist.models import (
     VersionType,
 )
 from aist.parser_overrides import DAST_SCAN_TYPE
-from aist.services.dast_source_versions import resolve_dast_source_version
+from aist.services.dast_result_versions import resolve_dast_result_version
 from aist.services.pipeline_lifecycle import transition_pipeline_status
 from aist.services.pipeline_results import (
     attach_findings_to_project_version,
@@ -160,7 +161,7 @@ def finalize_dast_report(
 
     report_sha256 = hashlib.sha256(report.canonical_json).hexdigest()
     with transaction.atomic():
-        version = resolve_dast_source_version(report, binding)
+        version = resolve_dast_result_version(report, binding)
         persisted_binding = DastProjectBinding.objects.select_for_update().get(pk=binding.pk)
         pipeline = (
             AISTPipeline.objects
@@ -193,11 +194,11 @@ def finalize_dast_report(
         repo_params = RepoParams(
             repo_url=repository.clone_url if repository else "",
             branch_tag=branch_tag,
-            commit_hash=version.version if version is not None else None,
+            commit_hash=None if version.version_type in SOURCELESS_VERSION_TYPES else version.version,
             scm_type=repository.type.lower() if repository else "generic",
             local_path=None,
         )
-        engagement_label = version.version[:12] if version is not None else report.run_id[:12]
+        engagement_label = version.version[:12]
         engagement = ensure_engagement(
             pipeline.project.product,
             f"{DAST_SCAN_TYPE} {engagement_label}",
@@ -213,9 +214,10 @@ def finalize_dast_report(
             minimum_severity="Info",
             lead=lead,
         )
-        finding_ids = attach_findings_to_project_version(
-            project_version_id=version.pk if version is not None else None,
-            finding_ids=[finding.pk for finding in findings],
+        finding_ids = [finding.pk for finding in findings]
+        attach_findings_to_project_version(
+            project_version_id=version.pk,
+            finding_ids=finding_ids,
             logger=logger,
         )
         pipeline.tests.add(test_obj)
@@ -226,12 +228,13 @@ def finalize_dast_report(
                 "run_id": report.run_id,
                 "correlation_id": report.correlation_id,
                 "report_sha256": report_sha256,
-                "project_version_id": version.pk if version is not None else None,
+                "project_version_id": version.pk,
                 "test_id": test_obj.pk,
                 "finding_ids": finding_ids,
             },
             "imported_test_ids": [test_obj.pk],
         })
+        launch_data.finding_postprocessing = False
         pipeline.project_version = version
         pipeline.launch_data = launch_data.as_dict()
         set_pipeline_status(

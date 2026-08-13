@@ -1,6 +1,7 @@
 import logging
 import time
 from datetime import timedelta
+from functools import partial
 
 from celery import shared_task
 from django.conf import settings
@@ -11,6 +12,7 @@ from dojo.finding.deduplication import do_dedupe_batch_task
 from dojo.models import Finding, Test
 from dojo.tasks import async_dupe_delete
 
+from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging
 from aist.models import (
     AISTPipeline,
@@ -90,8 +92,11 @@ def _requeue_missing_findings(*, test_id: int, batch_size: int, logger) -> int:
 
 def _release_pipeline_after_dedup(pipeline_id: str) -> None:
     """
-    Atomically transition the pipeline to FINDING_POSTPROCESSING and schedule the
-    enrich chord via on_commit so the dispatch only happens if the status change commits.
+    Hand a deduplicated pipeline to the tail its findings support, via on_commit so the
+    dispatch only happens if the transition commits.
+
+    Findings that describe a running system have no source tree to enrich against and no code
+    for AIST to triage, so that pipeline finishes here instead of entering post-processing.
 
     Idempotent: if the pipeline has already moved past WAITING_DEDUPLICATION_TO_FINISH
     (e.g. a concurrent watch_deduplication instance already released it), this is a no-op.
@@ -106,6 +111,9 @@ def _release_pipeline_after_dedup(pipeline_id: str) -> None:
                 pipeline_id,
                 pipeline.status,
             )
+            return
+        if not PipelineLaunchData(pipeline.launch_data).finding_postprocessing:
+            transaction.on_commit(partial(finish_pipeline, pipeline_id))
             return
         set_pipeline_status(pipeline, AISTStatus.FINDING_POSTPROCESSING)
         transaction.on_commit(lambda: make_enrich_chord(pipeline_id=pipeline_id).apply_async())

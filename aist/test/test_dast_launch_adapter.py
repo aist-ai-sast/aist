@@ -30,6 +30,7 @@ from aist.models import (
 from aist.pipeline_args import PipelineArguments
 from aist.services.dast_targets import refresh_dast_targets
 from aist.tasks import pipeline_dispatcher
+from aist.test import dast_fixtures
 from aist.test.test_api import AISTApiBase
 from aist.test.test_dast_target_models import _integration_config, _target_wire
 
@@ -69,7 +70,6 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
             source_repo_key="adapter-api",
             enabled=True,
             parameter_snapshot={"depth": "deep"},
-            autonomous_enabled=True,
         )
         self.config = AISTProjectLaunchConfig.objects.create(
             project=self.project,
@@ -140,7 +140,6 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
             source_repo_key="adapter-admin",
             enabled=True,
             parameter_snapshot={"depth": "deep"},
-            autonomous_enabled=True,
         )
         second_config = AISTProjectLaunchConfig.objects.create(
             project=self.project,
@@ -229,3 +228,78 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
 
         self.assertEqual(result.status, "READY")
         self.assertEqual(request.task_args_snapshot, [])
+
+
+class PerimeterDastLaunchTests(AISTApiBase):
+
+    """A target that declares no repository trigger must reach a plan with no source version."""
+
+    def setUp(self):
+        super().setUp()
+        self.now = timezone.now()
+        self.organization = Organization.objects.create(
+            name="Perimeter organization",
+            product_type=self.prod_type,
+        )
+        self.integration, self.state = dast_fixtures.create_dast_integration(
+            organization=self.organization,
+            public_id="perimeter-public-id",
+            now=self.now,
+        )
+        # Both shapes come from one catalog: a refresh that omits a target marks it unavailable.
+        self.target, self.source_target = dast_fixtures.create_dast_targets(
+            integration=self.integration,
+            wires=(
+                dast_fixtures.perimeter_target_wire(),
+                dast_fixtures.target_wire("source-based-api"),
+            ),
+            seen_at=self.now,
+        )
+        self.binding = dast_fixtures.create_dast_binding(project=self.project, target=self.target)
+        self.config = AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            execution_type=PipelineExecutionType.DAST,
+            dast_binding=self.binding,
+            trigger_project_version=None,
+            name="Perimeter config",
+            params={"depth": "deep"},
+        )
+
+    def _enqueue(self):
+        return enqueue_pipeline_launch(
+            arguments=PipelineArguments.from_launch_config(self.config),
+            principal=LaunchPrincipal.for_schedule(organization=self.organization),
+            launch_config=self.config,
+        ).request
+
+    def test_perimeter_launch_is_enqueued_and_planned_without_a_source_version(self):
+        request = self._enqueue()
+
+        self.assertIsNone(request.trigger_project_version_id)
+        self.assertTrue(request.coalesce_key)
+
+        plan = DastPipelineLaunchAdapter().build_plan(planning_context_from_launch_request(request))
+
+        self.assertIsNone(plan.trigger_project_version_id)
+        self.assertEqual(plan.initial_launch_data["dast_execution"]["source_repo_key"], "")
+
+    def test_perimeter_launches_of_one_binding_share_a_coalesce_identity(self):
+        self.assertEqual(self._enqueue().coalesce_key, self._enqueue().coalesce_key)
+
+    def test_perimeter_and_source_based_launches_never_share_a_coalesce_identity(self):
+        source_binding = dast_fixtures.create_dast_binding(project=self.project, target=self.source_target)
+        source_config = AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            execution_type=PipelineExecutionType.DAST,
+            dast_binding=source_binding,
+            trigger_project_version=self.pv,
+            name="Source-based config",
+            params={"depth": "deep"},
+        )
+        source_request = enqueue_pipeline_launch(
+            arguments=PipelineArguments.from_launch_config(source_config),
+            principal=LaunchPrincipal.for_schedule(organization=self.organization),
+            launch_config=source_config,
+        ).request
+
+        self.assertNotEqual(self._enqueue().coalesce_key, source_request.coalesce_key)

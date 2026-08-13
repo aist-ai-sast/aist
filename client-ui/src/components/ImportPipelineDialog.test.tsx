@@ -16,7 +16,7 @@ let projectBindings = [
   {
     id: 11,
     project: 1,
-    target: { display_name: "Cloud app" },
+    target: { display_name: "Cloud app", launch_requirements: ["repository-trigger"] },
     source_repo_key: "backend",
     enabled: true,
   },
@@ -69,7 +69,7 @@ describe("ImportPipelineDialog", () => {
       {
         id: 11,
         project: 1,
-        target: { display_name: "Cloud app" },
+        target: { display_name: "Cloud app", launch_requirements: ["repository-trigger"] },
         source_repo_key: "backend",
         enabled: true,
       },
@@ -133,6 +133,38 @@ describe("ImportPipelineDialog", () => {
     expect(screen.getByText("—")).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /create pipeline/i })).toBeDisabled();
+  });
+
+  it("names a perimeter binding without a dangling separator and imports it with no source commit", async () => {
+    projectBindings = [
+      {
+        id: 12,
+        project: 1,
+        target: { display_name: "External perimeter", launch_requirements: [] },
+        source_repo_key: "",
+        enabled: true,
+      },
+    ];
+    validateMutateAsync.mockResolvedValue({
+      findings_count: 1,
+      severity_breakdown: { High: 1 },
+      name: "DAST",
+      version: "edge-perimeter",
+      actual_source_commit: null,
+    });
+    render(<ImportPipelineDialog open onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getAllByRole("combobox")[0]);
+    fireEvent.click(screen.getByRole("option", { name: "cloud_portal" }));
+    fireEvent.click(screen.getAllByRole("combobox")[1]);
+    fireEvent.click(screen.getByRole("option", { name: "External perimeter" }));
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [reportFile()] } });
+    await waitFor(() => expect(screen.getByText("generic-aist-report.json")).toBeInTheDocument());
+
+    // A target with no repository requirement has no commit to report, so the missing commit
+    // must not block the import the way it does for a source-bound target.
+    expect(screen.getByRole("button", { name: /create pipeline/i })).toBeEnabled();
   });
 
   it("shows the backend's parser error when validation fails", async () => {

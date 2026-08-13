@@ -1,9 +1,9 @@
 import { useState } from "react";
-import Form, { type IChangeEvent } from "@rjsf/core";
+import type { IChangeEvent } from "@rjsf/core";
 import type { RJSFSchema } from "@rjsf/utils";
-import validator from "@rjsf/validator-ajv8";
 
 import { toUserMessage } from "../lib/api";
+import { targetRequiresSourceRepository } from "../lib/dast";
 import {
   useDeleteDastProjectBinding,
   useUpsertDastProjectBinding,
@@ -18,6 +18,8 @@ import {
   type DastTarget,
 } from "../lib/queries";
 import { useToast } from "./ToastProvider";
+import Checkbox from "./Checkbox";
+import SchemaForm from "./SchemaForm";
 import SelectField from "./SelectField";
 import PermissionGate from "./PermissionGate";
 import { SectionCard, TypeBadge, AddButton } from "./OrgIntegrationUI";
@@ -26,20 +28,14 @@ type BindingFormState = {
   targetId: number;
   sourceRepoKey: string;
   enabled: boolean;
-  autonomousEnabled: boolean;
   parameters: Record<string, unknown>;
 };
-
-function requiresSourceRepository(target: DastTarget): boolean {
-  return target.launch_requirements.includes("repository-trigger");
-}
 
 function initialBindingForm(target: DastTarget): BindingFormState {
   return {
     targetId: target.id,
-    sourceRepoKey: requiresSourceRepository(target) ? target.repository_keys[0] ?? "" : "",
+    sourceRepoKey: targetRequiresSourceRepository(target) ? target.repository_keys[0] ?? "" : "",
     enabled: true,
-    autonomousEnabled: false,
     parameters: structuredClone(target.provider_defaults),
   };
 }
@@ -84,7 +80,6 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
       targetId: binding.target.id,
       sourceRepoKey: binding.source_repo_key,
       enabled: binding.enabled,
-      autonomousEnabled: binding.autonomous_enabled,
       parameters: structuredClone(binding.parameter_snapshot),
     });
   }
@@ -103,7 +98,6 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
       source_repo_key: formState.sourceRepoKey,
       enabled: formState.enabled,
       parameter_snapshot: event.formData ?? {},
-      autonomous_enabled: formState.autonomousEnabled,
     };
     try {
       await upsertBinding.mutateAsync(payload);
@@ -154,16 +148,17 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
                     machinery, not operator-facing facts — the backend already fails a launch when
                     they drift. Showing them here only added noise nobody could act on.
                   */}
-                  <div className="mt-1 text-xs text-slate-400">
-                    Source repository: {binding.source_repo_key}
-                  </div>
+                  {targetRequiresSourceRepository(binding.target) ? (
+                    <div className="mt-1 text-xs text-slate-400">
+                      Source repository: {binding.source_repo_key}
+                    </div>
+                  ) : null}
                   <div className="mt-1 text-[11px] text-slate-500">
                     {binding.enabled ? "Enabled" : "Disabled"}
-                    {binding.autonomous_enabled ? " · autonomous" : ""}
                     {!binding.target.is_available ? " · target unavailable" : ""}
                   </div>
                   {binding.readiness.ready ? (
-                    <div className="mt-2 text-xs text-emerald-300">Ready for autonomous launch</div>
+                    <div className="mt-2 text-xs text-emerald-300">Ready to launch</div>
                   ) : (
                     <ul className="mt-2 space-y-1 text-xs text-amber-300">
                       {binding.readiness.issues.map((issue) => (
@@ -191,11 +186,8 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
           {formState && selectedTarget && (
             <div className="space-y-3 rounded-xl border border-brand-500/30 bg-night-800/70 p-4">
               {/*
-                Binding metadata controls live OUTSIDE <Form>. The RJSF wrapper below styles
-                provider-schema fields through descendant selectors ([&_input], [&_label], …);
-                those are arbitrary variants, so they out-specify a plain utility class and
-                would override our own controls — turning each checkbox into a full-width
-                bordered box and forcing `display:block` onto the flex checkbox rows.
+                Binding metadata is ours, not the provider's, so its controls stay outside the
+                schema form even though both now render through the same components.
               */}
               {!editingBindingId && (
                 <SelectField
@@ -207,7 +199,7 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
                     .map((target) => ({ value: String(target.id), label: target.display_name }))}
                 />
               )}
-              {requiresSourceRepository(selectedTarget) && (
+              {targetRequiresSourceRepository(selectedTarget) && (
                 <SelectField
                   label="Source repository"
                   value={formState.sourceRepoKey}
@@ -215,37 +207,17 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
                   options={selectedTarget.repository_keys.map((key) => ({ value: key, label: key }))}
                 />
               )}
-              <label className="flex items-center gap-2 text-xs text-slate-300">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 shrink-0"
-                  checked={formState.enabled}
-                  onChange={(event) => setFormState({ ...formState, enabled: event.target.checked })}
-                />
-                Enabled
-              </label>
-              <label className="flex items-center gap-2 text-xs text-slate-300">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 shrink-0"
-                  checked={formState.autonomousEnabled}
-                  disabled={!selectedTarget.autonomous_ready}
-                  onChange={(event) => setFormState({ ...formState, autonomousEnabled: event.target.checked })}
-                />
-                Allow autonomous launches
-              </label>
-
-              <Form<Record<string, unknown>, RJSFSchema>
-                key={`${selectedTarget.id}:${selectedTarget.schema_digest}:${editingBindingId ?? "new"}`}
+              <Checkbox
+                label="Enabled"
+                checked={formState.enabled}
+                onChange={(event) => setFormState({ ...formState, enabled: event.target.checked })}
+              />
+              <SchemaForm
+                formKey={`${selectedTarget.id}:${selectedTarget.schema_digest}:${editingBindingId ?? "new"}`}
                 schema={selectedTarget.parameter_schema as RJSFSchema}
-                validator={validator}
                 formData={formState.parameters}
-                liveValidate
-                showErrorList={false}
                 onChange={(event) => setFormState((current) => current ? { ...current, parameters: event.formData ?? {} } : current)}
                 onSubmit={submitBinding}
-                uiSchema={{ "ui:submitButtonOptions": { norender: true } }}
-                className="space-y-3 [&_fieldset]:space-y-3 [&_label]:mb-1 [&_label]:block [&_label]:text-xs [&_label]:font-medium [&_label]:text-slate-300 [&_input]:w-full [&_input]:rounded-lg [&_input]:border [&_input]:border-night-400 [&_input]:bg-night-900 [&_input]:px-3 [&_input]:py-2 [&_input]:text-sm [&_input]:text-slate-100 [&_select]:w-full [&_select]:rounded-lg [&_select]:border [&_select]:border-night-400 [&_select]:bg-night-900 [&_select]:px-3 [&_select]:py-2 [&_select]:text-sm [&_select]:text-slate-100 [&_.text-danger]:text-xs [&_.text-danger]:text-danger-400"
               >
                 <div className="flex justify-end gap-2 pt-1">
                   <button type="button" className="rounded-lg px-3 py-2 text-xs text-slate-300 hover:text-white" onClick={resetForm}>
@@ -255,14 +227,14 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
                     type="submit"
                     disabled={
                       upsertBinding.isPending ||
-                      (requiresSourceRepository(selectedTarget) && !formState.sourceRepoKey)
+                      (targetRequiresSourceRepository(selectedTarget) && !formState.sourceRepoKey)
                     }
                     className="rounded-lg bg-brand-500 px-3 py-2 text-xs font-medium text-white disabled:opacity-50"
                   >
                     {upsertBinding.isPending ? "Saving..." : "Save binding"}
                   </button>
                 </div>
-              </Form>
+              </SchemaForm>
             </div>
           )}
 

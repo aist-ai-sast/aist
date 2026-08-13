@@ -6,7 +6,13 @@ from django import forms
 
 from aist.ai_filter import validate_and_normalize_filter
 from aist.integrations.dast_readiness import check_dast_launch_readiness
-from aist.models import AISTProject, AISTProjectVersion, DastProjectBinding, VersionType
+from aist.models import (
+    OPERATOR_CREATABLE_VERSION_TYPES,
+    AISTProject,
+    AISTProjectVersion,
+    DastProjectBinding,
+    VersionType,
+)
 from aist.pipeline_args import PipelineArguments
 from aist.utils.pipeline import has_unfinished_pipeline
 from aist.utils.pipeline_imports import _load_analyzers_config
@@ -20,6 +26,10 @@ class AISTProjectVersionForm(forms.ModelForm):
             "project": forms.HiddenInput,
             "description": forms.Textarea(attrs={"rows": 2}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["version_type"].choices = OPERATOR_CREATABLE_VERSION_TYPES
 
     def clean(self):
         cleaned = super().clean()
@@ -301,6 +311,14 @@ class ProjectScopedSelect(forms.Select):
         return option
 
 
+def dast_binding_label(binding: DastProjectBinding) -> str:
+    """Name one binding for an operator; a sourceless target has no repository to append."""
+    target = f"{binding.project.product.name} · {binding.target.display_name or binding.target.provider_id}"
+    if not binding.requires_source_repository:
+        return target
+    return f"{target} — {binding.source_repo_key}"
+
+
 class DastPipelineRunForm(forms.Form):
 
     """Validate an ephemeral DAST launch without creating a saved preset."""
@@ -347,9 +365,7 @@ class DastPipelineRunForm(forms.Form):
             .order_by("project__product__name", "target__display_name")
         )
         bindings = list(bindings_qs)
-        self.fields["dast_binding"].label_from_instance = lambda b: (
-            f"{b.project.product.name} · {b.target.display_name or b.target.provider_id} — {b.source_repo_key}"
-        )
+        self.fields["dast_binding"].label_from_instance = dast_binding_label
         # The widget must be swapped in before `.queryset` is assigned: the queryset
         # property setter is what pushes rendered choices onto `field.widget`, and it
         # only reaches whichever widget instance is current at that moment.

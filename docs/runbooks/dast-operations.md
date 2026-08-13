@@ -42,7 +42,8 @@ binding for the AIST project. Review:
   binding rejects a source identity if one is supplied;
 - the current capability revision and schema;
 - every required target parameter;
-- whether autonomous execution is allowed.
+- whether the binding is enabled — a disabled binding neither launches nor
+  accepts an imported result.
 
 The ready state should show no unresolved integration, capability, parameter,
 source, or VPN issue. If the provider revision or schema changed, reload the

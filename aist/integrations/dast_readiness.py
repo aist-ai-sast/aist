@@ -45,8 +45,6 @@ class DastReadinessCode(StrEnum):
     TARGET_CONTRACT_INCOMPATIBLE = "TARGET_CONTRACT_INCOMPATIBLE"
     BINDING_PARAMETERS_INVALID = "BINDING_PARAMETERS_INVALID"
     SOURCE_REPOSITORY_UNAVAILABLE = "SOURCE_REPOSITORY_UNAVAILABLE"
-    AUTONOMOUS_POLICY_DISABLED = "AUTONOMOUS_POLICY_DISABLED"
-    AUTONOMOUS_TARGET_NOT_READY = "AUTONOMOUS_TARGET_NOT_READY"
     VPN_TYPE_INVALID = "VPN_TYPE_INVALID"
     VPN_ORGANIZATION_MISMATCH = "VPN_ORGANIZATION_MISMATCH"
     VPN_INACTIVE = "VPN_INACTIVE"
@@ -129,10 +127,6 @@ def check_dast_binding_readiness(
         add(DastReadinessCode.BINDING_DISABLED, "This DAST target binding is disabled.")
     if not target.is_available:
         add(DastReadinessCode.TARGET_UNAVAILABLE, "The selected DAST target is no longer available.")
-    if not binding.autonomous_enabled:
-        add(DastReadinessCode.AUTONOMOUS_POLICY_DISABLED, "Autonomous DAST execution is disabled for this binding.")
-    if not target.autonomous_ready:
-        add(DastReadinessCode.AUTONOMOUS_TARGET_NOT_READY, "The selected target is not autonomous-ready.")
 
     target_snapshot = None
     try:

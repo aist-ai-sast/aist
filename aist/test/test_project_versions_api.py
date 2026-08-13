@@ -14,6 +14,7 @@ from django.http import Http404
 from django.urls import reverse
 
 from aist.api.files import ProjectVersionFileBlobAPI
+from aist.api.project_versions import AISTProjectVersionCreateSerializer
 from aist.models import AISTProjectScript, AISTProjectVersion, RepositoryInfo, ScmType, VersionType
 from aist.test.test_api import AISTApiBase
 
@@ -95,6 +96,32 @@ class ProjectVersionsAPITests(AISTApiBase):
         url = reverse("aist_api:project_version_create", kwargs={"project_id": self.project.id})
         resp = self.client.post(url, data={"version_type": VersionType.FILE_HASH}, format="json")
         self.assertEqual(resp.status_code, 400)
+
+    def test_create_version_rejects_a_sourceless_type(self):
+        """
+        A DAST target version identifies a scan target and is created by the import that produces
+        its findings; an operator has nothing to fill in, so the API must not offer the choice.
+        """
+        url = reverse("aist_api:project_version_create", kwargs={"project_id": self.project.id})
+        resp = self.client.post(
+            url,
+            data={"version_type": VersionType.DAST_TARGET, "version": "perimeter"},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(
+            AISTProjectVersion.objects.filter(version_type=VersionType.DAST_TARGET).exists(),
+        )
+        # The response body cannot be asserted on here: vendor's APITrailingSlashMiddleware
+        # replaces the body of every 400 on a POST to an api/v2 path without a trailing slash,
+        # and this route is declared without one. The rejected field is checked directly.
+        serializer = AISTProjectVersionCreateSerializer(
+            data={"version_type": VersionType.DAST_TARGET, "version": "perimeter"},
+            context={"project": self.project},
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("version_type", serializer.errors)
 
     def test_create_version_duplicate_git_hash(self):
         AISTProjectVersion.objects.get_or_create(

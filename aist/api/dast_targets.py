@@ -69,7 +69,6 @@ class DastProjectBindingSerializer(serializers.ModelSerializer):
             "source_repo_key",
             "enabled",
             "parameter_snapshot",
-            "autonomous_enabled",
             "readiness",
             "created",
             "updated",
@@ -103,7 +102,6 @@ class DastProjectBindingSerializer(serializers.ModelSerializer):
             "source_repo_key",
             "enabled",
             "parameter_snapshot",
-            "autonomous_enabled",
         }
         if not isinstance(data, dict) or set(data) != expected:
             msg = "A complete DAST binding object with no unknown fields is required."
@@ -120,8 +118,6 @@ class DastProjectBindingSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"capability_revision": "Target capability changed; reload the catalog."})
         if attrs.pop("schema_digest") != target.schema_digest:
             raise serializers.ValidationError({"schema_digest": "Target schema changed; reload the catalog."})
-        if attrs.get("autonomous_enabled") and not target.autonomous_ready:
-            raise serializers.ValidationError({"autonomous_enabled": "Target is not autonomous-ready."})
         candidate = DastProjectBinding(project=project, **attrs)
         try:
             candidate.full_clean(exclude=["id"], validate_unique=False, validate_constraints=False)

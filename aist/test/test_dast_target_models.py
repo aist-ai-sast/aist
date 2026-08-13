@@ -16,43 +16,14 @@ from aist.models import (
     OrgIntegrationType,
 )
 from aist.services.dast_targets import refresh_dast_targets
+from aist.test import dast_fixtures
 
-
-def _parameter_schema():
-    return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {"depth": {"enum": ["light", "deep"]}},
-        "required": ["depth"],
-    }
-
-
-def _target_wire(provider_id="app", **overrides):
-    payload = {
-        "id": provider_id,
-        "display_name": f"{provider_id} API",
-        "contract_revision": "2.0",
-        "capability_revision": f"sha256:{provider_id}-capability",
-        "schema_digest": f"sha256:{provider_id}-schema",
-        "parameter_schema": _parameter_schema(),
-        "defaults": {"depth": "light"},
-        "repository_keys": [provider_id, f"{provider_id}-frontend"],
-        "launch_requirements": ["repository-trigger"],
-        "autonomous_ready": True,
-    }
-    payload.update(overrides)
-    return payload
-
-
-def _integration_config(public_id):
-    return {
-        "gateway_url": "https://dast-gateway.internal",
-        "ca_bundle": "",
-        "contract_major": 2,
-        "integrator_public_id": public_id,
-        "server_fingerprint": "sha256:server-fingerprint",
-    }
+# Re-exported under the names the surrounding DAST tests already import, so every target in
+# the suite comes from the one place that knows both target shapes (aist/test/dast_fixtures.py).
+_parameter_schema = dast_fixtures.parameter_schema
+_target_wire = dast_fixtures.target_wire
+_perimeter_target_wire = dast_fixtures.perimeter_target_wire
+_integration_config = dast_fixtures.integration_config
 
 
 class DastTargetSnapshotTests(TestCase):
@@ -193,7 +164,6 @@ class DastTargetAndBindingModelTests(TestCase):
             target=app,
             source_repo_key="app",
             parameter_snapshot={"depth": "light"},
-            autonomous_enabled=True,
         )
         second = DastProjectBinding(
             project=self.project,
@@ -214,6 +184,27 @@ class DastTargetAndBindingModelTests(TestCase):
                 source_repo_key="app",
                 parameter_snapshot={"depth": "light"},
             )
+
+    def test_perimeter_binding_is_valid_without_a_repository_and_rejects_one(self):
+        target = self._refresh(self.integration, _perimeter_target_wire())[0]
+
+        valid = DastProjectBinding(
+            project=self.project,
+            target=target,
+            source_repo_key="",
+            parameter_snapshot={"depth": "light"},
+        )
+        valid.full_clean()
+        self.assertFalse(valid.requires_source_repository)
+
+        with_repository = DastProjectBinding(
+            project=self.project,
+            target=target,
+            source_repo_key="anything",
+            parameter_snapshot={"depth": "light"},
+        )
+        with self.assertRaises(ValidationError):
+            with_repository.full_clean()
 
     def test_binding_rejects_cross_org_stale_integration_repository_and_parameter_mismatches(self):
         own_target = self._refresh(self.integration, _target_wire("app"))[0]

@@ -65,7 +65,6 @@ class DastCancellationTests(AISTApiBase):
             target=target,
             source_repo_key="cancellation-api",
             enabled=True,
-            autonomous_enabled=True,
             parameter_snapshot={"depth": "deep"},
         )
 

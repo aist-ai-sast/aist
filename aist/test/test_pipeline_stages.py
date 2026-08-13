@@ -164,6 +164,30 @@ class WatchDeduplicationTests(TestCase):
         self.assertEqual(pipeline.status, "FINDING_POSTPROCESSING")
         mock_chord_sig.apply_async.assert_called_once()
 
+    def test_findings_without_source_code_finish_instead_of_entering_postprocessing(self):
+        """
+        A pipeline whose findings describe a running system has no source tree to enrich against
+        and no code for AIST to triage, so deduplication is the end of its tail. Enrichment also
+        deletes findings by a project's excluded paths and severities — rules that would be
+        applied to results they were never written for.
+        """
+        tests_mgr = MagicMock()
+        tests_mgr.exists.return_value = True
+        tests_mgr.filter().count.return_value = 0
+        tests_mgr.values_list.return_value = [1]
+        pipeline = _mk_pipeline(
+            status="WAITING_DEDUPLICATION_TO_FINISH",
+            tests=tests_mgr,
+            launch_data={"finding_postprocessing": False},
+        )
+
+        with patch("aist.tasks.dedup.finish_pipeline") as mock_finish, self.captureOnCommitCallbacks(execute=True):
+            pipeline, mock_chord_sig = _call_watch_dedup(pipeline=pipeline, remaining_counts=[0])
+
+        mock_finish.assert_called_once_with(pipeline.id)
+        mock_chord_sig.apply_async.assert_not_called()
+        self.assertEqual(pipeline.status, "WAITING_DEDUPLICATION_TO_FINISH")
+
     def test_stale_retries_exhausted_triggers_enrich(self):
         tests_mgr = MagicMock()
         tests_mgr.exists.return_value = True

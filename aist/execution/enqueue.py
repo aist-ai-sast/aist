@@ -317,7 +317,9 @@ def enqueue_pipeline_launch(
                 project_id=project.pk,
                 binding_id=dast_binding.pk,
                 integration_id=dast_binding.target.integration_id,
-                trigger_project_version_id=trigger_project_version.pk,
+                trigger_project_version_id=(
+                    trigger_project_version.pk if trigger_project_version is not None else None
+                ),
                 params_snapshot=params_snapshot,
                 capability_snapshot=capability_snapshot,
             )

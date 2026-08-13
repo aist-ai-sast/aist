@@ -53,6 +53,8 @@ ERR_UNSUPPORTED_ARCHIVE = "Unsupported archive format: not a ZIP or TAR.*"
 ERR_GITHASH_PARENT_MUST_BE_BRANCH = "resolved_from_branch must point to a GIT_BRANCH version."
 ERR_GITHASH_PARENT_PROJECT_MISMATCH = "resolved_from_branch must belong to the same project."
 ERR_RESOLVED_FROM_BRANCH_ONLY_FOR_GITHASH = "resolved_from_branch is allowed only for GIT_HASH versions."
+ERR_SOURCELESS_REQUIRES_VERSION = "A version with no source revision must still name what it identifies."
+ERR_SOURCELESS_REJECTS_SOURCE = "A version with no source revision cannot carry a source archive."
 
 
 class ScmType(models.TextChoices):
@@ -878,7 +880,6 @@ class DastProjectBinding(models.Model):
     source_repo_key = models.CharField(max_length=128, blank=True, default="")
     enabled = models.BooleanField(default=True)
     parameter_snapshot = models.JSONField(default=dict, blank=True)
-    autonomous_enabled = models.BooleanField(default=False)
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 
@@ -902,7 +903,8 @@ class DastProjectBinding(models.Model):
 
     @property
     def requires_source_repository(self) -> bool:
-        """Whether this binding's target scenario declares a REPOSITORY_TRIGGER requirement.
+        """
+        Whether this binding's target scenario declares a REPOSITORY_TRIGGER requirement.
 
         The single accessor every other DAST module asks instead of re-deriving the answer from
         `repository_keys`/`source_repo_key` truthiness; see `aist/integrations/dast_config.py`'s
@@ -1207,13 +1209,28 @@ class VersionType(models.TextChoices):
     GIT_BRANCH = "GIT_BRANCH", "Git branch"
     GIT_HASH = "GIT_HASH", "Git commit/hash"
     FILE_HASH = "FILE_HASH", "File hash (uploaded archive)"
+    DAST_TARGET = "DAST_TARGET", "DAST target (no source revision)"
+
+
+# A scan of a running system that carries no source revision still produces results that
+# belong somewhere: findings reach a project only through a version, so the target itself is
+# the version they are attached to. One row per target per project, reused by every run.
+SOURCELESS_VERSION_TYPES = frozenset({VersionType.DAST_TARGET})
+
+# Sourceless versions are created by the import that produces their findings, never by hand:
+# they identify a scan target, so an operator has nothing to fill in and nothing to choose.
+OPERATOR_CREATABLE_VERSION_TYPES = tuple(
+    (value, label)
+    for value, label in VersionType.choices
+    if value not in SOURCELESS_VERSION_TYPES
+)
 
 
 class AISTProjectVersion(models.Model):
     project = models.ForeignKey(
         AISTProject, on_delete=models.CASCADE, related_name="versions",
     )
-    version = models.CharField(max_length=64, db_index=True)
+    version = models.CharField(max_length=255, db_index=True)
     last_resolved_commit = models.CharField(max_length=40, blank=True, default="")
     last_resolved_at = models.DateTimeField(null=True, blank=True)
     description = models.TextField(blank=True)
@@ -1287,6 +1304,12 @@ class AISTProjectVersion(models.Model):
                 ).exclude(pk=self.pk).exists()
                 if exists:
                     raise ValidationError({"version": ERR_VERSION_ALREADY_EXISTS})
+
+        if self.version_type in SOURCELESS_VERSION_TYPES:
+            if not (self.version or "").strip():
+                raise ValidationError({"version": ERR_SOURCELESS_REQUIRES_VERSION})
+            if self.source_archive:
+                raise ValidationError({"source_archive": ERR_SOURCELESS_REJECTS_SOURCE})
 
         if self.resolved_from_branch_id and self.version_type != VersionType.GIT_HASH:
             raise ValidationError({"resolved_from_branch": ERR_RESOLVED_FROM_BRANCH_ONLY_FOR_GITHASH})

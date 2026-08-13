@@ -11,6 +11,7 @@ import type {
   PipelineSummary,
   ProductSummary,
   Project,
+  ProjectVersionType,
   WorkItemLink,
 } from "../types";
 import { fetchJson, normalizeList } from "./api";
@@ -37,7 +38,7 @@ type FindingApi = {
   date?: string;
   created?: string;
   project_version?: string | null;
-  project_version_type?: "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH" | null;
+  project_version_type?: ProjectVersionType | null;
   file_path?: string | null;
   line?: number | null;
   description?: string | null;
@@ -102,7 +103,7 @@ type ProductSummaryApi = {
 };
 
 type ProjectMetaApi = {
-  versions: { id: string; label: string; version_type?: "GIT_BRANCH" | "GIT_HASH" | "FILE_HASH" }[];
+  versions: { id: string; label: string; version_type?: ProjectVersionType }[];
 };
 
 type PipelineApi = {
@@ -1094,7 +1095,6 @@ export type DastProjectBinding = {
   source_repo_key: string;
   enabled: boolean;
   parameter_snapshot: Record<string, unknown>;
-  autonomous_enabled: boolean;
   readiness: {
     ready: boolean;
     issues: Array<{ code: string; detail: string }>;

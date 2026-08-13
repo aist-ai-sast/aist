@@ -12,7 +12,6 @@ from aist.models import (
     AISTProjectLaunchConfig,
     DastIntegrationState,
     DastIntegrationValidationState,
-    DastProjectBinding,
     LaunchSchedule,
     Organization,
     OrgIntegration,
@@ -23,8 +22,9 @@ from aist.models import (
 )
 from aist.services.dast_targets import refresh_dast_targets
 from aist.tasks.launch_schedule import process_launch_schedules
+from aist.test import dast_fixtures
 from aist.test.test_api import AISTApiBase
-from aist.test.test_dast_target_models import _integration_config, _target_wire
+from aist.test.test_dast_target_models import _integration_config
 
 
 class ProcessLaunchSchedulesTests(AISTApiBase):
@@ -58,7 +58,7 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
         )
         return cfg, sched
 
-    def _mk_dast_config_and_schedule(self):
+    def _mk_dast_config_and_schedule(self, *, shape=dast_fixtures.SOURCE_BASED):
         integration = OrgIntegration.objects.create(
             organization=self.organization,
             integration_type=OrgIntegrationType.DAST,
@@ -69,7 +69,7 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
         )
         target = refresh_dast_targets(
             integration,
-            [DastTargetSnapshot.from_snapshot(_target_wire("scheduled-api"))],
+            [DastTargetSnapshot.from_snapshot(shape.wire("scheduled-api"))],
             seen_at=timezone.now(),
         )[0]
         DastIntegrationState.objects.create(
@@ -80,19 +80,17 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
             capabilities_etag="scheduled-catalog",
             capabilities_synced_at=timezone.now(),
         )
-        binding = DastProjectBinding.objects.create(
+        binding = dast_fixtures.create_dast_binding(
             project=self.project,
             target=target,
-            source_repo_key="scheduled-api",
-            parameter_snapshot={"depth": "light"},
-            autonomous_enabled=True,
+            parameters={"depth": "light"},
         )
         config = AISTProjectLaunchConfig.objects.create(
             project=self.project,
             name="Scheduled DAST config",
             execution_type=PipelineExecutionType.DAST,
             dast_binding=binding,
-            trigger_project_version=self.pv,
+            trigger_project_version=self.pv if binding.requires_source_repository else None,
             params={"depth": "light"},
         )
         schedule = LaunchSchedule.objects.create(
@@ -176,6 +174,23 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
         self.assertEqual(request.schedule_id, schedule.pk)
         self.assertEqual(request.params_snapshot, {"depth": "light"})
         self.assertEqual(request.capability_snapshot["id"], "scheduled-api")
+
+    def test_due_perimeter_schedule_enqueues_without_a_source_version(self):
+        """A schedule on a sourceless target must tick, not fail silently and repeat forever."""
+        binding, config, schedule = self._mk_dast_config_and_schedule(shape=dast_fixtures.PERIMETER)
+        now = timezone.now()
+
+        LaunchSchedule.objects.filter(pk=schedule.pk).update(next_run_at=now - timedelta(minutes=5))
+        with patch("aist.tasks.launch_schedule.timezone.now", return_value=now):
+            process_launch_schedules()
+
+        schedule.refresh_from_db()
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 1, schedule.last_error_detail)
+        request = PipelineLaunchRequest.objects.get()
+        self.assertEqual(request.dast_binding_id, binding.pk)
+        self.assertEqual(request.launch_config_id, config.pk)
+        self.assertIsNone(request.trigger_project_version_id)
+        self.assertIsNone(schedule.last_error_detail or None)
 
     def test_overlapping_dast_schedule_ticks_leave_one_pending_request(self):
         _binding, _config, schedule = self._mk_dast_config_and_schedule()

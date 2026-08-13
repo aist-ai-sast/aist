@@ -33,6 +33,7 @@ from aist.integrations.dast_capability_sync import prepare_dast_capability_sync,
 from aist.integrations.dast_config import DastTargetSnapshot
 from aist.integrations.dast_gateway_client import DastGatewayPing, DastTargetCatalog
 from aist.integrations.dast_validation import prepare_dast_validation, run_dast_validation
+from aist.launch_data import PipelineLaunchData
 from aist.models import (
     AISTPipeline,
     AISTProjectLaunchConfig,
@@ -58,6 +59,7 @@ from aist.utils.pipeline import finish_pipeline
 
 ACTUAL_SHA = "a" * 40
 TRIGGER_BRANCH = "release/2026-07"
+PERIMETER_TARGET = "edge-perimeter"
 
 
 class ContractFaithfulDastGateway:
@@ -71,6 +73,14 @@ class ContractFaithfulDastGateway:
         self.targets = (
             self._target("payments-api", capability_character="a", schema_character="c"),
             self._target("admin-api", capability_character="b", schema_character="d"),
+            # A perimeter target: the provider scans a running system and knows no repository,
+            # so this run carries no trigger and reports no source commit.
+            self._target(
+                PERIMETER_TARGET,
+                capability_character="e",
+                schema_character="f",
+                requires_repository=False,
+            ),
         )
         self.findings_by_target: dict[str, list[dict]] = {
             "payments-api": [],
@@ -86,10 +96,28 @@ class ContractFaithfulDastGateway:
                     "endpoints": ["https://admin.example.test/v2/objects/42"],
                 },
             ],
+            PERIMETER_TARGET: [
+                {
+                    "title": "Exposed management interface",
+                    "severity": "High",
+                    "description": "An administrative interface answers on the public perimeter.",
+                    "unique_id_from_tool": "dast-perimeter-1",
+                    "vuln_id_from_tool": "dast-perimeter-1",
+                    "cwe": 284,
+                    "dynamic_finding": True,
+                    "endpoints": ["https://edge.example.test:8443/manage"],
+                },
+            ],
         }
 
     @staticmethod
-    def _target(target_id: str, *, capability_character: str, schema_character: str) -> DastTargetSnapshot:
+    def _target(
+        target_id: str,
+        *,
+        capability_character: str,
+        schema_character: str,
+        requires_repository: bool = True,
+    ) -> DastTargetSnapshot:
         return DastTargetSnapshot.from_snapshot(
             {
                 "id": target_id,
@@ -105,8 +133,8 @@ class ContractFaithfulDastGateway:
                     "required": ["depth"],
                 },
                 "defaults": {"depth": "light"},
-                "repository_keys": ["backend"],
-                "launch_requirements": ["repository-trigger"],
+                "repository_keys": ["backend"] if requires_repository else [],
+                "launch_requirements": ["repository-trigger"] if requires_repository else [],
                 "autonomous_ready": True,
             },
         )
@@ -139,8 +167,12 @@ class ContractFaithfulDastGateway:
             ],
         )
         self.test_case.assertEqual(execution.vpn_container_name, "vpn-dast-e2e")
-        self.test_case.assertEqual(execution.command.trigger.type.value, "GIT_BRANCH")
-        self.test_case.assertEqual(execution.command.trigger.ref, TRIGGER_BRANCH)
+        sourceless = execution.command.target_id == PERIMETER_TARGET
+        if sourceless:
+            self.test_case.assertIsNone(execution.command.trigger)
+        else:
+            self.test_case.assertEqual(execution.command.trigger.type.value, "GIT_BRANCH")
+            self.test_case.assertEqual(execution.command.trigger.ref, TRIGGER_BRANCH)
         self.test_case.assertEqual(stat.S_IMODE(execution.token_file.stat().st_mode), 0o600)
         self.test_case.assertEqual(
             execution.token_file.read_text(encoding="utf-8"),
@@ -151,29 +183,30 @@ class ContractFaithfulDastGateway:
         recovery = execution.recovery.for_run(run_id).with_cursor(2)
         status = DastRunState.STOPPED if execution.stop_requested else DastRunState.SUCCEEDED
         findings = self.findings_by_target.get(execution.command.target_id, [])
+        source_commits = {} if sourceless else {"backend": ACTUAL_SHA}
         terminal = DastTerminalResult.from_wire(
             {
                 "contract_version": "2.0",
                 "run_id": run_id,
                 "status": status.value,
                 "selection": {"stand_id": "qa-shared", "relation": "ancestor", "distance": 2},
-                "trigger_resolution": {
+                "trigger_resolution": None if sourceless else {
                     "type": "GIT_BRANCH",
                     "ref": TRIGGER_BRANCH,
                     "resolved_commit": "b" * 40,
                     "resolved_at": "2026-07-26T10:00:00Z",
                 },
-                "dast_run_metadata": {"source_commits": {"backend": ACTUAL_SHA}},
+                "dast_run_metadata": {"source_commits": source_commits},
                 "report": {
                     "name": "DAST",
                     "type": "DAST Autonomous Scan",
-                    "version": "backend@aaaaaaaaaaaa",
+                    "version": PERIMETER_TARGET if sourceless else "backend@aaaaaaaaaaaa",
                     "findings": findings,
                     "dast_run_metadata": {
                         "run_id": run_id,
                         "target": execution.command.target_id,
                         "stand": "qa-shared",
-                        "source_commits": {"backend": ACTUAL_SHA},
+                        "source_commits": source_commits,
                     },
                 },
                 "audit": {
@@ -272,16 +305,16 @@ class DastMockEndToEndTests(AISTApiBase):
         )
         bindings = {}
         for target in self.integration.dast_targets.order_by("provider_id"):
+            requires_repository = target.get_snapshot().launch_requirements.requires_repository()
             response = self.client.post(
                 bindings_url,
                 {
                     "target_id": target.pk,
                     "capability_revision": target.capability_revision,
                     "schema_digest": target.schema_digest,
-                    "source_repo_key": "backend",
+                    "source_repo_key": "backend" if requires_repository else "",
                     "enabled": True,
                     "parameter_snapshot": {"depth": "light"},
-                    "autonomous_enabled": True,
                 },
                 format="json",
             )
@@ -296,7 +329,7 @@ class DastMockEndToEndTests(AISTApiBase):
             name=name,
             execution_type=PipelineExecutionType.DAST,
             dast_binding=binding,
-            trigger_project_version=self.branch,
+            trigger_project_version=self.branch if binding.requires_source_repository else None,
             params={"depth": "light"},
         )
         start_url = reverse(
@@ -387,3 +420,74 @@ class DastMockEndToEndTests(AISTApiBase):
         self.assertFalse(PipelineExecutionLease.objects.filter(released_at__isnull=True).exists())
         self.assertIn(("POST", "/integrations/v2/runs"), self.gateway.events)
         self.assertIn(("GET", "/integrations/v2/runs/{run_id}/logs"), self.gateway.events)
+
+    def test_perimeter_target_finishes_and_its_findings_are_reachable_by_project(self):
+        """
+        The operator scenario this covers: a perimeter target has no repository, so nothing in the
+        launch names a source version — and the findings it produces must still be the findings the
+        operator sees when filtering by project.
+        """
+        request = self._enqueue(self.bindings[PERIMETER_TARGET], "Perimeter target")
+
+        self.assertIsNone(request.trigger_project_version_id)
+        self.assertEqual(self._plan_and_publish(request).status, LaunchPlanningStatus.READY)
+
+        with self._runtime_patches(), self.captureOnCommitCallbacks(execute=True):
+            pipeline_tasks._execute_dast_pipeline(request.pipeline_id)
+
+        pipeline = AISTPipeline.objects.get(pk=request.pipeline_id)
+        self.assertIsNone(pipeline.trigger_project_version_id)
+        # The result belongs to the target itself, which is what makes it reachable below.
+        self.assertEqual(pipeline.project_version.version, PERIMETER_TARGET)
+        self.assertEqual(pipeline.project_version.version_type, VersionType.DAST_TARGET)
+        self.assertEqual(pipeline.tests.first().finding_set.count(), 1)
+        # Findings imported, so the pipeline waits for provider-side deduplication; the tail it
+        # takes from here is covered by WatchDeduplicationTests, which drives the watcher directly.
+        self.assertEqual(pipeline.status, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
+        self.assertFalse(PipelineLaunchData(pipeline.launch_data).finding_postprocessing)
+
+        findings = self.client.get(
+            reverse("aist_api:finding_list"),
+            {"project_id": self.project.pk, "pipeline_id": pipeline.id},
+        )
+        self.assertEqual(findings.status_code, 200, findings.data)
+        # The importer title-cases finding titles; what matters here is that the perimeter
+        # finding is reachable at all through a project filter that resolves via versions.
+        self.assertEqual(
+            [item["title"].lower() for item in findings.data["results"]],
+            ["exposed management interface"],
+        )
+
+    def test_a_source_based_dast_result_also_opts_out_of_the_source_code_tail(self):
+        """
+        AIST cannot triage a finding it has no code for, and enrichment's path/severity exclusions
+        describe a source tree — so a DAST result opts out for both shapes of target, not only the
+        one that obviously has no repository.
+        """
+        request = self._enqueue(self.bindings["admin-api"], "Source-based tail")
+        self.assertEqual(self._plan_and_publish(request).status, LaunchPlanningStatus.READY)
+
+        with self._runtime_patches(), self.captureOnCommitCallbacks(execute=True):
+            pipeline_tasks._execute_dast_pipeline(request.pipeline_id)
+
+        pipeline = AISTPipeline.objects.get(pk=request.pipeline_id)
+        self.assertEqual(pipeline.project_version.version, ACTUAL_SHA)
+        self.assertEqual(pipeline.tests.first().finding_set.count(), 1)
+        self.assertFalse(PipelineLaunchData(pipeline.launch_data).finding_postprocessing)
+
+    def test_redelivered_perimeter_finalization_is_a_no_op(self):
+        """A Celery redelivery of the finalization task must not turn into a permanent error."""
+        request = self._enqueue(self.bindings[PERIMETER_TARGET], "Perimeter redelivery")
+        self.assertEqual(self._plan_and_publish(request).status, LaunchPlanningStatus.READY)
+        with self._runtime_patches(), self.captureOnCommitCallbacks(execute=True):
+            result = pipeline_tasks._execute_dast_pipeline(request.pipeline_id)
+
+        pipeline = AISTPipeline.objects.get(pk=request.pipeline_id)
+        test_ids = list(pipeline.tests.values_list("id", flat=True))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            pipeline_tasks._handle_dast_execution_result(None, request.pipeline_id, result)
+
+        pipeline.refresh_from_db()
+        self.assertEqual(list(pipeline.tests.values_list("id", flat=True)), test_ids)
+        self.assertEqual(pipeline.tests.first().finding_set.count(), 1)

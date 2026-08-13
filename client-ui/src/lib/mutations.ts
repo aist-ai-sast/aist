@@ -377,7 +377,6 @@ export type DastBindingPayload = {
   source_repo_key: string;
   enabled: boolean;
   parameter_snapshot: Record<string, unknown>;
-  autonomous_enabled: boolean;
 };
 
 export function useUpsertDastProjectBinding(projectId: number) {

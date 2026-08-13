@@ -108,6 +108,22 @@ class PipelineLaunchData:
         return self.ai.get("triage_type")
 
     @property
+    def finding_postprocessing(self) -> bool:
+        """
+        Whether this pipeline's findings go through enrichment and AI triage after dedup.
+
+        Set to False by an import whose findings describe a running system rather than a source
+        tree: enrichment trims file paths, links findings to source and deletes those matching a
+        project's excluded severities or paths, and AIST cannot triage a finding it has no code
+        for. Absent means True, so every existing pipeline keeps the source-code tail.
+        """
+        return self._data.get("finding_postprocessing", True) is not False
+
+    @finding_postprocessing.setter
+    def finding_postprocessing(self, value: bool) -> None:
+        self._data["finding_postprocessing"] = bool(value)
+
+    @property
     def launch_config_id(self) -> str | None:
         return self._data.get("launch_config_id")
 

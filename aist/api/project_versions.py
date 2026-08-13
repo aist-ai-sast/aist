@@ -6,7 +6,13 @@ from rest_framework.response import Response
 
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy
-from aist.models import AISTProject, AISTProjectScript, AISTProjectVersion, VersionType
+from aist.models import (
+    OPERATOR_CREATABLE_VERSION_TYPES,
+    AISTProject,
+    AISTProjectScript,
+    AISTProjectVersion,
+    VersionType,
+)
 
 SCRIPT_SOURCE_VERSION = "version"
 SCRIPT_SOURCE_PROJECT_REVISION = "project_revision"
@@ -45,6 +51,7 @@ class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(read_only=True)
     project = serializers.PrimaryKeyRelatedField(read_only=True)
     script_id = serializers.IntegerField(read_only=True)
+    version_type = serializers.ChoiceField(choices=OPERATOR_CREATABLE_VERSION_TYPES)
 
     class Meta:
         model = AISTProjectVersion

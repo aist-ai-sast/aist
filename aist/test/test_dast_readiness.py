@@ -89,7 +89,6 @@ class DastReadinessTests(TestCase):
             source_repo_key="source",
             enabled=True,
             parameter_snapshot={},
-            autonomous_enabled=True,
         )
 
     def _fresh_binding(self) -> DastProjectBinding:
@@ -110,6 +109,20 @@ class DastReadinessTests(TestCase):
         self.assertEqual(snapshot["ready"], True)
         self.assertEqual(snapshot["issues"], [])
         self.assertNotIn(self.integration.secret, str(snapshot))
+
+    def test_launch_is_admitted_regardless_of_provider_autonomy_advertisement(self):
+        """
+        Readiness answers "can this binding launch", and autonomy is not part of that question:
+        an operator pressing Start is not an autonomous launch, and the provider refuses a target
+        it cannot run at its own start endpoint.
+        """
+        self.target.autonomous_ready = False
+        self.target.save(update_fields=["autonomous_ready"])
+
+        result = check_dast_binding_readiness(self._fresh_binding(), now=self.now)
+
+        self.assertTrue(result.ready)
+        self.assertEqual(result.issues, ())
 
     def test_each_durable_onboarding_prerequisite_has_a_stable_reason(self):
         binding = self._fresh_binding()
@@ -203,18 +216,6 @@ class DastReadinessTests(TestCase):
                 binding,
                 "source_repo_key",
                 "removed",
-            ),
-            (
-                DastReadinessCode.AUTONOMOUS_POLICY_DISABLED,
-                binding,
-                "autonomous_enabled",
-                False,
-            ),
-            (
-                DastReadinessCode.AUTONOMOUS_TARGET_NOT_READY,
-                binding.target,
-                "autonomous_ready",
-                False,
             ),
         )
         for code, subject, field, value in cases:

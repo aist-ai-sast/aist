@@ -23,6 +23,7 @@ from aist.models import (
     VersionType,
 )
 from aist.services.dast_targets import refresh_dast_targets
+from aist.test import dast_fixtures
 from aist.test.test_api import AISTApiBase
 from aist.test.test_dast_target_models import _integration_config, _target_wire
 
@@ -66,7 +67,6 @@ class DastStartViewTests(AISTApiBase):
             target=self.target,
             source_repo_key="start-api",
             enabled=True,
-            autonomous_enabled=True,
             parameter_snapshot={"depth": "light"},
         )
 
@@ -93,6 +93,56 @@ class DastStartViewTests(AISTApiBase):
         self.assertEqual(request.trigger_project_version, self.pv)
         self.assertEqual(request.params_snapshot, {"depth": "deep"})
         self.assertEqual(AISTProjectLaunchConfig.objects.count(), 0)
+
+    def test_perimeter_launch_from_the_start_form_creates_a_request_without_a_source_version(self):
+        """
+        The operator scenario that returned 503: a perimeter target legitimately has no source
+        version, and the form leaves that field empty.
+        """
+        perimeter_target = dast_fixtures.create_dast_target(
+            integration=self.integration,
+            wire=dast_fixtures.perimeter_target_wire(),
+            seen_at=timezone.now(),
+        )
+        perimeter_binding = dast_fixtures.create_dast_binding(
+            project=self.project,
+            target=perimeter_target,
+            parameters={"depth": "light"},
+        )
+
+        response = self.client.post(
+            reverse("aist:start_pipeline"),
+            self._payload(
+                dast_binding=perimeter_binding.pk,
+                trigger_project_version="",
+                client_request_key="one-off-perimeter-1",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        request = PipelineLaunchRequest.objects.get()
+        self.assertEqual(request.dast_binding, perimeter_binding)
+        self.assertIsNone(request.trigger_project_version_id)
+        self.assertTrue(request.coalesce_key)
+
+    def test_perimeter_binding_option_carries_no_dangling_repository_separator(self):
+        perimeter_target = dast_fixtures.create_dast_target(
+            integration=self.integration,
+            wire=dast_fixtures.perimeter_target_wire(),
+            seen_at=timezone.now(),
+        )
+        dast_fixtures.create_dast_binding(
+            project=self.project,
+            target=perimeter_target,
+            parameters={"depth": "light"},
+        )
+
+        response = self.client.get(reverse("aist:start_pipeline"), {"execution_type": "DAST"})
+
+        content = response.content.decode()
+        self.assertIn("perimeter API", content)
+        self.assertNotIn("perimeter API — <", content)
+        self.assertNotIn("perimeter API —<", content)
 
     def test_one_off_dast_launch_is_idempotent(self):
         first = self.client.post(reverse("aist:start_pipeline"), self._payload())
@@ -134,7 +184,6 @@ class DastStartViewTests(AISTApiBase):
             target=self.target,
             source_repo_key="start-api",
             enabled=True,
-            autonomous_enabled=True,
             parameter_snapshot={"depth": "light"},
         )
 

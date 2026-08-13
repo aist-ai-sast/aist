@@ -44,8 +44,12 @@ trigger, then sets the effective version only after a validated provider
 result maps the bound repository identity to an actual commit; a manual import
 against that binding uses the same result-to-binding mapping. A DAST binding
 whose target declares no repository requirement (a fixed-surface or
-declared-stand scenario) carries no trigger and never acquires an effective
-version — its pipeline and findings have no associated project version.
+declared-stand scenario) carries no trigger, and its effective version is the
+scan target itself: one durable version per target per project, reused by every
+run of that target. Findings reach a project only through a version, so this is
+what makes a perimeter result reachable when filtering findings by project.
+An operator never creates such a version by hand — the import that produces the
+findings owns it.
 
 The manual start page can build either a one-off SAST or DAST launch. A one-off
 DAST launch selects an enabled binding and target-schema-valid parameters in
@@ -70,6 +74,14 @@ An empty valid result finishes without creating findings. Otherwise AIST waits
 for import and deduplication to complete, enriches the findings with available
 source context, identifies regressions, and advances the pipeline to human or
 AI-assisted review.
+
+Findings that describe a running system take the shorter tail: after
+deduplication the pipeline finishes. Source-context enrichment rewrites file
+paths, drops findings excluded by a project's path or severity profile, and
+prepares code for triage — all of it about a source tree a dynamic result does
+not have, and AIST cannot meaningfully triage a finding it has no code for.
+Such findings are imported, deduplicated and reviewable by a human, but they are
+not enriched and not sent for AI triage.
 
 An execution or processing failure does not erase the pipeline. The terminal
 outcome and available logs remain part of its history. Provider-controlled

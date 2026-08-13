@@ -50,8 +50,11 @@ integration stays ready through it.
 
 A launch is ready only when the integration is healthy, synchronized
 capabilities are current, the project binding is enabled, the parameter set is
-valid, autonomous execution is allowed, and a private gateway has its explicit
-DAST VPN route.
+valid, and a private gateway has its explicit DAST VPN route.
+
+Readiness answers whether this binding can launch at all; it carries no separate
+permission to launch without an operator. A binding an operator can start is a
+binding a schedule can start.
 
 The same readiness result is shown during configuration and checked again when
 execution is admitted. A stale capability revision or changed provider schema
@@ -87,8 +90,9 @@ For a binding whose target requires a repository trigger, AIST resolves the
 effective Git hash from the validated report entry whose repository identity
 matches the selected binding; it does not accept a separate client-supplied
 revision, and a report with no matching entry is rejected. For a binding whose
-target has no repository requirement, no repository identity is expected in
-the report and the import pipeline is created without a project version.
+target has no repository requirement, no repository identity is expected in the
+report, and the results attach to the version standing for the target itself —
+see [pipeline execution](../product/pipeline-execution.md).
 Confirmation creates an import pipeline and applies the same result validation
 and finding lifecycle used by an autonomous result.
 

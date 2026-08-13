@@ -88,7 +88,6 @@ class DastTargetBindingAPITests(AISTApiBase):
             "source_repo_key": "source",
             "enabled": True,
             "parameter_snapshot": {},
-            "autonomous_enabled": True,
         }
         payload.update(overrides)
         return payload
@@ -116,11 +115,11 @@ class DastTargetBindingAPITests(AISTApiBase):
         self.assertEqual(DastProjectBinding.objects.filter(project=self.project).count(), 1)
         updated = self.client.post(
             self.bindings_url,
-            self._binding_payload(autonomous_enabled=False),
+            self._binding_payload(enabled=False),
             format="json",
         )
         self.assertEqual(updated.status_code, 200, updated.data)
-        self.assertFalse(DastProjectBinding.objects.get(project=self.project).autonomous_enabled)
+        self.assertFalse(DastProjectBinding.objects.get(project=self.project).enabled)
 
         for field in ("capability_revision", "schema_digest"):
             with self.subTest(field=field):
@@ -316,7 +315,6 @@ class DastTargetBindingAPITests(AISTApiBase):
             source_repo_key="source",
             enabled=True,
             parameter_snapshot={},
-            autonomous_enabled=True,
         )
 
         response = self.client.post(
