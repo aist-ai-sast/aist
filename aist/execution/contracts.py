@@ -33,6 +33,25 @@ class PipelineTaskName(StrEnum):
     RUN_PIPELINE_EXECUTION = "aist.tasks.pipeline.run_pipeline_execution"
 
 
+class ProviderOperation(StrEnum):
+
+    """
+    Every operation an execution provider can be observed performing.
+
+    One vocabulary for the provider side, the adapter descriptors and the metrics. Three
+    disagreeing sets meant an unrecognised operation was silently relabelled "execute", so a
+    resumed run was indistinguishable from a first attempt in the very metric used to diagnose
+    resume loops.
+    """
+
+    PING = "ping"
+    CATALOG = "catalog"
+    EXECUTE = "execute"
+    RESUME = "resume"
+    CANCEL = "cancel"
+    RECONCILE = "reconcile"
+
+
 class ExecutionCancellationMode(StrEnum):
     IMMEDIATE = "IMMEDIATE"
     COOPERATIVE = "COOPERATIVE"
@@ -48,6 +67,10 @@ class ExecutionMetricDescriptor:
             raise ExecutionPlanError(_ERR_METRIC_LABEL)
         if not self.operations or any(not operation or len(operation) > 24 for operation in self.operations):
             raise ExecutionPlanError(_ERR_METRIC_OPERATIONS)
+        unknown = {operation for operation in self.operations if operation not in set(ProviderOperation)}
+        if unknown:
+            detail = f"{_ERR_METRIC_OPERATIONS} Unknown: {sorted(unknown)}."
+            raise ExecutionPlanError(detail)
 
 
 class EffectiveVersionPolicy(StrEnum):

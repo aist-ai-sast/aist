@@ -40,6 +40,12 @@ When source acquisition needs a project VPN, the builder joins the
 execution-specific VPN sidecar. Analyzer containers consume the prepared
 workspace and do not automatically inherit that private network path.
 
+The connector receives its command, its provider token, and its output directory
+as owner-only files rather than environment variables, so the worker and the
+container must agree on who that owner is. The worker hands ownership to the
+unprivileged user the connector image declares; where it cannot, the container
+runs as the worker instead. Neither path relaxes the file modes.
+
 ## Hand reports back to AIST
 
 SAST analyzers write reports to the run output directory. A standalone provider
@@ -57,6 +63,11 @@ and execution leases from PostgreSQL. If an accepted DAST task disappears while
 the provider outcome remains recoverable, AIST republishes the same generic task
 with the stored checkpoint. A lost SAST task cannot safely resume midway and
 finishes with warnings instead.
+
+A connector that fails before it reaches the provider — an unreadable command
+file, an unusable token, an output directory it cannot write — is not a provider
+outage: the next attempt would fail identically. AIST ends such a pipeline at
+once with its own outcome code instead of retrying until the deadline.
 
 Containers and temporary paths remain scoped to one pipeline. SAST cancellation
 stops local work immediately. DAST cancellation persists intent first, then the

@@ -5,11 +5,13 @@ from dataclasses import dataclass
 
 from prometheus_client import Counter, Histogram
 
+from aist.execution.contracts import ProviderOperation
+
 _logger = logging.getLogger("aist.execution.audit")
 
 _EXECUTION_TYPES = {"all"}
 _QUEUE_EVENTS = frozenset({"claimed", "coalesced", "expired", "capacity_wait"})
-_PROVIDER_OPERATIONS = frozenset({"ping", "catalog", "execute", "reconcile"})
+_PROVIDER_OPERATIONS = frozenset(ProviderOperation)
 _DAST_OUTCOMES = frozenset({
     "SUCCESS_WITH_FINDINGS",
     "SUCCESS_CLEAN",
@@ -123,7 +125,10 @@ def observe_lease_decision(*, execution_type: str, acquired_slot: int | None, ca
 
 
 def observe_provider_call(*, operation: str, duration_seconds: float, error_code: str = "") -> None:
-    operation = _bounded(operation, _PROVIDER_OPERATIONS, fallback="execute")
+    # An unrecognised operation is labelled as such rather than relabelled "execute": silently
+    # folding it into the most common value is how a resume became indistinguishable from a first
+    # attempt.
+    operation = _bounded(operation, _PROVIDER_OPERATIONS, fallback="unknown")
     result = "error" if error_code else "success"
     PROVIDER_SECONDS.labels(operation=operation, result=result).observe(max(0.0, float(duration_seconds)))
     if error_code:

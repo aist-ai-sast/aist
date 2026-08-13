@@ -4,9 +4,8 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING
 
 from celery import shared_task
 from django.db import transaction
@@ -15,6 +14,11 @@ from dojo.models import Finding, Test
 
 from aist.celery_signals import _update_action_run
 from aist.execution.adapters import UnknownLaunchAdapterError
+from aist.execution.contracts import ProviderOperation
+from aist.execution.dast_deadlines import (
+    dast_deadline_exhausted,
+    dast_execution_timeout,
+)
 from aist.execution.dast_trigger import DastTrigger
 from aist.execution.dispatching import LaunchAcceptance, accept_published_launch
 from aist.execution.observability import (
@@ -69,20 +73,25 @@ from aist.utils.pipeline import (
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
 from aist.utils.vpn import vpn_sidecar_context
 
+if TYPE_CHECKING:
+    from datetime import datetime
+
 # --------------------------------------------------------------------
 # Ensure external "pipeline" package is importable before importing it
 # --------------------------------------------------------------------
 _import_sast_pipeline_package()
 
-from celery.exceptions import Ignore  # noqa: E402
+from celery.exceptions import Ignore, Retry  # noqa: E402
 from pipeline.config_utils import AnalyzersConfigHelper  # type: ignore[import-not-found]  # noqa: E402
 from pipeline.dast import (  # type: ignore[import-not-found]  # noqa: E402
     DastConnectorOutcomeState,
     DastExecutionIncomplete,
     DastExecutionInput,
+    DastExecutionLocalFailure,
     DastRecoveryState,
     DastStartCommand,
 )
+from pipeline.docker_utils import pipeline_workspace  # type: ignore[import-not-found]  # noqa: E402
 from pipeline.execution import execute_pipeline  # type: ignore[import-not-found]  # noqa: E402
 from pipeline.sast_execution import SastExecutionInput  # type: ignore[import-not-found]  # noqa: E402
 
@@ -93,8 +102,6 @@ from aist.internal_upload import upload_results_internal  # noqa: E402
 # -------------------------
 MSG_PROJECT_BUILD_PATH_NOT_SET = "Project build path for AIST is not setup"
 _ERR_DAST_RUNTIME = "Persisted DAST execution data is invalid."
-_DAST_EXECUTION_TIMEOUT = timedelta(hours=4)
-_DAST_UNREACHABLE_GRACE = timedelta(minutes=15)
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,7 +191,7 @@ def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
 
         now = timezone.now()
         if execution_state.deadline is None:
-            execution_state.deadline = now + _DAST_EXECUTION_TIMEOUT
+            execution_state.deadline = now + dast_execution_timeout()
         execution_state.outcome = DastExecutionOutcome.RUNNING
         execution_state.save(update_fields=["deadline", "outcome", "updated"])
         recovery = DastRecoveryState(
@@ -245,8 +252,9 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
         if runtime.vpn_integration is not None
         else None
     )
-    with TemporaryDirectory(prefix=f"aist-dast-{pipeline_id}-") as temporary_directory:
-        workspace = Path(temporary_directory)
+    # The connector's files are bind-mounted, and the daemon resolves those paths on the host:
+    # a directory under this container's own /tmp would mount empty.
+    with pipeline_workspace(pipeline_id) as workspace:
         token_file = workspace / "token"
         token_file.write_text(runtime.token, encoding="utf-8")
         token_file.chmod(0o600)
@@ -304,7 +312,7 @@ def _dast_reconciliation_exhausted(pipeline_id: str) -> bool:
         "deadline",
         flat=True,
     ).first()
-    return deadline is not None and timezone.now() >= deadline + _DAST_UNREACHABLE_GRACE
+    return dast_deadline_exhausted(deadline)
 
 
 def _mark_dast_unreachable(pipeline_id: str) -> None:
@@ -325,14 +333,33 @@ def _finish_dast_cancellation(pipeline_id: str) -> None:
     finish_pipeline(pipeline_id, degraded=True)
 
 
+def _abandon_dast_execution(pipeline_id: str) -> None:
+    """
+    End a run the deadline says is over, leaving no path that skips terminalization.
+
+    Every way of giving up funnels here, so the outcome is recorded and the pipeline reaches a
+    terminal status -- which is also what releases its capacity lease.
+    """
+    _mark_dast_unreachable(pipeline_id)
+    record_dast_pipeline_outcome(pipeline_id, DastPipelineOutcomeCode.TIMEOUT)
+    finish_pipeline(pipeline_id, degraded=True)
+
+
 def _retry_dast_execution(task, pipeline_id: str, *, exc: Exception | None = None) -> None:
     if _dast_reconciliation_exhausted(pipeline_id):
-        _mark_dast_unreachable(pipeline_id)
-        record_dast_pipeline_outcome(pipeline_id, DastPipelineOutcomeCode.TIMEOUT)
-        finish_pipeline(pipeline_id, degraded=True)
+        _abandon_dast_execution(pipeline_id)
         return
     countdown = min(15 * (2 ** min(int(task.request.retries), 5)), 300)
-    raise task.retry(exc=exc, countdown=countdown, max_retries=None)
+    try:
+        raise task.retry(exc=exc, countdown=countdown)
+    except Retry:
+        raise
+    except Exception:
+        # Celery re-raises the original error once the retry budget is spent, from inside this
+        # handler -- where no sibling `except` of the caller can see it. Without this the run
+        # would stay EXECUTING forever, holding the integration's only capacity slot.
+        _abandon_dast_execution(pipeline_id)
+        return
 
 
 def _handle_dast_execution_result(task, pipeline_id: str, result):
@@ -435,6 +462,16 @@ def _run_dast_execution(task, pipeline_id: str, *, operation: str):
         )
         _mark_dast_unreachable(pipeline_id)
         return _retry_dast_execution(task, pipeline_id, exc=exc)
+    except DastExecutionLocalFailure:
+        observe_provider_call(
+            operation=operation,
+            duration_seconds=time.monotonic() - started_at,
+            error_code="RUNTIME_FAILED",
+        )
+        logger.exception("DAST connector could not start (pipeline_id=%s operation=%s)", pipeline_id, operation)
+        record_dast_pipeline_outcome(pipeline_id, DastPipelineOutcomeCode.RUNTIME_FAILED)
+        finish_pipeline(pipeline_id, degraded=True)
+        return None
     except (DastReportValidationError, DastFinalizationError):
         observe_provider_call(
             operation=operation,
@@ -493,10 +530,19 @@ class _WorkerExecutionRuntime:
         return _run_sast_execution(self.task, pipeline_id)
 
     def run_dast(self, pipeline_id: str):
-        return _run_dast_execution(self.task, pipeline_id, operation="execute")
+        # A run that already has a provider run id is being resumed, not started. Reporting both
+        # as "execute" hid resume storms in the metric meant to reveal them.
+        resuming = DastExecutionState.objects.filter(
+            pipeline_id=pipeline_id,
+        ).exclude(run_id="").exclude(run_id=None).exists()
+        operation = ProviderOperation.RESUME if resuming else ProviderOperation.EXECUTE
+        return _run_dast_execution(self.task, pipeline_id, operation=str(operation))
 
 
-@shared_task(bind=True)
+# max_retries=None makes retries unbounded, so the DAST deadline is the only thing that ends a
+# run. Left at the Celery default of 3, the deadline branch is unreachable: attempts run out in
+# minutes while the deadline is hours away.
+@shared_task(bind=True, max_retries=None)
 def run_pipeline_execution(self, pipeline_id: str, async_user=None) -> None:
     """Execute one persisted pipeline; the broker carries only ``pipeline_id``."""
     del async_user

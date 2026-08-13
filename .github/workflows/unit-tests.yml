@@ -59,14 +59,21 @@ jobs:
           -t aist-dast-connector-tests:${{ github.sha }}
           .
 
-      - name: Run standalone DAST protocol tests
+      # The test image now carries the whole package and test tree, so `pytest
+      # tests/pipeline_tests/` really does mean everything. Three files are still excluded
+      # because they were outside CI long enough to rot against changed signatures:
+      # test_default_imported_project_no_built_script.py (13 failures),
+      # test_project_builder.py (4) and test_dockerfile_versions.py (1). Repairing them is
+      # tracked in docs/plans/2026-08-13-dast-runtime-launch-chain.md; until then they are named
+      # here rather than silently absent from the image, so the debt stays visible.
+      - name: Run pipeline unit tests
         run: >-
           docker run --rm
           aist-dast-connector-tests:${{ github.sha }}
-          tests/pipeline_tests/test_analyzers_yaml_dast.py
-          tests/pipeline_tests/test_dast_contract_snapshot.py
-          tests/pipeline_tests/test_dast_connector.py
-          tests/pipeline_tests/test_dast_executor.py
+          tests/pipeline_tests/
+          --ignore=tests/pipeline_tests/test_default_imported_project_no_built_script.py
+          --ignore=tests/pipeline_tests/test_project_builder.py
+          --ignore=tests/pipeline_tests/test_dockerfile_versions.py
           -p no:cacheprovider
           -q
 

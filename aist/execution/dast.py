@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from django.db import transaction
+from django.utils import timezone
 
 from aist.execution.coalescing import canonical_coalesce_key
 from aist.execution.contracts import (
@@ -14,7 +15,9 @@ from aist.execution.contracts import (
     LaunchPlanningContext,
     PipelineExecutionKind,
     PipelineTaskName,
+    ProviderOperation,
 )
+from aist.execution.dast_deadlines import dast_unreachable_grace
 from aist.integrations.dast_config import DastBindingParameters, DastConfigError, DastTargetSnapshot
 from aist.integrations.dast_readiness import check_dast_binding_readiness
 from aist.models import (
@@ -83,7 +86,11 @@ class DastPipelineLaunchAdapter:
     cancellation_mode = ExecutionCancellationMode.COOPERATIVE
     metric_descriptor = ExecutionMetricDescriptor(
         label="dast",
-        operations=frozenset({"execute", "cancel", "recover"}),
+        operations=frozenset({
+            ProviderOperation.EXECUTE,
+            ProviderOperation.CANCEL,
+            ProviderOperation.RESUME,
+        }),
     )
 
     @staticmethod
@@ -106,12 +113,21 @@ class DastPipelineLaunchAdapter:
 
     @staticmethod
     def should_recover(pipeline) -> bool:
+        """
+        Resume only work that is both unfinished and still inside its deadline.
+
+        Resuming is expensive -- it decrypts VPN credentials, raises a tunnel and pulls the
+        connector image -- so a run whose deadline has passed must be ended by the reconciler
+        rather than restarted on every pass for the rest of the grace window.
+        """
         return DastExecutionState.objects.filter(
             pipeline=pipeline,
             outcome__in=[
                 DastExecutionOutcome.STOP_PENDING,
                 DastExecutionOutcome.UNREACHABLE,
             ],
+        ).exclude(
+            deadline__lte=timezone.now() - dast_unreachable_grace(),
         ).exists()
 
     @staticmethod

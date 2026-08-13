@@ -283,6 +283,33 @@ class PerimeterDastLaunchTests(AISTApiBase):
         self.assertIsNone(plan.trigger_project_version_id)
         self.assertEqual(plan.initial_launch_data["dast_execution"]["source_repo_key"], "")
 
+    def test_a_launch_without_explicit_parameters_runs_the_binding_configuration(self):
+        """
+        The binding is where the operator configured this target, so its parameters are what runs.
+
+        Validating the raw input alone froze an empty set, and the scan then used the provider's
+        own defaults -- the operator's configuration was silently ignored.
+        """
+        arguments = PipelineArguments.for_dast(
+            project=self.project,
+            binding=self.binding,
+            trigger_project_version=None,
+            raw_params={},
+        )
+
+        self.assertEqual(self.binding.parameter_snapshot, {"depth": "deep"})
+        self.assertEqual(arguments.params_snapshot, {"depth": "deep"})
+
+    def test_an_explicit_parameter_still_overrides_the_binding(self):
+        arguments = PipelineArguments.for_dast(
+            project=self.project,
+            binding=self.binding,
+            trigger_project_version=None,
+            raw_params={"depth": "light"},
+        )
+
+        self.assertEqual(arguments.params_snapshot, {"depth": "light"})
+
     def test_perimeter_launches_of_one_binding_share_a_coalesce_identity(self):
         self.assertEqual(self._enqueue().coalesce_key, self._enqueue().coalesce_key)
 

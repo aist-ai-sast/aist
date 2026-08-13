@@ -241,10 +241,13 @@ services:
       context: ./sast-combinator/vpn-sidecar
       dockerfile: Dockerfile
     image: "aist-vpn-sidecar:latest"
-    # This service exists only to make `docker compose build` rebuild the VPN
-    # sidecar image. The image is started on-demand by vpn_sidecar_context()
-    # in aist/utils/vpn.py — not by docker compose up.
-    command: ["true"]
+    # This service exists only to make `docker compose build` rebuild the VPN sidecar image.
+    # The image is started on-demand by vpn_sidecar_context() in aist/utils/vpn.py — not by
+    # docker compose up. The entrypoint is overridden, not the command: the image declares its
+    # own ENTRYPOINT, so a `command: ["true"]` was passed to it as an argument and exited
+    # non-zero on every boot — a permanently failed service that masked real VPN errors.
+    # A profile would exclude it from `docker compose build` too, defeating its only purpose.
+    entrypoint: ["true"]
     restart: "no"
 
   context-extractor-mcp:

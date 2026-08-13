@@ -438,8 +438,13 @@ class DastPipelineArguments:
             msg = "DAST trigger version is not accepted for a target with no repository requirement."
             raise ValueError(msg)
         target = binding.target.get_snapshot()
+        # The binding is where an operator configured this target, so its saved parameters are
+        # what a launch runs unless the launch overrides them explicitly. Validating the raw
+        # input alone froze an empty set and silently ran the provider's own defaults instead.
+        effective_parameters = dict(binding.parameter_snapshot or {})
+        effective_parameters.update(raw_parameters or {})
         parameters = DastBindingParameters.from_snapshot(
-            raw_parameters,
+            effective_parameters,
             target=target,
         ).to_snapshot()
         return cls(

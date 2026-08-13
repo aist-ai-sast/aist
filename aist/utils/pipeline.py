@@ -282,12 +282,23 @@ def _request_dast_pipeline_stop(pipeline_id: str) -> None:
         execution_state.outcome = DastExecutionOutcome.STOP_PENDING
         execution_state.save(update_fields=["cancel_requested_at", "outcome", "updated"])
         task_id = pipeline.run_task_id
-        if launch_request is not None and launch_request.state != PipelineLaunchRequestState.DISPATCHED:
-            launch_request.state = PipelineLaunchRequestState.CANCELLED
-            launch_request.save(update_fields=["state", "updated"])
+        # A stop reaches the provider only through the connector, so cancellation stays
+        # cooperative while an execution owns this pipeline. It completes locally when nobody
+        # does: either the request was never dispatched, or no worker holds it and no provider
+        # run exists to cancel -- otherwise Stop would wait on a connector that never starts.
+        cancelled_before_dispatch = (
+            launch_request is not None
+            and launch_request.state != PipelineLaunchRequestState.DISPATCHED
+        )
+        nothing_to_cancel_remotely = not execution_state.run_id and not pipeline.run_task_id
+        if cancelled_before_dispatch or nothing_to_cancel_remotely:
+            if launch_request is not None:
+                launch_request.state = PipelineLaunchRequestState.CANCELLED
+                launch_request.save(update_fields=["state", "updated"])
             execution_state.outcome = DastExecutionOutcome.CANCELLED_BEFORE_START
             execution_state.save(update_fields=["outcome", "updated"])
             finish_without_provider = True
+            transaction.on_commit(lambda: cleanup_pipeline_containers(pipeline_id))
         else:
             transaction.on_commit(lambda: cleanup_pipeline_containers(pipeline_id))
         transaction.on_commit(

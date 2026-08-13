@@ -128,6 +128,7 @@ describe("dastOutcomeNarrative", () => {
     ["SOURCE_DRIFT", "Source changed during the scan", "warning"],
     ["PROVIDER_FAILED", "DAST provider failed", "warning"],
     ["PROVIDER_CREDENTIALS_EXPIRED", "DAST provider credentials expired", "warning"],
+    ["RUNTIME_FAILED", "DAST scan could not start", "warning"],
     ["INVALID_RESULT", "DAST result rejected", "warning"],
     ["CANCELLED", "DAST scan cancelled", "neutral"],
     ["TIMEOUT", "DAST scan timed out", "warning"],

@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TUN_WAIT_SECS = 35  # tun0 timeout (30 s in sidecar) + 5 s buffer for tinyproxy startup
+_VPN_IMAGE_BUILD_TIMEOUT_SECS = 300
 
 # Lines in docker logs output that may expose client DNS server IPs or search domains.
 _REDACT_LOG_PREFIXES = ("[VPN] DNS configured", "nameserver ", "search ")
@@ -98,8 +99,9 @@ def _build_vpn_sidecar_if_needed(image: str) -> None:
     """
     Build the VPN sidecar image if it is not present locally.
 
-    Mirrors ``build_image_if_needed`` in sast-pipeline's ``analyzer_runner.py``:
-    check with ``docker images -q``, skip if already present, build otherwise.
+    Delegates to the shared image contract in sast-pipeline's ``docker_utils.ensure_image``:
+    nothing in the runtime deployment builds these images, so every containerized step brings up
+    its own, and it does so in one place.
 
     The Dockerfile context is ``sast-combinator/vpn-sidecar/`` which lives
     next to ``sast-combinator/sast-pipeline/`` (AIST_PIPELINE_CODE_PATH).
@@ -110,6 +112,9 @@ def _build_vpn_sidecar_if_needed(image: str) -> None:
     if docker_bin is None:
         msg = "Docker CLI is not available; cannot manage VPN sidecar containers."
         raise RuntimeError(msg)
+
+    # Checked before anything else is required: an image that is already present must not need
+    # the build context to exist, so a deployment that ships the image prebuilt keeps working.
     present = subprocess.run(
         [docker_bin, "images", "-q", image],
         capture_output=True,
@@ -129,12 +134,19 @@ def _build_vpn_sidecar_if_needed(image: str) -> None:
             "cannot build the image automatically."
         )
         raise RuntimeError(msg)
-    dockerfile_dir = str(Path(pipeline_path).parent / "vpn-sidecar")
-    logger.info("vpn sidecar image=%s not found; building from %s", image, dockerfile_dir)
-    subprocess.run(
-        [docker_bin, "build", "-t", image, dockerfile_dir],
-        check=True,
-        timeout=300,  # 5-minute cap; a hung build would block the Celery worker indefinitely
+
+    # Imported here, not at module scope: the sast-pipeline package only enters sys.path at
+    # runtime, and this module must stay importable in contexts that never touch Docker.
+    from aist.utils.pipeline_imports import _import_sast_pipeline_package  # noqa: PLC0415
+
+    _import_sast_pipeline_package()
+    from pipeline.docker_utils import ensure_image  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    ensure_image(
+        image,
+        str(Path(pipeline_path).parent / "vpn-sidecar"),
+        # 5-minute cap; a hung build would block the Celery worker indefinitely.
+        timeout=_VPN_IMAGE_BUILD_TIMEOUT_SECS,
     )
 
 
