@@ -67,22 +67,9 @@ def _report_payload() -> dict:
     }
 
 
-def _terminal_payload() -> dict:
-    return {
-        "contract_version": "2.0",
-        "run_id": "run-dastview1",
-        "status": "succeeded",
-        "selection": {"stand_id": "qa-1", "relation": "exact", "distance": 0},
-        "trigger_resolution": {
-            "type": "GIT_HASH",
-            "ref": SHA,
-            "resolved_commit": SHA,
-            "resolved_at": "2026-07-26T10:00:00Z",
-        },
-        "dast_run_metadata": {"source_commits": {"backend": SHA}},
-        "report": _report_payload(),
-        "audit": {"correlation_id": "manual-dastview1", "source_verified": True},
-    }
+def _uploaded_payload() -> dict:
+    """What an operator uploads: the exported report itself, no transport wrapper."""
+    return _report_payload()
 
 
 class DastFindingViewFieldsTests(TestCase):
@@ -144,7 +131,7 @@ class DastFindingViewFieldsTests(TestCase):
             status=AISTStatus.ADMITTED,
             launch_data={"source": "manual_import", "dast_binding_id": binding.pk},
         )
-        report_bytes = json.dumps(_terminal_payload()).encode()
+        report_bytes = json.dumps(_uploaded_payload()).encode()
         storage_name = default_storage.save(
             "report_imports/dastview1.json",
             ContentFile(report_bytes),

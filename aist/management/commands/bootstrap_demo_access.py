@@ -34,6 +34,7 @@ from aist.models import (
     DastIntegrationState,
     DastIntegrationValidationState,
     DastProjectBinding,
+    DastRunMetadata,
     DastTarget,
     LaunchSchedule,
     Organization,
@@ -47,6 +48,12 @@ from aist.models import (
     VersionType,
 )
 from aist.integrations.dast_config import DastLaunchRequirement
+from aist.integrations.dast_report import (
+    DastCoverage,
+    DastTokenBucket,
+    DastTokenUsage,
+    ValidatedDastRunMetadata,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +119,71 @@ DAST_DEMO_SCAN_TYPE = "DAST Autonomous Scan"
 MANUAL_DEMO_SCAN_TYPE = "Demo Manual Report Import"
 DAST_DEMO_RUN_COUNT = 3
 MANUAL_DEMO_IMPORT_COUNT = 3
+
+# Reported run metadata for the demo DAST runs, so the pipeline card's coverage and spend panels
+# have something to show. Shaped like a real report's dast_run_metadata (see
+# docs/integrations/dast.md), one entry per historical run.
+#
+# The plan/analysed relationship deliberately differs across the three: run 1 overshot its plan by
+# a lot, run 2 stayed inside it, run 3 overshot slightly — so the conditional "beyond plan" chip is
+# visible on some rows and absent on others rather than always on.
+DAST_DEMO_COVERAGE = (
+    # (discovered, reachable, analysed, planned)
+    (784, 176, 38, 10),
+    (312, 96, 24, 30),
+    (540, 130, 31, 25),
+)
+# (input, output, thinking, cache_creation, cache_read, calls) per run, in the proportions a real
+# agent run produces — cache reads dominate, direct input is negligible.
+DAST_DEMO_TOKEN_TOTALS = (
+    (2234, 951808, 331554, 2578204, 90024238, 1117),
+    (874, 372615, 129804, 1009436, 35240117, 437),
+    (1508, 642391, 223760, 1740083, 60746902, 754),
+)
+# Phase and agent-type shares. Each split adds back up to the run total exactly, so the demo data
+# is internally consistent and never trips the accounting-mismatch note.
+DAST_DEMO_PHASES = (
+    ("5", "regression", 13),
+    ("6", "depth: floor, explore, discovery", 61),
+    ("7", "verify", 18),
+    ("8", "audit, report, durability", 8),
+)
+DAST_DEMO_AGENT_TYPES = (
+    ("orchestrator", 1, 24),
+    ("dast-discovery", 1, 10),
+    ("dast-check-runner", 9, 52),
+    ("dast-verify", 4, 14),
+)
+_DAST_DEMO_COVERAGE_SERVICES = (
+    "auth",
+    "cdb",
+    "discovery",
+    "licensing",
+    "mediator",
+    "oauth2-server",
+    "log-collector",
+    "service-authorizer",
+    "speedtest",
+    "stats",
+)
+_DAST_DEMO_COVERAGE_STANDS = ("prod", "stage", "test", "dev")
+
+
+def _split_exactly(total: int, weights: tuple[int, ...]) -> list[int]:
+    """Split an integer into weighted shares that always add back up to it."""
+    denominator = sum(weights)
+    shares = [total * weight // denominator for weight in weights[:-1]]
+    return [*shares, total - sum(shares)]
+
+
+def demo_coverage_names(count: int) -> tuple[str, ...]:
+    """Plausible endpoint names for the demo coverage inventory, on the reserved example.com."""
+    names = [
+        f"{service}-{stand}.example.com"
+        for stand in _DAST_DEMO_COVERAGE_STANDS
+        for service in _DAST_DEMO_COVERAGE_SERVICES
+    ]
+    return tuple(names[:count])
 
 
 def demo_ai_filter_snapshot() -> dict:
@@ -664,32 +736,36 @@ class Command(BaseCommand):
             )
 
             repository_keys = project_slugs_by_organization[organization.name]
+            self._retire_superseded_demo_target_ids(integration)
             targets: list[DastTarget] = []
-            for target_index, (target_key, display_name, defaults, launch_requirements, target_repository_keys) in enumerate(
+            for target_index, (provider_id, display_name, defaults, launch_requirements, target_repository_keys) in enumerate(
                 (
                     (
-                        "browser", "Customer web application", {"depth": "light"},
+                        "demo-browser", "Customer web application", {"depth": "light"},
                         [DastLaunchRequirement.REPOSITORY_TRIGGER.value], repository_keys,
                     ),
                     (
-                        "api", "Public API surface", {"depth": "light"},
+                        "demo-api", "Public API surface", {"depth": "light"},
                         [DastLaunchRequirement.REPOSITORY_TRIGGER.value], repository_keys,
                     ),
-                    # Sourceless scenario: a perimeter/blackbox scan of a fixed public
-                    # surface, not tied to any commit — mirrors the shipped
-                    # `dast/targets/perimeter/target.yaml` provider target.
+                    # Sourceless scenario: a perimeter/blackbox scan of a fixed public surface, not
+                    # tied to any commit. Unlike the two invented surfaces above, this id is not
+                    # ours to make up — the provider target is `perimeter`
+                    # (`dast/targets/perimeter/target.yaml`, `name: perimeter`) and every perimeter
+                    # report says so in its `dast_run_metadata.target`. A "demo-" prefix here would
+                    # mean no demo binding could ever accept a real perimeter report.
                     ("perimeter", "Public perimeter surface", {"depth": "light"}, [], []),
                 ),
                 start=1,
             ):
                 target, _ = DastTarget.objects.update_or_create(
                     integration=integration,
-                    provider_id=f"demo-{target_key}",
+                    provider_id=provider_id,
                     defaults={
                         "display_name": display_name,
                         "contract_revision": "2.0",
-                        "capability_revision": f"sha256:demo-{organization_index}-{target_key}-capability-v1",
-                        "schema_digest": f"sha256:demo-{organization_index}-{target_key}-schema-v1",
+                        "capability_revision": f"sha256:demo-{organization_index}-{provider_id}-capability-v1",
+                        "schema_digest": f"sha256:demo-{organization_index}-{provider_id}-schema-v1",
                         "parameter_schema": parameter_schema,
                         "provider_defaults": defaults,
                         "repository_keys": target_repository_keys,
@@ -703,6 +779,17 @@ class Command(BaseCommand):
                 targets.append(target)
             targets_by_organization[organization.name] = targets
         return targets_by_organization
+
+    # Demo target ids that an earlier seed made up before the real provider id was known. Renamed
+    # in place rather than re-seeded, so the bindings, launch configs and pipelines already pointing
+    # at the row follow it instead of being orphaned behind a target nothing publishes any more.
+    SUPERSEDED_DEMO_TARGET_IDS = {"demo-perimeter": "perimeter"}
+
+    def _retire_superseded_demo_target_ids(self, integration: OrgIntegration) -> None:
+        for stale_id, provider_id in self.SUPERSEDED_DEMO_TARGET_IDS.items():
+            if DastTarget.objects.filter(integration=integration, provider_id=provider_id).exists():
+                continue
+            DastTarget.objects.filter(integration=integration, provider_id=stale_id).update(provider_id=provider_id)
 
     def _ensure_demo_projects(self, *, organizations: list[Organization], users_by_username: dict[str, object]) -> None:
         organizations_by_name = {org.name: org for org in organizations}
@@ -1148,6 +1235,101 @@ class Command(BaseCommand):
         AISTPipeline.objects.filter(pk=pipeline.pk).update(created=started, updated=finished_at)
         return pipeline
 
+    def _ensure_dast_run_metadata(
+        self,
+        *,
+        pipeline: AISTPipeline,
+        binding: DastProjectBinding,
+        provider_run_id: str,
+        sequence: int,
+        started,
+        finished_at,
+    ) -> None:
+        """
+        Give the demo run the same reported metadata an accepted report would carry.
+
+        Written through the one writer the real import paths use, so the demo data can only ever
+        have the shape production data has.
+        """
+        index = (sequence - 1) % DAST_DEMO_RUN_COUNT
+        discovered, reachable, analysed, planned = DAST_DEMO_COVERAGE[index]
+        analysed_names = demo_coverage_names(analysed)
+        totals = DAST_DEMO_TOKEN_TOTALS[index]
+        total = DastTokenBucket(
+            input_tokens=totals[0],
+            output_tokens=totals[1],
+            thinking_tokens=totals[2],
+            cache_creation_tokens=totals[3],
+            cache_read_tokens=totals[4],
+            calls=totals[5],
+        )
+        phase_splits = [
+            _split_exactly(counter, tuple(weight for _key, _name, weight in DAST_DEMO_PHASES))
+            for counter in totals
+        ]
+        by_phase = tuple(
+            DastTokenBucket(
+                key=key,
+                name=name,
+                input_tokens=phase_splits[0][position],
+                output_tokens=phase_splits[1][position],
+                thinking_tokens=phase_splits[2][position],
+                cache_creation_tokens=phase_splits[3][position],
+                cache_read_tokens=phase_splits[4][position],
+                calls=phase_splits[5][position],
+            )
+            for position, (key, name, _weight) in enumerate(DAST_DEMO_PHASES)
+        )
+        agent_splits = [
+            _split_exactly(counter, tuple(weight for _key, _agents, weight in DAST_DEMO_AGENT_TYPES))
+            for counter in totals
+        ]
+        by_agent_type = tuple(
+            DastTokenBucket(
+                key=key,
+                agents=agents,
+                input_tokens=agent_splits[0][position],
+                output_tokens=agent_splits[1][position],
+                thinking_tokens=agent_splits[2][position],
+                cache_creation_tokens=agent_splits[3][position],
+                cache_read_tokens=agent_splits[4][position],
+                calls=agent_splits[5][position],
+            )
+            for position, (key, agents, _weight) in enumerate(DAST_DEMO_AGENT_TYPES)
+        )
+        DastRunMetadata.objects.upsert_from_report(
+            pipeline_id=pipeline.pk,
+            metadata=ValidatedDastRunMetadata(
+                run_id=provider_run_id,
+                target_id=binding.target.provider_id,
+                stand_id=f"{binding.target.provider_id}-stand-{sequence:02d}",
+                product_family=binding.target.provider_id,
+                tier="external",
+                run_type="deep" if analysed > planned else "baseline",
+                target_host=analysed_names[0] if analysed_names else None,
+                scan_started=started,
+                scan_finished=finished_at,
+                coverage=DastCoverage(
+                    unit="endpoint",
+                    discovered=discovered,
+                    reachable=reachable,
+                    analysed=analysed,
+                    planned=planned,
+                    analysed_names=analysed_names,
+                    # Everything past the plan; empty when the run stayed inside it, which is a
+                    # reported empty rather than an absence.
+                    beyond_plan_names=analysed_names[planned:],
+                ),
+                token_usage=DastTokenUsage(
+                    total=total,
+                    by_phase=by_phase,
+                    by_agent_type=by_agent_type,
+                    # True by construction: _split_exactly guarantees both breakdowns add back up.
+                    accounting_consistent=True,
+                ),
+            ),
+        )
+
     def _ensure_historical_dast_runs(
         self,
         *,
@@ -1219,6 +1401,14 @@ class Command(BaseCommand):
                         "terminal": True,
                     },
                 },
+            )
+            self._ensure_dast_run_metadata(
+                pipeline=pipeline,
+                binding=binding,
+                provider_run_id=provider_run_id,
+                sequence=sequence,
+                started=started,
+                finished_at=finished_at,
             )
             PipelineLaunchRequest.objects.update_or_create(
                 pipeline=pipeline,

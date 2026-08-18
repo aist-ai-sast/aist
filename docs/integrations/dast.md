@@ -10,7 +10,7 @@ DAST part of the SAST analyzer fan-out.
 |---|---|
 | Organization access, project binding, launch admission, and pipeline history | Target policy, target-side execution, and provider progress |
 | Encrypted integration credential and synchronized capability snapshot | Gateway authentication and the provider contract |
-| Result identity validation, import, deduplication, and finding review | Raw evidence, terminal result, and report production |
+| Result identity validation, import, deduplication, finding review, and retention of what a report says about its run | Raw evidence, terminal result, report production, and the coverage and cost it reports |
 
 The products do not share users, sessions, credentials, or a database. The DAST
 gateway is an external HTTPS boundary, optionally reached through the VPN
@@ -78,13 +78,23 @@ cancellation intent, pipeline state, and the final import decision throughout.
 Before importing a terminal result, AIST verifies the expected provider run,
 target binding, source revision, result format, and nested report. Invalid,
 ambiguous, or oversized results fail before findings are persisted.
+[Reported run metadata](#reported-run-metadata) covers what a report may say
+about the run itself and how a malformed or unfamiliar description is treated.
 
 ## Manual result import
 
 A DAST result produced outside AIST can be imported without contacting the
 gateway. A user with project-operate permission selects an enabled binding,
-uploads the terminal result, reviews its validation preview, and confirms the
-import.
+uploads the report the provider exported, reviews its validation preview, and
+confirms the import.
+
+The uploaded file is the exported report itself — the one artifact the provider
+writes for a person to carry. Nothing has to be wrapped around it: the run, the
+stand, and the source revisions it was produced from are all stated inside the
+report, and a wrapper could only repeat them or vouch for itself. Every check the
+autonomous path makes about a report is made here too, by the same validation, and
+what the binding knows — its target and the repositories it accepts — is enforced
+against the upload.
 
 For a binding whose target requires a repository trigger, AIST resolves the
 effective Git hash from the validated report entry whose repository identity
@@ -95,6 +105,60 @@ report, and the results attach to the version standing for the target itself —
 see [pipeline execution](../product/pipeline-execution.md).
 Confirmation creates an import pipeline and applies the same result validation
 and finding lifecycle used by an autonomous result.
+
+## Reported run metadata
+
+Besides its findings, a report may describe the run that produced them. AIST
+keeps whatever a validated report carries against the pipeline it was imported
+into — for an autonomous run and an operator upload alike — and presents it
+there: headline counters on the pipeline entry, the full inventory when that
+entry is expanded, and the same counters in the upload preview before the
+operator confirms the import.
+
+A report can describe two things:
+
+- **Coverage** — what the run saw, counted in the unit the provider works in,
+  such as an endpoint: how much was discovered, how much of that was reachable,
+  how much was analysed, and how much the run had planned to analyse. A report
+  may also name every analysed item and mark which of them the run took on beyond
+  its plan. A run can exceed its own plan, so a planned figure below the analysed
+  figure is a normal result, not a contradiction.
+- **Agent token usage** — the model-token accounting for the run: a total, plus
+  breakdowns by run phase and by agent type, each of which may report how many
+  agents it used and how many model calls it made. The headline total covers
+  submitted, generated, and cached tokens; thinking tokens are reported alongside
+  it rather than added to it, because the provider already counts them inside its
+  generated total.
+
+Every field at every level is optional, including the two descriptions
+themselves. Absence is preserved as absence: a value the report did not carry is
+left out rather than displayed as zero, and a derived number — a total, a
+duration, a beyond-plan count — is withheld unless everything it needs was
+reported. An inventory the provider reported as empty therefore stays
+distinguishable from one it never mentioned.
+
+These figures are the provider's account of its own run. AIST bounds them, stores
+them, and shows where they disagree with themselves; it does not re-measure them.
+
+### How a report's description is judged
+
+| What the report carries | What AIST does |
+|---|---|
+| A value that is not well formed: the wrong type, a negative count, or an inventory, name, or breakdown past its size bound | Rejects the whole report. An autonomous run ends with an invalid result and an upload fails at its preview, before any finding is persisted |
+| A descriptive field this version of AIST does not recognize — in the run metadata, in either description, or on an individual finding | Reads past it, records that it did so, and imports the report normally. The stored report keeps the field exactly as it arrived |
+| A breakdown that is well formed but does not add up to its own reported total | Accepts it and marks the run's accounting as inconsistent, so the pipeline shows the disagreement. The findings are unaffected |
+
+The middle row is deliberate. A provider that has learned a new field is a newer
+provider, not a broken one, and a report full of real findings should not be lost
+over a description AIST has nowhere to put. It applies only to descriptive
+material that no decision is made on; a finding that omits something the platform
+requires is still refused.
+
+The structure AIST does act on stays closed: the terminal result, the provider
+selection, the report envelope, and the scan type still reject any key they do
+not recognize, so a change there has to be a deliberate contract change rather
+than a silent one. Provider descriptions evolve inside the run metadata, which is
+where the tolerance lives.
 
 ## Network and credentials
 

@@ -10,7 +10,7 @@ from aist.integrations.dast_report import (
     DastReportValidationError,
     ValidatedDastReport,
     validate_dast_terminal_result_bytes,
-    validate_manual_dast_terminal_result_bytes,
+    validate_exported_dast_report_bytes,
 )
 from aist.parser_overrides import DAST_SCAN_TYPE
 
@@ -96,7 +96,7 @@ class DastReportValidationTests(SimpleTestCase):
     def test_selected_target_and_stand_conflicts_are_rejected(self):
         wrong_target = _report()
         wrong_target["dast_run_metadata"]["target"] = "another-target"
-        with self.assertRaisesRegex(DastReportValidationError, "target conflicts"):
+        with self.assertRaisesRegex(DastReportValidationError, "selected binding is for target"):
             validate_dast_terminal_result_bytes(
                 _bytes(_terminal(report=wrong_target)),
                 expectations=_expectations(),
@@ -104,7 +104,7 @@ class DastReportValidationTests(SimpleTestCase):
 
         wrong_stand = _report()
         wrong_stand["dast_run_metadata"]["stand"] = "qa-2"
-        with self.assertRaisesRegex(DastReportValidationError, "stand conflicts"):
+        with self.assertRaisesRegex(DastReportValidationError, "provider selected stand"):
             validate_dast_terminal_result_bytes(
                 _bytes(_terminal(report=wrong_stand)),
                 expectations=_expectations(),
@@ -112,7 +112,7 @@ class DastReportValidationTests(SimpleTestCase):
 
     def test_unknown_source_key_invalid_sha_and_conflicting_source_maps_are_rejected(self):
         for source_commits, message in (
-            ({"unknown": SHA}, "unknown source"),
+            ({"unknown": SHA}, "does not advertise"),
             ({"backend": "A" * 40}, "lowercase full SHA-1"),
         ):
             with self.subTest(source_commits=source_commits), self.assertRaisesRegex(
@@ -156,19 +156,375 @@ class DastReportValidationTests(SimpleTestCase):
                 expectations=_expectations(),
             )
 
-    def test_manual_boundary_uses_artifact_identity_but_enforces_bound_target(self):
-        result = validate_manual_dast_terminal_result_bytes(
-            _bytes(_terminal()),
+    def test_an_operator_uploads_the_exported_report_itself(self):
+        """
+        The reference artifact is what `dast export-findings` writes — no transport wrapper.
+
+        A wrapper could only restate the report's own run, stand and source commits, or assert its
+        own trustworthiness; neither checks anything, and demanding one made the file the provider
+        actually produces impossible to import.
+        """
+        result = validate_exported_dast_report_bytes(
+            _bytes(_report()),
             target_id="cloud-backend",
             allowed_repository_keys=frozenset({"backend"}),
         )
 
         self.assertEqual(result.run_id, "run-123")
-        self.assertEqual(result.correlation_id, "pipeline-123")
+        self.assertEqual(result.target_id, "cloud-backend")
         self.assertEqual(result.source_commit_for("backend"), SHA)
-        with self.assertRaisesRegex(DastReportValidationError, "target conflicts"):
-            validate_manual_dast_terminal_result_bytes(
-                _bytes(_terminal()),
+        self.assertEqual(result.run_metadata.stand_id, "qa-1")
+        # Nothing delivered it, so there is no transport to describe.
+        self.assertIsNone(result.correlation_id)
+        self.assertIsNone(result.selection)
+        self.assertIsNone(result.status)
+
+    def test_the_upload_is_still_held_to_what_the_binding_knows(self):
+        with self.assertRaisesRegex(DastReportValidationError, "selected binding is for target"):
+            validate_exported_dast_report_bytes(
+                _bytes(_report()),
                 target_id="another-target",
                 allowed_repository_keys=frozenset({"backend"}),
             )
+        with self.assertRaisesRegex(DastReportValidationError, "does not advertise"):
+            validate_exported_dast_report_bytes(
+                _bytes(_report()),
+                target_id="cloud-backend",
+                allowed_repository_keys=frozenset({"frontend"}),
+            )
+
+    def test_a_transport_wrapper_is_no_longer_accepted_as_an_upload(self):
+        """The wrapper was never something the provider produced; accepting it kept the bug alive."""
+        with self.assertRaises(DastReportValidationError):
+            validate_exported_dast_report_bytes(
+                _bytes(_terminal()),
+                target_id="cloud-backend",
+                allowed_repository_keys=frozenset({"backend"}),
+            )
+
+
+# Real values from run 80c744a2be37d91c07a7a8ef97c520be, the first report to carry these blocks.
+COVERAGE = {
+    "unit": "endpoint",
+    "discovered": 784,
+    "reachable": 176,
+    "analysed": 38,
+    "planned": 10,
+    "analysed_names": ["analytics3-test-hdw-mx", "cloud-prod-hdw-mx"],
+    "beyond_plan_names": ["cloud-prod-hdw-mx"],
+}
+TOKEN_USAGE = {
+    "total": {
+        "input": 26,
+        "output": 4712,
+        "thinking": 1075,
+        "cache_creation": 50367,
+        "cache_read": 1448274,
+        "calls": 13,
+    },
+    "by_phase": {
+        # Phase 2 carries no name in the real report; phase 3 does. Both must survive.
+        "2": {"input": 16, "output": 2081, "thinking": 534, "cache_creation": 45877, "cache_read": 799618, "calls": 8},
+        "3": {
+            "name": "preconditions",
+            "input": 10,
+            "output": 2631,
+            "thinking": 541,
+            "cache_creation": 4490,
+            "cache_read": 648656,
+            "calls": 5,
+        },
+    },
+    "by_agent_type": {
+        "dast-verify": {
+            "agents": 5,
+            "input": 26,
+            "output": 4712,
+            "thinking": 1075,
+            "cache_creation": 50367,
+            "cache_read": 1448274,
+            "calls": 13,
+        },
+    },
+}
+
+
+def _metadata_report(**metadata_overrides) -> dict:
+    report = _report()
+    report["dast_run_metadata"].update(metadata_overrides)
+    return report
+
+
+def _validate_metadata(**metadata_overrides):
+    result = validate_dast_terminal_result_bytes(
+        _bytes(_terminal(report=_metadata_report(**metadata_overrides))),
+        expectations=_expectations(),
+    )
+    return result.run_metadata
+
+
+class DastRunMetadataValidationTests(SimpleTestCase):
+
+    """
+    The report's ``coverage`` and ``token_usage`` blocks.
+
+    Everything below the three run identities is optional at every level, so absence is never an
+    error; a value that *is* present is bounded; and a breakdown that disagrees with its own total
+    is recorded rather than costing the report its findings.
+    """
+
+    def test_the_real_report_shape_is_accepted_whole(self):
+        metadata = _validate_metadata(
+            product_family="perimeter",
+            tier="external",
+            run_type="deep",
+            target_host="analytics3.test.hdw.mx",
+            scan_started="2026-08-17T17:37:46",
+            scan_finished="2026-08-17T19:56:35",
+            coverage=COVERAGE,
+            token_usage=TOKEN_USAGE,
+        )
+
+        self.assertEqual(metadata.run_id, "run-123")
+        self.assertEqual(metadata.tier, "external")
+        self.assertEqual(metadata.target_host, "analytics3.test.hdw.mx")
+        self.assertEqual(metadata.coverage.discovered, 784)
+        self.assertEqual(metadata.coverage.analysed, 38)
+        self.assertEqual(metadata.coverage.beyond_plan_names, ("cloud-prod-hdw-mx",))
+        self.assertEqual(metadata.token_usage.total.output_tokens, 4712)
+        self.assertEqual([bucket.key for bucket in metadata.token_usage.by_phase], ["2", "3"])
+        self.assertIsNone(metadata.token_usage.by_phase[0].name)
+        self.assertEqual(metadata.token_usage.by_phase[1].name, "preconditions")
+        self.assertEqual(metadata.token_usage.by_agent_type[0].agents, 5)
+        self.assertTrue(metadata.token_usage.accounting_consistent)
+
+    def test_offsetless_report_timestamps_are_read_as_utc(self):
+        metadata = _validate_metadata(scan_started="2026-08-17T17:37:46")
+
+        self.assertEqual(metadata.scan_started.utcoffset().total_seconds(), 0)
+
+    def test_a_report_that_carries_neither_block_still_validates(self):
+        metadata = _validate_metadata()
+
+        self.assertIsNone(metadata.coverage)
+        self.assertIsNone(metadata.token_usage)
+        self.assertIsNone(metadata.tier)
+        self.assertIsNone(metadata.scan_started)
+
+    def test_explicit_nulls_read_the_same_as_absence(self):
+        metadata = _validate_metadata(coverage=None, token_usage=None, tier=None)
+
+        self.assertIsNone(metadata.coverage)
+        self.assertIsNone(metadata.token_usage)
+        self.assertIsNone(metadata.tier)
+
+    def test_partial_blocks_keep_what_was_reported_without_inventing_the_rest(self):
+        metadata = _validate_metadata(
+            coverage={"analysed": 38},
+            token_usage={"by_phase": TOKEN_USAGE["by_phase"]},
+        )
+
+        self.assertEqual(metadata.coverage.analysed, 38)
+        self.assertIsNone(metadata.coverage.discovered)
+        self.assertIsNone(metadata.coverage.analysed_names)
+        self.assertIsNone(metadata.token_usage.total)
+        # Nothing to compare a breakdown against, so consistency is unknown rather than False.
+        self.assertIsNone(metadata.token_usage.accounting_consistent)
+
+    def test_names_are_not_pattern_matched_so_path_shaped_endpoints_survive(self):
+        metadata = _validate_metadata(
+            coverage={"analysed_names": ["/partners/internal/grant_access", "https://host/api/v1?x=1"]},
+        )
+
+        self.assertEqual(
+            metadata.coverage.analysed_names,
+            ("/partners/internal/grant_access", "https://host/api/v1?x=1"),
+        )
+
+    def test_a_breakdown_that_disagrees_with_its_total_is_flagged_not_rejected(self):
+        drifted = json.loads(json.dumps(TOKEN_USAGE))
+        drifted["by_phase"]["2"]["output"] = 1
+
+        metadata = _validate_metadata(token_usage=drifted)
+
+        self.assertFalse(metadata.token_usage.accounting_consistent)
+        self.assertEqual(metadata.token_usage.total.output_tokens, 4712)
+
+    def test_a_bucket_missing_a_counter_is_skipped_rather_than_summed_wrongly(self):
+        partial = json.loads(json.dumps(TOKEN_USAGE))
+        del partial["by_phase"]["2"]["output"]
+
+        metadata = _validate_metadata(token_usage=partial)
+
+        # Output is no longer comparable, but the other five counters still are and still agree.
+        self.assertTrue(metadata.token_usage.accounting_consistent)
+
+    def test_malformed_values_cost_the_report_its_import(self):
+        cases = [
+            ("negative count", {"coverage": {"analysed": -1}}),
+            ("boolean as count", {"coverage": {"analysed": True}}),
+            ("count as string", {"coverage": {"analysed": "38"}}),
+            ("coverage is not an object", {"coverage": [1, 2]}),
+            ("names are not a list", {"coverage": {"analysed_names": "a,b"}}),
+            ("name carries a control character", {"coverage": {"analysed_names": ["with\nnewline"]}}),
+            ("names over the list cap", {"coverage": {"analysed_names": ["x"] * 5001}}),
+            ("name over its length cap", {"coverage": {"analysed_names": ["x" * 254]}}),
+            ("buckets over the cap", {"token_usage": {"by_phase": {str(i): {"calls": 1} for i in range(65)}}}),
+            ("descriptor is not a string", {"tier": 7}),
+            ("unparseable timestamp", {"scan_started": "not-a-date"}),
+        ]
+        for label, overrides in cases:
+            with self.subTest(case=label), self.assertRaises(DastReportValidationError):
+                _validate_metadata(**overrides)
+
+    def test_the_shape_of_a_known_field_is_still_enforced_inside_a_tolerated_block(self):
+        """Tolerating an unread key must not soften the fields around it."""
+        with self.assertRaises(DastReportValidationError):
+            _validate_metadata(coverage={"unread_by_aist": 1, "analysed": -1})
+
+
+class DastReportForwardCompatibilityTests(SimpleTestCase):
+
+    """
+    A field AIST has never heard of must not cost the report its findings.
+
+    The DAST side evolves independently. Refusing a report because it carries one attribute we do
+    not model would mean an AIST release per provider addition, and would throw away every real
+    finding in the report meanwhile. Unread *descriptive* fields are therefore ignored and logged;
+    the trust-critical structure around them stays closed, and known fields stay strictly checked.
+    """
+
+    def test_unread_descriptive_fields_are_ignored_at_every_level(self):
+        cases = [
+            ("a new metadata field", {"scan_profile": "aggressive"}),
+            ("a new coverage field", {"coverage": {**COVERAGE, "skipped": 12}}),
+            ("a new token_usage field", {"token_usage": {**TOKEN_USAGE, "by_tool": {}}}),
+            (
+                "a new counter in a token bucket",
+                {"token_usage": {**TOKEN_USAGE, "total": {**TOKEN_USAGE["total"], "cache_hits": 5}}},
+            ),
+        ]
+        for label, metadata_overrides in cases:
+            with self.subTest(case=label):
+                result = validate_dast_terminal_result_bytes(
+                    _bytes(_terminal(report=_metadata_report(**metadata_overrides))),
+                    expectations=_expectations(),
+                )
+                self.assertEqual(result.run_metadata.run_id, "run-123")
+
+    def test_a_finding_field_the_platform_cannot_store_is_dropped_not_fatal(self):
+        report = _report(findings=[{
+            "title": "Cross-tenant object access",
+            "severity": "High",
+            "description": "redacted",
+            "confidence": "high",           # not modelled by the platform
+            "detector_version": "2026.8",   # nor this
+        }])
+
+        result = validate_dast_terminal_result_bytes(
+            _bytes(_terminal(report=report)),
+            expectations=_expectations(),
+        )
+
+        self.assertEqual(result.findings_count, 1)
+        # The stored artifact keeps what the provider sent, verbatim.
+        stored = json.loads(result.open_report().read())
+        self.assertEqual(stored["findings"][0]["confidence"], "high")
+
+    def test_a_finding_still_has_to_carry_what_the_platform_requires(self):
+        report = _report(findings=[{"title": "No description", "severity": "High"}])
+
+        with self.assertRaisesRegex(DastReportValidationError, "finding schema"):
+            validate_dast_terminal_result_bytes(
+                _bytes(_terminal(report=report)),
+                expectations=_expectations(),
+            )
+
+    def test_the_trust_critical_structure_stays_closed_to_unread_fields(self):
+        cases = [
+            ("terminal result", {"surprise": 1}),
+            ("selection", {"selection": {"stand_id": "qa-1", "relation": "exact", "distance": 0, "extra": 1}}),
+        ]
+        for label, overrides in cases:
+            with self.subTest(case=label), self.assertRaises(DastReportValidationError):
+                validate_dast_terminal_result_bytes(_bytes(_terminal(**overrides)), expectations=_expectations())
+
+    def test_the_report_envelope_also_stays_closed(self):
+        """A top-level addition must be a deliberate contract change; "report_path" is why."""
+        with self.assertRaisesRegex(DastReportValidationError, "envelope fields"):
+            validate_dast_terminal_result_bytes(
+                _bytes(_terminal(report=_report(summary="3 high"))),
+                expectations=_expectations(),
+            )
+
+    def test_identities_still_have_to_agree(self):
+        cases = [
+            ("run", {"run_id": "other-run"}, "the run being imported"),
+            ("stand", {"stand": "other-stand"}, "provider selected stand"),
+            ("target", {"target": "other-target"}, "selected binding is for target"),
+        ]
+        for label, overrides, expected in cases:
+            with self.subTest(case=label), self.assertRaisesRegex(DastReportValidationError, expected):
+                validate_dast_terminal_result_bytes(
+                    _bytes(_terminal(report=_metadata_report(**overrides))),
+                    expectations=_expectations(),
+                )
+
+
+class DastReportDiagnosticsTests(SimpleTestCase):
+
+    """
+    A refusal has to say what conflicted with what.
+
+    The value an operator cannot see is the one inside the file they are uploading, so every
+    identity conflict names both the report's claim and what the binding expects. Without that the
+    only actionable information in the message was that something, somewhere, disagreed.
+    """
+
+    def test_a_target_mismatch_names_the_report_and_the_binding(self):
+        with self.assertRaises(DastReportValidationError) as caught:
+            validate_exported_dast_report_bytes(
+                _bytes(_report()),
+                target_id="demo-perimeter",
+                allowed_repository_keys=frozenset({"backend"}),
+            )
+
+        message = str(caught.exception)
+        self.assertIn("'cloud-backend'", message)      # what the report says it is
+        self.assertIn("'demo-perimeter'", message)     # what the operator picked
+        self.assertIn("synchronize the DAST catalog", message)
+
+    def test_a_missing_source_revision_names_the_repositories_the_target_expects(self):
+        sourceless = _report()
+        sourceless["dast_run_metadata"]["source_commits"] = {}
+
+        with self.assertRaises(DastReportValidationError) as caught:
+            validate_exported_dast_report_bytes(
+                _bytes(sourceless),
+                target_id="cloud-backend",
+                allowed_repository_keys=frozenset({"backend", "frontend"}),
+            )
+
+        message = str(caught.exception)
+        self.assertIn("'backend'", message)
+        self.assertIn("'frontend'", message)
+
+    def test_an_unadvertised_repository_names_what_the_target_does_advertise(self):
+        with self.assertRaises(DastReportValidationError) as caught:
+            validate_exported_dast_report_bytes(
+                _bytes(_report()),
+                target_id="cloud-backend",
+                allowed_repository_keys=frozenset({"frontend"}),
+            )
+
+        self.assertIn("'frontend'", str(caught.exception))
+
+    def test_source_revisions_sent_to_a_target_that_wants_none_say_so(self):
+        with self.assertRaises(DastReportValidationError) as caught:
+            validate_exported_dast_report_bytes(
+                _bytes(_report()),
+                target_id="cloud-backend",
+                allowed_repository_keys=frozenset(),
+            )
+
+        self.assertIn("no repository requirement", str(caught.exception))

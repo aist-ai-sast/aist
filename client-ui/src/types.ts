@@ -168,11 +168,66 @@ export type ProductSummary = {
   lastSync?: string | null;
 };
 
+/**
+ * Provider-reported coverage and token usage from an accepted DAST report. Every field is
+ * optional at the source, so null means "the report did not carry it" — never zero.
+ */
+export type DastRunSummary = {
+  runId: string;
+  runType: string | null;
+  coverageUnit: string | null;
+  discovered: number | null;
+  reachable: number | null;
+  analysed: number | null;
+  planned: number | null;
+  beyondPlan: number | null;
+  totalTokens: number | null;
+  modelCalls: number | null;
+};
+
+export type DastTokenBucket = {
+  key: string;
+  name?: string | null;
+  agents?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  thinking_tokens?: number | null;
+  cache_creation_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  calls?: number | null;
+  total_tokens: number | null;
+};
+
+export type DastRunDetail = DastRunSummary & {
+  targetId: string;
+  standId: string;
+  productFamily: string | null;
+  tier: string | null;
+  targetHost: string | null;
+  scanStarted: string | null;
+  scanFinished: string | null;
+  durationSeconds: number | null;
+  analysedNames: string[] | null;
+  beyondPlanNames: string[] | null;
+  tokens: {
+    input_tokens: number | null;
+    output_tokens: number | null;
+    thinking_tokens: number | null;
+    cache_creation_tokens: number | null;
+    cache_read_tokens: number | null;
+  };
+  tokenByPhase: DastTokenBucket[] | null;
+  tokenByAgentType: DastTokenBucket[] | null;
+  agents: number | null;
+  tokenAccountingConsistent: boolean | null;
+};
+
 export type PipelineSummary = {
   id: string;
   executionType: "SAST" | "DAST" | "MANUAL_IMPORT";
   status: string;
   dastOutcomeCode?: import("./lib/dastNarrative").DastOutcomeCode | null;
+  dastRun?: DastRunSummary | null;
   projectId: number;
   productId: number;
   productName: string;

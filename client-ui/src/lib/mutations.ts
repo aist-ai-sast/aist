@@ -619,6 +619,17 @@ export type ImportPipelinePreview = {
   name: string | null;
   version: string | null;
   actual_source_commit: string | null;
+  /** Coverage and token usage the report carries; null for a report that reported neither. */
+  dast_run?: {
+    coverage_unit: string | null;
+    discovered: number | null;
+    reachable: number | null;
+    analysed: number | null;
+    planned: number | null;
+    beyond_plan: number | null;
+    total_tokens: number | null;
+    model_calls: number | null;
+  } | null;
 };
 
 /**

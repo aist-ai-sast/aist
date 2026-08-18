@@ -4,6 +4,9 @@ import type {
   AIResponse,
   CalendarEvent,
   CalendarView,
+  DastRunDetail,
+  DastRunSummary,
+  DastTokenBucket,
   Finding,
   FindingFilters,
   FindingTimelineEvent,
@@ -139,11 +142,43 @@ type AIFindingResponseApi = {
   created?: string;
 };
 
+type DastRunSummaryApi = {
+  run_id: string;
+  run_type: string | null;
+  coverage_unit: string | null;
+  discovered: number | null;
+  reachable: number | null;
+  analysed: number | null;
+  planned: number | null;
+  beyond_plan: number | null;
+  total_tokens: number | null;
+  model_calls: number | null;
+};
+
+type DastRunDetailApi = DastRunSummaryApi & {
+  target_id: string;
+  stand_id: string;
+  product_family: string | null;
+  tier: string | null;
+  target_host: string | null;
+  scan_started: string | null;
+  scan_finished: string | null;
+  duration_seconds: number | null;
+  analysed_names: string[] | null;
+  beyond_plan_names: string[] | null;
+  tokens: DastRunDetail["tokens"];
+  token_by_phase: DastTokenBucket[] | null;
+  token_by_agent_type: DastTokenBucket[] | null;
+  agents: number | null;
+  token_accounting_consistent: boolean | null;
+};
+
 type PipelineSummaryApi = {
   id: string;
   execution_type: "SAST" | "DAST" | "MANUAL_IMPORT";
   status: string;
   dast_outcome_code?: import("./dastNarrative").DastOutcomeCode | null;
+  dast_run?: DastRunSummaryApi | null;
   project_id: number;
   product_id: number;
   product_name: string;
@@ -619,6 +654,7 @@ export function usePipelineSummaries(filters: PipelineSummaryFilters) {
           executionType: item.execution_type,
           status: item.status,
           dastOutcomeCode: item.dast_outcome_code ?? null,
+          dastRun: normalizeDastRunSummary(item.dast_run),
           projectId: item.project_id,
           productId: item.product_id,
           productName: item.product_name,
@@ -633,6 +669,60 @@ export function usePipelineSummaries(filters: PipelineSummaryFilters) {
         count: payload.count ?? 0,
       };
     },
+  });
+}
+
+function normalizeDastRunSummary(api?: DastRunSummaryApi | null): DastRunSummary | null {
+  if (!api) return null;
+  return {
+    runId: api.run_id,
+    runType: api.run_type,
+    coverageUnit: api.coverage_unit,
+    discovered: api.discovered,
+    reachable: api.reachable,
+    analysed: api.analysed,
+    planned: api.planned,
+    beyondPlan: api.beyond_plan,
+    totalTokens: api.total_tokens,
+    modelCalls: api.model_calls,
+  };
+}
+
+/**
+ * Coverage and token usage of the DAST report accepted onto a pipeline, including the analysed
+ * inventory. Fetched only when a card is expanded and never refetched: a finished run's report
+ * cannot change, and the inventory is too large to carry on the list query.
+ */
+export function usePipelineDastRun(pipelineId: string | null) {
+  return useQuery({
+    queryKey: ["pipeline-dast-run", pipelineId],
+    queryFn: async () => {
+      const payload = await fetchJson<{ dast_run: DastRunDetailApi | null }>(
+        getRoute("pipeline_dast_run_url", { pipeline_id: pipelineId! }),
+      );
+      const api = payload.dast_run;
+      if (!api) return null;
+      return {
+        ...(normalizeDastRunSummary(api) as DastRunSummary),
+        targetId: api.target_id,
+        standId: api.stand_id,
+        productFamily: api.product_family,
+        tier: api.tier,
+        targetHost: api.target_host,
+        scanStarted: api.scan_started,
+        scanFinished: api.scan_finished,
+        durationSeconds: api.duration_seconds,
+        analysedNames: api.analysed_names,
+        beyondPlanNames: api.beyond_plan_names,
+        tokens: api.tokens,
+        tokenByPhase: api.token_by_phase,
+        tokenByAgentType: api.token_by_agent_type,
+        agents: api.agents,
+        tokenAccountingConsistent: api.token_accounting_consistent,
+      } satisfies DastRunDetail;
+    },
+    enabled: Boolean(pipelineId),
+    staleTime: Infinity,
   });
 }
 

@@ -46,6 +46,7 @@ from aist.logging_transport import (
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, DastExecutionState, TestDeduplicationProgress
 from aist.pipeline_args import PipelineArguments
 from aist.services.dast_outcomes import public_dast_outcome_code
+from aist.services.dast_run_metadata import dast_run_detail
 from aist.utils.export import _build_ai_export_rows
 from aist.utils.pipeline import (
     is_terminal_pipeline_status,
@@ -363,6 +364,33 @@ class PipelineAPI(AISTAPIView):
             return Response(status=status.HTTP_400_BAD_REQUEST)
         p.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PipelineDastRunAPI(AISTAPIView):
+
+    """Provider-reported run metadata of the DAST report accepted onto this pipeline."""
+
+    authz = ResourcePolicy(resource=AISTPipeline, read=Action.PRODUCT_READ, write=Action.PRODUCT_READ)
+    token_read_only = True
+
+    @extend_schema(
+        responses={
+            200: OpenApiResponse(description="An envelope whose dast_run field is the metadata, or null"),
+            404: OpenApiResponse(description="Not found"),
+        },
+        tags=[AISTApiTag.PIPELINES.value],
+        summary="Get DAST run metadata",
+        description=(
+            "Coverage and agent token usage as reported by the accepted DAST report, for both "
+            "autonomous runs and operator uploads. Every field is optional: a key is absent "
+            "whenever the report did not carry it, and `dast_run` itself is null for a pipeline "
+            "with no accepted DAST report. Wrapped in an envelope so absence is still a valid "
+            "JSON body rather than an empty response."
+        ),
+    )
+    def get(self, request, pipeline_id: str, *args, **kwargs) -> Response:
+        pipeline = self.resolve(id=pipeline_id)
+        return Response({"dast_run": dast_run_detail(pipeline)}, status=status.HTTP_200_OK)
 
 
 def export_ai_results_response(*, pipeline: AISTPipeline, params: dict) -> HttpResponse:

@@ -112,6 +112,15 @@ def mask_sensitive_text(text: str) -> str:
 # not a token or any part of one.
 # "source_repo_key" — a DastProjectBinding's plain repository slug (DastProjectBindingSerializer),
 # not a credential; matches only because it contains the substring "key".
+# The "*_tokens" / "token_*" group below is DAST agent token *accounting* — model-usage counts and
+# their per-phase / per-agent breakdowns from a report's dast_run_metadata (DastRunMetadata). They
+# are integers and bucket lists, never credentials, and match only on the substring "token".
+# Without these the pipeline card renders "**********" where the spend should be.
+# Each entry earns its place by being reachable as a *scalar*: a breakdown the report omitted comes
+# through as None, which takes the branch below and would otherwise be replaced by the mask string
+# — turning a missing list into text the UI cannot read. A key whose value is always a dict or list
+# is deliberately absent from this set, because the container branch above already ignores the key
+# name and allowlisting it would only widen the set for nothing.
 _NON_SENSITIVE_KEYS: frozenset[str] = frozenset(
     {
         "key",
@@ -126,6 +135,15 @@ _NON_SENSITIVE_KEYS: frozenset[str] = frozenset(
         "has_client_key",
         "can_create_write_token",
         "source_repo_key",
+        "total_tokens",
+        "input_tokens",
+        "output_tokens",
+        "thinking_tokens",
+        "cache_creation_tokens",
+        "cache_read_tokens",
+        "token_by_phase",
+        "token_by_agent_type",
+        "token_accounting_consistent",
     },
 )
 

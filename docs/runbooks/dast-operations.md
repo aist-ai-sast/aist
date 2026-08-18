@@ -123,6 +123,11 @@ repository requirement, the report must carry no repository identity and the
 import pipeline is created without a project version. Confirmation creates an
 import pipeline and repeats validation before findings are persisted.
 
+When the report describes its run, the preview also shows the coverage and agent
+token spend it reported, so an import whose run examined the wrong surface can be
+abandoned instead of confirmed. The same figures appear on the pipeline
+afterwards.
+
 ## Rotate or disable access
 
 Generate a replacement onboarding bundle through the provider's rotation
@@ -164,4 +169,6 @@ promotion.
 | Binding stale | Capability revision, schema digest, target availability, and parameter snapshot |
 | Launch remains pending | Stored authority, readiness, capacity, and request expiry |
 | Cancellation remains pending | Provider reachability and reconciliation progress |
-| Import rejected | Complete terminal result, expected binding, source identity, size, and report format |
+| Import rejected | Complete terminal result, expected binding, source identity, size, report format, and whether the run metadata the report carries is well formed |
+| A pipeline shows no coverage or token figures | Whether the report described its run at all. A provider that reports nothing about the run imports normally and simply has nothing to show; nothing is missing on the AIST side |
+| A pipeline reports inconsistent run accounting | The provider's own breakdown against the total it reported in the same report. The import, its tests, and its findings are unaffected, so treat this as a provider reporting defect |

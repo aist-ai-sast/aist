@@ -11,6 +11,7 @@ import PermissionGate from "../components/PermissionGate";
 import ImportPipelineDialog, { ImportUploadIcon } from "../components/ImportPipelineDialog";
 import { pipelineStatusBadgeClass, pipelineStatusLabel } from "../lib/badgeStyles";
 import { dastOutcomeNarrative } from "../lib/dastNarrative";
+import DastRunPanels, { DastRunChips } from "../components/DastRunPanels";
 
 const statusOptions = [
   { value: "all", label: "All statuses" },
@@ -129,6 +130,8 @@ function PipelineDetailCard({ pipeline }: { pipeline: PipelineSummary | null }) 
           <div className="mt-1 text-slate-300">{dastOutcome.detail}</div>
         </div>
       ) : null}
+
+      {pipeline.dastRun ? <DastRunPanels pipelineId={pipeline.id} /> : null}
 
       <div>
         <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Actions</div>
@@ -431,6 +434,7 @@ export default function PipelinesPage() {
                       )}
                     </div>
                   </div>
+                  {pipeline.dastRun ? <DastRunChips run={pipeline.dastRun} /> : null}
                   <div className="mt-3">
                     <ActionsBadge actions={pipeline.actions} />
                   </div>

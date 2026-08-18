@@ -1561,6 +1561,166 @@ class DastExecutionState(models.Model):
             raise ValidationError({"pipeline": "DAST execution state requires a DAST pipeline."})
 
 
+# Column name -> attribute on the validated coverage / token-usage value objects. The two
+# names differ only where a column reads better than the wire counter it came from.
+_DAST_COVERAGE_COUNT_COLUMNS = ("discovered", "reachable", "analysed", "planned")
+_DAST_COVERAGE_NAME_COLUMNS = ("analysed_names", "beyond_plan_names")
+_DAST_TOKEN_COUNT_COLUMNS = {
+    "input_tokens": "input_tokens",
+    "output_tokens": "output_tokens",
+    "thinking_tokens": "thinking_tokens",
+    "cache_creation_tokens": "cache_creation_tokens",
+    "cache_read_tokens": "cache_read_tokens",
+    "model_calls": "calls",
+}
+
+
+class DastRunMetadataManager(models.Manager):
+
+    """Persists one validated ``dast_run_metadata`` block; the only value-object-to-column map."""
+
+    @staticmethod
+    def _reported(block, attribute: str):
+        """Read one optional attribute off a block the report may not have carried at all."""
+        return None if block is None else getattr(block, attribute)
+
+    @classmethod
+    def _reported_names(cls, coverage, attribute: str) -> list[str] | None:
+        names = cls._reported(coverage, attribute)
+        return None if names is None else list(names)
+
+    @classmethod
+    def _reported_buckets(cls, usage, attribute: str) -> list[dict] | None:
+        buckets = cls._reported(usage, attribute)
+        return None if buckets is None else [bucket.as_wire() for bucket in buckets]
+
+    @classmethod
+    def columns_from_report(cls, metadata) -> dict:
+        """Flatten one validated metadata block onto this table's columns."""
+        coverage = metadata.coverage
+        usage = metadata.token_usage
+        total = cls._reported(usage, "total")
+        return {
+            "run_id": metadata.run_id,
+            "target_id": metadata.target_id,
+            "stand_id": metadata.stand_id,
+            "product_family": metadata.product_family,
+            "tier": metadata.tier,
+            "run_type": metadata.run_type,
+            "target_host": metadata.target_host,
+            "scan_started": metadata.scan_started,
+            "scan_finished": metadata.scan_finished,
+            "coverage_unit": cls._reported(coverage, "unit"),
+            **{column: cls._reported(coverage, column) for column in _DAST_COVERAGE_COUNT_COLUMNS},
+            **{column: cls._reported_names(coverage, column) for column in _DAST_COVERAGE_NAME_COLUMNS},
+            **{
+                column: cls._reported(total, attribute)
+                for column, attribute in _DAST_TOKEN_COUNT_COLUMNS.items()
+            },
+            "token_by_phase": cls._reported_buckets(usage, "by_phase"),
+            "token_by_agent_type": cls._reported_buckets(usage, "by_agent_type"),
+            "token_accounting_consistent": cls._reported(usage, "accounting_consistent"),
+        }
+
+    def build_from_report(self, metadata) -> DastRunMetadata:
+        """
+        An unsaved row for a report that has not been imported yet.
+
+        Lets the import preview run the same read derivations the pipeline list runs after the
+        import, so the operator sees exactly the numbers that will appear.
+        """
+        return self.model(**self.columns_from_report(metadata))
+
+    def upsert_from_report(self, *, pipeline_id: str, metadata) -> DastRunMetadata:
+        """
+        Write the accepted report's run metadata, replacing any earlier write for this pipeline.
+
+        Idempotent by construction: finalization calls this before its own already-finalized
+        short circuit, so redelivering the same report rewrites identical data and a pipeline
+        finalized before this table existed gains its row.
+        """
+        row, _created = self.update_or_create(
+            pipeline_id=pipeline_id,
+            defaults=self.columns_from_report(metadata),
+        )
+        return row
+
+
+class DastRunMetadata(models.Model):
+
+    """
+    Provider-reported run metadata carried by one accepted DAST report.
+
+    Every reported column is nullable and stays NULL when the report did not carry it —
+    absent must never read as zero, and an empty inventory the provider *did* report is a
+    different fact from one it never mentioned.
+
+    Readers may treat NULL as the only empty state, but that comes from the writer rather than
+    from the column: :meth:`DastRunMetadataManager.columns_from_report` is the only thing that
+    fills this table, and it stores either None or a value the report validator has already
+    refused to accept blank. ``blank=True`` is kept because the fields genuinely are optional,
+    so a form would be wrong to demand them; this model is not registered in the admin, and a
+    future form-based writer would have to preserve that invariant itself.
+
+    Distinct from :class:`DastExecutionState`, which is provider *runtime* state written
+    before any report exists so a run can be polled and resumed. This row is *reported*
+    state, written once when a report crosses the trust boundary, and it is the same row for
+    an autonomous run and an operator upload — which is why the report's own identity
+    (``run_id``, ``target_id``, ``stand_id``) lives here rather than being read from two
+    different places depending on the pipeline's execution type.
+    """
+
+    pipeline = models.OneToOneField(
+        AISTPipeline,
+        on_delete=models.CASCADE,
+        related_name="dast_run_metadata",
+    )
+
+    run_id = models.CharField(max_length=255)
+    target_id = models.CharField(max_length=255)
+    stand_id = models.CharField(max_length=255)
+
+    product_family = models.CharField(max_length=64, null=True, blank=True)
+    tier = models.CharField(max_length=64, null=True, blank=True)
+    run_type = models.CharField(max_length=64, null=True, blank=True)
+    target_host = models.CharField(max_length=255, null=True, blank=True)
+    scan_started = models.DateTimeField(null=True, blank=True)
+    scan_finished = models.DateTimeField(null=True, blank=True)
+
+    coverage_unit = models.CharField(max_length=64, null=True, blank=True)
+    discovered = models.PositiveIntegerField(null=True, blank=True)
+    reachable = models.PositiveIntegerField(null=True, blank=True)
+    analysed = models.PositiveIntegerField(null=True, blank=True)
+    planned = models.PositiveIntegerField(null=True, blank=True)
+    analysed_names = models.JSONField(null=True, blank=True, default=None)
+    beyond_plan_names = models.JSONField(null=True, blank=True, default=None)
+
+    input_tokens = models.BigIntegerField(null=True, blank=True)
+    output_tokens = models.BigIntegerField(null=True, blank=True)
+    thinking_tokens = models.BigIntegerField(null=True, blank=True)
+    cache_creation_tokens = models.BigIntegerField(null=True, blank=True)
+    cache_read_tokens = models.BigIntegerField(null=True, blank=True)
+    model_calls = models.PositiveIntegerField(null=True, blank=True)
+    token_by_phase = models.JSONField(null=True, blank=True, default=None)
+    token_by_agent_type = models.JSONField(null=True, blank=True, default=None)
+    # False when a breakdown could be compared against the reported total and disagreed with
+    # it. Recorded and surfaced rather than rejected: both sides are individually well-formed,
+    # and a report full of real findings must not be lost to an accounting mismatch.
+    token_accounting_consistent = models.BooleanField(null=True, blank=True)
+
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    objects = DastRunMetadataManager()
+
+    def __str__(self) -> str:
+        return f"DastRunMetadata(pipeline={self.pipeline_id}, run={self.run_id})"
+
+    def clean(self):
+        if self.pipeline.execution_type not in {PipelineExecutionType.DAST, PipelineExecutionType.MANUAL_IMPORT}:
+            raise ValidationError({"pipeline": "DAST run metadata requires a DAST or manual-import pipeline."})
+
+
 class AISTTestMeta(models.Model):
     test = models.OneToOneField(
         Test,

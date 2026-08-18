@@ -35,7 +35,7 @@ SHA = "fd5b25aa1234567890abcdef1234567890abcdef"
 
 
 def _report_payload() -> dict:
-    report = {
+    return {
         "name": "DAST",
         "type": "DAST Autonomous Scan",
         "version": "backend@fd5b25aa1234",
@@ -57,21 +57,6 @@ def _report_payload() -> dict:
             "stand": "qa-1",
             "source_commits": {"backend": SHA},
         },
-    }
-    return {
-        "contract_version": "2.0",
-        "run_id": "run-123",
-        "status": "succeeded",
-        "selection": {"stand_id": "qa-1", "relation": "exact", "distance": 0},
-        "trigger_resolution": {
-            "type": "GIT_HASH",
-            "ref": SHA,
-            "resolved_commit": SHA,
-            "resolved_at": "2026-07-26T10:00:00Z",
-        },
-        "dast_run_metadata": {"source_commits": {"backend": SHA}},
-        "report": report,
-        "audit": {"correlation_id": "provider-pipeline-123", "source_verified": True},
     }
 
 

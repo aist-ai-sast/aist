@@ -357,3 +357,77 @@ class PipelineLogsMaskingViewsTests(AISTApiBase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(wrapped_mask.call_count, 0)
+
+
+class DastTokenAccountingMaskingTests(AISTApiBase):
+
+    """
+    DAST token *accounting* is model-usage arithmetic, not a credential.
+
+    Django's heuristic masks any key containing "token", which would render the pipeline card's
+    spend panel as a row of asterisks. These counters are allowlisted; anything that really is a
+    credential must keep being masked, including inside the same payload.
+    """
+
+    def test_agent_token_counters_survive_the_response_masking(self):
+        payload = {
+            "dast_run": {
+                "total_tokens": 93556484,
+                "model_calls": 1117,
+                "token_accounting_consistent": True,
+                "tokens": {
+                    "input_tokens": 2234,
+                    "output_tokens": 951808,
+                    "thinking_tokens": 331554,
+                    "cache_creation_tokens": 2578204,
+                    "cache_read_tokens": 90024238,
+                },
+                "token_by_phase": [
+                    {"key": "6", "name": "depth: floor, explore, discovery", "total_tokens": 56824360},
+                ],
+                "token_by_agent_type": [
+                    {"key": "dast-check-runner", "agents": 14, "total_tokens": 48659086},
+                ],
+            },
+        }
+
+        masked = mask_sensitive_data(payload)
+
+        self.assertEqual(masked, payload)
+
+    def test_an_unreported_breakdown_stays_null_instead_of_becoming_the_mask_string(self):
+        """The case each allowlist entry exists for: a scalar None must not turn into text."""
+        payload = {
+            "total_tokens": None,
+            "model_calls": None,
+            "token_by_phase": None,
+            "token_by_agent_type": None,
+            "token_accounting_consistent": None,
+            "tokens": {"input_tokens": None, "output_tokens": None},
+        }
+
+        self.assertEqual(mask_sensitive_data(payload), payload)
+
+    def test_a_container_is_recursed_into_whatever_its_key_is_called(self):
+        """
+        Why "tokens" is deliberately not allowlisted.
+
+        The container branch ignores the key name, so a dict or list never needs an entry — and
+        leaving it out keeps the allowlist from covering a key that elsewhere carries a list of
+        API token records (aist/api/tokens.py).
+        """
+        masked = mask_sensitive_data({"tokens": {"output_tokens": 951808, "api_token": "glpat-abcdefgh12345678"}})
+
+        self.assertEqual(masked["tokens"]["output_tokens"], 951808)
+        self.assertEqual(masked["tokens"]["api_token"], MASKED_VALUE)
+
+    def test_a_real_credential_beside_the_counters_is_still_masked(self):
+        masked = mask_sensitive_data({
+            "total_tokens": 93556484,
+            "api_token": "glpat-abcdefgh12345678",
+            "vpn_password": "hunter2",
+        })
+
+        self.assertEqual(masked["total_tokens"], 93556484)
+        self.assertEqual(masked["api_token"], MASKED_VALUE)
+        self.assertEqual(masked["vpn_password"], MASKED_VALUE)

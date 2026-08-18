@@ -9,13 +9,20 @@ from django.test import TestCase
 from django.utils import timezone
 from dojo.models import Finding, Product_Type_Member, Role
 
-from aist.management.commands.bootstrap_demo_access import DEMO_PROJECTS, DEMO_USERS, ORG_NAMES
+from aist.management.commands.bootstrap_demo_access import (
+    DAST_DEMO_COVERAGE,
+    DAST_DEMO_RUN_COUNT,
+    DEMO_PROJECTS,
+    DEMO_USERS,
+    ORG_NAMES,
+)
 from aist.models import (
     AISTPipeline,
     AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectVersion,
     DastProjectBinding,
+    DastRunMetadata,
     LaunchSchedule,
     Organization,
     OrgIntegration,
@@ -275,3 +282,64 @@ class BootstrapDemoAccessCommandTests(TestCase):
                 expected_org.product_type_id,
                 f"{spec.username} should be in '{spec.organization_name}' only",
             )
+
+
+class BootstrapDemoAccessDastRunMetadataTests(BootstrapDemoAccessCommandTests):
+
+    """
+    Demo DAST runs must carry reported run metadata.
+
+    The seeder writes pipelines directly instead of going through report finalization, so without
+    this the coverage and spend panels are invisible on every demo run — the one place someone
+    looks at them first.
+    """
+
+    def test_every_demo_dast_run_carries_coverage_and_spend(self):
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        dast_pipelines = AISTPipeline.objects.filter(execution_type=PipelineExecutionType.DAST)
+        self.assertGreater(dast_pipelines.count(), 0)
+        for pipeline in dast_pipelines:
+            with self.subTest(pipeline=pipeline.pk):
+                row = DastRunMetadata.objects.get(pipeline_id=pipeline.pk)
+                self.assertEqual(row.coverage_unit, "endpoint")
+                self.assertIsNotNone(row.discovered)
+                self.assertEqual(len(row.analysed_names), row.analysed)
+                self.assertIsNotNone(row.model_calls)
+                self.assertTrue(row.token_accounting_consistent)
+
+    def test_the_breakdowns_add_back_up_to_the_reported_total(self):
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        counters = ("input_tokens", "output_tokens", "thinking_tokens", "cache_creation_tokens",
+                    "cache_read_tokens", "calls")
+        for row in DastRunMetadata.objects.exclude(token_by_phase=None):
+            for buckets in (row.token_by_phase, row.token_by_agent_type):
+                for counter in counters:
+                    column = "model_calls" if counter == "calls" else counter
+                    with self.subTest(pipeline=row.pipeline_id, counter=counter):
+                        self.assertEqual(
+                            sum(bucket[counter] for bucket in buckets),
+                            getattr(row, column),
+                        )
+
+    def test_the_beyond_plan_chip_is_conditional_across_the_demo_runs(self):
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        # One demo run stays inside its plan, so the amber chip must not be on every row.
+        overshoots = {
+            len(row.beyond_plan_names) > 0
+            for row in DastRunMetadata.objects.exclude(beyond_plan_names=None)
+        }
+        self.assertEqual(overshoots, {True, False})
+        inside_plan = [coverage for coverage in DAST_DEMO_COVERAGE if coverage[2] <= coverage[3]]
+        self.assertTrue(inside_plan)
+        self.assertEqual(len(DAST_DEMO_COVERAGE), DAST_DEMO_RUN_COUNT)
+
+    def test_rerunning_the_command_leaves_one_metadata_row_per_run(self):
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        before = DastRunMetadata.objects.count()
+
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        self.assertEqual(DastRunMetadata.objects.count(), before)

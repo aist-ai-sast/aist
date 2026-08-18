@@ -1929,6 +1929,8 @@ class AISTPipelineSummaryTests(AISTApiBase):
         self.assertIsNotNone(row)
         self.assertEqual(row["execution_type"], self.pipeline.execution_type)
         self.assertIsNone(row["dast_outcome_code"])
+        # A SAST pipeline carries no DAST report, so it reports no run rather than empty counters.
+        self.assertIsNone(row["dast_run"])
         self.assertEqual(row["status"], AISTStatus.FINISHED)
         self.assertEqual(row["branch"], "release/main")
         self.assertEqual(row["commit"], "deadbeef123")

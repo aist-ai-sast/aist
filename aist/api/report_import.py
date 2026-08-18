@@ -18,10 +18,11 @@ from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.integrations.dast_report import (
     DastReportValidationError,
-    validate_manual_dast_terminal_result_bytes,
+    validate_exported_dast_report_bytes,
 )
 from aist.models import AISTProject, DastProjectBinding, PipelineExecutionType
 from aist.parser_overrides import DAST_SCAN_TYPE
+from aist.services.dast_run_metadata import reported_dast_run_preview
 from aist.tasks.report_import import import_report
 from aist.utils.pipeline import create_pipeline_object
 from aist.utils.report_import import (
@@ -84,8 +85,15 @@ class _DastBindingFieldMixin:
                 raise serializers.ValidationError({"binding_id": "DAST binding must belong to the selected project."})
             if not binding.enabled:
                 raise serializers.ValidationError({"binding_id": "DAST binding must be enabled."})
-            if project.repository_id is None:
-                raise serializers.ValidationError({"project_id": "DAST imports require a linked project repository."})
+            # Only a target that declares a repository trigger needs one: its result is pinned to a
+            # commit, which has to come from a repository linked to this project. A target with no
+            # such requirement reports no source revision at all and its findings attach to the
+            # version standing for the target itself, so demanding a repository would lock every
+            # perimeter import out of a project that legitimately has none.
+            if binding.requires_source_repository and project.repository_id is None:
+                raise serializers.ValidationError(
+                    {"project_id": "This DAST target is source-bound, so the project needs a linked repository."},
+                )
             if commit_hash:
                 raise serializers.ValidationError({"commit_hash": "DAST source commits come only from the report."})
         else:
@@ -133,6 +141,9 @@ class PipelineImportPreviewSerializer(serializers.Serializer):
     name = serializers.CharField(allow_null=True)
     version = serializers.CharField(allow_null=True)
     actual_source_commit = serializers.CharField(allow_null=True)
+    # Coverage and token usage the DAST report carries, so the operator sees what the run
+    # covered before committing the import. Null for every non-DAST scan type.
+    dast_run = serializers.JSONField(allow_null=True, required=False)
 
 
 class PipelineImportRequestSerializer(
@@ -175,17 +186,19 @@ def _validated_manual_dast_report(uploaded_file, binding: DastProjectBinding):
     raw = uploaded_file.read(settings.PIPELINE_IMPORT_MAX_SIZE_BYTES + 1)
     uploaded_file.seek(0)
     if len(raw) > settings.PIPELINE_IMPORT_MAX_SIZE_BYTES:
-        msg = "DAST terminal result exceeds its size limit."
+        msg = "DAST report exceeds its size limit."
         raise DastReportValidationError(msg)
-    report = validate_manual_dast_terminal_result_bytes(
+    report = validate_exported_dast_report_bytes(
         raw,
         target_id=binding.target.provider_id,
         allowed_repository_keys=frozenset(binding.target.repository_keys),
-        maximum_result_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
         maximum_report_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
     )
     if binding.requires_source_repository and report.source_commit_for(binding.source_repo_key) is None:
-        msg = "DAST report does not contain the binding source repository."
+        msg = (
+            f"This report carries no source revision for '{binding.source_repo_key}', which is the "
+            f"repository this binding is bound to."
+        )
         raise DastReportValidationError(msg)
     return report
 
@@ -220,6 +233,7 @@ class PipelineImportValidateAPI(AISTAPIView):
 
         scan_type = serializer.validated_data["scan_type"]
         uploaded_file = serializer.validated_data["file"]
+        validated_report = None
         try:
             binding = serializer.validated_data.get("binding")
             if scan_type == DAST_SCAN_TYPE:
@@ -243,6 +257,9 @@ class PipelineImportValidateAPI(AISTAPIView):
             "name": getattr(test, "name", None) if test else None,
             "version": getattr(test, "version", None) if test else None,
             "actual_source_commit": actual_source_commit,
+            # Derived after validation, from the already-validated report: it cannot fail, so it
+            # stays out of the try clause guarding the parse.
+            "dast_run": None if validated_report is None else reported_dast_run_preview(validated_report.run_metadata),
         })
         return Response(out.data, status=status.HTTP_200_OK)
 

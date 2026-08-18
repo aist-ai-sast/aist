@@ -96,6 +96,7 @@ from aist.api.org_integrations import (
 from aist.api.organizations import AISTOrganizationSerializer, OrganizationCreateAPI
 from aist.api.pipelines import (
     PipelineAPI,
+    PipelineDastRunAPI,
     PipelineListAPI,
     PipelineResponseSerializer,
     PipelineStartAPI,
@@ -225,6 +226,7 @@ __all__ = [
     "OrganizationDastIntegrationImportAPI",
     "OrganizationDastTargetCatalogAPI",
     "PipelineAPI",
+    "PipelineDastRunAPI",
     "PipelineLaunchRequestCancelAPI",
     "PipelineLaunchRequestClearDispatchedAPI",
     "PipelineLaunchRequestClearSerializer",

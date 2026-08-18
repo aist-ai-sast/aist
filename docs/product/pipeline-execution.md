@@ -68,6 +68,13 @@ validation, import, and finding-processing lifecycle. The import workflow must
 derive or validate the source version required by the selected format rather
 than accepting an unrelated revision.
 
+A report can also describe the run that produced it, rather than only its
+findings. AIST keeps that description with the pipeline and presents it there, so
+a run's own account of what it covered and what it spent stays attached to the
+history it belongs to. The [DAST integration](../integrations/dast.md#reported-run-metadata)
+describes what a dynamic result may report and how an unfamiliar or malformed
+description is treated.
+
 ## Prepare findings for review
 
 An empty valid result finishes without creating findings. Otherwise AIST waits

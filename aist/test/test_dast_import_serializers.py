@@ -25,6 +25,7 @@ from aist.models import (
     ScmType,
 )
 from aist.parser_overrides import DAST_SCAN_TYPE
+from aist.test import dast_fixtures
 
 
 def _upload(content: bytes = b"{}", name: str = "report.json") -> SimpleUploadedFile:
@@ -70,8 +71,10 @@ class ReportImportSerializerTestCase(TestCase):
             contract_revision="2.0",
             capability_revision="sha256:serializer-capability",
             schema_digest="sha256:serializer-schema",
-            parameter_schema={"type": "object", "additionalProperties": False},
-            provider_defaults={},
+            # A real catalog sync validates the snapshot, so the fixture has to be one a sync
+            # could actually have produced — including the $schema the snapshot requires.
+            parameter_schema=dast_fixtures.parameter_schema(),
+            provider_defaults={"depth": "light"},
             repository_keys=["backend"],
             launch_requirements=["repository-trigger"],
             autonomous_ready=True,

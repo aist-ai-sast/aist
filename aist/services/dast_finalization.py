@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from functools import partial
 
 from django.db import transaction
+from dojo.celery_dispatch import dojo_dispatch_task
+from dojo.finding import helper as finding_helper
 
 from aist.integrations.dast_report import ValidatedDastReport
 from aist.internal_upload import ensure_engagement, import_scan_file_via_default_importer
@@ -17,6 +19,7 @@ from aist.models import (
     AISTProjectVersion,
     AISTStatus,
     DastProjectBinding,
+    DastRunMetadata,
     PipelineExecutionType,
     PipelineLaunchRequest,
     VersionType,
@@ -171,6 +174,14 @@ def finalize_dast_report(
         )
         _verify_pipeline_binding(pipeline=pipeline, binding=persisted_binding, report=report)
 
+        # Ahead of the already-finalized short circuit below, so redelivering a report rewrites
+        # identical metadata and a pipeline finalized before this table existed gains its row.
+        if report.run_metadata is not None:
+            DastRunMetadata.objects.upsert_from_report(
+                pipeline_id=pipeline.pk,
+                metadata=report.run_metadata,
+            )
+
         launch_data = PipelineLaunchData(pipeline.launch_data)
         existing = _existing_result(
             pipeline=pipeline,
@@ -242,6 +253,23 @@ def finalize_dast_report(
             AISTStatus.UPLOADING_RESULTS,
             update_fields_extra=["project_version", "launch_data"],
         )
+        # The importer dispatches this itself, but it does so with `apply_async` from inside this
+        # still-open transaction: the worker picks the task up in milliseconds, reads finding ids
+        # that have not been committed yet, finds nothing and returns silently. Deduplication then
+        # never runs, no ProcessedFinding row is ever written, and the pipeline waits out the full
+        # AIST_DEDUP_MAX_WAIT_S before being force-released — an hour of looking hung. Dispatching
+        # it again once the findings are actually visible is what makes post-processing happen at
+        # all; the in-transaction attempt is a harmless no-op on an empty batch.
+        transaction.on_commit(partial(
+            dojo_dispatch_task,
+            finding_helper.post_process_findings_batch,
+            finding_ids,
+            dedupe_option=True,
+            rules_option=True,
+            product_grading_option=True,
+            issue_updater_option=True,
+            push_to_jira=False,
+        ))
         transaction.on_commit(partial(
             finish_or_schedule_pipeline_results,
             pipeline_id=pipeline.id,

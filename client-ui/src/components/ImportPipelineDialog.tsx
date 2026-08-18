@@ -6,6 +6,7 @@ import { severityBadgeClass } from "../lib/badgeStyles";
 import { dastBindingLabel, targetRequiresSourceRepository } from "../lib/dast";
 import { useImportPipeline, useValidateImportPipeline } from "../lib/mutations";
 import type { ImportPipelinePreview } from "../lib/mutations";
+import { formatCompactTokens, formatCount } from "../lib/dastRun";
 import { usePipelineStatus, useProjectDastBindings, useProjects } from "../lib/queries";
 import type { Severity } from "../types";
 import Modal from "./Modal";
@@ -24,6 +25,43 @@ export function ImportUploadIcon({ className = "h-4 w-4" }: { className?: string
       <path d="M12 15V4M12 4 8 8M12 4l4 4" />
       <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
     </svg>
+  );
+}
+
+/**
+ * What the run covered, shown before the operator commits the import. Reads the same counters
+ * the pipeline list will show afterwards, so the two cannot disagree.
+ */
+function ImportRunCoverage({ run }: { run: NonNullable<ImportPipelinePreview["dast_run"]> }) {
+  const unit = run.coverage_unit ? `${run.coverage_unit}s` : "targets";
+  const coverage =
+    run.analysed !== null && run.reachable !== null
+      ? `${formatCount(run.analysed)} / ${formatCount(run.reachable)} ${unit}`
+      : run.analysed !== null
+        ? `${formatCount(run.analysed)} ${unit}`
+        : null;
+  const tokens = formatCompactTokens(run.total_tokens);
+  const calls = formatCount(run.model_calls);
+  if (!coverage && !tokens) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      {coverage ? (
+        <span className="rounded-full border border-night-500 bg-night-800 px-3 py-1 text-slate-200">
+          {coverage} analysed
+        </span>
+      ) : null}
+      {tokens ? (
+        <span className="rounded-full border border-night-500 bg-night-800 px-3 py-1 text-slate-200">
+          {tokens} tokens{calls ? ` · ${calls} calls` : ""}
+        </span>
+      ) : null}
+      {run.beyond_plan !== null && run.beyond_plan > 0 ? (
+        <span className="rounded-full border border-amber-400/35 bg-amber-400/10 px-3 py-1 text-amber-400">
+          {formatCount(run.beyond_plan)} beyond plan
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -229,6 +267,8 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
                 <p className="text-slate-100">{preview.findings_count}</p>
               </div>
             </div>
+
+            {preview.dast_run ? <ImportRunCoverage run={preview.dast_run} /> : null}
 
             <div className="flex flex-wrap gap-2">
               {(Object.entries(preview.severity_breakdown) as [Severity, number][]).map(([severity, count]) => (

@@ -35,11 +35,13 @@ from aist.models import (
     ScmType,
 )
 from aist.parser_overrides import DAST_SCAN_TYPE
+from aist.test import dast_fixtures
 
 SHA = "fd5b25aa1234567890abcdef1234567890abcdef"
 
 
-def _report_payload(*, missing_description: bool = False) -> dict:
+def _report_payload(*, missing_description: bool = False, run_metadata: dict | None = None) -> dict:
+    """The artifact `dast export-findings --format generic-aist` writes — what an operator uploads."""
     finding = {
         "title": "Cross-tenant BOLA on subscription keys",
         "severity": "High",
@@ -48,7 +50,7 @@ def _report_payload(*, missing_description: bool = False) -> dict:
     }
     if not missing_description:
         finding["description"] = "redacted description"
-    report = {
+    return {
         "name": "DAST",
         "type": DAST_SCAN_TYPE,
         "version": "backend@fd5b25aa1234",
@@ -58,22 +60,8 @@ def _report_payload(*, missing_description: bool = False) -> dict:
             "target": "cloud-app",
             "stand": "qa-1",
             "source_commits": {"backend": SHA},
+            **(run_metadata or {}),
         },
-    }
-    return {
-        "contract_version": "2.0",
-        "run_id": "run-123",
-        "status": "succeeded",
-        "selection": {"stand_id": "qa-1", "relation": "exact", "distance": 0},
-        "trigger_resolution": {
-            "type": "GIT_HASH",
-            "ref": SHA,
-            "resolved_commit": SHA,
-            "resolved_at": "2026-07-26T10:00:00Z",
-        },
-        "dast_run_metadata": {"source_commits": {"backend": SHA}},
-        "report": report,
-        "audit": {"correlation_id": "provider-pipeline-123", "source_verified": True},
     }
 
 
@@ -376,3 +364,164 @@ class PipelineImportAPITests(TestCase):
         ]
         self.assertIn(429, statuses)
         self.assertTrue(all(code in {400, 429} for code in statuses))
+
+
+class DastImportPreviewRunMetadataTests(PipelineImportAPITests):
+
+    """The operator sees what the run covered before committing the import."""
+
+    # Real values from run 80c744a2be37d91c07a7a8ef97c520be.
+    COVERAGE = {
+        "unit": "endpoint",
+        "discovered": 784,
+        "reachable": 176,
+        "analysed": 38,
+        "planned": 10,
+        "analysed_names": ["analytics3-test-hdw-mx", "cloud-prod-hdw-mx"],
+        "beyond_plan_names": ["cloud-prod-hdw-mx"],
+    }
+    TOKEN_USAGE = {
+        "total": {
+            "input": 2234,
+            "output": 951808,
+            "thinking": 331554,
+            "cache_creation": 2578204,
+            "cache_read": 90024238,
+            "calls": 1117,
+        },
+    }
+
+    def _preview(self, payload):
+        response = self.client.post(
+            self._validate_url(),
+            {
+                "file": _upload(payload),
+                "project_id": self.project.id,
+                "scan_type": DAST_SCAN_TYPE,
+                "binding_id": self.binding.id,
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        return response.data
+
+    def test_preview_reports_the_coverage_and_spend_the_report_carries(self):
+        data = self._preview(
+            _report_payload(run_metadata={"coverage": self.COVERAGE, "token_usage": self.TOKEN_USAGE}),
+        )
+
+        self.assertEqual(data["findings_count"], 1)
+        run = data["dast_run"]
+        self.assertEqual(run["analysed"], 38)
+        self.assertEqual(run["reachable"], 176)
+        self.assertEqual(run["beyond_plan"], 1)
+        self.assertEqual(run["model_calls"], 1117)
+        self.assertEqual(run["total_tokens"], 2234 + 951808 + 2578204 + 90024238)
+
+    def test_preview_of_a_report_without_the_blocks_reports_no_counters(self):
+        run = self._preview(_report_payload())["dast_run"]
+
+        self.assertEqual(run["run_id"], "run-123")
+        self.assertIsNone(run["analysed"])
+        self.assertIsNone(run["total_tokens"])
+
+
+class DastPerimeterImportTests(TestCase):
+
+    """
+    A perimeter target reports no source revision, so its project needs no repository.
+
+    Regression: the import serializer demanded a linked project repository for *every* DAST import.
+    A sourceless target's findings attach to the version standing for the target itself, so that
+    requirement locked every perimeter report out of a project that legitimately has none — the
+    operator saw "DAST imports require a linked project repository" and could go no further.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.user = get_user_model().objects.create_user(username="perimeter-import-user", password="pass")  # noqa: S106
+        sla = SLA_Configuration.objects.create(name="Perimeter Import SLA")
+        prod_type = Product_Type.objects.create(name="Perimeter Import PT")
+        organization = Organization.objects.create(name="Perimeter Import Org", product_type=prod_type)
+        role_maintainer, _ = Role.objects.get_or_create(id=Roles.Maintainer, defaults={"name": "Maintainer"})
+        Product_Type_Member.objects.create(product_type=prod_type, user=self.user, role=role_maintainer)
+        product = Product.objects.create(
+            name="Perimeter Import Product",
+            description="desc",
+            prod_type=prod_type,
+            sla_configuration=sla,
+        )
+        # Deliberately no RepositoryInfo: a perimeter scan has no source to link to.
+        self.project = AISTProject.objects.create(
+            product=product,
+            supported_languages=[],
+            compilable=False,
+            profile={},
+        )
+        integration, _state = dast_fixtures.create_dast_integration(
+            organization=organization,
+            public_id="perimeter-import",
+            name="Perimeter Import DAST",
+        )
+        source_target, perimeter_target = dast_fixtures.create_dast_targets(
+            integration=integration,
+            wires=(dast_fixtures.target_wire("cloud-app"), dast_fixtures.perimeter_target_wire("perimeter")),
+        )
+        self.source_binding = dast_fixtures.create_dast_binding(project=self.project, target=source_target)
+        self.binding = dast_fixtures.create_dast_binding(project=self.project, target=perimeter_target)
+        self.client.force_login(self.user)
+
+    def _perimeter_report(self) -> dict:
+        report = _report_payload()
+        report["dast_run_metadata"].update(
+            run_id="run-perimeter-1",
+            target="perimeter",
+            stand="external-10host",
+            source_commits={},
+        )
+        return report
+
+    def _post(self, url, report, *, binding):
+        return self.client.post(
+            url,
+            {
+                "file": _upload(report),
+                "project_id": self.project.id,
+                "scan_type": DAST_SCAN_TYPE,
+                "binding_id": binding.id,
+            },
+        )
+
+    def test_the_binding_needs_no_repository_when_its_target_reports_no_source(self):
+        self.assertFalse(self.binding.requires_source_repository)
+        self.assertTrue(self.source_binding.requires_source_repository)
+        self.assertIsNone(self.project.repository_id)
+
+    def test_preview_accepts_a_perimeter_report_from_a_project_without_a_repository(self):
+        response = self._post(
+            reverse("aist_api:aist_pipeline_import_validate"), self._perimeter_report(), binding=self.binding,
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.data["findings_count"], 1)
+        self.assertIsNone(response.data["actual_source_commit"])
+
+    @patch("aist.api.report_import.import_report.apply_async")
+    def test_import_accepts_a_perimeter_report_from_a_project_without_a_repository(self, mock_apply_async):
+        response = self._post(
+            reverse("aist_api:aist_pipeline_import"), self._perimeter_report(), binding=self.binding,
+        )
+
+        self.assertEqual(response.status_code, 202, response.content)
+        pipeline = AISTPipeline.objects.get(pk=response.data["pipeline_id"])
+        self.assertEqual(pipeline.project_id, self.project.id)
+        self.assertEqual(pipeline.execution_type, PipelineExecutionType.MANUAL_IMPORT)
+        self.assertEqual(mock_apply_async.call_count, 1)
+
+    def test_a_source_bound_target_still_needs_the_project_to_have_a_repository(self):
+        """The requirement is not gone; it is asked of the binding that actually has it."""
+        response = self._post(
+            reverse("aist_api:aist_pipeline_import_validate"), _report_payload(), binding=self.source_binding,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("project_id", response.data)

@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.storage import default_storage
 from django.db import transaction
 
-from aist.integrations.dast_report import validate_manual_dast_terminal_result_bytes
+from aist.integrations.dast_report import validate_exported_dast_report_bytes
 from aist.internal_upload import ensure_engagement, import_scan_via_default_importer
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging, uninstall_pipeline_file_logging
@@ -176,20 +176,22 @@ def _process_dast_report_import(
     with default_storage.open(storage_name, "rb") as stored_report:
         raw = stored_report.read(settings.PIPELINE_IMPORT_MAX_SIZE_BYTES + 1)
     if len(raw) > settings.PIPELINE_IMPORT_MAX_SIZE_BYTES:
-        msg = "DAST terminal result exceeds its size limit."
+        msg = "DAST report exceeds its size limit."
         raise ValueError(msg)
     if not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), sha256):
         msg = "Persisted DAST report checksum does not match the accepted upload."
         raise ValueError(msg)
-    report = validate_manual_dast_terminal_result_bytes(
+    report = validate_exported_dast_report_bytes(
         raw,
         target_id=binding.target.provider_id,
         allowed_repository_keys=frozenset(binding.target.repository_keys),
-        maximum_result_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
         maximum_report_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
     )
     if binding.requires_source_repository and report.source_commit_for(binding.source_repo_key) is None:
-        msg = "DAST report does not contain the binding source repository."
+        msg = (
+            f"This report carries no source revision for '{binding.source_repo_key}', which is the "
+            f"repository this binding is bound to."
+        )
         raise ValueError(msg)
     uploader = get_user_model().objects.filter(pk=uploader_id).first()
     finalize_dast_report(

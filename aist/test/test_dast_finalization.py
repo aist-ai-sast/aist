@@ -17,6 +17,7 @@ from aist.models import (
     AISTStatus,
     DastExecutionState,
     DastProjectBinding,
+    DastRunMetadata,
     DastTarget,
     Organization,
     OrgIntegration,
@@ -36,7 +37,42 @@ TRIGGER_BRANCH = "release/2026-07"
 LOGGER = logging.getLogger(__name__)
 
 
-def _validated_report(*, correlation_id: str, findings: list[dict] | None = None, run_id: str = "run-123"):
+# Real values from run 80c744a2be37d91c07a7a8ef97c520be.
+RUN_COVERAGE = {
+    "unit": "endpoint",
+    "discovered": 784,
+    "reachable": 176,
+    "analysed": 38,
+    "planned": 10,
+    "analysed_names": ["analytics3-test-hdw-mx", "cloud-prod-hdw-mx"],
+    "beyond_plan_names": ["cloud-prod-hdw-mx"],
+}
+RUN_TOKEN_USAGE = {
+    "total": {"input": 16, "output": 2081, "thinking": 534, "cache_creation": 45877, "cache_read": 799618, "calls": 8},
+    "by_phase": {
+        "2": {"input": 16, "output": 2081, "thinking": 534, "cache_creation": 45877, "cache_read": 799618, "calls": 8},
+    },
+    "by_agent_type": {
+        "dast-verify": {
+            "agents": 5,
+            "input": 16,
+            "output": 2081,
+            "thinking": 534,
+            "cache_creation": 45877,
+            "cache_read": 799618,
+            "calls": 8,
+        },
+    },
+}
+
+
+def _validated_report(
+    *,
+    correlation_id: str,
+    findings: list[dict] | None = None,
+    run_id: str = "run-123",
+    run_metadata: dict | None = None,
+):
     report = {
         "name": "DAST",
         "type": DAST_SCAN_TYPE,
@@ -58,6 +94,7 @@ def _validated_report(*, correlation_id: str, findings: list[dict] | None = None
             "target": "cloud-app",
             "stand": "qa-1",
             "source_commits": {"backend": ACTUAL_SHA},
+            **(run_metadata or {}),
         },
     }
     terminal = {
@@ -91,6 +128,11 @@ class DastFinalizationTests(TestCase):
         dispatch = patch("dojo.importers.default_importer.dojo_dispatch_task")
         dispatch.start()
         self.addCleanup(dispatch.stop)
+        # Finalization re-dispatches the importer's post-processing once the findings are committed,
+        # so the same broker dependency has to be stubbed on this module's own binding.
+        finalization_dispatch = patch("aist.services.dast_finalization.dojo_dispatch_task")
+        self.post_processing_dispatch = finalization_dispatch.start()
+        self.addCleanup(finalization_dispatch.stop)
         product_type = Product_Type.objects.create(name="DAST finalization")
         sla = SLA_Configuration.objects.create(name="DAST finalization SLA")
         self.organization = Organization.objects.create(
@@ -288,3 +330,145 @@ class DastFinalizationTests(TestCase):
             )
 
         self.assertEqual(self.remote.tests.count(), test_count)
+
+    def test_run_metadata_lands_on_the_pipeline_for_an_autonomous_run(self):
+        report = _validated_report(
+            correlation_id=self.remote.id,
+            run_metadata={"coverage": RUN_COVERAGE, "token_usage": RUN_TOKEN_USAGE, "tier": "external"},
+        )
+
+        with self.captureOnCommitCallbacks(execute=False):
+            finalize_dast_report(
+                pipeline_id=self.remote.id,
+                report=report,
+                binding=self.binding,
+                logger=LOGGER,
+                lead=self.lead,
+            )
+
+        row = DastRunMetadata.objects.get(pipeline_id=self.remote.id)
+        self.assertEqual(row.run_id, "run-123")
+        self.assertEqual(row.stand_id, "qa-1")
+        self.assertEqual(row.tier, "external")
+        self.assertEqual((row.discovered, row.reachable, row.analysed, row.planned), (784, 176, 38, 10))
+        self.assertEqual(row.beyond_plan_names, ["cloud-prod-hdw-mx"])
+        self.assertEqual(row.output_tokens, 2081)
+        self.assertEqual(row.model_calls, 8)
+        self.assertTrue(row.token_accounting_consistent)
+
+    def test_run_metadata_lands_the_same_way_for_an_operator_upload(self):
+        report = _validated_report(
+            correlation_id=self.manual.id,
+            run_metadata={"coverage": RUN_COVERAGE, "token_usage": RUN_TOKEN_USAGE},
+        )
+
+        with self.captureOnCommitCallbacks(execute=False):
+            finalize_dast_report(
+                pipeline_id=self.manual.id,
+                report=report,
+                binding=self.binding,
+                logger=LOGGER,
+                lead=self.lead,
+            )
+
+        row = DastRunMetadata.objects.get(pipeline_id=self.manual.id)
+        self.assertEqual(row.analysed, 38)
+        self.assertEqual(row.model_calls, 8)
+
+    def test_a_report_without_the_new_blocks_still_finalizes_and_stores_no_counters(self):
+        report = _validated_report(correlation_id=self.remote.id)
+
+        with self.captureOnCommitCallbacks(execute=False):
+            finalize_dast_report(
+                pipeline_id=self.remote.id,
+                report=report,
+                binding=self.binding,
+                logger=LOGGER,
+                lead=self.lead,
+            )
+
+        row = DastRunMetadata.objects.get(pipeline_id=self.remote.id)
+        # Absent must stay absent: a run that reported nothing must never read as zero.
+        self.assertIsNone(row.analysed)
+        self.assertIsNone(row.analysed_names)
+        self.assertIsNone(row.output_tokens)
+        self.assertIsNone(row.token_by_phase)
+        self.assertIsNone(row.token_accounting_consistent)
+
+    def test_redelivering_the_same_report_keeps_exactly_one_metadata_row(self):
+        report = _validated_report(
+            correlation_id=self.remote.id,
+            run_metadata={"coverage": RUN_COVERAGE},
+        )
+
+        for _ in range(2):
+            with self.captureOnCommitCallbacks(execute=False):
+                finalize_dast_report(
+                    pipeline_id=self.remote.id,
+                    report=report,
+                    binding=self.binding,
+                    logger=LOGGER,
+                    lead=self.lead,
+                )
+
+        self.assertEqual(DastRunMetadata.objects.filter(pipeline_id=self.remote.id).count(), 1)
+        self.assertEqual(DastRunMetadata.objects.get(pipeline_id=self.remote.id).analysed, 38)
+
+    def test_a_pipeline_finalized_before_this_table_existed_gains_its_row_on_redelivery(self):
+        report = _validated_report(
+            correlation_id=self.remote.id,
+            run_metadata={"coverage": RUN_COVERAGE},
+        )
+        with self.captureOnCommitCallbacks(execute=False):
+            finalize_dast_report(
+                pipeline_id=self.remote.id,
+                report=report,
+                binding=self.binding,
+                logger=LOGGER,
+                lead=self.lead,
+            )
+        # Stand in for a pipeline whose report was accepted before the metadata was persisted:
+        # the finalization marker is already there, the row is not.
+        DastRunMetadata.objects.filter(pipeline_id=self.remote.id).delete()
+
+        with self.captureOnCommitCallbacks(execute=False):
+            result = finalize_dast_report(
+                pipeline_id=self.remote.id,
+                report=report,
+                binding=self.binding,
+                logger=LOGGER,
+                lead=self.lead,
+            )
+
+        self.assertTrue(result.already_finalized)
+        self.assertEqual(DastRunMetadata.objects.get(pipeline_id=self.remote.id).analysed, 38)
+
+    def test_post_processing_is_dispatched_only_after_the_findings_are_committed(self):
+        """
+        The defect this guards: the importer queues post-processing with `apply_async` from inside
+        finalization's still-open transaction, so the worker reads finding ids that are not visible
+        yet, finds an empty batch and returns. Deduplication then never runs, no ProcessedFinding
+        row is written, and the pipeline sits in WAITING_DEDUPLICATION_TO_FINISH until the
+        hour-long dedup deadline force-releases it.
+        """
+        report = _validated_report(correlation_id=self.remote.id)
+
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            result = finalize_dast_report(
+                pipeline_id=self.remote.id,
+                report=report,
+                binding=self.binding,
+                logger=LOGGER,
+                lead=self.lead,
+            )
+        # Nothing may be queued while the transaction is still open.
+        self.assertEqual(self.post_processing_dispatch.call_count, 0)
+
+        for callback in callbacks:
+            callback()
+
+        self.assertEqual(self.post_processing_dispatch.call_count, 1)
+        _dispatch_args, dispatch_kwargs = self.post_processing_dispatch.call_args
+        dispatched_ids = self.post_processing_dispatch.call_args[0][1]
+        self.assertEqual(sorted(dispatched_ids), sorted(result.finding_ids))
+        self.assertTrue(dispatch_kwargs["dedupe_option"])

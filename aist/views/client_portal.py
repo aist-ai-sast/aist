@@ -76,6 +76,11 @@ def _build_routes() -> dict[str, Any]:
             "PIPELINE_ID",
             "pipeline_id",
         ),
+        "pipeline_dast_run_url": _replace_str_placeholder(
+            reverse("aist_api:pipeline_dast_run", kwargs={"pipeline_id": "PIPELINE_ID"}),
+            "PIPELINE_ID",
+            "pipeline_id",
+        ),
         "pipelines_summary_url": reverse("client_pipeline_summary"),
         "calendar_events_url": reverse("aist_api:calendar_events"),
         "calendar_event_detail_url": _replace_str_placeholder(

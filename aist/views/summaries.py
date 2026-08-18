@@ -22,6 +22,7 @@ from aist.launch_data import PipelineLaunchData
 from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus, WorkItemLink, WorkItemStatusCategory
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects, get_authorized_findings
 from aist.services.dast_outcomes import public_dast_outcome_code
+from aist.services.dast_run_metadata import dast_run_summary
 from aist.utils.cwe_lookup import fetch_cwe_meta, load_cwe_fixture_lookup, trim_text
 from aist.utils.project_version_refs import resolve_project_version_git_refs
 
@@ -365,7 +366,15 @@ def product_summary(request: HttpRequest) -> HttpResponse:
 def pipeline_summary(request: HttpRequest) -> HttpResponse:
     queryset = (
         get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
-        .select_related("project", "project__product", "project_version", "project_version__resolved_from_branch")
+        .select_related(
+            "project",
+            "project__product",
+            "project_version",
+            "project_version__resolved_from_branch",
+            # Absent for SAST rows and for any pipeline without an accepted DAST report; joined
+            # here so a mixed page still costs one query.
+            "dast_run_metadata",
+        )
         .order_by("-created")
     )
 
@@ -445,6 +454,7 @@ def pipeline_summary(request: HttpRequest) -> HttpResponse:
                 "execution_type": pipeline.execution_type,
                 "status": pipeline.status,
                 "dast_outcome_code": public_dast_outcome_code(pipeline),
+                "dast_run": dast_run_summary(pipeline),
                 "project_id": pipeline.project_id,
                 "product_id": pipeline.project.product_id,
                 "product_name": pipeline.project.product.name,

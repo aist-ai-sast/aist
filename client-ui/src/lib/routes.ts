@@ -36,6 +36,7 @@ type RouteMap = {
   pipelines_import_url: string;
   pipelines_import_validate_url: string;
   pipeline_detail_url: string;
+  pipeline_dast_run_url: string;
   pipelines_summary_url: string;
   pipeline_export_url: string;
   calendar_events_url: string;
