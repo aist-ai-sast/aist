@@ -49,6 +49,9 @@ class ProviderOperation(StrEnum):
     EXECUTE = "execute"
     RESUME = "resume"
     CANCEL = "cancel"
+    # Reads a run's final status without starting one; distinct from RESUME so the two are
+    # separable in the metric.
+    HARVEST = "harvest"
     RECONCILE = "reconcile"
 
 

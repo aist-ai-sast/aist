@@ -48,7 +48,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TUN_WAIT_SECS = 35  # tun0 timeout (30 s in sidecar) + 5 s buffer for tinyproxy startup
+# The sidecar waits up to 30 s for tun0 and 10 s for tinyproxy before declaring readiness.
+_SIDECAR_WAIT_SECS = 50
+# Written by the entrypoint last: tun0 up, VPN-pushed resolvers in /etc/resolv.conf, proxy listening.
+_SIDECAR_READY_MARKER = "/run/aist-vpn-ready"
 _VPN_IMAGE_BUILD_TIMEOUT_SECS = 300
 
 # Lines in docker logs output that may expose client DNS server IPs or search domains.
@@ -92,7 +95,7 @@ def _find_executable(name: str) -> str | None:
 def _get_vpn_sidecar_image() -> str:
     from django.conf import settings  # noqa: PLC0415
 
-    return getattr(settings, "AIST_VPN_SIDECAR_IMAGE", "aist-vpn-sidecar:latest")
+    return settings.AIST_VPN_SIDECAR_IMAGE
 
 
 def _build_vpn_sidecar_if_needed(image: str) -> None:
@@ -372,12 +375,15 @@ def _parse_docker_created_at(raw: str) -> datetime | None:
     return dt_naive.replace(tzinfo=offset).astimezone(UTC)
 
 
-def _wait_for_sidecar_ready(container_name: str, timeout: float = _TUN_WAIT_SECS) -> None:
+def _wait_for_sidecar_ready(container_name: str, timeout: float = _SIDECAR_WAIT_SECS) -> None:
     """
-    Poll ``docker exec <name> ip link show tun0`` until the tunnel interface
-    appears (meaning OpenVPN is up and tinyproxy is starting).
-    Dumps the last 50 log lines on timeout to aid diagnosis.
-    DNS-related lines are redacted to avoid leaking client network details.
+    Wait for the readiness marker the sidecar writes when its namespace is actually usable.
+
+    Deliberately not ``tun0``: a container joining the namespace inherits its ``/etc/resolv.conf``,
+    which the sidecar rewrites with the VPN-pushed resolvers only after the tunnel is up. Probing
+    DNS from here cannot substitute -- a VPN-internal name has no answer in this process.
+
+    Dumps the last 50 log lines on timeout, with DNS lines redacted.
     """
     docker_bin = _find_executable("docker")
     if docker_bin is None:
@@ -386,13 +392,11 @@ def _wait_for_sidecar_ready(container_name: str, timeout: float = _TUN_WAIT_SECS
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         result = subprocess.run(
-            [docker_bin, "exec", container_name, "ip", "link", "show", "tun0"],
+            [docker_bin, "exec", container_name, "test", "-f", _SIDECAR_READY_MARKER],
             capture_output=True,
             check=False,
         )
         if result.returncode == 0:
-            # Give tinyproxy a moment to bind after openvpn comes up
-            time.sleep(0.5)
             return
         time.sleep(1.0)
 
@@ -642,16 +646,51 @@ def vpn_sidecar_context(
         stop_sidecar(container_name)
 
 
-def cleanup_orphaned_vpn_containers(max_age_minutes: int = 240) -> int:
-    """
-    Stop and remove any ``aist-vpn-*`` containers older than *max_age_minutes*.
+def _vpn_orphan_max_age_minutes() -> int:
+    from django.conf import settings  # noqa: PLC0415
 
-    These are VPN sidecar containers that were not cleaned up because the Celery
-    worker was killed (SIGKILL, OOM) before the ``finally`` block in
-    :func:`vpn_sidecar_context` could run.
+    return settings.AIST_VPN_ORPHAN_MAX_AGE_MINUTES
 
-    Returns the number of containers removed.
+
+def _sidecar_ownership() -> tuple[set[str], str]:
     """
+    Return the sidecar names a live pipeline still owns, plus the warm-egress prefix.
+
+    A pipeline owns its sidecar until it is terminal, which for a DAST run can be days -- so age is
+    not evidence of abandonment. Names are derived forwards from the pipelines because
+    :func:`vpn_sidecar_container_name` truncates a long execution id and cannot be reversed.
+    Warm-egress sidecars are retired by their own idle reaper, so they are excluded outright.
+
+    Imports are local: this module stays importable where the app registry is not ready.
+    """
+    from aist.integrations.egress import NAME_PREFIX as WARM_EGRESS_PREFIX  # noqa: PLC0415
+    from aist.models import AISTPipeline  # noqa: PLC0415
+    from aist.services.pipeline_lifecycle import is_terminal_pipeline_status  # noqa: PLC0415
+
+    names = {
+        vpn_sidecar_container_name(pipeline_id)
+        for pipeline_id, status in AISTPipeline.objects.values_list("id", "status")
+        if not is_terminal_pipeline_status(status)
+    }
+    return names, WARM_EGRESS_PREFIX
+
+
+def cleanup_orphaned_vpn_containers(max_age_minutes: int | None = None) -> int:
+    """
+    Stop and remove abandoned ``aist-vpn-*`` containers older than *max_age_minutes*.
+
+    These are sidecars left behind when a Celery worker was killed before the ``finally`` block in
+    :func:`vpn_sidecar_context` could run. Only unowned sidecars are eligible: this is a leak sweep,
+    never an execution time limit. Returns the number of containers removed.
+    """
+    if max_age_minutes is None:
+        max_age_minutes = _vpn_orphan_max_age_minutes()
+    try:
+        owned_names, egress_prefix = _sidecar_ownership()
+    except Exception:
+        # Fail closed: without the ownership answer the sweep cannot tell a leak from live work.
+        logger.warning("cleanup_orphaned_vpn_containers: could not resolve sidecar ownership", exc_info=True)
+        return 0
     try:
         docker_bin = _find_executable("docker")
         if docker_bin is None:
@@ -687,6 +726,9 @@ def cleanup_orphaned_vpn_containers(max_age_minutes: int = 240) -> int:
             continue
 
         name = info.get("Names", "")
+        if name in owned_names or name.startswith(egress_prefix):
+            logger.debug("cleanup_orphaned_vpn_containers: %s is still owned", name)
+            continue
         created_at_raw = info.get("CreatedAt", "")
         created_at = _parse_docker_created_at(created_at_raw)
         if created_at is None:

@@ -66,14 +66,17 @@ def sync_all_work_item_providers(**_kwargs) -> dict:
 
 
 @shared_task(name="aist.tasks.work_items.cleanup_orphaned_vpn_containers")
-def cleanup_orphaned_vpn_containers_task(max_age_minutes: int = 240, **_kwargs) -> dict:
+def cleanup_orphaned_vpn_containers_task(max_age_minutes: int | None = None, **_kwargs) -> dict:
     """
-    Periodic safety-net: remove ``aist-vpn-*`` containers older than *max_age_minutes*.
+    Periodic safety-net: remove abandoned ``aist-vpn-*`` containers older than *max_age_minutes*.
 
     VPN sidecar containers are normally stopped by the ``finally`` block in
     ``vpn_sidecar_context``.  This task handles the edge case where a Celery
     worker was killed (SIGKILL / OOM) before the finally block could run,
     leaving orphaned containers that hold VPN connections and consume resources.
+
+    A live pipeline's sidecar is never eligible regardless of age.  ``None`` takes the age from
+    ``AIST_VPN_ORPHAN_MAX_AGE_MINUTES``.
     """
     from aist.utils.vpn import cleanup_orphaned_vpn_containers  # noqa: PLC0415
 

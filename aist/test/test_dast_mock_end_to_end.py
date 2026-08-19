@@ -23,6 +23,8 @@ from pipeline.dast.contracts import (
 from pipeline.dast.executor import DastExecutionResult, DastExecutionTelemetry
 
 from aist.execution.claiming import claim_next_launch_request, revalidate_claimed_authority
+from aist.execution.dast import DastPipelineLaunchAdapter
+from aist.execution.dast_deadlines import dast_final_pass_taken, dast_unreachable_grace
 from aist.execution.dispatching import (
     LaunchPlanningStatus,
     accept_published_launch,
@@ -39,7 +41,10 @@ from aist.models import (
     AISTProjectLaunchConfig,
     AISTProjectVersion,
     AISTStatus,
+    DastExecutionOutcome,
+    DastExecutionState,
     DastProjectBinding,
+    DastRunMetadata,
     Organization,
     OrgIntegration,
     OrgIntegrationType,
@@ -52,6 +57,7 @@ from aist.models import (
     ScmType,
     VersionType,
 )
+from aist.services.dast_outcomes import public_dast_outcome_code
 from aist.tasks import pipeline as pipeline_tasks
 from aist.tasks import pipeline_dispatcher
 from aist.test.test_api import AISTApiBase
@@ -228,7 +234,10 @@ class ContractFaithfulDastGateway:
         )
 
 
-class DastMockEndToEndTests(AISTApiBase):
+class _DastContractGatewayFixture(AISTApiBase):
+
+    """Onboarding, bindings and launch plumbing for a contract-faithful DAST gateway."""
+
     def setUp(self):
         super().setUp()
         self.organization = Organization.objects.create(name="DAST mock E2E", product_type=self.prod_type)
@@ -372,6 +381,8 @@ class DastMockEndToEndTests(AISTApiBase):
         ):
             yield
 
+
+class DastMockEndToEndTests(_DastContractGatewayFixture):
     def test_onboarding_capacity_clean_findings_and_cancel_follow_one_generic_execution_path(self):
         clean_request = self._enqueue(self.bindings["payments-api"], "Clean target")
         finding_request = self._enqueue(self.bindings["admin-api"], "Finding target")
@@ -491,3 +502,158 @@ class DastMockEndToEndTests(AISTApiBase):
         pipeline.refresh_from_db()
         self.assertEqual(list(pipeline.tests.values_list("id", flat=True)), test_ids)
         self.assertEqual(pipeline.tests.first().finding_set.count(), 1)
+
+
+class _ExpiredDeadlineTask:
+
+    """Stands in for the bound Celery task on a run whose ceiling has already passed."""
+
+    def __init__(self):
+        self.request = type("Request", (), {"retries": 7, "id": "task-harvest"})()
+        self.retry_calls: list[dict] = []
+
+    def retry(self, **kwargs):
+        self.retry_calls.append(kwargs)
+        detail = "a run past its ceiling must not be retried"
+        raise AssertionError(detail)
+
+
+class DastFinalHarvestTests(_DastContractGatewayFixture):
+
+    """Regression: a scan that finished seconds after the platform stopped waiting was discarded."""
+
+    def _expire_the_ceiling(self, pipeline_id):
+        DastExecutionState.objects.filter(pipeline_id=pipeline_id).update(
+            deadline=timezone.now() - dast_unreachable_grace() - timedelta(seconds=1),
+            last_progress_at=timezone.now(),
+        )
+
+    def _pending_then(self, *, harvest_is_terminal: bool):
+        """Answer every ordinary attempt with "not finished", and the harvest with the truth."""
+        attempts = []
+
+        def execute(execution_type, execution):
+            attempts.append(execution.harvest_only)
+            if execution.harvest_only and harvest_is_terminal:
+                return self.gateway.execute(execution_type, execution)
+            recovery = execution.recovery.for_run(f"run-{execution.command.target_id}").with_cursor(2)
+            return DastExecutionResult(
+                outcome=DastConnectorOutcome(
+                    state=DastConnectorOutcomeState.STOP_PENDING,
+                    recovery=recovery,
+                    reason_code="EXECUTION_TIMEOUT",
+                ),
+                terminal_result=None,
+                recovery=recovery,
+                telemetry=DastExecutionTelemetry(logs_delivered=2, max_log_lag_seconds=0.5),
+            )
+
+        return execute, attempts
+
+    def test_a_run_that_finished_after_its_ceiling_is_imported_instead_of_declared_lost(self):
+        request = self._enqueue(self.bindings["admin-api"], "Overran target")
+        self.assertEqual(self._plan_and_publish(request).status, LaunchPlanningStatus.READY)
+        self._expire_the_ceiling(request.pipeline_id)
+        execute, attempts = self._pending_then(harvest_is_terminal=True)
+
+        @contextmanager
+        def vpn_context(resolved, *, execution_id):
+            del resolved, execution_id
+            yield "vpn-dast-e2e", None
+
+        with (
+            patch("aist.tasks.pipeline.vpn_sidecar_context", vpn_context),
+            patch("aist.tasks.pipeline.execute_pipeline", side_effect=execute),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            pipeline_tasks._run_dast_execution(
+                _ExpiredDeadlineTask(),
+                request.pipeline_id,
+                operation="execute",
+            )
+
+        # One ordinary attempt, then exactly one harvest.
+        self.assertEqual(attempts, [False, True])
+        pipeline = AISTPipeline.objects.get(pk=request.pipeline_id)
+        state = DastExecutionState.objects.get(pipeline_id=request.pipeline_id)
+        self.assertEqual(state.outcome, DastExecutionOutcome.TERMINAL)
+        self.assertEqual(public_dast_outcome_code(pipeline), "SUCCESS_WITH_FINDINGS")
+        self.assertEqual(pipeline.tests.first().finding_set.count(), 1)
+        self.assertTrue(DastRunMetadata.objects.filter(pipeline_id=request.pipeline_id).exists())
+        self.assertNotEqual(pipeline.status, AISTStatus.EXECUTING)
+
+    def test_a_run_that_really_is_gone_still_ends_as_a_timeout(self):
+        request = self._enqueue(self.bindings["admin-api"], "Lost target")
+        self.assertEqual(self._plan_and_publish(request).status, LaunchPlanningStatus.READY)
+        self._expire_the_ceiling(request.pipeline_id)
+        execute, attempts = self._pending_then(harvest_is_terminal=False)
+
+        @contextmanager
+        def vpn_context(resolved, *, execution_id):
+            del resolved, execution_id
+            yield "vpn-dast-e2e", None
+
+        with (
+            patch("aist.tasks.pipeline.vpn_sidecar_context", vpn_context),
+            patch("aist.tasks.pipeline.execute_pipeline", side_effect=execute),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            pipeline_tasks._run_dast_execution(
+                _ExpiredDeadlineTask(),
+                request.pipeline_id,
+                operation="execute",
+            )
+
+        self.assertEqual(attempts, [False, True])
+        pipeline = AISTPipeline.objects.get(pk=request.pipeline_id)
+        state = DastExecutionState.objects.get(pipeline_id=request.pipeline_id)
+        self.assertEqual(state.outcome, DastExecutionOutcome.UNREACHABLE)
+        self.assertEqual(public_dast_outcome_code(pipeline), "TIMEOUT")
+        self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
+        self.assertFalse(PipelineExecutionLease.objects.filter(released_at__isnull=True).exists())
+        # The closing pass recorded itself, so reconciliation will not grant a second one.
+        self.assertTrue(dast_final_pass_taken(state.recovery_checkpoint))
+        self.assertFalse(DastPipelineLaunchAdapter.should_recover(pipeline))
+
+    def test_a_harvest_that_cannot_reach_the_provider_does_not_replace_the_outcome(self):
+        request = self._enqueue(self.bindings["admin-api"], "Unreachable target")
+        self.assertEqual(self._plan_and_publish(request).status, LaunchPlanningStatus.READY)
+        self._expire_the_ceiling(request.pipeline_id)
+        attempts = []
+
+        def execute(_execution_type, execution):
+            attempts.append(execution.harvest_only)
+            if execution.harvest_only:
+                detail = "gateway hostname could not be resolved safely"
+                raise pipeline_tasks.DastExecutionIncomplete(detail)
+            recovery = execution.recovery.for_run("run-admin-api").with_cursor(2)
+            return DastExecutionResult(
+                outcome=DastConnectorOutcome(
+                    state=DastConnectorOutcomeState.UNREACHABLE,
+                    recovery=recovery,
+                ),
+                terminal_result=None,
+                recovery=recovery,
+                telemetry=DastExecutionTelemetry(logs_delivered=2, max_log_lag_seconds=0.5),
+            )
+
+        @contextmanager
+        def vpn_context(resolved, *, execution_id):
+            del resolved, execution_id
+            yield "vpn-dast-e2e", None
+
+        with (
+            patch("aist.tasks.pipeline.vpn_sidecar_context", vpn_context),
+            patch("aist.tasks.pipeline.execute_pipeline", side_effect=execute),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            pipeline_tasks._run_dast_execution(
+                _ExpiredDeadlineTask(),
+                request.pipeline_id,
+                operation="execute",
+            )
+
+        self.assertEqual(attempts, [False, True])
+        pipeline = AISTPipeline.objects.get(pk=request.pipeline_id)
+        self.assertEqual(public_dast_outcome_code(pipeline), "TIMEOUT")
+        self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)

@@ -165,6 +165,12 @@ services:
       AGENT_FULL_MAX_BYTES: "${AGENT_FULL_MAX_BYTES:-100000000}"
       AGENT_FULL_MAX_FILE_BYTES: "${AGENT_FULL_MAX_FILE_BYTES:-300000}"
       AGENT_FULL_MAX_FINDINGS: "${AGENT_FULL_MAX_FINDINGS:-50}"
+      # Two bounds end a DAST run: the ceiling on total length (0 removes it) and the window in
+      # which the provider must show a sign of life. See docs/runbooks/dast-operations.md.
+      AIST_DAST_EXECUTION_TIMEOUT_SECONDS: "${AIST_DAST_EXECUTION_TIMEOUT_SECONDS:-604800}"
+      AIST_DAST_UNREACHABLE_GRACE_SECONDS: "${AIST_DAST_UNREACHABLE_GRACE_SECONDS:-3600}"
+      AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS: "${AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS:-3600}"
+      AIST_VPN_ORPHAN_MAX_AGE_MINUTES: "${AIST_VPN_ORPHAN_MAX_AGE_MINUTES:-240}"
     extra_hosts:
       # Allows VPN sidecar SOCKS5 proxy to be reached from inside this container
       # via host.docker.internal on Linux Docker Engine (Docker Desktop provides it automatically).
@@ -240,7 +246,7 @@ services:
     build:
       context: ./sast-combinator/vpn-sidecar
       dockerfile: Dockerfile
-    image: "aist-vpn-sidecar:latest"
+    image: "aist-vpn-sidecar:v2"
     # This service exists only to make `docker compose build` rebuild the VPN sidecar image.
     # The image is started on-demand by vpn_sidecar_context() in aist/utils/vpn.py — not by
     # docker compose up. The entrypoint is overridden, not the command: the image declares its

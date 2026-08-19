@@ -104,6 +104,38 @@ When a run appears stuck, check in order:
 3. the provider run identified by the AIST correlation value;
 4. whether reconciliation later records a terminal provider outcome.
 
+### What ends a run
+
+A long scan is not a stuck one. Two independent limits end an autonomous run, and
+both are set from the environment on the Celery worker and beat services:
+
+| Setting | Default | What it bounds |
+|---|---|---|
+| `AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS` | 1 hour | How long the provider may deliver nothing — no run identity, no new log output — before the run is given up. This is what ends a run in practice, and what stops an unreachable provider from being retried indefinitely. `0` removes it. |
+| `AIST_DAST_EXECUTION_TIMEOUT_SECONDS` | 7 days | The ceiling on total run length. A safety limit, not a scan budget; a healthy scan does not reach it. `0` removes it. |
+| `AIST_DAST_UNREACHABLE_GRACE_SECONDS` | 1 hour | How long a run past that ceiling is still retried before it is abandoned. |
+
+Removing both bounds leaves nothing that ends a run whose provider has gone away,
+so remove at most one. Raising the ceiling is the safe adjustment; the stall window
+is what protects the integration's single capacity slot.
+
+Before abandoning a run for either reason, AIST asks the provider once more whether
+it has finished, and imports the result if one exists by then. A pipeline whose
+outcome is `TIMEOUT` therefore means the provider had nothing to hand over, not
+merely that AIST stopped waiting.
+
+Both bounds are recorded per run when it first starts, so changing a setting affects
+runs started afterwards. A run already in flight keeps the ceiling it was given.
+
+### VPN sidecars during a long run
+
+An execution keeps its VPN sidecar for as long as it runs. The periodic sweep that
+reclaims leaked sidecars (`AIST_VPN_ORPHAN_MAX_AGE_MINUTES`, default 240) never
+removes one that a live pipeline still owns, and never touches a warm-egress
+sidecar, which its own idle reaper retires. Do not treat that age as a run limit:
+lowering it does not shorten scans, and it is not the setting to change if a run is
+taking too long.
+
 For a schedule that does not launch, inspect its persisted last-attempt time,
 error code, and safe error explanation before changing cron or readiness state.
 Do not repeatedly recreate the schedule: the stored due tick is the recovery
@@ -169,6 +201,8 @@ promotion.
 | Binding stale | Capability revision, schema digest, target availability, and parameter snapshot |
 | Launch remains pending | Stored authority, readiness, capacity, and request expiry |
 | Cancellation remains pending | Provider reachability and reconciliation progress |
+| A run ends as `TIMEOUT` | Whether the provider stopped delivering log output, and for how long, against `AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS`. AIST reads the provider's status once more before abandoning a run, so this outcome means the provider had no result to hand over |
+| A long scan is cut short | The two run bounds above, and whether the provider keeps emitting log output. Duration alone never ends a run |
 | Import rejected | Complete terminal result, expected binding, source identity, size, report format, and whether the run metadata the report carries is well formed |
 | A pipeline shows no coverage or token figures | Whether the report described its run at all. A provider that reports nothing about the run imports normally and simply has nothing to show; nothing is missing on the AIST side |
 | A pipeline reports inconsistent run accounting | The provider's own breakdown against the total it reported in the same report. The import, its tests, and its findings are unaffected, so treat this as a provider reporting defect |

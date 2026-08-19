@@ -1,22 +1,31 @@
 """
-The deadline is the only thing that ends a DAST run.
+What ends a DAST run, and what must never end one.
 
-Retries, reconciliation and cancellation each used to decide on their own, which is how a run
-could keep retrying past its deadline, be resurrected forever, or -- worst -- stop being retried
-while nobody terminalized it, leaving the pipeline EXECUTING with its capacity lease held.
+Retries, reconciliation and cancellation share one predicate over two bounds: a wall-clock ceiling
+a healthy run never reaches, and the absence of any sign of life. Taking long is not a fault.
 """
 
 from __future__ import annotations
 
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from celery.exceptions import Retry
+from django.test import override_settings
 from django.utils import timezone
 
 from aist.execution.contracts import ProviderOperation
 from aist.execution.dast import DastPipelineLaunchAdapter
-from aist.execution.dast_deadlines import dast_deadline_exhausted, dast_unreachable_grace
+from aist.execution.dast_deadlines import (
+    dast_deadline_exhausted,
+    dast_execution_over,
+    dast_execution_timeout,
+    dast_mark_final_pass,
+    dast_progress_stalled,
+    dast_provider_stall_timeout,
+    dast_unreachable_grace,
+)
 from aist.models import (
     AISTPipeline,
     AISTStatus,
@@ -33,6 +42,11 @@ from aist.tasks import pipeline as pipeline_tasks
 from aist.test import dast_fixtures
 from aist.test.test_api import AISTApiBase
 from aist.utils.pipeline import _request_dast_pipeline_stop
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
+
+_import_sast_pipeline_package()
+
+from pipeline.dast.contracts import DastConnectorOutcomeState  # noqa: E402
 
 
 class _FakeTask:
@@ -52,6 +66,19 @@ class _FakeTask:
             detail = "provider unreachable"
             raise RuntimeError(detail)
         return Retry()
+
+
+class _ConnectorResult:
+
+    """The parts of a connector result that ``_persist_dast_execution_result`` reads."""
+
+    def __init__(self, pipeline_id: str, *, run_id: str, log_cursor: int):
+        self.recovery = SimpleNamespace(
+            correlation_id=pipeline_id,
+            run_id=run_id,
+            log_cursor=log_cursor,
+        )
+        self.outcome = SimpleNamespace(state=DastConnectorOutcomeState.STOP_PENDING)
 
 
 class _DastPipelineFixture(AISTApiBase):
@@ -161,6 +188,31 @@ class DastExecutionDeadlineTests(_DastPipelineFixture):
             {AISTStatus.FINISHED, AISTStatus.FINISHED_WITH_WARNINGS},
         )
 
+    def test_abandoning_asks_the_provider_once_and_survives_a_failed_answer(self):
+        """
+        The provider is asked exactly once whether the run finished after all.
+
+        An unreachable gateway must not become an exception, a second attempt, or a run left
+        EXECUTING with its capacity slot held.
+        """
+        self._expire_deadline()
+
+        with patch.object(
+            pipeline_tasks,
+            "_execute_dast_pipeline",
+            side_effect=RuntimeError("gateway is unreachable"),
+        ) as harvest:
+            pipeline_tasks._retry_dast_execution(_FakeTask(), self.pipeline.id)
+
+        self.assertEqual(harvest.call_count, 1)
+        self.assertTrue(harvest.call_args.kwargs["harvest_only"])
+        self.pipeline.refresh_from_db()
+        self.state.refresh_from_db()
+        self.lease.refresh_from_db()
+        self.assertEqual(self.state.outcome, DastExecutionOutcome.UNREACHABLE)
+        self.assertEqual(public_dast_outcome_code(self.pipeline), "TIMEOUT")
+        self.assertIsNotNone(self.lease.released_at)
+
     def test_a_connector_that_cannot_start_fails_now_instead_of_retrying_until_the_deadline(self):
         """
         A failure on this host -- an unreadable handoff, an unwritable output directory -- repeats
@@ -193,10 +245,12 @@ class DastExecutionDeadlineTests(_DastPipelineFixture):
         self.assertNotEqual(self.state.outcome, DastExecutionOutcome.UNREACHABLE)
         self.assertIsNotNone(self.lease.released_at)
 
-    def test_reconciliation_resumes_inside_the_deadline_and_stops_after_it(self):
+    def test_reconciliation_resumes_inside_the_deadline_and_closes_out_after_it(self):
         """
-        Resuming costs a VPN tunnel and an image pull every pass, so a run whose deadline has
-        passed must not be republished for the rest of the grace window.
+        A past-deadline run is not republished for the whole grace window, but gets one closing pass.
+
+        Resuming costs a tunnel and an image pull; the one pass exists because when the worker that
+        would have asked the provider a final question is gone, reconciliation is all that is left.
         """
         DastExecutionState.objects.filter(pk=self.state.pk).update(
             outcome=DastExecutionOutcome.UNREACHABLE,
@@ -206,6 +260,12 @@ class DastExecutionDeadlineTests(_DastPipelineFixture):
 
         self._expire_deadline()
 
+        self.assertTrue(DastPipelineLaunchAdapter.should_recover(self.pipeline))
+
+        DastExecutionState.objects.filter(pk=self.state.pk).update(
+            recovery_checkpoint=dast_mark_final_pass({}),
+        )
+
         self.assertFalse(DastPipelineLaunchAdapter.should_recover(self.pipeline))
 
     def test_the_deadline_predicate_is_shared_by_every_decision(self):
@@ -214,6 +274,86 @@ class DastExecutionDeadlineTests(_DastPipelineFixture):
         self.assertFalse(dast_deadline_exhausted(timezone.now() + timedelta(minutes=1)))
         # A run that never recorded a deadline is not silently abandoned.
         self.assertFalse(dast_deadline_exhausted(None))
+
+    def test_a_run_past_the_old_four_hour_cap_is_no_longer_killed_for_taking_long(self):
+        """Regression: a scan working for four and a half hours was stopped for taking long."""
+        started = timezone.now() - timedelta(hours=4, minutes=20)
+        timeout = dast_execution_timeout()
+
+        self.assertIsNotNone(timeout)
+        self.assertGreater(timeout, timedelta(hours=4, minutes=20))
+        self.assertFalse(
+            dast_execution_over(deadline=started + timeout, last_progress_at=timezone.now()),
+        )
+
+    @override_settings(AIST_DAST_EXECUTION_TIMEOUT_SECONDS=0)
+    def test_the_ceiling_can_be_removed_and_a_run_without_one_keeps_going(self):
+        self.assertIsNone(dast_execution_timeout())
+
+        DastExecutionState.objects.filter(pk=self.state.pk).update(
+            deadline=None,
+            last_progress_at=timezone.now(),
+            outcome=DastExecutionOutcome.UNREACHABLE,
+        )
+
+        self.assertFalse(pipeline_tasks._dast_reconciliation_exhausted(self.pipeline.id))
+        self.assertTrue(DastPipelineLaunchAdapter.should_recover(self.pipeline))
+
+    @override_settings(AIST_DAST_EXECUTION_TIMEOUT_SECONDS=0)
+    def test_a_provider_that_went_quiet_ends_even_with_no_ceiling(self):
+        """Removing the wall clock must not turn a dead provider into an endless retry storm."""
+        stall_timeout = dast_provider_stall_timeout()
+        self.assertIsNotNone(stall_timeout)
+        DastExecutionState.objects.filter(pk=self.state.pk).update(
+            deadline=None,
+            last_progress_at=timezone.now() - stall_timeout - timedelta(seconds=1),
+            outcome=DastExecutionOutcome.UNREACHABLE,
+        )
+
+        self.assertTrue(pipeline_tasks._dast_reconciliation_exhausted(self.pipeline.id))
+        # Over, so no further scanning -- but the one closing pass is still owed.
+        self.assertTrue(DastPipelineLaunchAdapter.should_recover(self.pipeline))
+        DastExecutionState.objects.filter(pk=self.state.pk).update(
+            recovery_checkpoint=dast_mark_final_pass({}),
+        )
+        self.assertFalse(DastPipelineLaunchAdapter.should_recover(self.pipeline))
+
+    def test_a_provider_that_keeps_delivering_is_never_treated_as_stalled(self):
+        stall_timeout = dast_provider_stall_timeout()
+
+        self.assertFalse(dast_progress_stalled(timezone.now()))
+        self.assertTrue(dast_progress_stalled(timezone.now() - stall_timeout - timedelta(seconds=1)))
+        # A run persisted before this bound existed has no baseline, and absence of a baseline is
+        # not evidence of death.
+        self.assertFalse(dast_progress_stalled(None))
+
+    @override_settings(AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS=0)
+    def test_the_stall_bound_can_be_removed_too(self):
+        self.assertIsNone(dast_provider_stall_timeout())
+        self.assertFalse(dast_progress_stalled(timezone.now() - timedelta(days=30)))
+
+    def test_progress_is_recorded_only_when_the_provider_actually_delivered_something(self):
+        """``last_progress_at`` is the stall bound's clock, so a no-op attempt must not wind it."""
+        stale = timezone.now() - timedelta(hours=3)
+        DastExecutionState.objects.filter(pk=self.state.pk).update(
+            run_id="run-1",
+            log_cursor=784,
+            last_progress_at=stale,
+        )
+
+        pipeline_tasks._persist_dast_execution_result(
+            self.pipeline.id,
+            _ConnectorResult(self.pipeline.id, run_id="run-1", log_cursor=784),
+        )
+        self.state.refresh_from_db()
+        self.assertEqual(self.state.last_progress_at, stale)
+
+        pipeline_tasks._persist_dast_execution_result(
+            self.pipeline.id,
+            _ConnectorResult(self.pipeline.id, run_id="run-1", log_cursor=791),
+        )
+        self.state.refresh_from_db()
+        self.assertGreater(self.state.last_progress_at, stale)
 
 
 class DastStopBeforeProviderRunTests(_DastPipelineFixture):

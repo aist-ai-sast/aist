@@ -18,11 +18,19 @@ from dojo.models import Product_Type
 
 from aist.api.org_integrations import _split_ovpn_pem_blocks
 from aist.integrations import egress
-from aist.models import Organization, OrgIntegration, OrgIntegrationType
+from aist.models import (
+    AISTPipeline,
+    AISTStatus,
+    Organization,
+    OrgIntegration,
+    OrgIntegrationType,
+    PipelineExecutionType,
+)
 from aist.test.test_api import AISTApiBase
 from aist.utils.vpn import (
     _assemble_env,
     _extract_key_direction,
+    _wait_for_sidecar_ready,
     cleanup_orphaned_vpn_containers,
     vpn_sidecar_container_name,
 )
@@ -964,3 +972,108 @@ class VpnSidecarContainerNameTests(AISTApiBase):
 
         self.assertEqual(vpn_sidecar_container_name(first), vpn_sidecar_container_name(first))
         self.assertNotEqual(vpn_sidecar_container_name(first), vpn_sidecar_container_name(second))
+
+
+class SidecarReadinessTests(AISTApiBase):
+
+    """
+    Readiness is the sidecar's own statement, not something inferred from outside.
+
+    Waiting on ``tun0`` raced the sidecar's rewrite of ``/etc/resolv.conf``, so a joined container
+    could resolve a VPN-internal name against Docker's resolver and fail.
+    """
+
+    def test_the_readiness_marker_is_what_is_waited_for_not_the_tunnel_interface(self):
+        probes = []
+
+        def fake_run(cmd, **_kwargs):
+            probes.append(cmd)
+            # Ready only once the marker exists; the tunnel being up is not enough.
+            ready = len(probes) >= 2
+            return MagicMock(returncode=0 if ready else 1, stdout=b"", stderr=b"")
+
+        with (
+            patch("aist.utils.vpn._find_executable", return_value="/usr/bin/docker"),
+            patch("aist.utils.vpn.subprocess.run", side_effect=fake_run),
+            patch("aist.utils.vpn.time.sleep"),
+        ):
+            _wait_for_sidecar_ready("aist-vpn-p1", timeout=5)
+
+        self.assertTrue(probes)
+        for probe in probes:
+            self.assertNotIn("tun0", probe)
+            self.assertEqual(probe[-3:], ["test", "-f", "/run/aist-vpn-ready"])
+
+
+class SidecarOwnershipSweepTests(AISTApiBase):
+
+    """
+    The leak sweep must never double as an execution time limit.
+
+    It removed every ``aist-vpn-*`` container older than four hours without asking who was using
+    it, which with a realistic run ceiling kills the tunnel of a working scan.
+    """
+
+    def _make_mock_run(self, containers: list[dict]):
+        lines = "\n".join(json.dumps(c) for c in containers)
+        return MagicMock(returncode=0, stdout=lines + "\n" if lines else "")
+
+    def _pipeline(self, pipeline_id: str, status: str):
+        return AISTPipeline.objects.create(
+            id=pipeline_id,
+            project=self.project,
+            project_version=self.pv,
+            execution_type=PipelineExecutionType.DAST,
+            status=status,
+        )
+
+    def _sweep(self, mock_run, containers, *, max_age_minutes=30):
+        mock_run.return_value = self._make_mock_run(containers)
+        return cleanup_orphaned_vpn_containers(max_age_minutes=max_age_minutes)
+
+    @patch("subprocess.run")
+    def test_a_live_pipelines_sidecar_survives_any_age(self, mock_run):
+        pipeline = self._pipeline("livedast1", AISTStatus.EXECUTING)
+        name = vpn_sidecar_container_name(pipeline.id)
+
+        removed = self._sweep(
+            mock_run,
+            [{"Names": name, "CreatedAt": "2020-01-01 00:00:00 +0000 UTC"}],
+        )
+
+        self.assertEqual(removed, 0)
+
+    @patch("subprocess.run")
+    def test_a_finished_pipelines_sidecar_is_swept_up(self, mock_run):
+        pipeline = self._pipeline("donedast1", AISTStatus.FINISHED)
+        name = vpn_sidecar_container_name(pipeline.id)
+
+        removed = self._sweep(
+            mock_run,
+            [{"Names": name, "CreatedAt": "2020-01-01 00:00:00 +0000 UTC"}],
+        )
+
+        self.assertEqual(removed, 1)
+
+    @patch("subprocess.run")
+    def test_a_warm_egress_sidecar_is_left_to_its_own_idle_reaper(self, mock_run):
+        removed = self._sweep(
+            mock_run,
+            [{"Names": egress.container_name(7), "CreatedAt": "2020-01-01 00:00:00 +0000 UTC"}],
+        )
+
+        self.assertEqual(removed, 0)
+
+    @patch("subprocess.run")
+    def test_an_unanswerable_ownership_question_removes_nothing(self, mock_run):
+        """Without the ownership answer the sweep cannot tell a leak from live work."""
+        with patch(
+            "aist.utils.vpn._sidecar_ownership",
+            side_effect=RuntimeError("database is unreachable"),
+        ):
+            removed = self._sweep(
+                mock_run,
+                [{"Names": "aist-vpn-unknown", "CreatedAt": "2020-01-01 00:00:00 +0000 UTC"}],
+            )
+
+        self.assertEqual(removed, 0)

@@ -45,8 +45,10 @@ class ExecutionObservabilityTests(SimpleTestCase):
                 distance=-9,
             )
 
-        provider.assert_called_once_with(operation="execute", result="error")
-        errors.assert_called_once_with(operation="execute", error_code="UNKNOWN")
+        # An unrecognised operation is labelled "unknown", not folded into the most common value:
+        # that folding is what made a resume indistinguishable from a first attempt.
+        provider.assert_called_once_with(operation="unknown", result="error")
+        errors.assert_called_once_with(operation="unknown", error_code="UNKNOWN")
         outcomes.assert_called_once_with(outcome="error")
         selection.assert_called_once_with(relation="none")
 

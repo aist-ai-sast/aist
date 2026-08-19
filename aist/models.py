@@ -1551,6 +1551,9 @@ class DastExecutionState(models.Model):
         default="",
     )
     deadline = models.DateTimeField(null=True, blank=True)
+    # When the provider last delivered a run id or new log events -- the run's sign of life.
+    # NULL means "no baseline yet"; a reader must never read it as "stalled".
+    last_progress_at = models.DateTimeField(null=True, blank=True)
     cancel_requested_at = models.DateTimeField(null=True, blank=True)
     recovery_checkpoint = models.JSONField(default=dict, blank=True)
     created = models.DateTimeField(auto_now_add=True)

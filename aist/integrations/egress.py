@@ -43,7 +43,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_NAME_PREFIX = "aist-vpn-egress-"
+# Public so the VPN leak sweep can recognise a warm-egress sidecar and leave it to the reaper below.
+NAME_PREFIX = "aist-vpn-egress-"
 _ACCESS_LOG = "/tmp/tinyproxy-access.log"  # noqa: S108 -- path inside the sidecar container, not this host
 
 
@@ -51,7 +52,7 @@ _ACCESS_LOG = "/tmp/tinyproxy-access.log"  # noqa: S108 -- path inside the sidec
 
 def container_name(vpn_integration_id: int | str) -> str:
     """Warm-egress container name for a VPN integration."""
-    return f"{_NAME_PREFIX}{vpn_integration_id}"
+    return f"{NAME_PREFIX}{vpn_integration_id}"
 
 
 def proxy_url(vpn_integration_id: int | str) -> str:
@@ -204,10 +205,10 @@ def list_active() -> list[str]:
     if docker_bin is None:
         return []
     r = subprocess.run(
-        [docker_bin, "ps", "--filter", f"name={_NAME_PREFIX}", "--format", "{{.Names}}"],
+        [docker_bin, "ps", "--filter", f"name={NAME_PREFIX}", "--format", "{{.Names}}"],
         capture_output=True, text=True, check=False,
     )
-    return [n.strip() for n in r.stdout.splitlines() if n.strip().startswith(_NAME_PREFIX)]
+    return [n.strip() for n in r.stdout.splitlines() if n.strip().startswith(NAME_PREFIX)]
 
 
 def _last_used(name: str) -> datetime | None:

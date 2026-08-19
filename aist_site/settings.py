@@ -92,7 +92,9 @@ AIST_PROJECTS_BUILD_DIR = env("AIST_PROJECTS_BUILD_DIR", default="/tmp/aist/proj
 # triage run wakes the bridge up immediately instead of waiting for
 # ``AIST_LOCAL_TRIAGE_TIMEOUT`` (default 3h).
 AIST_TRIAGE_OUTPUT_DIR = env("AIST_TRIAGE_OUTPUT_DIR", default="/tmp/aist/triage-output")  # noqa: F405,S108
-AIST_VPN_SIDECAR_IMAGE = env("AIST_VPN_SIDECAR_IMAGE", default="aist-vpn-sidecar:latest")  # noqa: F405
+# Tagged, not :latest — the image is built only when absent, so a changed readiness contract needs
+# a new tag or an existing deployment keeps the old entrypoint.
+AIST_VPN_SIDECAR_IMAGE = env("AIST_VPN_SIDECAR_IMAGE", default="aist-vpn-sidecar:v2")  # noqa: F405
 
 # Manual report import accepts every registered scan_type. Registered parsers validate
 # their report format, while this setting bounds the upload payload size.
@@ -207,6 +209,29 @@ AIST_EXECUTION_RECONCILIATION_INTERVAL_SECONDS = env.int(  # noqa: F405
     default=600,
 )
 
+# Ceiling on total DAST run length: a safety limit, not a scan budget. 0 disables it.
+AIST_DAST_EXECUTION_TIMEOUT_SECONDS = env.int(  # noqa: F405
+    "AIST_DAST_EXECUTION_TIMEOUT_SECONDS",
+    default=7 * 24 * 60 * 60,
+)
+# How long a provider that stopped answering is still retried past that ceiling.
+AIST_DAST_UNREACHABLE_GRACE_SECONDS = env.int(  # noqa: F405
+    "AIST_DAST_UNREACHABLE_GRACE_SECONDS",
+    default=60 * 60,
+)
+# How long the provider may deliver nothing before the run is given up. This, not the ceiling
+# above, is what ends a run nobody will hear from again. 0 disables it.
+AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS = env.int(  # noqa: F405
+    "AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS",
+    default=60 * 60,
+)
+# Age at which an unowned VPN sidecar is swept up. A live pipeline's sidecar is never eligible,
+# so this is not an execution time limit.
+AIST_VPN_ORPHAN_MAX_AGE_MINUTES = env.int(  # noqa: F405
+    "AIST_VPN_ORPHAN_MAX_AGE_MINUTES",
+    default=240,
+)
+
 # Add AIST Celery schedules.
 CELERY_BEAT_SCHEDULE.update(  # noqa: F405
     {
@@ -240,10 +265,10 @@ CELERY_BEAT_SCHEDULE.update(  # noqa: F405
             "task": "aist.tasks.work_items.sync_all_work_item_providers",
             "schedule": timedelta(minutes=15),
         },
+        # No kwargs: the age comes from AIST_VPN_ORPHAN_MAX_AGE_MINUTES, so there is one copy of it.
         "aist-cleanup-orphaned-vpn-containers": {
             "task": "aist.tasks.work_items.cleanup_orphaned_vpn_containers",
             "schedule": timedelta(hours=1),
-            "kwargs": {"max_age_minutes": 240},
         },
         "aist-reap-warm-egress": {
             "task": "aist.tasks.egress.reap_egress",

@@ -75,6 +75,19 @@ connector container, which loads this integration's gateway URL and service
 token and starts, observes, and can cancel the provider run. AIST retains
 cancellation intent, pipeline state, and the final import decision throughout.
 
+A DAST scan is expected to be long. Nothing caps it at a working day, and the
+platform does not treat duration as a fault: a run is bounded by whether the
+provider is still delivering, not by how long it has been going. Two limits sit
+above that, both operator-configured — a ceiling on total run length that a
+healthy scan never reaches, and a window in which the provider must show some
+sign of life. Only silence ends a run early. See
+[DAST operations](../runbooks/dast-operations.md#cancel-and-recover) for the
+settings and how to read the resulting pipeline outcome.
+
+Before the platform gives up on a run for either reason, it asks the provider one
+last time whether that run has finished. A scan that completed while AIST was no
+longer waiting is imported normally rather than recorded as lost.
+
 Before importing a terminal result, AIST verifies the expected provider run,
 target binding, source revision, result format, and nested report. Invalid,
 ambiguous, or oversized results fail before findings are persisted.
@@ -188,6 +201,12 @@ needs. The platform still refuses a routed name that it can already see resolves
 to a loopback, link-local, or other special-purpose address. That is an early
 rejection of an obvious misconfiguration, not a guarantee about the address the
 connection finally uses.
+
+A routed name that cannot be looked up at all is a different case from one that
+resolves somewhere forbidden. Inside a tunnel that is still settling there may be
+no answer yet, and no answer is not a policy violation — the attempt proceeds and
+the connection itself is retried. What bounds the destination in that case is
+still the route and the port allowlist, neither of which depends on a lookup.
 
 A rejected destination fails before any connection is attempted. A failure of the
 TLS handshake itself — an untrusted certificate, or a name the gateway will not

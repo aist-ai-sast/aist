@@ -25,7 +25,21 @@ without that route is rejected; AIST does not substitute a project or SCM VPN.
 Before a routed worker operation begins, the worker starts a sidecar for that
 operation. HTTP clients receive its proxy address. A SAST builder or standalone
 connector can instead join the sidecar's network namespace. The sidecar is
-removed when the operation exits, including handled failure paths.
+removed when the operation exits, including handled failure paths, and is removed
+by exactly one owner — the operation that started it.
+
+The sidecar declares when it is ready, and the worker waits for that declaration
+rather than inferring readiness from the tunnel interface. Readiness means the
+whole namespace is usable: the tunnel is up, the resolvers the VPN pushed are in
+place, and the proxy is listening. This matters because a consumer that joins the
+namespace inherits its name resolution, so a consumer admitted while resolution
+still pointed outside the tunnel would fail to find a private destination that is
+in fact reachable. Nothing outside the namespace can stand in for that check — a
+name inside a private zone has no answer there.
+
+A long-lived operation keeps its sidecar for as long as it runs. Sidecar age is
+not evidence of abandonment, so the periodic sweep that reclaims leaked sidecars
+only considers ones no live operation and no pool still owns.
 
 If the operation does not require a VPN and no active route is selected, it
 continues directly. If a selected private route is unavailable or lacks usable

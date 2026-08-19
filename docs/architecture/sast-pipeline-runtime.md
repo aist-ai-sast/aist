@@ -67,7 +67,18 @@ finishes with warnings instead.
 A connector that fails before it reaches the provider — an unreadable command
 file, an unusable token, an output directory it cannot write — is not a provider
 outage: the next attempt would fail identically. AIST ends such a pipeline at
-once with its own outcome code instead of retrying until the deadline.
+once with its own outcome code instead of retrying it.
+
+What ends an external provider run is silence, not duration. A run that keeps
+delivering — a run identity, further log output — is left alone however long it
+takes, and its capacity lease is renewed while its worker holds it. A run that
+delivers nothing for longer than a working one would is ended. A separate ceiling
+on total run length is a safety limit a healthy scan does not reach; either bound
+may be configured off and the other still applies.
+
+Before a run is abandoned for either reason, the provider is asked once more
+whether it has become terminal, and a result that exists by then is imported
+through the same validation and finalization path as any other.
 
 Containers and temporary paths remain scoped to one pipeline. SAST cancellation
 stops local work immediately. DAST cancellation persists intent first, then the
