@@ -21,6 +21,7 @@ from aist.models import (
     AISTStatus,
     DastExecutionOutcome,
     DastExecutionState,
+    DastRunMetadata,
     PipelineExecutionType,
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
@@ -193,9 +194,14 @@ def _finalize_pipeline_status(pipeline_id: str, *, degraded: bool, reconcile_sta
             # (e.g. FINISHED -> FINISHED_WITH_WARNINGS on a stale degraded=True call).
             return
         launch_data_degraded = PipelineLaunchData(pipeline.launch_data).has_analyzer_degraded_reasons
+        try:
+            dast_delivery_degraded = pipeline.dast_run_metadata.delivery_quality in {"degraded", "partial"}
+        except DastRunMetadata.DoesNotExist:
+            dast_delivery_degraded = False
         target_status = (
             AISTStatus.FINISHED_WITH_WARNINGS
-            if degraded or launch_data_degraded or (reconcile_stats.get("remaining_violations") or 0) > 0
+            if degraded or launch_data_degraded or dast_delivery_degraded
+            or (reconcile_stats.get("remaining_violations") or 0) > 0
             else AISTStatus.FINISHED
         )
         set_pipeline_status(pipeline, target_status)

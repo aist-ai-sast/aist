@@ -16,7 +16,6 @@ from aist.execution.contracts import (
     PipelineTaskName,
     ProviderOperation,
 )
-from aist.execution.dast_deadlines import dast_execution_over, dast_final_pass_taken
 from aist.integrations.dast_config import DastBindingParameters, DastConfigError, DastTargetSnapshot
 from aist.integrations.dast_readiness import check_dast_binding_readiness
 from aist.models import (
@@ -89,7 +88,6 @@ class DastPipelineLaunchAdapter:
             ProviderOperation.EXECUTE,
             ProviderOperation.CANCEL,
             ProviderOperation.RESUME,
-            ProviderOperation.HARVEST,
         }),
     )
 
@@ -113,28 +111,14 @@ class DastPipelineLaunchAdapter:
 
     @staticmethod
     def should_recover(pipeline) -> bool:
-        """
-        Resume unfinished work, and grant a run that is over exactly one closing pass.
-
-        Resuming is expensive (VPN tunnel, image pull), so a run that is over is not restarted on
-        every pass -- but one closing pass is what asks the provider for a result when the worker
-        that would have asked is gone. ``dast_execution_over`` is shared with the retry path.
-        """
-        state = DastExecutionState.objects.filter(
+        """Resume provider work until it reports an explicit terminal domain state."""
+        return DastExecutionState.objects.filter(
             pipeline=pipeline,
             outcome__in=[
                 DastExecutionOutcome.STOP_PENDING,
                 DastExecutionOutcome.UNREACHABLE,
             ],
-        ).values("deadline", "last_progress_at", "recovery_checkpoint").first()
-        if state is None:
-            return False
-        if not dast_execution_over(
-            deadline=state["deadline"],
-            last_progress_at=state["last_progress_at"],
-        ):
-            return True
-        return not dast_final_pass_taken(state["recovery_checkpoint"])
+        ).exists()
 
     @staticmethod
     def invoke(runtime, pipeline_id: str):

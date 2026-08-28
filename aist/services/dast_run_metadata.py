@@ -76,6 +76,10 @@ def _summary(row: DastRunMetadata) -> dict[str, Any]:
         "beyond_plan": _beyond_plan(row),
         "total_tokens": _sum_reported([getattr(row, column) for column in _TOKEN_TOTAL_COLUMNS]),
         "model_calls": row.model_calls,
+        "delivery_quality": row.delivery_quality,
+        "audit_state": row.audit_state,
+        "findings_complete": row.findings_complete,
+        "source_verified": row.source_verified,
     }
 
 
@@ -119,4 +123,11 @@ def dast_run_detail(pipeline: AISTPipeline) -> dict[str, Any] | None:
         "token_by_agent_type": _buckets_view(row.token_by_agent_type),
         "agents": _agents_total(row.token_by_agent_type),
         "token_accounting_consistent": row.token_accounting_consistent,
+        "operator_actions_persisted": row.operator_actions_persisted,
+        "operator_actions": row.operator_actions,
+        "operator_actions_total": row.operator_actions_total,
+        "operator_actions_truncated": row.operator_actions_truncated,
+        "excluded_findings": row.excluded_findings,
+        "excluded_findings_total": row.excluded_findings_total,
+        "excluded_findings_truncated": row.excluded_findings_truncated,
     }

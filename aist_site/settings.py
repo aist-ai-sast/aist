@@ -209,22 +209,6 @@ AIST_EXECUTION_RECONCILIATION_INTERVAL_SECONDS = env.int(  # noqa: F405
     default=600,
 )
 
-# Ceiling on total DAST run length: a safety limit, not a scan budget. 0 disables it.
-AIST_DAST_EXECUTION_TIMEOUT_SECONDS = env.int(  # noqa: F405
-    "AIST_DAST_EXECUTION_TIMEOUT_SECONDS",
-    default=7 * 24 * 60 * 60,
-)
-# How long a provider that stopped answering is still retried past that ceiling.
-AIST_DAST_UNREACHABLE_GRACE_SECONDS = env.int(  # noqa: F405
-    "AIST_DAST_UNREACHABLE_GRACE_SECONDS",
-    default=60 * 60,
-)
-# How long the provider may deliver nothing before the run is given up. This, not the ceiling
-# above, is what ends a run nobody will hear from again. 0 disables it.
-AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS = env.int(  # noqa: F405
-    "AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS",
-    default=60 * 60,
-)
 # Age at which an unowned VPN sidecar is swept up. A live pipeline's sidecar is never eligible,
 # so this is not an execution time limit.
 AIST_VPN_ORPHAN_MAX_AGE_MINUTES = env.int(  # noqa: F405

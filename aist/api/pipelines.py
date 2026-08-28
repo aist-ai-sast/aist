@@ -103,7 +103,6 @@ class PipelineResponseSerializer(serializers.Serializer):
     external_log_cursor = serializers.SerializerMethodField()
     external_execution_outcome = serializers.SerializerMethodField()
     dast_outcome_code = serializers.SerializerMethodField()
-    external_execution_deadline = serializers.SerializerMethodField()
     external_cancel_requested_at = serializers.SerializerMethodField()
     response_from_ai = serializers.JSONField(allow_null=True)
     created = serializers.DateTimeField()
@@ -130,10 +129,6 @@ class PipelineResponseSerializer(serializers.Serializer):
     def get_external_execution_outcome(self, obj: AISTPipeline) -> str:
         state = self._dast_state(obj)
         return state.outcome if state is not None else ""
-
-    def get_external_execution_deadline(self, obj: AISTPipeline) -> datetime | None:
-        state = self._dast_state(obj)
-        return state.deadline if state is not None else None
 
     def get_external_cancel_requested_at(self, obj: AISTPipeline) -> datetime | None:
         state = self._dast_state(obj)

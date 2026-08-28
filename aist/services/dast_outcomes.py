@@ -14,6 +14,8 @@ from aist.models import AISTPipeline, PipelineExecutionType
 class DastPipelineOutcomeCode(StrEnum):
     SUCCESS_WITH_FINDINGS = "SUCCESS_WITH_FINDINGS"
     SUCCESS_CLEAN = "SUCCESS_CLEAN"
+    COMPLETED_WITH_DEGRADATION = "COMPLETED_WITH_DEGRADATION"
+    FAILED_WITH_PARTIAL_RESULTS = "FAILED_WITH_PARTIAL_RESULTS"
     POLICY_NO_ELIGIBLE_STAND = "POLICY_NO_ELIGIBLE_STAND"
     SOURCE_DRIFT = "SOURCE_DRIFT"
     PROVIDER_FAILED = "PROVIDER_FAILED"
@@ -21,7 +23,6 @@ class DastPipelineOutcomeCode(StrEnum):
     RUNTIME_FAILED = "RUNTIME_FAILED"
     INVALID_RESULT = "INVALID_RESULT"
     CANCELLED = "CANCELLED"
-    TIMEOUT = "TIMEOUT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +37,6 @@ _PROVIDER_REASON_CODES = {
     "REPORT_MISSING": DastPipelineOutcomeCode.INVALID_RESULT,
     "REPORT_INVALID": DastPipelineOutcomeCode.INVALID_RESULT,
     "AUDIT_INCOMPLETE": DastPipelineOutcomeCode.INVALID_RESULT,
-    "DEADLINE_EXCEEDED": DastPipelineOutcomeCode.TIMEOUT,
     "PROVIDER_CREDENTIALS_EXPIRED": DastPipelineOutcomeCode.PROVIDER_CREDENTIALS_EXPIRED,
 }
 
@@ -48,17 +48,22 @@ def classify_dast_execution_result(result) -> ClassifiedDastOutcome | None:
     if state in {"stop_pending", "unreachable"}:
         return None
     if state == "cancelled_before_start":
-        code = (
-            DastPipelineOutcomeCode.TIMEOUT
-            if provider_reason == "EXECUTION_TIMEOUT"
-            else DastPipelineOutcomeCode.CANCELLED
-        )
-        return ClassifiedDastOutcome(code=code, degraded=True)
+        return ClassifiedDastOutcome(code=DastPipelineOutcomeCode.CANCELLED, degraded=True)
 
     terminal_result = result.terminal_result
     if state != "terminal" or terminal_result is None:
         return ClassifiedDastOutcome(code=DastPipelineOutcomeCode.INVALID_RESULT, degraded=True)
     terminal_status = terminal_result.status.value
+    if terminal_status == "completed_with_degradation":
+        return ClassifiedDastOutcome(
+            code=DastPipelineOutcomeCode.COMPLETED_WITH_DEGRADATION,
+            degraded=True,
+        )
+    if terminal_status == "failed_with_partial_results":
+        return ClassifiedDastOutcome(
+            code=DastPipelineOutcomeCode.FAILED_WITH_PARTIAL_RESULTS,
+            degraded=True,
+        )
     if terminal_status == "succeeded":
         report = getattr(terminal_result, "report", None)
         findings = report.get("findings") if isinstance(report, dict) else None
@@ -69,12 +74,7 @@ def classify_dast_execution_result(result) -> ClassifiedDastOutcome | None:
         )
         return ClassifiedDastOutcome(code=code, degraded=False)
     if terminal_status == "stopped":
-        code = (
-            DastPipelineOutcomeCode.TIMEOUT
-            if provider_reason == "EXECUTION_TIMEOUT"
-            else DastPipelineOutcomeCode.CANCELLED
-        )
-        return ClassifiedDastOutcome(code=code, degraded=True)
+        return ClassifiedDastOutcome(code=DastPipelineOutcomeCode.CANCELLED, degraded=True)
     if terminal_status == "failed":
         return ClassifiedDastOutcome(
             code=_PROVIDER_REASON_CODES.get(provider_reason, DastPipelineOutcomeCode.PROVIDER_FAILED),

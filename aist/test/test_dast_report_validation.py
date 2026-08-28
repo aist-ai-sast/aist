@@ -39,6 +39,9 @@ def _report(**overrides) -> dict:
             "target": "cloud-backend",
             "stand": "qa-1",
             "source_commits": {"backend": SHA},
+            "delivery_quality": "complete",
+            "audit_state": "complete",
+            "findings_complete": True,
         },
     }
     report.update(overrides)
@@ -85,7 +88,7 @@ class DastReportValidationTests(SimpleTestCase):
         cases = (
             ({"contract_version": "1.0"}, "contract version"),
             ({"run_id": "other-run"}, "run identity"),
-            ({"status": "failed"}, "successful"),
+            ({"status": "failed"}, "does not carry an importable"),
             ({"audit": {"correlation_id": "other-pipeline", "source_verified": True}}, "correlation"),
             ({"audit": {"correlation_id": "pipeline-123", "source_verified": False}}, "source integrity"),
         )
@@ -156,6 +159,78 @@ class DastReportValidationTests(SimpleTestCase):
                 expectations=_expectations(),
             )
 
+    def test_transport_metadata_extensions_are_accepted_without_changing_trust_claims(self):
+        result = validate_dast_terminal_result_bytes(
+            _bytes(_terminal(dast_run_metadata={"source_commits": {"backend": SHA}, "future": {"value": 7}})),
+            expectations=_expectations(),
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertTrue(result.source_verified)
+
+    def test_standless_terminal_report_omits_stand_without_inventing_an_identity(self):
+        report = _report()
+        del report["dast_run_metadata"]["stand"]
+        report["dast_run_metadata"]["source_commits"] = {}
+        result = validate_dast_terminal_result_bytes(
+            _bytes(_terminal(
+                selection={"mode": "none", "note": "this scenario declares no stands"},
+                trigger_resolution=None,
+                dast_run_metadata={"source_commits": {}},
+                report=report,
+            )),
+            expectations=_expectations(allowed_repository_keys=frozenset()),
+        )
+
+        self.assertIsNone(result.selection.stand_id)
+        self.assertIsNone(result.run_metadata.stand_id)
+
+        report["dast_run_metadata"]["stand"] = "invented"
+        with self.assertRaisesRegex(DastReportValidationError, "stand-less"):
+            validate_dast_terminal_result_bytes(
+                _bytes(_terminal(
+                    selection={"mode": "none", "note": "this scenario declares no stands"},
+                    trigger_resolution=None,
+                    dast_run_metadata={"source_commits": {}},
+                    report=report,
+                )),
+                expectations=_expectations(allowed_repository_keys=frozenset()),
+            )
+
+    def test_degraded_and_partial_terminal_states_require_matching_quality(self):
+        degraded = _report()
+        degraded["dast_run_metadata"]["delivery_quality"] = "degraded"
+        result = validate_dast_terminal_result_bytes(
+            _bytes(_terminal(status="completed_with_degradation", report=degraded)),
+            expectations=_expectations(),
+        )
+        self.assertEqual(result.status, "completed_with_degradation")
+
+        partial = _report()
+        partial["dast_run_metadata"].update({
+            "delivery_quality": "partial",
+            "audit_state": "incomplete",
+            "findings_complete": False,
+        })
+        result = validate_dast_terminal_result_bytes(
+            _bytes(_terminal(
+                status="failed_with_partial_results",
+                report=partial,
+                audit={"correlation_id": "pipeline-123", "source_verified": False},
+            )),
+            expectations=_expectations(),
+        )
+        self.assertEqual(result.status, "failed_with_partial_results")
+        self.assertFalse(result.source_verified)
+
+        inconsistent = _report()
+        inconsistent["dast_run_metadata"]["delivery_quality"] = "partial"
+        with self.assertRaisesRegex(DastReportValidationError, "partial status"):
+            validate_dast_terminal_result_bytes(
+                _bytes(_terminal(status="failed_with_partial_results", report=inconsistent)),
+                expectations=_expectations(),
+            )
+
     def test_an_operator_uploads_the_exported_report_itself(self):
         """
         The reference artifact is what `dast export-findings` writes — no transport wrapper.
@@ -178,6 +253,20 @@ class DastReportValidationTests(SimpleTestCase):
         self.assertIsNone(result.correlation_id)
         self.assertIsNone(result.selection)
         self.assertIsNone(result.status)
+
+    def test_an_operator_can_import_a_standless_perimeter_report(self):
+        report = _report()
+        report["dast_run_metadata"].pop("stand")
+        report["dast_run_metadata"]["target"] = "perimeter"
+        report["dast_run_metadata"]["source_commits"] = {}
+
+        result = validate_exported_dast_report_bytes(
+            _bytes(report),
+            target_id="perimeter",
+            allowed_repository_keys=frozenset(),
+        )
+
+        self.assertIsNone(result.run_metadata.stand_id)
 
     def test_the_upload_is_still_held_to_what_the_binding_knows(self):
         with self.assertRaisesRegex(DastReportValidationError, "selected binding is for target"):
@@ -312,11 +401,19 @@ class DastRunMetadataValidationTests(SimpleTestCase):
         self.assertIsNone(metadata.scan_started)
 
     def test_explicit_nulls_read_the_same_as_absence(self):
-        metadata = _validate_metadata(coverage=None, token_usage=None, tier=None)
+        result = validate_dast_terminal_result_bytes(
+            _bytes(_terminal(report=_metadata_report(coverage=None, token_usage=None, tier=None))),
+            expectations=_expectations(),
+        )
+        metadata = result.run_metadata
 
         self.assertIsNone(metadata.coverage)
         self.assertIsNone(metadata.token_usage)
         self.assertIsNone(metadata.tier)
+        canonical_metadata = json.loads(result.canonical_json)["dast_run_metadata"]
+        self.assertNotIn("coverage", canonical_metadata)
+        self.assertNotIn("token_usage", canonical_metadata)
+        self.assertNotIn("tier", canonical_metadata)
 
     def test_partial_blocks_keep_what_was_reported_without_inventing_the_rest(self):
         metadata = _validate_metadata(

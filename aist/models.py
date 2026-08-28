@@ -1550,7 +1550,6 @@ class DastExecutionState(models.Model):
         blank=True,
         default="",
     )
-    deadline = models.DateTimeField(null=True, blank=True)
     # When the provider last delivered a run id or new log events -- the run's sign of life.
     # NULL means "no baseline yet"; a reader must never read it as "stalled".
     last_progress_at = models.DateTimeField(null=True, blank=True)
@@ -1598,7 +1597,7 @@ class DastRunMetadataManager(models.Manager):
         return None if buckets is None else [bucket.as_wire() for bucket in buckets]
 
     @classmethod
-    def columns_from_report(cls, metadata) -> dict:
+    def columns_from_report(cls, metadata, *, source_verified: bool | None = None) -> dict:
         """Flatten one validated metadata block onto this table's columns."""
         coverage = metadata.coverage
         usage = metadata.token_usage
@@ -1613,6 +1612,23 @@ class DastRunMetadataManager(models.Manager):
             "target_host": metadata.target_host,
             "scan_started": metadata.scan_started,
             "scan_finished": metadata.scan_finished,
+            "delivery_quality": metadata.delivery_quality,
+            "audit_state": metadata.audit_state,
+            "findings_complete": metadata.findings_complete,
+            "source_verified": source_verified,
+            "operator_actions_persisted": metadata.operator_actions_persisted,
+            "operator_actions": (
+                None if metadata.operator_actions is None
+                else [row.as_wire() for row in metadata.operator_actions]
+            ),
+            "operator_actions_total": metadata.operator_actions_total,
+            "operator_actions_truncated": metadata.operator_actions_truncated,
+            "excluded_findings": (
+                None if metadata.excluded_findings is None
+                else [row.as_wire() for row in metadata.excluded_findings]
+            ),
+            "excluded_findings_total": metadata.excluded_findings_total,
+            "excluded_findings_truncated": metadata.excluded_findings_truncated,
             "coverage_unit": cls._reported(coverage, "unit"),
             **{column: cls._reported(coverage, column) for column in _DAST_COVERAGE_COUNT_COLUMNS},
             **{column: cls._reported_names(coverage, column) for column in _DAST_COVERAGE_NAME_COLUMNS},
@@ -1634,7 +1650,7 @@ class DastRunMetadataManager(models.Manager):
         """
         return self.model(**self.columns_from_report(metadata))
 
-    def upsert_from_report(self, *, pipeline_id: str, metadata) -> DastRunMetadata:
+    def upsert_from_report(self, *, pipeline_id: str, report) -> DastRunMetadata:
         """
         Write the accepted report's run metadata, replacing any earlier write for this pipeline.
 
@@ -1644,7 +1660,10 @@ class DastRunMetadataManager(models.Manager):
         """
         row, _created = self.update_or_create(
             pipeline_id=pipeline_id,
-            defaults=self.columns_from_report(metadata),
+            defaults=self.columns_from_report(
+                report.run_metadata,
+                source_verified=report.source_verified,
+            ),
         )
         return row
 
@@ -1681,7 +1700,7 @@ class DastRunMetadata(models.Model):
 
     run_id = models.CharField(max_length=255)
     target_id = models.CharField(max_length=255)
-    stand_id = models.CharField(max_length=255)
+    stand_id = models.CharField(max_length=255, null=True, blank=True)
 
     product_family = models.CharField(max_length=64, null=True, blank=True)
     tier = models.CharField(max_length=64, null=True, blank=True)
@@ -1689,6 +1708,19 @@ class DastRunMetadata(models.Model):
     target_host = models.CharField(max_length=255, null=True, blank=True)
     scan_started = models.DateTimeField(null=True, blank=True)
     scan_finished = models.DateTimeField(null=True, blank=True)
+
+    delivery_quality = models.CharField(max_length=16, null=True, blank=True)
+    audit_state = models.CharField(max_length=16, null=True, blank=True)
+    findings_complete = models.BooleanField(null=True, blank=True)
+    # Transport provenance: NULL for manual uploads, never inferred from report metadata.
+    source_verified = models.BooleanField(null=True, blank=True)
+    operator_actions_persisted = models.BooleanField(null=True, blank=True)
+    operator_actions = models.JSONField(null=True, blank=True, default=None)
+    operator_actions_total = models.PositiveIntegerField(null=True, blank=True)
+    operator_actions_truncated = models.BooleanField(null=True, blank=True)
+    excluded_findings = models.JSONField(null=True, blank=True, default=None)
+    excluded_findings_total = models.PositiveIntegerField(null=True, blank=True)
+    excluded_findings_truncated = models.BooleanField(null=True, blank=True)
 
     coverage_unit = models.CharField(max_length=64, null=True, blank=True)
     discovered = models.PositiveIntegerField(null=True, blank=True)

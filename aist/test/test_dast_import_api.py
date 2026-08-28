@@ -475,9 +475,9 @@ class DastPerimeterImportTests(TestCase):
         report["dast_run_metadata"].update(
             run_id="run-perimeter-1",
             target="perimeter",
-            stand="external-10host",
             source_commits={},
         )
+        report["dast_run_metadata"].pop("stand", None)
         return report
 
     def _post(self, url, report, *, binding):

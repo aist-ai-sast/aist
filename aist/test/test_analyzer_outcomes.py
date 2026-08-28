@@ -197,7 +197,16 @@ class StandaloneDastOutcomeTests(AISTApiBase):
             (self._result(status="failed", reason_code="NO_ELIGIBLE_STAND"), "POLICY_NO_ELIGIBLE_STAND", True),
             (self._result(status="failed", reason_code="SOURCE_DRIFT"), "SOURCE_DRIFT", True),
             (self._result(status="failed", reason_code="REPORT_INVALID"), "INVALID_RESULT", True),
-            (self._result(status="failed", reason_code="DEADLINE_EXCEEDED"), "TIMEOUT", True),
+            (
+                self._result(status="completed_with_degradation", findings=[{"title": "finding"}]),
+                "COMPLETED_WITH_DEGRADATION",
+                True,
+            ),
+            (
+                self._result(status="failed_with_partial_results", findings=[{"title": "finding"}]),
+                "FAILED_WITH_PARTIAL_RESULTS",
+                True,
+            ),
             (
                 self._result(status="failed", reason_code="PROVIDER_CREDENTIALS_EXPIRED"),
                 "PROVIDER_CREDENTIALS_EXPIRED",
@@ -206,7 +215,7 @@ class StandaloneDastOutcomeTests(AISTApiBase):
             (self._result(status="failed", reason_code="provider-secret-detail"), "PROVIDER_FAILED", True),
             (self._result(status="unknown"), "INVALID_RESULT", True),
             (self._result(status="stopped", reason_code="CANCEL_REQUESTED"), "CANCELLED", True),
-            (self._result(status="stopped", reason_code="EXECUTION_TIMEOUT"), "TIMEOUT", True),
+            (self._result(status="stopped", reason_code="CANCEL_REQUESTED"), "CANCELLED", True),
         ]
 
         for result, expected_code, expected_degraded in scenarios:

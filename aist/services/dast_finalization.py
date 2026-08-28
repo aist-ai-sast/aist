@@ -179,7 +179,7 @@ def finalize_dast_report(
         if report.run_metadata is not None:
             DastRunMetadata.objects.upsert_from_report(
                 pipeline_id=pipeline.pk,
-                metadata=report.run_metadata,
+                report=report,
             )
 
         launch_data = PipelineLaunchData(pipeline.launch_data)

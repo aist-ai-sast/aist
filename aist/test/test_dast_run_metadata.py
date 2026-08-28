@@ -12,6 +12,7 @@ from aist.integrations.dast_report import (
     DastCoverage,
     DastTokenBucket,
     DastTokenUsage,
+    ValidatedDastReport,
     ValidatedDastRunMetadata,
 )
 from aist.models import AISTPipeline, AISTStatus, DastRunMetadata, PipelineExecutionType
@@ -103,6 +104,19 @@ def _metadata(**overrides) -> ValidatedDastRunMetadata:
     }
     values.update(overrides)
     return ValidatedDastRunMetadata(**values)
+
+
+def _report(metadata: ValidatedDastRunMetadata | None = None) -> ValidatedDastReport:
+    metadata = metadata or _metadata()
+    return ValidatedDastReport(
+        run_id=metadata.run_id,
+        target_id=metadata.target_id,
+        source_commits=(),
+        findings_count=0,
+        canonical_json=b"{}",
+        run_metadata=metadata,
+        source_verified=None,
+    )
 
 
 class _Carrier:
@@ -214,14 +228,14 @@ class DastRunMetadataReadPathTests(AISTApiBase):
             execution_type=PipelineExecutionType.MANUAL_IMPORT,
             status=AISTStatus.FINISHED,
         )
-        DastRunMetadata.objects.upsert_from_report(pipeline_id=self.imported.id, metadata=_metadata())
+        DastRunMetadata.objects.upsert_from_report(pipeline_id=self.imported.id, report=_report())
         self.foreign = AISTPipeline.objects.create(
             id="run-meta-foreign",
             project=self.other_project,
             execution_type=PipelineExecutionType.MANUAL_IMPORT,
             status=AISTStatus.FINISHED,
         )
-        DastRunMetadata.objects.upsert_from_report(pipeline_id=self.foreign.id, metadata=_metadata())
+        DastRunMetadata.objects.upsert_from_report(pipeline_id=self.foreign.id, report=_report())
 
     def _summary_rows(self):
         response = self.client.get(reverse("client_pipeline_summary"))
@@ -252,7 +266,7 @@ class DastRunMetadataReadPathTests(AISTApiBase):
                 execution_type=PipelineExecutionType.MANUAL_IMPORT,
                 status=AISTStatus.FINISHED,
             )
-            DastRunMetadata.objects.upsert_from_report(pipeline_id=extra.id, metadata=_metadata())
+            DastRunMetadata.objects.upsert_from_report(pipeline_id=extra.id, report=_report())
 
         with CaptureQueriesContext(connection) as after:
             rows = self._summary_rows()

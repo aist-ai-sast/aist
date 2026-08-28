@@ -1,11 +1,9 @@
 import stat
 from contextlib import contextmanager
-from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
-from django.utils import timezone
 
 from aist.models import PipelineExecutionType
 from aist.tasks import pipeline as pipeline_tasks
@@ -37,7 +35,6 @@ def _runtime(*, vpn_integration=None):
         vpn_integration=vpn_integration,
         recovery=pipeline_tasks.DastRecoveryState.initial(command),
         allowed_repository_keys=frozenset({"backend"}),
-        deadline_at=timezone.now() + timedelta(hours=1),
         stop_requested=False,
         binding=SimpleNamespace(pk=123),
         lead=None,

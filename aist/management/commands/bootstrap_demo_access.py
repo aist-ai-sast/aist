@@ -1297,36 +1297,43 @@ class Command(BaseCommand):
             )
             for position, (key, agents, _weight) in enumerate(DAST_DEMO_AGENT_TYPES)
         )
-        DastRunMetadata.objects.upsert_from_report(
+        metadata = ValidatedDastRunMetadata(
+            run_id=provider_run_id,
+            target_id=binding.target.provider_id,
+            stand_id=f"{binding.target.provider_id}-stand-{sequence:02d}",
+            product_family=binding.target.provider_id,
+            tier="external",
+            run_type="deep" if analysed > planned else "baseline",
+            target_host=analysed_names[0] if analysed_names else None,
+            scan_started=started,
+            scan_finished=finished_at,
+            coverage=DastCoverage(
+                unit="endpoint",
+                discovered=discovered,
+                reachable=reachable,
+                analysed=analysed,
+                planned=planned,
+                analysed_names=analysed_names,
+                # Everything past the plan; empty when the run stayed inside it, which is a
+                # reported empty rather than an absence.
+                beyond_plan_names=analysed_names[planned:],
+            ),
+            token_usage=DastTokenUsage(
+                total=total,
+                by_phase=by_phase,
+                by_agent_type=by_agent_type,
+                # True by construction: _split_exactly guarantees both breakdowns add back up.
+                accounting_consistent=True,
+            ),
+            delivery_quality="complete",
+            audit_state="complete",
+            findings_complete=True,
+        )
+        DastRunMetadata.objects.update_or_create(
             pipeline_id=pipeline.pk,
-            metadata=ValidatedDastRunMetadata(
-                run_id=provider_run_id,
-                target_id=binding.target.provider_id,
-                stand_id=f"{binding.target.provider_id}-stand-{sequence:02d}",
-                product_family=binding.target.provider_id,
-                tier="external",
-                run_type="deep" if analysed > planned else "baseline",
-                target_host=analysed_names[0] if analysed_names else None,
-                scan_started=started,
-                scan_finished=finished_at,
-                coverage=DastCoverage(
-                    unit="endpoint",
-                    discovered=discovered,
-                    reachable=reachable,
-                    analysed=analysed,
-                    planned=planned,
-                    analysed_names=analysed_names,
-                    # Everything past the plan; empty when the run stayed inside it, which is a
-                    # reported empty rather than an absence.
-                    beyond_plan_names=analysed_names[planned:],
-                ),
-                token_usage=DastTokenUsage(
-                    total=total,
-                    by_phase=by_phase,
-                    by_agent_type=by_agent_type,
-                    # True by construction: _split_exactly guarantees both breakdowns add back up.
-                    accounting_consistent=True,
-                ),
+            defaults=DastRunMetadata.objects.columns_from_report(
+                metadata,
+                source_verified=True,
             ),
         )
 
@@ -1395,7 +1402,6 @@ class Command(BaseCommand):
                     "run_id": provider_run_id,
                     "log_cursor": 120 + sequence,
                     "outcome": DastExecutionOutcome.TERMINAL,
-                    "deadline": finished_at,
                     "recovery_checkpoint": {
                         "source": "bootstrap_demo_access",
                         "terminal": True,

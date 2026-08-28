@@ -15,12 +15,13 @@ _PROVIDER_OPERATIONS = frozenset(ProviderOperation)
 _DAST_OUTCOMES = frozenset({
     "SUCCESS_WITH_FINDINGS",
     "SUCCESS_CLEAN",
+    "COMPLETED_WITH_DEGRADATION",
+    "FAILED_WITH_PARTIAL_RESULTS",
     "POLICY_NO_ELIGIBLE_STAND",
     "SOURCE_DRIFT",
     "PROVIDER_FAILED",
     "INVALID_RESULT",
     "CANCELLED",
-    "TIMEOUT",
     "pending",
     "error",
 })

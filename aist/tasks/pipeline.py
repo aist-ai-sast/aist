@@ -5,7 +5,6 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from celery import shared_task
 from django.db import transaction
@@ -15,12 +14,6 @@ from dojo.models import Finding, Test
 from aist.celery_signals import _update_action_run
 from aist.execution.adapters import UnknownLaunchAdapterError
 from aist.execution.contracts import ProviderOperation
-from aist.execution.dast_deadlines import (
-    dast_execution_over,
-    dast_execution_timeout,
-    dast_final_pass_taken,
-    dast_mark_final_pass,
-)
 from aist.execution.dast_trigger import DastTrigger
 from aist.execution.dispatching import LaunchAcceptance, accept_published_launch
 from aist.execution.observability import (
@@ -75,15 +68,12 @@ from aist.utils.pipeline import (
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
 from aist.utils.vpn import vpn_sidecar_context
 
-if TYPE_CHECKING:
-    from datetime import datetime
-
 # --------------------------------------------------------------------
 # Ensure external "pipeline" package is importable before importing it
 # --------------------------------------------------------------------
 _import_sast_pipeline_package()
 
-from celery.exceptions import Ignore, Retry  # noqa: E402
+from celery.exceptions import Ignore  # noqa: E402
 from pipeline.config_utils import AnalyzersConfigHelper  # type: ignore[import-not-found]  # noqa: E402
 from pipeline.dast import (  # type: ignore[import-not-found]  # noqa: E402
     DastConnectorOutcomeState,
@@ -115,13 +105,12 @@ class _DastRuntimeSpec:
     vpn_integration: object | None = field(repr=False)
     recovery: DastRecoveryState
     allowed_repository_keys: frozenset[str]
-    deadline_at: datetime | None
     stop_requested: bool
     binding: object
     lead: object | None
 
 
-def _prepare_dast_runtime(pipeline_id: str, *, harvest_only: bool = False) -> _DastRuntimeSpec:
+def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
     with transaction.atomic():
         pipeline = (
             AISTPipeline.objects
@@ -191,34 +180,13 @@ def _prepare_dast_runtime(pipeline_id: str, *, harvest_only: bool = False) -> _D
         if not token:
             raise ValueError(_ERR_DAST_RUNTIME)
 
-        now = timezone.now()
         updated_fields = ["updated"]
-        timeout = dast_execution_timeout()
-        # Stamped once and never moved, so a resumed attempt inherits the original ceiling.
-        # NULL is the uncapped case every deadline reader already understands.
-        if execution_state.deadline is None and timeout is not None:
-            execution_state.deadline = now + timeout
-            updated_fields.append("deadline")
-        # The stall bound needs a baseline before the provider has answered anything.
+        # This timestamp is observability only. Silence never changes the run lifecycle.
         if execution_state.last_progress_at is None:
-            execution_state.last_progress_at = now
+            execution_state.last_progress_at = timezone.now()
             updated_fields.append("last_progress_at")
-        # An attempt on a run already past its bounds is the closing pass. Recorded here, before any
-        # tunnel or container, so a crash mid-pass cannot earn the run another one.
-        if dast_execution_over(
-            deadline=execution_state.deadline,
-            last_progress_at=execution_state.last_progress_at,
-            now=now,
-        ) and not dast_final_pass_taken(execution_state.recovery_checkpoint):
-            execution_state.recovery_checkpoint = dast_mark_final_pass(
-                execution_state.recovery_checkpoint,
-                now=now,
-            )
-            updated_fields.append("recovery_checkpoint")
-        # A harvest is not a run: RUNNING would contradict the outcome about to be recorded.
-        if not harvest_only:
-            execution_state.outcome = DastExecutionOutcome.RUNNING
-            updated_fields.append("outcome")
+        execution_state.outcome = DastExecutionOutcome.RUNNING
+        updated_fields.append("outcome")
         execution_state.save(update_fields=updated_fields)
         recovery = DastRecoveryState(
             correlation_id=pipeline.id,
@@ -242,7 +210,6 @@ def _prepare_dast_runtime(pipeline_id: str, *, harvest_only: bool = False) -> _D
             vpn_integration=integration.vpn_integration,
             recovery=recovery,
             allowed_repository_keys=frozenset(capability.repository_keys),
-            deadline_at=execution_state.deadline,
             stop_requested=execution_state.cancel_requested_at is not None,
             binding=binding,
             lead=launch_request.requester,
@@ -277,9 +244,9 @@ def _persist_dast_execution_result(pipeline_id: str, result) -> None:
         execution_state.save(update_fields=update_fields)
 
 
-def _execute_dast_pipeline(pipeline_id: str, logger=None, *, harvest_only: bool = False):
+def _execute_dast_pipeline(pipeline_id: str, logger=None):
     logger = logger or logging.getLogger(__name__)
-    runtime = _prepare_dast_runtime(pipeline_id, harvest_only=harvest_only)
+    runtime = _prepare_dast_runtime(pipeline_id)
     vpn_resolved = (
         ResolvedIntegration(
             integration=runtime.vpn_integration,
@@ -309,13 +276,15 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None, *, harvest_only: bool 
                 ca_file=ca_file,
                 vpn_container_name=vpn_container,
                 recovery=runtime.recovery,
-                deadline_at=runtime.deadline_at,
                 stop_requested=runtime.stop_requested,
-                harvest_only=harvest_only,
             )
             result = execute_pipeline(PipelineExecutionType.DAST, execution)
     terminal_result = getattr(result, "terminal_result", None)
-    if terminal_result is not None and terminal_result.status.value == "succeeded":
+    if terminal_result is not None and terminal_result.status.value in {
+        "succeeded",
+        "completed_with_degradation",
+        "failed_with_partial_results",
+    }:
         if result.recovery.run_id is None:
             raise ValueError(_ERR_DAST_RUNTIME)
         validated_report = validate_dast_terminal_result_bytes(
@@ -344,19 +313,6 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None, *, harvest_only: bool 
     return result
 
 
-def _dast_reconciliation_exhausted(pipeline_id: str) -> bool:
-    state = DastExecutionState.objects.filter(pipeline_id=pipeline_id).values(
-        "deadline",
-        "last_progress_at",
-    ).first()
-    if state is None:
-        return False
-    return dast_execution_over(
-        deadline=state["deadline"],
-        last_progress_at=state["last_progress_at"],
-    )
-
-
 def _mark_dast_unreachable(pipeline_id: str) -> None:
     DastExecutionState.objects.filter(pipeline_id=pipeline_id).update(
         outcome=DastExecutionOutcome.UNREACHABLE,
@@ -375,54 +331,6 @@ def _finish_dast_cancellation(pipeline_id: str) -> None:
     finish_pipeline(pipeline_id, degraded=True)
 
 
-def _harvest_dast_result(pipeline_id: str, logger=None) -> bool:
-    """
-    Ask the provider once whether the run finished after all; import it through the usual path if so.
-
-    Returns whether the pipeline was terminalized here. Runs on the way to abandoning the pipeline,
-    so every failure is swallowed: it may improve that outcome, never replace it with an exception.
-    """
-    log = logger or logging.getLogger(__name__)
-    started_at = time.monotonic()
-    try:
-        result = _execute_dast_pipeline(pipeline_id, log, harvest_only=True)
-    except Exception:
-        observe_provider_call(
-            operation=str(ProviderOperation.HARVEST),
-            duration_seconds=time.monotonic() - started_at,
-            error_code="UNREACHABLE",
-        )
-        log.warning(
-            "Final DAST result harvest did not reach the provider (pipeline_id=%s)",
-            pipeline_id,
-            exc_info=True,
-        )
-        return False
-    observe_provider_call(
-        operation=str(ProviderOperation.HARVEST),
-        duration_seconds=time.monotonic() - started_at,
-    )
-    if result.outcome.state is not DastConnectorOutcomeState.TERMINAL:
-        return False
-    log.info("Provider run became terminal before it was abandoned (pipeline_id=%s)", pipeline_id)
-    return _record_dast_terminal_outcome(pipeline_id, result)
-
-
-def _abandon_dast_execution(pipeline_id: str, logger=None) -> None:
-    """
-    End a run that is over, leaving no path that skips terminalization.
-
-    Every way of giving up funnels here, so the outcome is recorded and the pipeline reaches a
-    terminal status -- which is what releases its capacity lease. The provider is asked for a
-    result first: "we stopped waiting" is not "there is nothing to collect".
-    """
-    if _harvest_dast_result(pipeline_id, logger):
-        return
-    _mark_dast_unreachable(pipeline_id)
-    record_dast_pipeline_outcome(pipeline_id, DastPipelineOutcomeCode.TIMEOUT)
-    finish_pipeline(pipeline_id, degraded=True)
-
-
 def _retry_dast_execution(
     task,
     pipeline_id: str,
@@ -430,20 +338,8 @@ def _retry_dast_execution(
     exc: Exception | None = None,
     logger=None,
 ) -> None:
-    if _dast_reconciliation_exhausted(pipeline_id):
-        _abandon_dast_execution(pipeline_id, logger)
-        return
     countdown = min(15 * (2 ** min(int(task.request.retries), 5)), 300)
-    try:
-        raise task.retry(exc=exc, countdown=countdown)
-    except Retry:
-        raise
-    except Exception:
-        # Celery re-raises the original error once the retry budget is spent, from inside this
-        # handler -- where no sibling `except` of the caller can see it. Without this the run
-        # would stay EXECUTING forever, holding the integration's only capacity slot.
-        _abandon_dast_execution(pipeline_id, logger)
-        return
+    raise task.retry(exc=exc, countdown=countdown)
 
 
 def _record_dast_terminal_outcome(pipeline_id: str, result) -> bool:
@@ -468,6 +364,13 @@ def _record_dast_terminal_outcome(pipeline_id: str, result) -> bool:
     record_dast_pipeline_outcome(pipeline_id, outcome.code)
     if result.outcome.state is DastConnectorOutcomeState.CANCELLED_BEFORE_START:
         _finish_dast_cancellation(pipeline_id)
+        return True
+    if terminal_result is not None and terminal_result.status.value in {
+        "succeeded",
+        "completed_with_degradation",
+        "failed_with_partial_results",
+    }:
+        # The common report finalizer already handed this pipeline to the shared findings tail.
         return True
     if outcome.degraded:
         if terminal_result is not None and terminal_result.status.value == "stopped":
@@ -636,9 +539,8 @@ class _WorkerExecutionRuntime:
         return _run_dast_execution(self.task, pipeline_id, operation=str(operation))
 
 
-# max_retries=None makes retries unbounded, so the DAST deadline is the only thing that ends a
-# run. Left at the Celery default of 3, the deadline branch is unreachable: attempts run out in
-# minutes while the deadline is hours away.
+# A provider run is terminal only after an explicit domain outcome. Transport recovery is
+# therefore unbounded; last_progress_at remains telemetry and never becomes a stop decision.
 @shared_task(bind=True, max_retries=None)
 def run_pipeline_execution(self, pipeline_id: str, async_user=None) -> None:
     """Execute one persisted pipeline; the broker carries only ``pipeline_id``."""

@@ -94,6 +94,9 @@ def _validated_report(
             "target": "cloud-app",
             "stand": "qa-1",
             "source_commits": {"backend": ACTUAL_SHA},
+            "delivery_quality": "complete",
+            "audit_state": "complete",
+            "findings_complete": True,
             **(run_metadata or {}),
         },
     }
