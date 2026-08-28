@@ -231,6 +231,162 @@ class DastReportValidationTests(SimpleTestCase):
                 expectations=_expectations(),
             )
 
+    def test_a_provider_that_never_reports_delivery_quality_is_still_imported(self):
+        """
+        The group describes a run; it does not gate one.
+
+        A gateway that predates these fields -- or simply does not track them -- keeps delivering
+        importable results, and its runs land with no quality recorded rather than being rejected
+        as invalid. Nothing downstream reads a missing group as anything but "not degraded".
+        """
+        silent = _report()
+        for field in ("delivery_quality", "audit_state", "findings_complete"):
+            del silent["dast_run_metadata"][field]
+
+        result = validate_dast_terminal_result_bytes(
+            _bytes(_terminal(report=silent)),
+            expectations=_expectations(),
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertIsNone(result.run_metadata.delivery_quality)
+        self.assertIsNone(result.run_metadata.audit_state)
+        self.assertIsNone(result.run_metadata.findings_complete)
+
+    def test_half_a_delivery_quality_group_is_still_refused(self):
+        half = _report()
+        del half["dast_run_metadata"]["audit_state"]
+
+        with self.assertRaisesRegex(DastReportValidationError, "one complete group"):
+            validate_dast_terminal_result_bytes(
+                _bytes(_terminal(report=half)),
+                expectations=_expectations(),
+            )
+
+    def test_the_operator_and_exclusion_inventories_reach_the_boundary_object(self):
+        reported = _report()
+        reported["dast_run_metadata"].update({
+            "operator_actions_persisted": True,
+            "operator_actions": [{
+                "issue_id": "OPS-17",
+                "classification": "infrastructure",
+                "impact": "coverage",
+                "action_summary": "Restarted the stand after the agent pool ran out of workers.",
+            }],
+            "operator_actions_total": 3,
+            "operator_actions_truncated": True,
+            "excluded_findings": [{
+                "finding_ref": "finding-9",
+                "check_id": "auth.missing-rate-limit",
+                "validation_codes": ["NO_EVIDENCE", "UNREACHABLE_ENDPOINT"],
+            }],
+            "excluded_findings_total": 1,
+            "excluded_findings_truncated": False,
+        })
+
+        metadata = validate_dast_terminal_result_bytes(
+            _bytes(_terminal(report=reported)),
+            expectations=_expectations(),
+        ).run_metadata
+
+        self.assertTrue(metadata.operator_actions_persisted)
+        self.assertEqual(metadata.operator_actions_total, 3)
+        self.assertTrue(metadata.operator_actions_truncated)
+        self.assertEqual(metadata.operator_actions[0].issue_id, "OPS-17")
+        self.assertEqual(metadata.operator_actions[0].impact, "coverage")
+        self.assertEqual(metadata.excluded_findings_total, 1)
+        self.assertEqual(metadata.excluded_findings[0].check_id, "auth.missing-rate-limit")
+        self.assertEqual(
+            metadata.excluded_findings[0].validation_codes,
+            ("NO_EVIDENCE", "UNREACHABLE_ENDPOINT"),
+        )
+
+    def test_an_exclusion_the_provider_cannot_attribute_to_a_check_is_still_accepted(self):
+        """
+        ``check_id`` is the one optional field of an exclusion: a finding dropped before it was
+        ever matched to a check has no check to name, and losing that exclusion from the audit
+        trail is worse than recording it without an attribution. Anything else is still refused.
+        """
+        unattributed = _report()
+        unattributed["dast_run_metadata"].update({
+            "excluded_findings": [{"finding_ref": "finding-4", "validation_codes": ["NO_EVIDENCE"]}],
+            "excluded_findings_total": 1,
+            "excluded_findings_truncated": False,
+        })
+
+        metadata = validate_dast_terminal_result_bytes(
+            _bytes(_terminal(report=unattributed)),
+            expectations=_expectations(),
+        ).run_metadata
+
+        self.assertEqual(metadata.excluded_findings[0].finding_ref, "finding-4")
+        self.assertIsNone(metadata.excluded_findings[0].check_id)
+
+        for row in (
+            {"check_id": "auth.x", "validation_codes": ["NO_EVIDENCE"]},
+            {"finding_ref": "finding-4"},
+            {"finding_ref": "finding-4", "validation_codes": ["NO_EVIDENCE"], "verdict": "dropped"},
+        ):
+            malformed = _report()
+            malformed["dast_run_metadata"].update({
+                "excluded_findings": [row],
+                "excluded_findings_total": 1,
+                "excluded_findings_truncated": False,
+            })
+            with self.assertRaisesRegex(DastReportValidationError, "excluded finding fields"):
+                validate_dast_terminal_result_bytes(
+                    _bytes(_terminal(report=malformed)),
+                    expectations=_expectations(),
+                )
+
+    def test_an_inventory_reported_as_empty_is_not_the_same_as_an_unreported_one(self):
+        """
+        A clean run says "no operator touched this" by reporting nothing in the group, not by
+        omitting the group. Both are valid and they mean different things, so an empty inventory
+        has to survive validation as an empty inventory rather than fail the whole report.
+        """
+        clean = _report()
+        clean["dast_run_metadata"].update({
+            "operator_actions_persisted": True,
+            "operator_actions": [],
+            "operator_actions_total": 0,
+            "operator_actions_truncated": False,
+            "excluded_findings": [],
+            "excluded_findings_total": 0,
+            "excluded_findings_truncated": False,
+        })
+
+        reported = validate_dast_terminal_result_bytes(
+            _bytes(_terminal(report=clean)),
+            expectations=_expectations(),
+        ).run_metadata
+        unreported = validate_dast_terminal_result_bytes(
+            _bytes(_terminal()),
+            expectations=_expectations(),
+        ).run_metadata
+
+        self.assertEqual(reported.operator_actions, ())
+        self.assertEqual(reported.operator_actions_total, 0)
+        self.assertEqual(reported.excluded_findings, ())
+        self.assertIsNone(unreported.operator_actions)
+        self.assertIsNone(unreported.operator_actions_total)
+        self.assertIsNone(unreported.excluded_findings)
+
+    def test_an_inventory_shorter_than_its_total_must_say_it_was_truncated(self):
+        lying = _report()
+        lying["dast_run_metadata"].update({
+            "operator_actions_persisted": True,
+            "operator_actions": [],
+            "operator_actions_total": 2,
+            "operator_actions_truncated": False,
+        })
+
+        with self.assertRaisesRegex(DastReportValidationError, "conflicts with its total"):
+            validate_dast_terminal_result_bytes(
+                _bytes(_terminal(report=lying)),
+                expectations=_expectations(),
+            )
+
     def test_an_operator_uploads_the_exported_report_itself(self):
         """
         The reference artifact is what `dast export-findings` writes — no transport wrapper.

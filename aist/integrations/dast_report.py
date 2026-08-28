@@ -96,6 +96,8 @@ _OPERATOR_CLASSIFICATIONS = {
 }
 _OPERATOR_IMPACTS = {"coverage", "findings", "audit", "delivery", "cleanup", "source", "none"}
 _EXCLUDED_FINDING_FIELDS = {"finding_ref", "check_id", "validation_codes"}
+# A provider that cannot attribute an exclusion to a check still has to report the exclusion.
+_EXCLUDED_FINDING_REQUIRED_FIELDS = _EXCLUDED_FINDING_FIELDS - {"check_id"}
 
 
 class DastReportValidationError(ValueError):
@@ -454,9 +456,13 @@ def _operator_action(value: object) -> DastOperatorAction:
 
 
 def _excluded_finding(value: object) -> DastExcludedFinding:
-    allowed_fields = {_EXCLUDED_FINDING_FIELDS, _EXCLUDED_FINDING_FIELDS - {"check_id"}}
-    if not isinstance(value, dict) or set(value) not in allowed_fields:
-        raise _error("DAST excluded finding fields are invalid.")
+    if (
+        not isinstance(value, dict)
+        or not _EXCLUDED_FINDING_REQUIRED_FIELDS.issubset(value)
+        or set(value) - _EXCLUDED_FINDING_FIELDS
+    ):
+        msg = "DAST excluded finding fields are invalid."
+        raise _error(msg)
     codes = value["validation_codes"]
     if not isinstance(codes, list) or not codes or len(codes) > DAST_VALIDATION_CODES_MAX:
         raise _error("DAST excluded finding validation_codes are invalid.")
@@ -484,7 +490,10 @@ def _summary_group(metadata: dict[str, Any], *, prefix: str, parser, persisted: 
     truncated = metadata[f"{prefix}_truncated"]
     if not isinstance(raw_rows, list) or len(raw_rows) > DAST_QUALITY_SUMMARY_MAX:
         raise _error(f"DAST {prefix} is invalid.")
-    if isinstance(total, bool) or not isinstance(total, int) or total < 1 or len(raw_rows) > total:
+    # Zero is a real total: a provider that always reports this group says "none" with an empty
+    # list, which is a different fact from never mentioning the group at all. Only a negative
+    # total is impossible -- the column it lands in cannot hold one.
+    if isinstance(total, bool) or not isinstance(total, int) or total < 0 or len(raw_rows) > total:
         raise _error(f"DAST {prefix}_total is invalid.")
     truncated = _required_bool(truncated, f"DAST {prefix}_truncated")
     if not truncated and len(raw_rows) != total:
@@ -909,21 +918,30 @@ def validate_dast_terminal_result_bytes(
         run_metadata.audit_state,
         run_metadata.findings_complete,
     )
-    if None in quality:
-        raise _error("DAST terminal report requires the complete delivery quality group.")
-    if status == "succeeded" and quality != ("complete", "complete", True):
-        raise _error("DAST succeeded status conflicts with report delivery quality.")
-    if status == "completed_with_degradation" and quality != ("degraded", "complete", True):
-        raise _error("DAST degraded status conflicts with report delivery quality.")
-    if status == "failed_with_partial_results":
-        if run_metadata.delivery_quality != "partial" or (
-            run_metadata.audit_state == "complete"
-            and run_metadata.findings_complete is True
-            and source_verified
+    # The group is descriptive, not required: nothing downstream depends on it -- every column is
+    # nullable and the one reader treats absence as "not degraded" -- so a provider that does not
+    # report it still produces an importable result. Reported, it has to agree with the status the
+    # same result declares: one run cannot carry two accounts of how it went.
+    if None not in quality:
+        if status == "succeeded" and quality != ("complete", "complete", True):
+            msg = "DAST succeeded status conflicts with report delivery quality."
+            raise _error(msg)
+        if status == "completed_with_degradation" and quality != ("degraded", "complete", True):
+            msg = "DAST degraded status conflicts with report delivery quality."
+            raise _error(msg)
+        if status == "failed_with_partial_results" and (
+            run_metadata.delivery_quality != "partial"
+            or (
+                run_metadata.audit_state == "complete"
+                and run_metadata.findings_complete is True
+                and source_verified
+            )
         ):
-            raise _error("DAST partial status requires at least one incomplete postcondition.")
-    elif not source_verified:
-        raise _error("DAST complete result did not verify source integrity.")
+            msg = "DAST partial status requires at least one incomplete postcondition."
+            raise _error(msg)
+    if status != "failed_with_partial_results" and not source_verified:
+        msg = "DAST complete result did not verify source integrity."
+        raise _error(msg)
     return ValidatedDastReport(
         run_id=run_id,
         target_id=expectations.target_id,
