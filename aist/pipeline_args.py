@@ -487,7 +487,7 @@ class PipelineArguments:
         """Prepare the common workspace and durable result root for one pipeline run."""
         workspace = self._workspace_path(pipeline_id)
         self._cleanup_terminal_workspaces(keep_pipeline_id=pipeline_id)
-        workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
+        workspace.mkdir(parents=True, exist_ok=True)
         return workspace, self._output_path(pipeline_id)
 
     def cleanup_workspace(self, pipeline_id: str) -> None:

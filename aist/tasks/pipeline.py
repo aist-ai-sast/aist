@@ -270,6 +270,7 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
     )
     workspace, output_dir = runtime.arguments.prepare_execution(pipeline_id)
     try:
+        workspace.chmod(0o700)
         token_file = workspace / "token"
         token_file.write_text(runtime.token, encoding="utf-8")
         token_file.chmod(0o600)

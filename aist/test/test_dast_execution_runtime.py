@@ -89,6 +89,7 @@ class DastExecutionRuntimeTests(AISTApiBase):
             (execution.output_dir / "durable-result.json").write_text("{}", encoding="utf-8")
             observed["token_path"] = execution.token_file
             observed["ca_path"] = execution.ca_file
+            self.assertEqual(stat.S_IMODE(execution.token_file.parent.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE(execution.token_file.stat().st_mode), 0o600)
             self.assertEqual(stat.S_IMODE(execution.ca_file.stat().st_mode), 0o600)
             self.assertEqual(execution.token_file.read_text(encoding="utf-8"), "runtime-token")

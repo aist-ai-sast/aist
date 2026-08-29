@@ -6,6 +6,8 @@ the directory is cleaned up so per-run dirs do not accumulate on disk.
 """
 from __future__ import annotations
 
+import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -28,6 +30,18 @@ class PipelineExecutionPathTests(AISTApiBase):
         with self.settings(AIST_PROJECTS_BUILD_DIR="/builds"):
             workspace, _output = self._arguments(version="master").prepare_execution("abc123")
         self.assertEqual(workspace, Path("/builds") / self.product.name / "master" / "runs" / "abc123")
+
+    def test_sast_workspace_remains_traversable_by_the_separate_bridge_user(self):
+        with tempfile.TemporaryDirectory() as build_dir:
+            Path(build_dir).chmod(0o755)
+            previous_umask = os.umask(0o022)
+            try:
+                with self.settings(AIST_PROJECTS_BUILD_DIR=build_dir):
+                    workspace, _output = self._arguments().prepare_execution("pipeline-123")
+            finally:
+                os.umask(previous_umask)
+
+            self.assertEqual(stat.S_IMODE(workspace.stat().st_mode), 0o755)
 
     def test_different_pipeline_ids_yield_different_paths(self):
         with self.settings(AIST_PROJECTS_BUILD_DIR="/builds"):
