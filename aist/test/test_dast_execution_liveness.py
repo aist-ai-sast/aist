@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -40,13 +41,14 @@ class _FakeTask:
 
 
 class _ConnectorResult:
-    def __init__(self, pipeline_id: str, *, run_id: str, log_cursor: int):
+    def __init__(self, pipeline_id: str, *, run_id: str, log_cursor: int, report_path: Path | None = None):
         self.recovery = SimpleNamespace(
             correlation_id=pipeline_id,
             run_id=run_id,
             log_cursor=log_cursor,
         )
         self.outcome = SimpleNamespace(state=pipeline_tasks.DastConnectorOutcomeState.STOP_PENDING)
+        self.report_path = report_path
 
 
 class _DastPipelineFixture(AISTApiBase):
@@ -138,6 +140,22 @@ class DastExecutionLivenessTests(_DastPipelineFixture):
         )
         self.state.refresh_from_db()
         self.assertGreater(self.state.last_progress_at, stale)
+
+    def test_terminal_report_directory_is_persisted_for_reimport(self):
+        report_path = Path("output/run/dast_result.json")
+
+        pipeline_tasks._persist_dast_execution_result(
+            self.pipeline.id,
+            _ConnectorResult(
+                self.pipeline.id,
+                run_id="run-1",
+                log_cursor=1,
+                report_path=report_path,
+            ),
+        )
+
+        self.pipeline.refresh_from_db()
+        self.assertEqual(self.pipeline.launch_data["output_dir"], str(report_path.parent))
 
     def test_local_connector_setup_failure_remains_an_explicit_terminal_outcome(self):
         task = _FakeTask()

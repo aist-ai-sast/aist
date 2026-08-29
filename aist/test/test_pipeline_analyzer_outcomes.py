@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -26,11 +26,6 @@ class _DummyLogger:
         return None
 
 
-@contextmanager
-def _dummy_script_path_context():
-    yield "aist-test-script.sh"
-
-
 class AnalyzerOutcomesPipelineTests(AISTApiBase):
     def setUp(self):
         super().setUp()
@@ -40,34 +35,6 @@ class AnalyzerOutcomesPipelineTests(AISTApiBase):
         )
         acceptance.start()
         self.addCleanup(acceptance.stop)
-
-    def _pipeline_params(self, *, output_dir: str) -> SimpleNamespace:
-        descriptor = {
-            "id": self.pv.id,
-            "type": self.pv.version_type,
-            "excluded_paths": [],
-        }
-        return SimpleNamespace(
-            project_version={"id": self.pv.id, "version": self.pv.version},
-            project_name="test_product",
-            languages=["python"],
-            output_dir=output_dir,
-            rebuild_images=False,
-            analyzers=[],
-            time_class_level="slow",
-            dockerfile_path="Dockerfile",
-            pipeline_src_path="/aist-src",
-            additional_environments={},
-            ai_mode="MANUAL",
-            ai_filter_snapshot=None,
-            script_path_context=_dummy_script_path_context,
-            resolve_effective_project_version=lambda **_kwargs: self.pv,
-            build_project_version_descriptor=lambda: descriptor,
-            enrich_config=lambda: {
-                "project_version_descriptor": descriptor,
-                "log_level": "INFO",
-            },
-        )
 
     def _make_pipeline(self, pipeline_id: str) -> AISTPipeline:
         return AISTPipeline.objects.create(
@@ -112,13 +79,7 @@ class AnalyzerOutcomesPipelineTests(AISTApiBase):
         extra_patches=(),
     ) -> None:
         patches = (
-            patch(
-                "aist.tasks.pipeline.PipelineArguments.from_dict",
-                return_value=SimpleNamespace(sast=self._pipeline_params(output_dir=output_dir)),
-            ),
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
-            patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
-            patch("aist.tasks.pipeline.cleanup_terminal_project_build_paths", return_value=None),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.build_bridge_client_from_settings", return_value=object()),
             patch(
@@ -149,12 +110,18 @@ class AnalyzerOutcomesPipelineTests(AISTApiBase):
             patch("aist.tasks.pipeline.upload_results_internal", return_value=upload_results),
             *extra_patches,
         )
-        with ExitStack() as stack:
+        build_dir = str(Path(output_dir).parent / "build")
+        with self.settings(AIST_PROJECTS_BUILD_DIR=build_dir, AIST_OUTPUT_PATH=output_dir), ExitStack() as stack:
             for ctx in patches:
                 stack.enter_context(ctx)
             run_persisted_sast_pipeline(
                 pipeline,
-                {"project_id": self.project.id},
+                {
+                    "project_id": self.project.id,
+                    "project_version": self.pv.id,
+                    "analyzers": ["semgrep"],
+                    "selected_languages": ["python"],
+                },
                 async_user=async_user,
             )
 

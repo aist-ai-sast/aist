@@ -13,6 +13,7 @@ from aist.utils.pipeline_imports import _import_sast_pipeline_package
 
 _import_sast_pipeline_package()
 
+from pipeline.dast.connector import write_json_atomically
 from pipeline.dast.contract_snapshot import DastContractSnapshot
 from pipeline.dast.contracts import (
     DastConnectorOutcome,
@@ -21,6 +22,7 @@ from pipeline.dast.contracts import (
     DastTerminalResult,
 )
 from pipeline.dast.executor import DastExecutionResult, DastExecutionTelemetry
+from pipeline.project_builder import prepare_run_output_dir
 
 from aist.execution.claiming import claim_next_launch_request, revalidate_claimed_authority
 from aist.execution.dispatching import (
@@ -223,11 +225,17 @@ class ContractFaithfulDastGateway:
             recovery=recovery,
             reason_code="CANCEL_REQUESTED" if execution.stop_requested else None,
         )
+        report_path = write_json_atomically(
+            prepare_run_output_dir(execution.output_dir),
+            "dast_result.json",
+            terminal.report,
+        )
         return DastExecutionResult(
             outcome=outcome,
             terminal_result=terminal,
             recovery=recovery,
             telemetry=DastExecutionTelemetry(logs_delivered=2, max_log_lag_seconds=0.5),
+            report_path=report_path,
         )
 
 

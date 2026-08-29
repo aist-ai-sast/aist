@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -21,11 +21,6 @@ class _DummyLogger:
         return None
 
 
-@contextmanager
-def _dummy_script_path_context():
-    yield "aist-test-script.sh"
-
-
 class PipelineGitVersionResolutionTests(AISTApiBase):
     def setUp(self):
         super().setUp()
@@ -35,6 +30,22 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
         )
         acceptance.start()
         self.addCleanup(acceptance.stop)
+        self._runtime_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._runtime_dir.cleanup)
+        settings_override = self.settings(
+            AIST_PROJECTS_BUILD_DIR=f"{self._runtime_dir.name}/build",
+            AIST_OUTPUT_PATH=f"{self._runtime_dir.name}/output",
+        )
+        settings_override.enable()
+        self.addCleanup(settings_override.disable)
+
+    def _params(self, project_version):
+        return {
+            "project_id": self.project.id,
+            "project_version": project_version.id,
+            "analyzers": ["semgrep"],
+            "selected_languages": ["python"],
+        }
 
     def test_launch_fails_when_pipeline_and_params_project_version_mismatch(self):
         version_a = AISTProjectVersion.objects.create(
@@ -55,36 +66,14 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
         )
 
         with (
-            patch("aist.tasks.pipeline.PipelineArguments.from_dict") as mock_from_dict,
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
-            patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
             patch("aist.tasks.pipeline.execute_pipeline") as mock_configure,
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[]),
         ):
-            mock_from_dict.return_value = SimpleNamespace(
-                project_version={"id": version_b.id, "version": "develop"},
-                project_name="test_product",
-                languages=["python"],
-                output_dir="/aist-output",
-                rebuild_images=False,
-                analyzers=[],
-                time_class_level="slow",
-                dockerfile_path="Dockerfile",
-                pipeline_src_path="/aist-src",
-                additional_environments={},
-                ai_mode="MANUAL",
-                ai_filter_snapshot=None,
-                enrich_config=lambda: {
-                    "project_version_descriptor": {"id": version_b.id, "version": "develop"},
-                    "log_level": "INFO",
-                },
-            )
-            mock_from_dict.return_value = SimpleNamespace(sast=mock_from_dict.return_value)
-
             with self.assertRaises(ValueError):
-                run_persisted_sast_pipeline(pipeline, {"project_id": self.project.id})
+                run_persisted_sast_pipeline(pipeline, self._params(version_b))
 
             mock_configure.assert_not_called()
 
@@ -103,64 +92,12 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
 
         resolved_commit = "1234567890abcdef1234567890abcdef12345678"
         with (
-            patch("aist.tasks.pipeline.PipelineArguments.from_dict") as mock_from_dict,
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
-            patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
             patch("aist.tasks.pipeline.execute_pipeline") as mock_configure,
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[]),
         ):
-            project_version_state = {"id": branch.id, "version": "main", "type": VersionType.GIT_BRANCH}
-
-            def _resolve_effective_project_version(*, resolved_commit=""):
-                commit = (resolved_commit or "").strip()
-                pv_id = project_version_state.get("id")
-                current_project_version = AISTProjectVersion.objects.filter(pk=pv_id).first() if pv_id else None
-                if current_project_version and commit and current_project_version.version_type == VersionType.GIT_BRANCH:
-                    resolved, _ = AISTProjectVersion.objects.get_or_create(
-                        project_id=current_project_version.project_id,
-                        version=commit,
-                        version_type=VersionType.GIT_HASH,
-                        defaults={"resolved_from_branch": current_project_version},
-                    )
-                    if resolved.resolved_from_branch_id is None:
-                        resolved.resolved_from_branch = current_project_version
-                        resolved.save(update_fields=["resolved_from_branch", "updated"])
-                    current_project_version.last_resolved_commit = commit
-                    current_project_version.save(update_fields=["last_resolved_commit", "updated"])
-                    project_version_state.update(resolved.as_dict())
-                    return resolved
-                return current_project_version
-
-            mock_from_dict.return_value = SimpleNamespace(
-                project_version=project_version_state,
-                project_name="test_product",
-                languages=["python"],
-                output_dir="/aist-output",
-                rebuild_images=False,
-                analyzers=[],
-                time_class_level="slow",
-                dockerfile_path="Dockerfile",
-                pipeline_src_path="/aist-src",
-                additional_environments={},
-                ai_mode="MANUAL",
-                ai_filter_snapshot=None,
-                script_path_context=_dummy_script_path_context,
-                resolve_effective_project_version=_resolve_effective_project_version,
-                build_project_version_descriptor=lambda: {
-                    **project_version_state,
-                    "excluded_paths": [],
-                },
-                enrich_config=lambda: {
-                    "project_version_descriptor": {
-                        **project_version_state,
-                        "excluded_paths": [],
-                    },
-                    "log_level": "INFO",
-                },
-            )
-            mock_from_dict.return_value = SimpleNamespace(sast=mock_from_dict.return_value)
             mock_configure.return_value = SimpleNamespace(launch_data={
                 "git": {"resolved_commit": resolved_commit},
                 "output_dir": "/aist-output",
@@ -169,7 +106,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                 "tmp_analyzer_config_path": "/aist-analyzers.yml",
             })
 
-            run_persisted_sast_pipeline(pipeline, {"project_id": self.project.id})
+            run_persisted_sast_pipeline(pipeline, self._params(branch))
 
         pipeline.refresh_from_db()
         branch.refresh_from_db()
@@ -214,65 +151,13 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
 
         resolved_commit = "1234567890abcdef1234567890abcdef12345678"
         with (
-            patch("aist.tasks.pipeline.PipelineArguments.from_dict") as mock_from_dict,
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
-            patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
             patch("aist.tasks.pipeline.execute_pipeline") as mock_configure,
             patch("aist.tasks.pipeline.upload_results_internal", return_value=[SimpleNamespace(test_id=dd_test.id)]),
             patch("aist.tasks.pipeline.postprocess_findings", return_value=SimpleNamespace()) as mock_postprocess,
         ):
-            project_version_state = {"id": branch.id, "version": "main", "type": VersionType.GIT_BRANCH}
-
-            def _resolve_effective_project_version(*, resolved_commit=""):
-                commit = (resolved_commit or "").strip()
-                pv_id = project_version_state.get("id")
-                current_project_version = AISTProjectVersion.objects.filter(pk=pv_id).first() if pv_id else None
-                if current_project_version and commit and current_project_version.version_type == VersionType.GIT_BRANCH:
-                    resolved, _ = AISTProjectVersion.objects.get_or_create(
-                        project_id=current_project_version.project_id,
-                        version=commit,
-                        version_type=VersionType.GIT_HASH,
-                        defaults={"resolved_from_branch": current_project_version},
-                    )
-                    if resolved.resolved_from_branch_id is None:
-                        resolved.resolved_from_branch = current_project_version
-                        resolved.save(update_fields=["resolved_from_branch", "updated"])
-                    current_project_version.last_resolved_commit = commit
-                    current_project_version.save(update_fields=["last_resolved_commit", "updated"])
-                    project_version_state.update(resolved.as_dict())
-                    return resolved
-                return current_project_version
-
-            mock_from_dict.return_value = SimpleNamespace(
-                project_version=project_version_state,
-                project_name="test_product",
-                languages=["python"],
-                output_dir="/aist-output",
-                rebuild_images=False,
-                analyzers=[],
-                time_class_level="slow",
-                dockerfile_path="Dockerfile",
-                pipeline_src_path="/aist-src",
-                additional_environments={},
-                ai_mode="MANUAL",
-                ai_filter_snapshot=None,
-                script_path_context=_dummy_script_path_context,
-                resolve_effective_project_version=_resolve_effective_project_version,
-                build_project_version_descriptor=lambda: {
-                    **project_version_state,
-                    "excluded_paths": [],
-                },
-                enrich_config=lambda: {
-                    "project_version_descriptor": {
-                        **project_version_state,
-                        "excluded_paths": [],
-                    },
-                    "log_level": "INFO",
-                },
-            )
-            mock_from_dict.return_value = SimpleNamespace(sast=mock_from_dict.return_value)
             mock_configure.return_value = SimpleNamespace(launch_data={
                 "git": {"resolved_commit": resolved_commit},
                 "output_dir": "/aist-output",
@@ -281,7 +166,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                 "tmp_analyzer_config_path": "/aist-analyzers.yml",
             })
 
-            run_persisted_sast_pipeline(pipeline, {"project_id": self.project.id})
+            run_persisted_sast_pipeline(pipeline, self._params(branch))
 
         pipeline.refresh_from_db()
         branch.refresh_from_db()
@@ -331,9 +216,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
         original_finding_filter = Finding.objects.filter
 
         with (
-            patch("aist.tasks.pipeline.PipelineArguments.from_dict") as mock_from_dict,
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
-            patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
             patch("aist.tasks.pipeline.execute_pipeline") as mock_configure,
@@ -341,62 +224,12 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
             patch("aist.tasks.pipeline.postprocess_findings", return_value=SimpleNamespace()) as mock_postprocess,
             patch("aist.tasks.pipeline.Finding.objects.filter") as mock_finding_filter,
         ):
-            project_version_state = {"id": branch.id, "version": "main", "type": VersionType.GIT_BRANCH}
-
-            def _resolve_effective_project_version(*, resolved_commit=""):
-                commit = (resolved_commit or "").strip()
-                pv_id = project_version_state.get("id")
-                current_project_version = AISTProjectVersion.objects.filter(pk=pv_id).first() if pv_id else None
-                if current_project_version and commit and current_project_version.version_type == VersionType.GIT_BRANCH:
-                    resolved, _ = AISTProjectVersion.objects.get_or_create(
-                        project_id=current_project_version.project_id,
-                        version=commit,
-                        version_type=VersionType.GIT_HASH,
-                        defaults={"resolved_from_branch": current_project_version},
-                    )
-                    if resolved.resolved_from_branch_id is None:
-                        resolved.resolved_from_branch = current_project_version
-                        resolved.save(update_fields=["resolved_from_branch", "updated"])
-                    current_project_version.last_resolved_commit = commit
-                    current_project_version.save(update_fields=["last_resolved_commit", "updated"])
-                    project_version_state.update(resolved.as_dict())
-                    return resolved
-                return current_project_version
-
             def _finding_filter(*args, **kwargs):
                 if "test_id__in" in kwargs:
                     return SimpleNamespace(values_list=lambda *_args, **_kwargs: [finding.id, missing_finding_id])
                 return original_finding_filter(*args, **kwargs)
 
             mock_finding_filter.side_effect = _finding_filter
-            mock_from_dict.return_value = SimpleNamespace(
-                project_version=project_version_state,
-                project_name="test_product",
-                languages=["python"],
-                output_dir="/aist-output",
-                rebuild_images=False,
-                analyzers=[],
-                time_class_level="slow",
-                dockerfile_path="Dockerfile",
-                pipeline_src_path="/aist-src",
-                additional_environments={},
-                ai_mode="MANUAL",
-                ai_filter_snapshot=None,
-                script_path_context=_dummy_script_path_context,
-                resolve_effective_project_version=_resolve_effective_project_version,
-                build_project_version_descriptor=lambda: {
-                    **project_version_state,
-                    "excluded_paths": [],
-                },
-                enrich_config=lambda: {
-                    "project_version_descriptor": {
-                        **project_version_state,
-                        "excluded_paths": [],
-                    },
-                    "log_level": "INFO",
-                },
-            )
-            mock_from_dict.return_value = SimpleNamespace(sast=mock_from_dict.return_value)
             mock_configure.return_value = SimpleNamespace(launch_data={
                 "git": {"resolved_commit": resolved_commit},
                 "output_dir": "/aist-output",
@@ -405,7 +238,7 @@ class PipelineGitVersionResolutionTests(AISTApiBase):
                 "tmp_analyzer_config_path": "/aist-analyzers.yml",
             })
 
-            run_persisted_sast_pipeline(pipeline, {"project_id": self.project.id})
+            run_persisted_sast_pipeline(pipeline, self._params(branch))
 
         pipeline.refresh_from_db()
         branch.refresh_from_db()

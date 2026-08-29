@@ -18,7 +18,7 @@ from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.integrations.dast_report import (
     DastReportValidationError,
-    validate_exported_dast_report_bytes,
+    validate_dast_report_bytes,
 )
 from aist.models import AISTProject, DastProjectBinding, PipelineExecutionType
 from aist.parser_overrides import DAST_SCAN_TYPE
@@ -188,19 +188,12 @@ def _validated_manual_dast_report(uploaded_file, binding: DastProjectBinding):
     if len(raw) > settings.PIPELINE_IMPORT_MAX_SIZE_BYTES:
         msg = "DAST report exceeds its size limit."
         raise DastReportValidationError(msg)
-    report = validate_exported_dast_report_bytes(
+    return validate_dast_report_bytes(
         raw,
         target_id=binding.target.provider_id,
         allowed_repository_keys=frozenset(binding.target.repository_keys),
         maximum_report_bytes=settings.PIPELINE_IMPORT_MAX_SIZE_BYTES,
     )
-    if binding.requires_source_repository and report.source_commit_for(binding.source_repo_key) is None:
-        msg = (
-            f"This report carries no source revision for '{binding.source_repo_key}', which is the "
-            f"repository this binding is bound to."
-        )
-        raise DastReportValidationError(msg)
-    return report
 
 
 class PipelineImportValidateAPI(AISTAPIView):
@@ -327,7 +320,6 @@ class PipelineImportAPI(AISTAPIView):
                     "sha256": sha256,
                     "dast_binding_id": binding.pk,
                     "provider_run_id": validated_report.run_id,
-                    "provider_correlation_id": validated_report.correlation_id,
                 }
             pipeline.save(update_fields=["run_task_id", "launch_data"])
 

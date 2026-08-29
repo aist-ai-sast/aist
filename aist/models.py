@@ -1596,26 +1596,31 @@ class DastRunMetadataManager(models.Manager):
         buckets = cls._reported(usage, attribute)
         return None if buckets is None else [bucket.as_wire() for bucket in buckets]
 
-    @classmethod
-    def columns_from_report(cls, metadata, *, source_verified: bool | None = None) -> dict:
+    def _column_text(self, column: str, value: str | None) -> str | None:
+        """Fit descriptive text to the actual database column without duplicating its schema."""
+        if value is None:
+            return None
+        maximum = self.model._meta.get_field(column).max_length
+        return value if maximum is None or len(value) <= maximum else None
+
+    def columns_from_report(self, metadata) -> dict:
         """Flatten one validated metadata block onto this table's columns."""
         coverage = metadata.coverage
         usage = metadata.token_usage
-        total = cls._reported(usage, "total")
+        total = self._reported(usage, "total")
         return {
             "run_id": metadata.run_id,
             "target_id": metadata.target_id,
-            "stand_id": metadata.stand_id,
-            "product_family": metadata.product_family,
-            "tier": metadata.tier,
-            "run_type": metadata.run_type,
-            "target_host": metadata.target_host,
+            **{
+                column: self._column_text(column, getattr(metadata, column))
+                for column in ("stand_id", "product_family", "tier", "run_type", "target_host")
+            },
             "scan_started": metadata.scan_started,
             "scan_finished": metadata.scan_finished,
             "delivery_quality": metadata.delivery_quality,
             "audit_state": metadata.audit_state,
             "findings_complete": metadata.findings_complete,
-            "source_verified": source_verified,
+            "source_verified": None,
             "operator_actions_persisted": metadata.operator_actions_persisted,
             "operator_actions": (
                 None if metadata.operator_actions is None
@@ -1629,16 +1634,16 @@ class DastRunMetadataManager(models.Manager):
             ),
             "excluded_findings_total": metadata.excluded_findings_total,
             "excluded_findings_truncated": metadata.excluded_findings_truncated,
-            "coverage_unit": cls._reported(coverage, "unit"),
-            **{column: cls._reported(coverage, column) for column in _DAST_COVERAGE_COUNT_COLUMNS},
-            **{column: cls._reported_names(coverage, column) for column in _DAST_COVERAGE_NAME_COLUMNS},
+            "coverage_unit": self._column_text("coverage_unit", self._reported(coverage, "unit")),
+            **{column: self._reported(coverage, column) for column in _DAST_COVERAGE_COUNT_COLUMNS},
+            **{column: self._reported_names(coverage, column) for column in _DAST_COVERAGE_NAME_COLUMNS},
             **{
-                column: cls._reported(total, attribute)
+                column: self._reported(total, attribute)
                 for column, attribute in _DAST_TOKEN_COUNT_COLUMNS.items()
             },
-            "token_by_phase": cls._reported_buckets(usage, "by_phase"),
-            "token_by_agent_type": cls._reported_buckets(usage, "by_agent_type"),
-            "token_accounting_consistent": cls._reported(usage, "accounting_consistent"),
+            "token_by_phase": self._reported_buckets(usage, "by_phase"),
+            "token_by_agent_type": self._reported_buckets(usage, "by_agent_type"),
+            "token_accounting_consistent": self._reported(usage, "accounting_consistent"),
         }
 
     def build_from_report(self, metadata) -> DastRunMetadata:
@@ -1660,10 +1665,7 @@ class DastRunMetadataManager(models.Manager):
         """
         row, _created = self.update_or_create(
             pipeline_id=pipeline_id,
-            defaults=self.columns_from_report(
-                report.run_metadata,
-                source_verified=report.source_verified,
-            ),
+            defaults=self.columns_from_report(report.run_metadata),
         )
         return row
 
@@ -1673,9 +1675,8 @@ class DastRunMetadata(models.Model):
     """
     Provider-reported run metadata carried by one accepted DAST report.
 
-    Every reported column is nullable and stays NULL when the report did not carry it —
-    absent must never read as zero, and an empty inventory the provider *did* report is a
-    different fact from one it never mentioned.
+    Every descriptive column is nullable. Missing, empty, or unsupported values stay NULL;
+    zero and false remain values because they carry information.
 
     Readers may treat NULL as the only empty state, but that comes from the writer rather than
     from the column: :meth:`DastRunMetadataManager.columns_from_report` is the only thing that

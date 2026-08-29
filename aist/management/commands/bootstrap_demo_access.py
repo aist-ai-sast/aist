@@ -21,6 +21,13 @@ from dojo.models import (
     Test_Type,
 )
 
+from aist.integrations.dast_config import DastLaunchRequirement
+from aist.integrations.dast_report import (
+    DastCoverage,
+    DastTokenBucket,
+    DastTokenUsage,
+    ValidatedDastRunMetadata,
+)
 from aist.models import (
     AISTAIFindingResponse,
     AISTAIResponse,
@@ -46,13 +53,6 @@ from aist.models import (
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
     VersionType,
-)
-from aist.integrations.dast_config import DastLaunchRequirement
-from aist.integrations.dast_report import (
-    DastCoverage,
-    DastTokenBucket,
-    DastTokenUsage,
-    ValidatedDastRunMetadata,
 )
 
 
@@ -1331,10 +1331,7 @@ class Command(BaseCommand):
         )
         DastRunMetadata.objects.update_or_create(
             pipeline_id=pipeline.pk,
-            defaults=DastRunMetadata.objects.columns_from_report(
-                metadata,
-                source_verified=True,
-            ),
+            defaults=DastRunMetadata.objects.columns_from_report(metadata),
         )
 
     def _ensure_historical_dast_runs(

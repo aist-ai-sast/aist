@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import type { DastTarget } from "../src/lib/queries";
 import { loginByApi } from "./support";
 
 async function openSelectOption(trigger: Locator, optionName: string) {
@@ -219,6 +220,7 @@ test("maintainer can create a VPN integration and link it to a work item provide
 
 test("DAST onboarding imports a strict bundle without retaining the token", async ({ page }) => {
   const suffix = Date.now();
+  const organizationName = `E2E DAST Organization ${suffix}`;
   const integrationName = `E2E DAST ${suffix}`;
   const token = `e2e-public.${suffix}.one-time-token`;
   const bundle = {
@@ -230,7 +232,15 @@ test("DAST onboarding imports a strict bundle without retaining the token", asyn
     server_fingerprint: `sha256:e2e-${suffix}`,
     token,
   };
-  const orgSection = page.locator("section").filter({ hasText: "Org Integrations" }).first();
+  const csrfToken = (await page.context().cookies()).find((cookie) => cookie.name === "csrftoken")?.value;
+  expect(csrfToken).toBeTruthy();
+  const organizationResponse = await page.request.post("/api/v2/aist/organizations/", {
+    data: { name: organizationName },
+    headers: { "X-CSRFToken": csrfToken as string },
+  });
+  expect(organizationResponse.status(), await organizationResponse.text()).toBe(201);
+  const organizationContainer = page.getByText(organizationName, { exact: true }).locator("xpath=..");
+  const orgSection = organizationContainer.locator("section").filter({ hasText: "Org Integrations" }).first();
   let integrationId: number | undefined;
 
   try {
@@ -293,10 +303,11 @@ test("DAST binding form follows provider JSON Schema and sends the complete revi
     },
     provider_defaults: { scan_mode: "quick", label: "baseline", rate_limit: 2, advanced: false },
     repository_keys: ["source"],
+    launch_requirements: ["repository-trigger"],
     autonomous_ready: true,
     is_available: true,
     last_seen_at: "2026-07-25T00:00:00Z",
-  };
+  } satisfies DastTarget;
   let savedPayload: Record<string, unknown> | undefined;
   let savedBinding: Record<string, unknown> | undefined;
 
@@ -330,7 +341,7 @@ test("DAST binding form follows provider JSON Schema and sends the complete revi
   await selectFirstOption(bindingSection.getByRole("combobox").first());
   await bindingSection.getByRole("button", { name: "Add" }).click();
 
-  await bindingSection.getByLabel("Scan mode").selectOption("deep");
+  await openSelectOption(bindingSection.getByLabel("Scan mode"), "Deep");
   await bindingSection.getByLabel("Run label").fill("release candidate");
   await bindingSection.getByLabel("Rate limit").fill("4");
   await bindingSection.getByLabel("Advanced").check();
@@ -352,7 +363,6 @@ test("DAST binding form follows provider JSON Schema and sends the complete revi
       advanced: true,
       note: "authenticated routes",
     },
-    autonomous_enabled: false,
   });
   await expect(bindingSection.getByText("E2E Web Target")).toBeVisible();
 });

@@ -4,7 +4,7 @@ from django.test import TestCase
 from django.utils import timezone
 from dojo.models import Product, Product_Type, SLA_Configuration
 
-from aist.integrations.dast_report import ValidatedDastReport, ValidatedDastSelection
+from aist.integrations.dast_report import ValidatedDastReport
 from aist.models import (
     AISTProject,
     AISTProjectVersion,
@@ -30,12 +30,8 @@ def _validated_report(
     source_commits: tuple[tuple[str, str], ...] = (("backend", BACKEND_SHA),),
 ) -> ValidatedDastReport:
     return ValidatedDastReport(
-        contract_version="2.0",
         run_id="run-123",
-        correlation_id="pipeline-123",
         target_id=target_id,
-        status="succeeded",
-        selection=ValidatedDastSelection(stand_id="qa-1", relation="exact", distance=0),
         source_commits=source_commits,
         findings_count=0,
         canonical_json=b"{}",

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import uuid
-from pathlib import Path
 
 from celery import states
 from celery.result import AsyncResult
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -36,7 +33,6 @@ from aist.utils.pipeline_imports import cleanup_pipeline_containers
 from aist.utils.reconciliation import reconcile_pipeline_orphans
 
 _logger = logging.getLogger(__name__)
-BUILD_DIR_WARNING = "AIST_PROJECTS_BUILD_DIR is not set"
 
 
 def get_terminal_pipeline_statuses() -> set[str]:
@@ -49,92 +45,6 @@ def has_unfinished_pipeline(project_version) -> bool:
         .exclude(status__in=get_terminal_pipeline_statuses())
         .exists()
     )
-
-
-def get_project_build_path(project_name: str, project_version: str, pipeline_id: str) -> str:
-    """
-    Return an isolated workspace path for a single pipeline run.
-
-    Path structure: <AIST_PROJECTS_BUILD_DIR>/<project_name>/<project_version>/runs/<pipeline_id>
-    Each run gets its own directory, eliminating concurrent-checkout races.
-
-    Raises ValueError if the computed path escapes the build directory (path traversal guard).
-    """
-    project_build_path = getattr(settings, "AIST_PROJECTS_BUILD_DIR", None)
-    if not project_build_path:
-        raise RuntimeError(BUILD_DIR_WARNING)
-
-    base = Path(project_build_path).resolve()
-    run_dir = (
-        base
-        / (project_name or "project")
-        / (project_version or "default")
-        / "runs"
-        / pipeline_id
-    )
-    resolved = run_dir.resolve()
-    try:
-        resolved.relative_to(base)
-    except ValueError:
-        msg = f"Workspace path escapes build directory: {resolved}"
-        raise ValueError(msg)
-    return str(resolved)
-
-
-def _remove_pipeline_workspace(project_name: str, project_version: str, pipeline_id: str) -> None:
-    project_build_path = getattr(settings, "AIST_PROJECTS_BUILD_DIR", None)
-    if not project_build_path:
-        return
-    run_dir = (
-        Path(project_build_path)
-        / (project_name or "project")
-        / (project_version or "default")
-        / "runs"
-        / pipeline_id
-    )
-    if run_dir.exists():
-        shutil.rmtree(run_dir)
-        _logger.info("Cleaned up pipeline workspace: %s", run_dir)
-
-
-def cleanup_project_build_path(project_name: str, project_version: str, pipeline_id: str) -> None:
-    """Remove the per-pipeline workspace directory created by get_project_build_path."""
-    try:
-        _remove_pipeline_workspace(project_name, project_version, pipeline_id)
-    except Exception:
-        _logger.exception("Failed to clean up pipeline workspace (pipeline_id=%s)", pipeline_id)
-
-
-def cleanup_terminal_project_build_paths(
-    project_id: int,
-    project_name: str,
-    project_version: str,
-    *,
-    keep_pipeline_id: str,
-) -> None:
-    """
-    Remove stale per-run workspaces for finished pipelines in the same project/version workspace.
-
-    The currently starting pipeline must always be preserved to avoid deleting the active
-    workspace during duplicate task delivery or concurrent launches.
-
-    Uses SELECT FOR UPDATE SKIP LOCKED so concurrent pipeline starts don't race on the
-    same rows — only one caller claims a batch of terminal pipelines at a time.
-    """
-    with transaction.atomic():
-        terminal_pipeline_ids = list(
-            AISTPipeline.objects.select_for_update(skip_locked=True)
-            .filter(
-                project_id=project_id,
-                status__in=get_terminal_pipeline_statuses(),
-            )
-            .exclude(id=keep_pipeline_id)
-            .values_list("id", flat=True),
-        )
-    # Filesystem cleanup happens outside the transaction to avoid
-    # holding DB locks during potentially slow shutil.rmtree calls.
-    for pipeline_id in terminal_pipeline_ids:
-        cleanup_project_build_path(project_name, project_version, pipeline_id)
 
 
 def set_pipeline_status(

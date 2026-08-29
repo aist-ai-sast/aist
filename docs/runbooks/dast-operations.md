@@ -143,17 +143,31 @@ anchor after an admission failure.
 
 ## Import an external result
 
-In **Pipelines → Import**, select DAST, choose the enabled binding, upload the
-complete provider terminal result, and review the validation preview before
-confirming.
+In **Pipelines → Import**, select **DAST Autonomous Scan**, choose the enabled
+binding, upload the provider report, and review the validation preview before
+confirming. Upload the report envelope itself, not the gateway's terminal
+transport response.
 
 For a binding whose target requires a repository trigger, AIST resolves the
 effective Git hash from the validated report entry matching the binding's
 repository identity; there is no separate revision field to override, and a
 report with no matching entry is rejected. For a binding whose target has no
 repository requirement, the report must carry no repository identity and the
-import pipeline is created without a project version. Confirmation creates an
-import pipeline and repeats validation before findings are persisted.
+import resolves to the durable project version representing that DAST target.
+Confirmation creates an import pipeline and repeats validation before findings
+are persisted.
+
+An autonomous execution retains the same importable artifact at:
+
+```text
+<AIST output root>/<product>/<version>/<pipeline_id>/<timestamp>/dast_result.json
+```
+
+This is the same product/version/pipeline/timestamp layout used by SAST analyzer
+results; a sourceless DAST binding uses `default` as its version. The file is
+written atomically and remains after the connector's credential and recovery
+workspace is removed. It can therefore be imported again through
+**Pipelines → Import** with the original binding without contacting the gateway.
 
 When the report describes its run, the preview also shows the coverage and agent
 token spend it reported, so an import whose run examined the wrong surface can be
@@ -203,6 +217,6 @@ promotion.
 | Cancellation remains pending | Provider reachability and reconciliation progress |
 | A run ends as `TIMEOUT` | Whether the provider stopped delivering log output, and for how long, against `AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS`. AIST reads the provider's status once more before abandoning a run, so this outcome means the provider had no result to hand over |
 | A long scan is cut short | The two run bounds above, and whether the provider keeps emitting log output. Duration alone never ends a run |
-| Import rejected | Complete terminal result, expected binding, source identity, size, report format, and whether the run metadata the report carries is well formed |
+| Import rejected | Report scan type, non-empty run identity, expected target binding, allowed source identities, size, and the registered finding schema. Descriptive run metadata does not reject an import; values AIST cannot interpret appear as absent |
 | A pipeline shows no coverage or token figures | Whether the report described its run at all. A provider that reports nothing about the run imports normally and simply has nothing to show; nothing is missing on the AIST side |
 | A pipeline reports inconsistent run accounting | The provider's own breakdown against the total it reported in the same report. The import, its tests, and its findings are unaffected, so treat this as a provider reporting defect |

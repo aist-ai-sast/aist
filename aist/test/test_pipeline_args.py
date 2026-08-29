@@ -124,6 +124,41 @@ class PipelineArgsProfileTests(TestCase):
         self.assertEqual(set(args.analyzers), {"cppcheck", "semgrep"})
         self.assertEqual(set(args.languages), {"cpp", "python"})
 
+    def test_execution_paths_use_the_common_pipeline_layout(self):
+        project = AISTProject.objects.create(
+            product=self.product,
+            supported_languages=["python"],
+            compilable=True,
+            profile={},
+        )
+        arguments = PipelineArguments(
+            project=project,
+            payload=SastPipelineArguments(
+                project=project,
+                project_version={"version": "main"},
+            ),
+        )
+
+        with (
+            tempfile.TemporaryDirectory() as build_dir,
+            tempfile.TemporaryDirectory() as output_dir,
+            self.settings(
+                AIST_PROJECTS_BUILD_DIR=build_dir,
+                AIST_OUTPUT_PATH=output_dir,
+            ),
+        ):
+            workspace, results = arguments.prepare_execution("pipeline-123")
+
+            self.assertEqual(
+                workspace,
+                Path(build_dir) / "Test Product" / "main" / "runs" / "pipeline-123",
+            )
+            self.assertEqual(
+                results,
+                Path(output_dir) / "Test Product" / "main" / "pipeline-123",
+            )
+            self.assertTrue(workspace.is_dir())
+
 
 class AIFilterValidationTests(TestCase):
     def test_validate_filter_requires_dict(self):
@@ -354,7 +389,6 @@ class ScriptFromDBTests(TestCase):
         args.project = project
         args.project_version = project_version
         args.pipeline_path = None
-        args.aist_path = Path(tempfile.gettempdir()) / "aist-out"
         return args
 
     def test_version_script_writes_temp_file_and_cleans_up(self):

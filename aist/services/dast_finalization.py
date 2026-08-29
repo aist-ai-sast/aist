@@ -72,6 +72,7 @@ def _existing_result(
     binding_id: int,
     report: ValidatedDastReport,
     report_sha256: str,
+    correlation_id: str | None,
 ) -> FinalizeDastResult | None:
     if marker is None:
         return None
@@ -82,7 +83,7 @@ def _existing_result(
         "version": _FINALIZATION_MARKER_VERSION,
         "binding_id": binding_id,
         "run_id": report.run_id,
-        "correlation_id": report.correlation_id,
+        "correlation_id": correlation_id,
         "report_sha256": report_sha256,
     }
     if any(marker.get(key) != value for key, value in expected_identity.items()):
@@ -120,7 +121,6 @@ def _verify_pipeline_binding(
     *,
     pipeline: AISTPipeline,
     binding: DastProjectBinding,
-    report: ValidatedDastReport,
 ) -> None:
     if pipeline.project_id != binding.project_id:
         msg = "DAST binding and pipeline must belong to the same project."
@@ -135,13 +135,6 @@ def _verify_pipeline_binding(
         ).first()
         if request_binding_id != binding.pk:
             msg = "DAST pipeline launch binding does not match the finalization binding."
-            raise DastFinalizationError(msg)
-        if report.correlation_id != pipeline.id:
-            msg = "DAST report correlation does not match the autonomous pipeline."
-            raise DastFinalizationError(msg)
-        execution_state = pipeline.dast_execution_state
-        if execution_state.run_id and execution_state.run_id != report.run_id:
-            msg = "DAST report run does not match the autonomous pipeline."
             raise DastFinalizationError(msg)
 
 
@@ -172,7 +165,8 @@ def finalize_dast_report(
             .select_related("project__repository", "trigger_project_version", "dast_execution_state")
             .get(pk=pipeline_id)
         )
-        _verify_pipeline_binding(pipeline=pipeline, binding=persisted_binding, report=report)
+        _verify_pipeline_binding(pipeline=pipeline, binding=persisted_binding)
+        correlation_id = pipeline.id if pipeline.execution_type == PipelineExecutionType.DAST else None
 
         # Ahead of the already-finalized short circuit below, so redelivering a report rewrites
         # identical metadata and a pipeline finalized before this table existed gains its row.
@@ -189,6 +183,7 @@ def finalize_dast_report(
             binding_id=persisted_binding.pk,
             report=report,
             report_sha256=report_sha256,
+            correlation_id=correlation_id,
         )
         if existing is not None:
             return existing
@@ -237,7 +232,7 @@ def finalize_dast_report(
                 "version": _FINALIZATION_MARKER_VERSION,
                 "binding_id": persisted_binding.pk,
                 "run_id": report.run_id,
-                "correlation_id": report.correlation_id,
+                "correlation_id": correlation_id,
                 "report_sha256": report_sha256,
                 "project_version_id": version.pk,
                 "test_id": test_obj.pk,

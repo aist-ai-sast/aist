@@ -9,7 +9,7 @@ from django.test import TestCase
 from django.utils import timezone
 from dojo.models import Product, Product_Type, SLA_Configuration
 
-from aist.integrations.dast_report import DastReportExpectations, validate_dast_terminal_result_bytes
+from aist.integrations.dast_report import validate_dast_report_bytes
 from aist.models import (
     AISTPipeline,
     AISTProject,
@@ -73,6 +73,7 @@ def _validated_report(
     run_id: str = "run-123",
     run_metadata: dict | None = None,
 ):
+    del correlation_id
     report = {
         "name": "DAST",
         "type": DAST_SCAN_TYPE,
@@ -100,29 +101,10 @@ def _validated_report(
             **(run_metadata or {}),
         },
     }
-    terminal = {
-        "contract_version": "2.0",
-        "run_id": run_id,
-        "status": "succeeded",
-        "selection": {"stand_id": "qa-1", "relation": "ancestor", "distance": 2},
-        "trigger_resolution": {
-            "type": "GIT_BRANCH",
-            "ref": TRIGGER_BRANCH,
-            "resolved_commit": "b" * 40,
-            "resolved_at": "2026-07-26T10:00:00Z",
-        },
-        "dast_run_metadata": {"source_commits": {"backend": ACTUAL_SHA}},
-        "report": report,
-        "audit": {"correlation_id": correlation_id, "source_verified": True},
-    }
-    return validate_dast_terminal_result_bytes(
-        json.dumps(terminal).encode(),
-        expectations=DastReportExpectations(
-            correlation_id=correlation_id,
-            run_id=run_id,
-            target_id="cloud-app",
-            allowed_repository_keys=frozenset({"backend"}),
-        ),
+    return validate_dast_report_bytes(
+        json.dumps(report).encode(),
+        target_id="cloud-app",
+        allowed_repository_keys=frozenset({"backend"}),
     )
 
 

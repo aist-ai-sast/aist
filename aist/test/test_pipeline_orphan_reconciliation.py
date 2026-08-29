@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import tempfile
-from contextlib import contextmanager
 from datetime import timedelta
 from io import StringIO
 from pathlib import Path
@@ -34,11 +33,6 @@ class _DummyLogger:
         return None
 
 
-@contextmanager
-def _dummy_script_path_context():
-    yield "aist-test-script.sh"
-
-
 class PipelineOrphanReconciliationTests(AISTApiBase):
     def setUp(self):
         super().setUp()
@@ -48,6 +42,14 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
         )
         acceptance.start()
         self.addCleanup(acceptance.stop)
+        self._runtime_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._runtime_dir.cleanup)
+        settings_override = self.settings(
+            AIST_PROJECTS_BUILD_DIR=f"{self._runtime_dir.name}/build",
+            AIST_OUTPUT_PATH=f"{self._runtime_dir.name}/output",
+        )
+        settings_override.enable()
+        self.addCleanup(settings_override.disable)
 
     def _make_test_with_finding(self, *, file_path: str = "src/app.py"):
         engagement = Engagement.objects.create(
@@ -72,34 +74,6 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             file_path=file_path,
         )
         return dd_test, finding
-
-    def _pipeline_params(self, pv_id: int) -> SimpleNamespace:
-        descriptor = {
-            "id": self.pv.id,
-            "type": self.pv.version_type,
-            "excluded_paths": [],
-        }
-        return SimpleNamespace(
-            project_version={"id": pv_id, "version": "main"},
-            project_name="test_product",
-            languages=["python"],
-            output_dir="/aist-output",
-            rebuild_images=False,
-            analyzers=[],
-            time_class_level="slow",
-            dockerfile_path="Dockerfile",
-            pipeline_src_path="/aist-src",
-            additional_environments={},
-            ai_mode="MANUAL",
-            ai_filter_snapshot=None,
-            script_path_context=_dummy_script_path_context,
-            resolve_effective_project_version=lambda **_kwargs: self.pv,
-            build_project_version_descriptor=lambda: descriptor,
-            enrich_config=lambda: {
-                "project_version_descriptor": descriptor,
-                "log_level": "INFO",
-            },
-        )
 
     def test_safe_attach_skips_findings_deleted_before_lock(self):
         """
@@ -147,12 +121,7 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             status=AISTStatus.FINISHED,
         )
         with (
-            patch(
-                "aist.tasks.pipeline.PipelineArguments.from_dict",
-                return_value=SimpleNamespace(sast=self._pipeline_params(self.pv.id)),
-            ),
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
-            patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
             patch(
@@ -169,7 +138,15 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             patch("aist.tasks.pipeline.postprocess_findings", side_effect=RuntimeError("forced crash")),
             self.assertRaises(RuntimeError),
         ):
-            run_persisted_sast_pipeline(pipeline, {"project_id": self.project.id})
+            run_persisted_sast_pipeline(
+                pipeline,
+                {
+                    "project_id": self.project.id,
+                    "project_version": self.pv.id,
+                    "analyzers": ["semgrep"],
+                    "selected_languages": ["python"],
+                },
+            )
 
         pipeline.refresh_from_db()
         self.assertTrue(pipeline.tests.filter(id=dd_test.id).exists())

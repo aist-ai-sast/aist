@@ -202,7 +202,7 @@ class PipelineImportAPITests(TestCase):
             },
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("finding schema", str(response.data))
+        self.assertIn("Required fields are missing", str(response.data))
 
     def test_validate_rejects_unregistered_scan_type(self):
         response = self.client.post(

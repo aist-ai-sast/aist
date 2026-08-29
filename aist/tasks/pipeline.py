@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 import logging
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from celery import shared_task
 from django.db import transaction
@@ -26,9 +24,9 @@ from aist.integrations.claude import claude_auth_env
 from aist.integrations.dast_config import DastBindingParameters, DastTargetSnapshot
 from aist.integrations.dast_readiness import check_dast_binding_readiness
 from aist.integrations.dast_report import (
-    DastReportExpectations,
+    DAST_RESULT_MAX_BYTES,
     DastReportValidationError,
-    validate_dast_terminal_result_bytes,
+    validate_dast_report_bytes,
 )
 from aist.integrations.resolver import ResolvedIntegration, resolve_integration
 from aist.launch_data import PipelineLaunchData
@@ -44,7 +42,7 @@ from aist.models import (
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
-from aist.pipeline_args import PipelineArguments
+from aist.pipeline_args import DastPipelineArguments, PipelineArguments
 from aist.services.dast_finalization import DastFinalizationError, finalize_dast_report
 from aist.services.dast_outcomes import (
     DastPipelineOutcomeCode,
@@ -60,9 +58,7 @@ from aist.utils.agent_runtime import build_agent_runtime_env
 from aist.utils.analyzer_outcomes import consume_analyzer_outcomes
 from aist.utils.bridge_client_factory import build_bridge_client_from_settings
 from aist.utils.pipeline import (
-    cleanup_terminal_project_build_paths,
     finish_pipeline,
-    get_project_build_path,
     set_pipeline_status,
 )
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
@@ -83,7 +79,6 @@ from pipeline.dast import (  # type: ignore[import-not-found]  # noqa: E402
     DastRecoveryState,
     DastStartCommand,
 )
-from pipeline.docker_utils import pipeline_workspace  # type: ignore[import-not-found]  # noqa: E402
 from pipeline.execution import execute_pipeline  # type: ignore[import-not-found]  # noqa: E402
 from pipeline.sast_execution import SastExecutionInput  # type: ignore[import-not-found]  # noqa: E402
 
@@ -104,6 +99,7 @@ class _DastRuntimeSpec:
     ca_bundle: str = field(repr=False)
     vpn_integration: object | None = field(repr=False)
     recovery: DastRecoveryState
+    arguments: PipelineArguments
     allowed_repository_keys: frozenset[str]
     stop_requested: bool
     binding: object
@@ -194,6 +190,16 @@ def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
             run_id=execution_state.run_id,
             log_cursor=execution_state.log_cursor,
         )
+        arguments = PipelineArguments(
+            project=pipeline.project,
+            payload=DastPipelineArguments(
+                project=pipeline.project,
+                binding=binding,
+                trigger_project_version=pipeline.trigger_project_version,
+                parameters=parameters.to_snapshot(),
+                capability=capability.to_snapshot(),
+            ),
+        )
         return _DastRuntimeSpec(
             gateway_url=config.gateway_url,
             command=DastStartCommand.from_wire({
@@ -209,6 +215,7 @@ def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
             ca_bundle=config.ca_bundle,
             vpn_integration=integration.vpn_integration,
             recovery=recovery,
+            arguments=arguments,
             allowed_repository_keys=frozenset(capability.repository_keys),
             stop_requested=execution_state.cancel_requested_at is not None,
             binding=binding,
@@ -242,6 +249,12 @@ def _persist_dast_execution_result(pipeline_id: str, result) -> None:
             execution_state.last_progress_at = timezone.now()
             update_fields.append("last_progress_at")
         execution_state.save(update_fields=update_fields)
+        report_path = getattr(result, "report_path", None)
+        if report_path is not None:
+            launch_data = PipelineLaunchData(pipeline.launch_data)
+            launch_data.merge({"output_dir": str(report_path.parent)})
+            pipeline.launch_data = launch_data.as_dict()
+            pipeline.save(update_fields=["launch_data", "updated"])
 
 
 def _execute_dast_pipeline(pipeline_id: str, logger=None):
@@ -255,9 +268,8 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
         if runtime.vpn_integration is not None
         else None
     )
-    # The connector's files are bind-mounted, and the daemon resolves those paths on the host:
-    # a directory under this container's own /tmp would mount empty.
-    with pipeline_workspace(pipeline_id) as workspace:
+    workspace, output_dir = runtime.arguments.prepare_execution(pipeline_id)
+    try:
         token_file = workspace / "token"
         token_file.write_text(runtime.token, encoding="utf-8")
         token_file.chmod(0o600)
@@ -272,6 +284,7 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
                 gateway_url=runtime.gateway_url,
                 command=runtime.command,
                 workspace=workspace / "connector",
+                output_dir=output_dir,
                 token_file=token_file,
                 ca_file=ca_file,
                 vpn_container_name=vpn_container,
@@ -279,6 +292,9 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
                 stop_requested=runtime.stop_requested,
             )
             result = execute_pipeline(PipelineExecutionType.DAST, execution)
+    finally:
+        runtime.arguments.cleanup_workspace(pipeline_id)
+    _persist_dast_execution_result(pipeline_id, result)
     terminal_result = getattr(result, "terminal_result", None)
     if terminal_result is not None and terminal_result.status.value in {
         "succeeded",
@@ -287,19 +303,15 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
     }:
         if result.recovery.run_id is None:
             raise ValueError(_ERR_DAST_RUNTIME)
-        validated_report = validate_dast_terminal_result_bytes(
-            json.dumps(
-                terminal_result.to_wire(),
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8"),
-            expectations=DastReportExpectations(
-                correlation_id=runtime.command.correlation_id,
-                run_id=result.recovery.run_id,
-                target_id=runtime.command.target_id,
-                allowed_repository_keys=runtime.allowed_repository_keys,
-            ),
+        report_path = getattr(result, "report_path", None)
+        if report_path is None:
+            raise ValueError(_ERR_DAST_RUNTIME)
+        with report_path.open("rb") as report_file:
+            raw_report = report_file.read(DAST_RESULT_MAX_BYTES + 1)
+        validated_report = validate_dast_report_bytes(
+            raw_report,
+            target_id=runtime.command.target_id,
+            allowed_repository_keys=runtime.allowed_repository_keys,
         )
         finalize_dast_report(
             pipeline_id=pipeline_id,
@@ -309,7 +321,6 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
             lead=runtime.lead,
         )
         observe_dast_finalization(succeeded=True)
-    _persist_dast_execution_result(pipeline_id, result)
     return result
 
 
@@ -582,7 +593,8 @@ def _execute_sast_pipeline(pipeline_id, params, log_level, launch_config_id, log
             logger.info("Pipeline already in progress; skipping duplicate start.")
             return
 
-        params = PipelineArguments.from_dict(params).sast
+        arguments = PipelineArguments.from_dict(params)
+        params = arguments.sast
 
     logger.info(f"Project version: {params.project_version}")
     param_project_version_id = (params.project_version or {}).get("id")
@@ -601,23 +613,14 @@ def _execute_sast_pipeline(pipeline_id, params, log_level, launch_config_id, log
     project_name = params.project_name
     languages = params.languages
     project_version = params.project_version
-    output_dir = params.output_dir
     rebuild_images = params.rebuild_images
     analyzers = params.analyzers
     time_class_level = params.time_class_level
     dockerfile_path = params.dockerfile_path
 
-    ws_name = project_name or "project"
-    ws_version = params.project_version.get("version", "default")
-    project_build_path = get_project_build_path(ws_name, ws_version, pipeline_id)
-    cleanup_terminal_project_build_paths(
-        pipeline.project_id,
-        ws_name,
-        ws_version,
-        keep_pipeline_id=pipeline_id,
-    )
-    # Isolate output directory per pipeline run to prevent concurrent-write collisions.
-    output_dir = str(Path(output_dir) / pipeline_id)
+    project_build_path, output_dir = arguments.prepare_execution(pipeline_id)
+    project_build_path = str(project_build_path)
+    output_dir = str(output_dir)
 
     # Per-pipeline runtime config for agent-bridge analyzers. This goes
     # straight to the bridge runner via configure_project_run_analyses

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { DastProjectBinding } from "../src/lib/queries";
 import { loginByApi, openPipelines } from "./support";
 
 test.beforeEach(async ({ page }) => {
@@ -34,18 +35,36 @@ test("manual DAST import requires a binding and never sends a commit override", 
   let validateBody = "";
   let importBody = "";
   await page.route(/\/api\/v2\/aist\/projects\/\d+\/dast-bindings\//, async (route) => {
+    const projectId = Number(route.request().url().match(/projects\/(\d+)/)?.[1]);
+    const binding = {
+      id: 901,
+      project: projectId,
+      target: {
+        id: 77,
+        provider_id: "e2e-cloud-app",
+        display_name: "E2E cloud app",
+        contract_revision: "2.0",
+        capability_revision: "cap-e2e-import",
+        schema_digest: "schema-e2e-import",
+        parameter_schema: { type: "object", additionalProperties: false, properties: {} },
+        provider_defaults: {},
+        repository_keys: ["backend"],
+        launch_requirements: ["repository-trigger"],
+        autonomous_ready: true,
+        is_available: true,
+        last_seen_at: "2026-08-29T00:00:00Z",
+      },
+      source_repo_key: "backend",
+      enabled: true,
+      parameter_snapshot: {},
+      readiness: { ready: true, issues: [], checked_at: "2026-08-29T00:00:00Z" },
+      created: "2026-08-29T00:00:00Z",
+      updated: "2026-08-29T00:00:00Z",
+    } satisfies DastProjectBinding;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify([
-        {
-          id: 901,
-          project: 1,
-          target: { id: 77, display_name: "E2E cloud app" },
-          source_repo_key: "backend",
-          enabled: true,
-        },
-      ]),
+      body: JSON.stringify([binding]),
     });
   });
   await page.route("**/api/v2/aist/pipelines/import/validate/", async (route) => {

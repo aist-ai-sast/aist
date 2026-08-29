@@ -10,7 +10,7 @@ DAST part of the SAST analyzer fan-out.
 |---|---|
 | Organization access, project binding, launch admission, and pipeline history | Target policy, target-side execution, and provider progress |
 | Encrypted integration credential and synchronized capability snapshot | Gateway authentication and the provider contract |
-| Result identity validation, import, deduplication, finding review, and retention of what a report says about its run | Raw evidence, terminal result, report production, and the coverage and cost it reports |
+| Target-bound report validation, import, deduplication, finding review, and retention of what a report says about its run | Raw evidence, terminal result, report production, and the coverage and cost it reports |
 
 The products do not share users, sessions, credentials, or a database. The DAST
 gateway is an external HTTPS boundary, optionally reached through the VPN
@@ -88,11 +88,23 @@ Before the platform gives up on a run for either reason, it asks the provider on
 last time whether that run has finished. A scan that completed while AIST was no
 longer waiting is imported normally rather than recorded as lost.
 
-Before importing a terminal result, AIST verifies the expected provider run,
-target binding, source revision, result format, and nested report. Invalid,
-ambiguous, or oversized results fail before findings are persisted.
-[Reported run metadata](#reported-run-metadata) covers what a report may say
-about the run itself and how a malformed or unfamiliar description is treated.
+The connector validates the run and correlation identities returned by the
+gateway. When the provider reaches a terminal state, the execution runtime
+atomically writes the report itself as `dast_result.json` in the pipeline's
+standard durable analyzer output directory. AIST then persists the execution checkpoint
+before it reads, validates, or imports that file. Connector credentials,
+recovery state, outcome, and telemetry remain in the ephemeral execution
+workspace.
+
+AIST imports that file through the same report validator used for an operator
+upload. The validator accepts only the DAST scan type, an array of findings, a
+non-empty provider run identity, the target named by the selected binding, and
+source revisions whose repository identities the binding allows. It also
+enforces the report-size limit. The registered importer validates individual
+findings. A target mismatch, an unadvertised repository identity, or an
+oversized report fails before findings are persisted.
+[Reported run metadata](#reported-run-metadata) covers how descriptive values
+are handled.
 
 ## Manual result import
 
@@ -143,22 +155,24 @@ A report can describe two things:
   it rather than added to it, because the provider already counts them inside its
   generated total.
 
-Every field at every level is optional, including the two descriptions
-themselves. Absence is preserved as absence: a value the report did not carry is
-left out rather than displayed as zero, and a derived number — a total, a
-duration, a beyond-plan count — is withheld unless everything it needs was
-reported. An inventory the provider reported as empty therefore stays
-distinguishable from one it never mentioned.
+Every descriptive field at every level is optional, including the two
+descriptions themselves. Absence, an empty string, and a value AIST cannot
+interpret all become an absent value in the corresponding metadata column; none
+of them prevents finding import. A derived number — a total, a duration, or a
+beyond-plan count — is withheld unless everything it needs was understood.
+Empty strings, lists, and objects therefore have the same stored meaning as an
+omitted value: `NULL`.
 
-These figures are the provider's account of its own run. AIST bounds them, stores
-them, and shows where they disagree with themselves; it does not re-measure them.
+These figures are the provider's account of its own run. AIST stores them and
+shows where they disagree with themselves; it does not re-measure them. The
+single report-size limit bounds the complete input, including these descriptions.
 
 ### How a report's description is judged
 
 | What the report carries | What AIST does |
 |---|---|
-| A value that is not well formed: the wrong type, a negative count, or an inventory, name, or breakdown past its size bound | Rejects the whole report. An autonomous run ends with an invalid result and an upload fails at its preview, before any finding is persisted |
-| A descriptive field this version of AIST does not recognize — in the run metadata, in either description, or on an individual finding | Reads past it, records that it did so, and imports the report normally. The stored report keeps the field exactly as it arrived |
+| A descriptive value AIST cannot interpret: the wrong type, an empty string, list, or object, or a negative count | Stores `NULL` for the affected metadata value and imports the findings normally |
+| A descriptive field this version of AIST does not recognize — in the run metadata, in either description, or on an individual finding | Reads past it and imports the report normally. The stored report keeps the field exactly as it arrived |
 | A breakdown that is well formed but does not add up to its own reported total | Accepts it and marks the run's accounting as inconsistent, so the pipeline shows the disagreement. The findings are unaffected |
 
 The middle row is deliberate. A provider that has learned a new field is a newer
@@ -167,11 +181,12 @@ over a description AIST has nowhere to put. It applies only to descriptive
 material that no decision is made on; a finding that omits something the platform
 requires is still refused.
 
-The structure AIST does act on stays closed: the terminal result, the provider
-selection, the report envelope, and the scan type still reject any key they do
-not recognize, so a change there has to be a deliberate contract change rather
-than a silent one. Provider descriptions evolve inside the run metadata, which is
-where the tolerance lives.
+The fields AIST acts on remain strict: the scan type selects the importer, the
+run identity supports idempotent delivery, the target binds the file to the
+selected project binding, and source-commit keys stay inside that binding's
+repository set. Extra report-envelope fields and descriptive metadata do not
+make authorization or attachment decisions and therefore do not reject the
+report.
 
 ## Network and credentials
 

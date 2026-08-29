@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
 if TYPE_CHECKING:
@@ -17,6 +19,7 @@ if TYPE_CHECKING:
 from aist.ai_filter import validate_and_normalize_filter
 from aist.integrations.dast_config import DastBindingParameters
 from aist.models import (
+    AISTPipeline,
     AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectScript,
@@ -25,6 +28,7 @@ from aist.models import (
     PipelineExecutionType,
     VersionType,
 )
+from aist.services.pipeline_lifecycle import TERMINAL_PIPELINE_STATUSES
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 _logger = logging.getLogger(__name__)
@@ -32,6 +36,7 @@ _logger = logging.getLogger(__name__)
 # Error messages (for TRY003/EM101/EM102)
 MSG_PROJECT_NOT_FOUND_TPL = "AISTProject with id={} not found"
 MSG_DOCKERFILE_NOT_FOUND = "Dockerfile does not exist"
+BUILD_DIR_WARNING = "AIST_PROJECTS_BUILD_DIR is not set"
 
 
 @dataclass
@@ -50,10 +55,6 @@ class SastPipelineArguments:
     additional_environments: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        default_out = Path(tempfile.gettempdir()) / "aist" / "output"
-        configured_out = getattr(settings, "AIST_OUTPUT_PATH", None)
-        self.aist_path: Path = Path(configured_out) if configured_out else default_out
-
         configured_pipeline = getattr(settings, "AIST_PIPELINE_CODE_PATH", None)
         self.pipeline_path: Path | None = Path(configured_pipeline) if configured_pipeline else None
         self.project_version["excluded_paths"] = self.project.get_excluded_paths()
@@ -338,6 +339,10 @@ class SastPipelineArguments:
     def project_name(self) -> str:
         return self.project.product.name
 
+    @property
+    def output_version(self) -> str:
+        return self.project_version.get("version", "default")
+
     @contextmanager
     def script_path_context(self) -> Iterator[str]:
         """
@@ -381,14 +386,6 @@ class SastPipelineArguments:
         return path
 
     @property
-    def output_dir(self) -> str:
-        return str(
-            self.aist_path
-            / (self.project_name or "project")
-            / (self.project_version.get("version", "default")),
-        )
-
-    @property
     def pipeline_src_path(self):
         return self.pipeline_path
 
@@ -408,6 +405,12 @@ class DastPipelineArguments:
     trigger_project_version: AISTProjectVersion | None
     parameters: dict
     capability: dict
+
+    @property
+    def output_version(self) -> str:
+        if self.trigger_project_version is None:
+            return "default"
+        return self.trigger_project_version.version
 
     @classmethod
     def build(
@@ -479,6 +482,69 @@ class PipelineArguments:
         if isinstance(self.payload, SastPipelineArguments):
             return PipelineExecutionType.SAST
         return PipelineExecutionType.DAST
+
+    def prepare_execution(self, pipeline_id: str) -> tuple[Path, Path]:
+        """Prepare the common workspace and durable result root for one pipeline run."""
+        workspace = self._workspace_path(pipeline_id)
+        self._cleanup_terminal_workspaces(keep_pipeline_id=pipeline_id)
+        workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return workspace, self._output_path(pipeline_id)
+
+    def cleanup_workspace(self, pipeline_id: str) -> None:
+        """Remove one pipeline workspace without touching its durable results."""
+        if not getattr(settings, "AIST_PROJECTS_BUILD_DIR", None):
+            return
+        try:
+            workspace = self._workspace_path(pipeline_id)
+            if workspace.exists():
+                shutil.rmtree(workspace)
+                _logger.info("Cleaned up pipeline workspace: %s", workspace)
+        except Exception:
+            _logger.exception("Failed to clean up pipeline workspace (pipeline_id=%s)", pipeline_id)
+
+    def _workspace_path(self, pipeline_id: str) -> Path:
+        configured = getattr(settings, "AIST_PROJECTS_BUILD_DIR", None)
+        if not configured:
+            raise RuntimeError(BUILD_DIR_WARNING)
+        return self._path_within(
+            Path(configured),
+            self.project.product.name or "project",
+            self.payload.output_version or "default",
+            "runs",
+            pipeline_id,
+        )
+
+    def _output_path(self, pipeline_id: str) -> Path:
+        configured = getattr(settings, "AIST_OUTPUT_PATH", None)
+        root = Path(configured) if configured else Path(tempfile.gettempdir()) / "aist" / "output"
+        return self._path_within(
+            root,
+            self.project.product.name or "project",
+            self.payload.output_version or "default",
+            pipeline_id,
+        )
+
+    @staticmethod
+    def _path_within(root: Path, *parts: str) -> Path:
+        resolved_root = root.resolve()
+        resolved = resolved_root.joinpath(*parts).resolve()
+        try:
+            resolved.relative_to(resolved_root)
+        except ValueError:
+            msg = f"Pipeline path escapes configured root: {resolved}"
+            raise ValueError(msg)
+        return resolved
+
+    def _cleanup_terminal_workspaces(self, *, keep_pipeline_id: str) -> None:
+        with transaction.atomic():
+            terminal_pipeline_ids = list(
+                AISTPipeline.objects.select_for_update(skip_locked=True)
+                .filter(project_id=self.project.pk, status__in=TERMINAL_PIPELINE_STATUSES)
+                .exclude(id=keep_pipeline_id)
+                .values_list("id", flat=True),
+            )
+        for pipeline_id in terminal_pipeline_ids:
+            self.cleanup_workspace(pipeline_id)
 
     @property
     def sast(self) -> SastPipelineArguments:

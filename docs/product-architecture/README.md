@@ -43,11 +43,14 @@ store, or runtime with the other.
    the integration.
 5. **DAST integration gateway.** The gateway authenticates the connector's
    HTTPS request with its bearer token and returns progress and a typed
-   terminal result.
+   terminal result. The connector checks the gateway's run and correlation
+   identities over the pinned TLS connection.
 6. **Host-side DAST runner.** The provider performs the target testing and
    produces the report behind the gateway.
-7. **Validate identity and report.** AIST checks the returned run identity,
-   source revision, and report format before importing tests and findings.
+7. **Persist and validate the report.** The execution runtime atomically keeps
+   the report in the pipeline's standard analyzer output layout. AIST checks
+   its scan type, non-empty run identity, selected target binding, allowed
+   source-repository identities, and size before importing tests and findings.
 
 Cancellation and recovery cross the same connector-to-gateway boundary. AIST
 owns the durable cancellation intent and pipeline outcome; DAST owns the actual
@@ -57,8 +60,8 @@ termination of target-side work.
 
 A DAST result produced outside AIST — the diagram's manual upload path — can be
 imported against an enabled project binding without contacting the gateway. It
-still validates the result identity, source revision, target binding, and
-report format before creating the pipeline's tests and findings.
+passes the same report validator and finding importer as the autonomous file
+before creating the pipeline's tests and findings.
 
 ## Continue reading
 

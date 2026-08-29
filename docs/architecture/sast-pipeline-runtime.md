@@ -26,10 +26,11 @@ Inside the worker, the AIST driver selects the lifecycle behavior for the
 pipeline type. The execution package then uses its own registry to invoke one
 runtime path:
 
-- **SAST** creates an execution-specific workspace and output directory, runs
+- **SAST** prepares the standard execution workspace and output directory, runs
   the builder, then fans out to the selected analyzer containers;
-- **DAST** creates a connector container that starts or resumes one external
-  provider run and returns a bounded outcome plus its recovery checkpoint.
+- **DAST** uses those same prepared paths, creates a connector container that
+  starts or resumes one external provider run, and returns a bounded outcome
+  plus its recovery checkpoint.
 
 The builder prepares source and dependencies in a container selected for the
 project. Analyzer containers then use the prepared workspace and the
@@ -48,13 +49,18 @@ runs as the worker instead. Neither path relaxes the file modes.
 
 ## Hand reports back to AIST
 
-SAST analyzers write reports to the run output directory. A standalone provider
-returns its typed result through its connector. The platform importer validates
-the selected format, records tests on the pipeline, and creates or updates
-findings for the effective project version.
+SAST analyzers write reports to the timestamped run output directory. When DAST
+reaches a terminal outcome, the execution package atomically writes the report
+from the typed connector result into the same product/version/pipeline/timestamp
+layout and returns its path. AIST persists the provider checkpoint before it
+reads and imports that file. The platform importer validates the selected
+format, records tests on the pipeline, and creates or updates findings for the
+effective project version.
 
-After report hand-off and container cleanup, AIST owns deduplication, enrichment,
-regression detection, review, and AI triage.
+After report hand-off and container cleanup, the report remains in durable
+pipeline output while connector credentials and recovery files are removed with
+the execution workspace. AIST owns deduplication, enrichment, regression
+detection, review, and AI triage.
 
 ## Recover without changing the boundary
 

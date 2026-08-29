@@ -15,7 +15,7 @@ mocked. The assertion target is the ``auth_env`` kwarg passed to
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -38,35 +38,6 @@ class _DummyLogger:
 
     def exception(self, *args, **kwargs):
         return None
-
-
-@contextmanager
-def _dummy_script_path_context():
-    yield "aist-test-script.sh"
-
-
-def _params_namespace(project_version_state) -> SimpleNamespace:
-    return SimpleNamespace(
-        project_version=project_version_state,
-        project_name="test_product",
-        languages=["python"],
-        output_dir="/aist-output",
-        rebuild_images=False,
-        analyzers=[],
-        time_class_level="slow",
-        dockerfile_path="Dockerfile",
-        pipeline_src_path="/aist-src",
-        additional_environments={},
-        ai_mode="MANUAL",
-        ai_filter_snapshot=None,
-        script_path_context=_dummy_script_path_context,
-        resolve_effective_project_version=lambda **_: None,
-        build_project_version_descriptor=lambda: {**project_version_state, "excluded_paths": []},
-        enrich_config=lambda: {
-            "project_version_descriptor": {**project_version_state, "excluded_paths": []},
-            "log_level": "INFO",
-        },
-    )
 
 
 class PipelineClaudeAuthEnvTests(AISTApiBase):
@@ -96,19 +67,16 @@ class PipelineClaudeAuthEnvTests(AISTApiBase):
             project_version=self.branch,
             status="FINISHED",
         )
-        self._project_version_state = {
-            "id": self.branch.id,
-            "version": "main",
-            "type": VersionType.GIT_BRANCH,
-        }
 
     def _run_with_mocks(self) -> MagicMock:
         """Run the pipeline and return the factory mock for inspection."""
-        params = _params_namespace(self._project_version_state)
         with (
-            patch("aist.tasks.pipeline.PipelineArguments.from_dict", return_value=SimpleNamespace(sast=params)),
+            tempfile.TemporaryDirectory() as runtime_dir,
+            self.settings(
+                AIST_PROJECTS_BUILD_DIR=f"{runtime_dir}/build",
+                AIST_OUTPUT_PATH=f"{runtime_dir}/output",
+            ),
             patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
-            patch("aist.tasks.pipeline.get_project_build_path", return_value="/aist-project"),
             patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
             patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
             patch("aist.tasks.pipeline.execute_pipeline", return_value=SimpleNamespace(launch_data={
@@ -124,7 +92,15 @@ class PipelineClaudeAuthEnvTests(AISTApiBase):
             ) as mock_factory,
         ):
             mock_factory.return_value = MagicMock()
-            run_persisted_sast_pipeline(self.pipeline, {"project_id": self.project.id})
+            run_persisted_sast_pipeline(
+                self.pipeline,
+                {
+                    "project_id": self.project.id,
+                    "project_version": self.branch.id,
+                    "analyzers": ["semgrep"],
+                    "selected_languages": ["python"],
+                },
+            )
             return mock_factory
 
     def test_factory_called_with_claude_oauth_token_when_integration_configured(self):
