@@ -13,7 +13,6 @@ from aist.utils.pipeline_imports import _import_sast_pipeline_package
 
 _import_sast_pipeline_package()
 
-from pipeline.dast.connector import write_json_atomically
 from pipeline.dast.contract_snapshot import DastContractSnapshot
 from pipeline.dast.contracts import (
     DastConnectorOutcome,
@@ -22,7 +21,7 @@ from pipeline.dast.contracts import (
     DastTerminalResult,
 )
 from pipeline.dast.executor import DastExecutionResult, DastExecutionTelemetry
-from pipeline.project_builder import prepare_run_output_dir
+from pipeline.run_output import prepare_run_output_dir, write_json_atomically
 
 from aist.execution.claiming import claim_next_launch_request, revalidate_claimed_authority
 from aist.execution.dispatching import (
