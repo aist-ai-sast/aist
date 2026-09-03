@@ -7,7 +7,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
-from dojo.models import Product, Product_Type, SLA_Configuration
+from dojo.models import Finding, Product, Product_Type, SLA_Configuration, Test
 
 from aist.integrations.dast_report import validate_dast_report_bytes
 from aist.models import (
@@ -72,6 +72,7 @@ def _validated_report(
     findings: list[dict] | None = None,
     run_id: str = "run-123",
     run_metadata: dict | None = None,
+    target_id: str = "cloud-app",
 ):
     del correlation_id
     report = {
@@ -86,13 +87,18 @@ def _validated_report(
                 "unique_id_from_tool": "dast-bola-1",
                 "vuln_id_from_tool": "dast-bola-1",
                 "cwe": 639,
+                "vulnerability_ids": ["CVE-2026-12345"],
                 "dynamic_finding": True,
                 "endpoints": ["https://api.example.test/v2/objects/42"],
+                "param": "object_id",
+                "service": "https",
+                "component_name": "cloud-api",
+                "component_version": "2026.8",
             },
         ],
         "dast_run_metadata": {
             "run_id": run_id,
-            "target": "cloud-app",
+            "target": target_id,
             "stand": "qa-1",
             "source_commits": {"backend": ACTUAL_SHA},
             "delivery_quality": "complete",
@@ -103,7 +109,7 @@ def _validated_report(
     }
     return validate_dast_report_bytes(
         json.dumps(report).encode(),
-        target_id="cloud-app",
+        target_id=target_id,
         allowed_repository_keys=frozenset({"backend"}),
     )
 
@@ -172,6 +178,7 @@ class DastFinalizationTests(TestCase):
             source_repo_key="backend",
             enabled=True,
         )
+        self.integration = integration
         self.trigger = AISTProjectVersion.objects.create(
             project=self.project,
             version=TRIGGER_BRANCH,
@@ -183,6 +190,7 @@ class DastFinalizationTests(TestCase):
             id="dast-remote-finalize",
             project=self.project,
             trigger_project_version=self.trigger,
+            dast_binding=self.binding,
             execution_type=PipelineExecutionType.DAST,
             status=AISTStatus.EXECUTING,
         )
@@ -199,6 +207,7 @@ class DastFinalizationTests(TestCase):
         self.manual = AISTPipeline.objects.create(
             id="dast-manual-finalize",
             project=self.project,
+            dast_binding=self.binding,
             execution_type=PipelineExecutionType.MANUAL_IMPORT,
             status=AISTStatus.ADMITTED,
         )
@@ -241,6 +250,85 @@ class DastFinalizationTests(TestCase):
             remote_result.finding_ids,
             tuple(self.remote.tests.first().finding_set.values_list("id", flat=True)),
         )
+        persisted = self.remote.tests.first().finding_set.get()
+        self.assertEqual(persisted.cwe, 639)
+        self.assertEqual(persisted.param, "object_id")
+        self.assertEqual(persisted.service, "https")
+        self.assertEqual(persisted.component_name, "cloud-api")
+        self.assertEqual(persisted.component_version, "2026.8")
+        self.assertEqual(
+            set(persisted.vulnerability_ids),
+            {"CVE-2026-12345"},
+        )
+        self.assertEqual(
+            set(persisted.endpoints.values_list("host", "path")),
+            {("api.example.test", "v2/objects/42")},
+        )
+
+    def test_finalization_refuses_a_different_binding_before_importing_any_result(self):
+        other_target = DastTarget.objects.create(
+            integration=self.integration,
+            provider_id="other-cloud-app",
+            display_name="Other cloud app",
+            contract_revision="2.0",
+            capability_revision="sha256:other-capability",
+            schema_digest="sha256:other-schema",
+            parameter_schema={
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": False,
+            },
+            provider_defaults={},
+            repository_keys=["backend"],
+            launch_requirements=["repository-trigger"],
+            autonomous_ready=True,
+            last_seen_at=timezone.now(),
+        )
+        other_binding = DastProjectBinding.objects.create(
+            project=self.project,
+            target=other_target,
+            source_repo_key="backend",
+            enabled=True,
+        )
+        report = _validated_report(
+            correlation_id=self.remote.id,
+            target_id=other_target.provider_id,
+        )
+        before = (Test.objects.count(), Finding.objects.count(), DastRunMetadata.objects.count())
+
+        with self.assertRaisesRegex(DastFinalizationError, "binding does not match"):
+            finalize_dast_report(
+                pipeline_id=self.remote.id,
+                report=report,
+                binding=other_binding,
+                logger=LOGGER,
+                lead=self.lead,
+            )
+
+        self.assertEqual(
+            (Test.objects.count(), Finding.objects.count(), DastRunMetadata.objects.count()),
+            before,
+        )
+        self.assertFalse(self.remote.tests.exists())
+
+    def test_autonomous_finalization_refuses_a_report_from_another_provider_run(self):
+        report = _validated_report(correlation_id=self.remote.id, run_id="stale-run")
+        before = (Test.objects.count(), Finding.objects.count(), DastRunMetadata.objects.count())
+
+        with self.assertRaisesRegex(DastFinalizationError, "provider run recorded"):
+            finalize_dast_report(
+                pipeline_id=self.remote.id,
+                report=report,
+                binding=self.binding,
+                logger=LOGGER,
+                lead=self.lead,
+            )
+
+        self.assertEqual(
+            (Test.objects.count(), Finding.objects.count(), DastRunMetadata.objects.count()),
+            before,
+        )
+        self.assertFalse(self.remote.tests.exists())
 
     def test_duplicate_finalize_returns_persisted_result_without_second_import(self):
         report = _validated_report(correlation_id=self.remote.id)

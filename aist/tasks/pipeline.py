@@ -313,6 +313,7 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
             raw_report,
             target_id=runtime.command.target_id,
             allowed_repository_keys=runtime.allowed_repository_keys,
+            expected_run_id=result.recovery.run_id,
         )
         finalize_dast_report(
             pipeline_id=pipeline_id,

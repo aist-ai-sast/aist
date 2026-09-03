@@ -219,6 +219,7 @@ class DastExecutionRuntimeTests(AISTApiBase):
                 b"{}",
                 target_id="cloud-backend",
                 allowed_repository_keys=frozenset({"backend"}),
+                expected_run_id="run-123",
             )
             persist_result.assert_called_once_with("pipeline-123", execution_result)
 

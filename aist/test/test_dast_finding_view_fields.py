@@ -127,6 +127,7 @@ class DastFindingViewFieldsTests(TestCase):
         self.pipeline = AISTPipeline.objects.create(
             id="dastview1",
             project=self.project,
+            dast_binding=binding,
             execution_type=PipelineExecutionType.MANUAL_IMPORT,
             status=AISTStatus.ADMITTED,
             launch_data={"source": "manual_import", "dast_binding_id": binding.pk},

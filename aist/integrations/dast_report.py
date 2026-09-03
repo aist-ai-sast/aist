@@ -30,6 +30,9 @@ _TOKEN_BUCKET_COUNTERS = {
     "calls": "calls",
 }
 _TOKEN_COUNTER_ATTRIBUTES = tuple(_TOKEN_BUCKET_COUNTERS.values())
+_TOKEN_ECONOMY_COUNTS = (
+    "tokens_per_check", "tokens", "checks", "commands", "waits", "artifact_reads", "contract_reads",
+)
 _DELIVERY_QUALITIES = {"complete", "degraded", "partial"}
 _AUDIT_STATES = {"complete", "incomplete", "failed", "unavailable"}
 _OPERATOR_CLASSIFICATIONS = {
@@ -37,6 +40,10 @@ _OPERATOR_CLASSIFICATIONS = {
     "infrastructure", "delivery", "teardown", "operator_stop",
 }
 _OPERATOR_IMPACTS = {"coverage", "findings", "audit", "delivery", "cleanup", "source", "none"}
+_EXCLUDED_FINDING_CODES = {
+    "CHECK_PROVENANCE_INVALID", "CURATED_REPORT_AMBIGUOUS", "CURATED_REPORT_INVALID",
+    "CURATED_REPORT_MISSING", "INVALID_FIELD_VALUE", "MISSING_REQUIRED_FIELD", "UNDECLARED_FIELD",
+}
 
 
 class DastReportValidationError(ValueError):
@@ -88,6 +95,27 @@ class DastTokenBucket:
 
 
 @dataclass(frozen=True, slots=True)
+class DastRunEconomy:
+
+    """Provider-owned measurements of one check's cost and harness overhead."""
+
+    tokens_per_check: int | None = None
+    tokens: int | None = None
+    checks: int | None = None
+    commands: int | None = None
+    waits: int | None = None
+    artifact_reads: int | None = None
+    contract_reads: int | None = None
+
+    def as_wire(self) -> dict[str, int]:
+        return {
+            field_name: value
+            for field_name in _TOKEN_ECONOMY_COUNTS
+            if (value := getattr(self, field_name)) is not None
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DastTokenUsage:
 
     """Agent token accounting for one run."""
@@ -95,6 +123,7 @@ class DastTokenUsage:
     total: DastTokenBucket | None = None
     by_phase: tuple[DastTokenBucket, ...] | None = None
     by_agent_type: tuple[DastTokenBucket, ...] | None = None
+    economy: DastRunEconomy | None = None
     # True/False when a breakdown could be compared against ``total``, None when the report
     # carried nothing comparable. A False is recorded and surfaced, never rejected: both
     # sides are individually well-formed and only their relationship is off.
@@ -119,13 +148,13 @@ class DastOperatorAction:
 
 @dataclass(frozen=True, slots=True)
 class DastExcludedFinding:
-    finding_ref: str
+    finding_ref: str | None
     validation_codes: tuple[str, ...]
     check_id: str | None = None
 
     def as_wire(self) -> dict[str, Any]:
         return {
-            "finding_ref": self.finding_ref,
+            **({"finding_ref": self.finding_ref} if self.finding_ref is not None else {}),
             **({"check_id": self.check_id} if self.check_id is not None else {}),
             "validation_codes": list(self.validation_codes),
         }
@@ -314,14 +343,19 @@ def _excluded_finding(value: object) -> DastExcludedFinding | None:
     finding_ref = _optional_text(value.get("finding_ref"))
     check_id = _optional_text(value.get("check_id"))
     raw_codes = value.get("validation_codes")
-    if finding_ref is None or not isinstance(raw_codes, list) or not raw_codes:
+    if not isinstance(raw_codes, list) or not raw_codes:
         return None
     codes: list[str] = []
     for raw_code in raw_codes:
         code = _optional_text(raw_code)
-        if code is None:
+        if code is None or code not in _EXCLUDED_FINDING_CODES:
             return None
         codes.append(code)
+    if finding_ref is None:
+        if check_id is not None or "CHECK_PROVENANCE_INVALID" not in codes:
+            return None
+    elif check_id != finding_ref:
+        return None
     return DastExcludedFinding(
         finding_ref=finding_ref,
         check_id=check_id,
@@ -414,10 +448,20 @@ def _token_usage(value: object) -> DastTokenUsage | None:
     total = _token_bucket(value.get("total"))
     by_phase = _token_buckets(value.get("by_phase"))
     by_agent_type = _token_buckets(value.get("by_agent_type"))
+    raw_economy = value.get("economy")
+    economy = (
+        DastRunEconomy(**{
+            field_name: _optional_count(raw_economy.get(field_name))
+            for field_name in _TOKEN_ECONOMY_COUNTS
+        })
+        if isinstance(raw_economy, dict) and raw_economy
+        else None
+    )
     return DastTokenUsage(
         total=total,
         by_phase=by_phase,
         by_agent_type=by_agent_type,
+        economy=economy,
         accounting_consistent=_accounting_consistent(total, (by_phase, by_agent_type)),
     )
 
@@ -461,6 +505,7 @@ def validate_dast_report_bytes(
     *,
     target_id: str,
     allowed_repository_keys: frozenset[str],
+    expected_run_id: str | None = None,
     maximum_report_bytes: int = DAST_RESULT_MAX_BYTES,
 ) -> ValidatedDastReport:
     """Validate only the report properties required for safe, correct tenant-bound import."""
@@ -479,6 +524,9 @@ def validate_dast_report_bytes(
     run_id = metadata.get("run_id")
     if not isinstance(run_id, str) or not run_id.strip():
         msg = "DAST report run_id must be a non-empty string."
+        raise _error(msg)
+    if expected_run_id is not None and run_id != expected_run_id:
+        msg = "DAST report run_id does not match the provider run being finalized."
         raise _error(msg)
     report_target_id = metadata.get("target")
     if report_target_id != target_id:

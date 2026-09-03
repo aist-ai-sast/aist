@@ -129,12 +129,14 @@ def create_pipeline_object(
     status: str = AISTStatus.ADMITTED,
     execution_type: str = PipelineExecutionType.SAST,
     trigger_project_version=None,
+    dast_binding=None,
 ):
     return AISTPipeline.objects.create(
         id=uuid.uuid4().hex[:8],
         project=aist_project,
         project_version=project_version,
         trigger_project_version=trigger_project_version,
+        dast_binding=dast_binding,
         execution_type=execution_type,
         pull_request=pull_request,
         status=status,

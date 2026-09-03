@@ -116,6 +116,7 @@ class ImportReportTaskTests(TestCase):
         self.pipeline = AISTPipeline.objects.create(
             id="importtest1",
             project=self.project,
+            dast_binding=self.binding,
             execution_type=PipelineExecutionType.MANUAL_IMPORT,
             status=AISTStatus.ADMITTED,
             launch_data={

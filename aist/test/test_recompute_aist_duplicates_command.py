@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from io import StringIO
 
 from django.core.management import call_command
 from django.utils import timezone
 from dojo.models import Engagement, Finding, Test, Test_Type
 
+from aist.dedupe.custom import AIST_DEDUPE_CANDIDATE_TAG
 from aist.models import AISTPipeline, AISTStatus
 from aist.test.test_api import AISTApiBase
 
@@ -20,6 +22,7 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
         file_path: str,
         line: int,
         cwe: int | None = None,
+        unique_id: str = "",
         test: Test | None = None,
     ) -> Finding:
         if test is None:
@@ -43,6 +46,7 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
             date=timezone.now(),
             reporter=self.user,
             vuln_id_from_tool=vuln_id,
+            unique_id_from_tool=unique_id,
             file_path=file_path,
             line=line,
             cwe=cwe,
@@ -67,7 +71,7 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
         )
 
         out = StringIO()
-        call_command("recompute_aist_duplicates", "--dry-run", stdout=out)
+        call_command("recompute_aist_duplicates", "--dry-run", "--explain-json", stdout=out)
         duplicate.refresh_from_db()
 
         self.assertFalse(duplicate.duplicate)
@@ -76,6 +80,16 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
         self.assertIn("auto_duplicates=1", output)
         self.assertIn("duplicate_group", output)
         self.assertIn(f"finding_id={duplicate.id}", output)
+        explanations = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+        duplicate_explanation = next(row for row in explanations if row["finding_id"] == duplicate.id)
+        self.assertEqual(duplicate_explanation["verdict"], "duplicate")
+        self.assertEqual(duplicate_explanation["location_strength"], "source_exact")
+        self.assertIn("evidence_contributions", duplicate_explanation)
+        self.assertIn("db_candidates", duplicate_explanation)
+        self.assertIn("duration_ms", duplicate_explanation)
+        self.assertEqual(duplicate_explanation["severity"], "High")
+        self.assertEqual(duplicate_explanation["root_severity"], "High")
+        self.assertFalse(duplicate_explanation["severity_mismatch"])
         self.assertTrue(Finding.objects.filter(id=original.id).exists())
 
     def test_apply_cross_scanner_duplicates_and_negative_case(self):
@@ -299,6 +313,108 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
 
         self.assertTrue(duplicate.duplicate)
         self.assertFalse(outside.duplicate)
+
+    def test_pipeline_filter_recomputes_exact_uid_against_historical_scope(self):
+        root = self._create_finding(
+            scan_type="Semgrep JSON Report",
+            title="Original SQL injection",
+            vuln_id="semgrep-rule-v1",
+            unique_id="semgrep-result-91",
+            file_path="src/old_query.py",
+            line=11,
+            cwe=89,
+        )
+        unsafe_root = self._create_finding(
+            scan_type="Semgrep JSON Report",
+            title="Original command injection",
+            vuln_id="semgrep-command-v1",
+            unique_id="semgrep-result-92",
+            file_path="src/old_process.py",
+            line=18,
+            cwe=78,
+        )
+        unsafe_root.severity = "Low"
+        unsafe_root.save(update_fields=["severity"])
+        imported = self._create_finding(
+            scan_type="Semgrep JSON Report",
+            title="Moved SQL injection",
+            vuln_id="semgrep-rule-v2",
+            unique_id="semgrep-result-91",
+            file_path="src/new_query.py",
+            line=72,
+            cwe=20,
+        )
+        repeated_test = imported.test
+        unsafe_imported = self._create_finding(
+            scan_type="Semgrep JSON Report",
+            title="Moved command injection",
+            vuln_id="semgrep-command-v2",
+            unique_id="semgrep-result-92",
+            file_path="src/new_process.py",
+            line=81,
+            cwe=77,
+            test=repeated_test,
+        )
+        unsafe_imported.severity = "Critical"
+        unsafe_imported.save(update_fields=["severity"])
+        pipeline = AISTPipeline.objects.create(
+            id="recompute-exact-pipeline-filter",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINISHED,
+        )
+        pipeline.tests.add(repeated_test)
+
+        dry_run_out = StringIO()
+        call_command(
+            "recompute_aist_duplicates",
+            "--dry-run",
+            "--explain-json",
+            "--pipeline-id",
+            pipeline.id,
+            stdout=dry_run_out,
+        )
+        imported.refresh_from_db()
+        unsafe_imported.refresh_from_db()
+
+        self.assertFalse(imported.duplicate)
+        self.assertFalse(unsafe_imported.duplicate)
+        self.assertIn("processed=2 exact_duplicates=1", dry_run_out.getvalue())
+        explanations = [
+            json.loads(line)
+            for line in dry_run_out.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+        unsafe_explanation = next(
+            row for row in explanations if row["finding_id"] == unsafe_imported.id
+        )
+        self.assertEqual(unsafe_explanation["verdict"], "candidate")
+        self.assertEqual(unsafe_explanation["source"], "unique_id_from_tool")
+        self.assertEqual(unsafe_explanation["root_id"], unsafe_root.id)
+        self.assertEqual(unsafe_explanation["root_severity"], "Low")
+        self.assertTrue(unsafe_explanation["severity_mismatch"])
+
+        apply_out = StringIO()
+        call_command(
+            "recompute_aist_duplicates",
+            "--apply-candidates",
+            "--pipeline-id",
+            pipeline.id,
+            stdout=apply_out,
+        )
+        imported.refresh_from_db()
+        unsafe_imported.refresh_from_db()
+
+        self.assertTrue(imported.duplicate)
+        self.assertEqual(imported.duplicate_finding_id, root.id)
+        self.assertFalse(unsafe_imported.duplicate)
+        self.assertTrue(unsafe_imported.active)
+        self.assertIn(
+            AIST_DEDUPE_CANDIDATE_TAG,
+            set(unsafe_imported.tags.values_list("name", flat=True)),
+        )
+        self.assertIn("processed=2 exact_duplicates=1", apply_out.getvalue())
+        self.assertIn("promoted_candidates=0", apply_out.getvalue())
 
     def test_line_zero_uses_fallback_hash_dedupe(self):
         first = self._create_finding(

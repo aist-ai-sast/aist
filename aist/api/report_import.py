@@ -309,6 +309,7 @@ class PipelineImportAPI(AISTAPIView):
                 None,
                 None,
                 execution_type=PipelineExecutionType.MANUAL_IMPORT,
+                dast_binding=binding if scan_type == DAST_SCAN_TYPE else None,
             )
             pipeline.run_task_id = task_id
             if scan_type == DAST_SCAN_TYPE:

@@ -1,9 +1,7 @@
 """
-Tests for the generic endpoint-scheme hardening in
-``aist.internal_upload.import_scan_via_default_importer`` — the single choke point every
-AIST import path (SAST analyzers, DAST, any future scan_type) goes through. Exercised here
-with DefectDojo's base "Generic Findings Import" scan_type specifically (not DAST's own
-parser) to prove the guard is generic, not something only DAST benefits from.
+Tests for validation and endpoint preservation in
+``aist.internal_upload.import_scan_via_default_importer`` — the shared importer used by
+AIST scan providers.
 
 Severity has no equivalent AIST-side guard (see the assertion at the bottom of this file
 for why: DefectDojo's own DefaultImporter already hard-rejects an invalid severity for
@@ -65,18 +63,32 @@ class ImportHardeningTests(TestCase):
             lead=self.lead,
         )
 
-    def test_endpoint_with_disallowed_scheme_is_stripped(self):
-        _test_obj, findings = self._import([
-            {"title": "X", "severity": "High", "description": "d", "endpoints": ["javascript://alert(1)"]},
-        ])
-        self.assertEqual(findings[0].endpoints.count(), 0)
-
     def test_endpoint_with_allowed_scheme_is_kept(self):
         _test_obj, findings = self._import([
             {"title": "X", "severity": "High", "description": "d", "endpoints": ["https://example.com/path"]},
         ])
         self.assertEqual(findings[0].endpoints.count(), 1)
         self.assertEqual(findings[0].endpoints.first().protocol, "https")
+
+    def test_tcp_service_location_is_kept_for_dynamic_finding_dedupe(self):
+        _test_obj, findings = self._import([
+            {
+                "title": "coturn peer ACL bypass",
+                "severity": "High",
+                "description": "The TURN service relays traffic to a denied peer range.",
+                "dynamic_finding": True,
+                "endpoints": [{
+                    "protocol": "tcp",
+                    "host": "mail.relay.example",
+                    "port": 3478,
+                }],
+            },
+        ])
+
+        endpoint = findings[0].endpoints.get()
+        self.assertEqual(endpoint.protocol, "tcp")
+        self.assertEqual(endpoint.host, "mail.relay.example")
+        self.assertEqual(endpoint.port, 3478)
 
     def test_defaultimporter_itself_already_rejects_invalid_severity(self):
         # Documents why aist/internal_upload.py has no severity-coercion guard of its own:

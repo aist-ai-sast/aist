@@ -81,10 +81,10 @@ class PipelineExecutionTypeTests(TestCase):
         pipeline.full_clean()
         pipeline.save(update_fields=["project_version"])
 
-        # AISTPipeline has no dast_binding reference, so it cannot tell whether a given
-        # run's binding required a repository trigger -- that invariant is enforced earlier,
-        # at PipelineLaunchRequest/AISTProjectLaunchConfig validation time, where the binding
-        # is in scope. A sourceless DAST pipeline (no trigger version at all) is valid here.
+        # Whether the selected binding requires a repository trigger is enforced earlier by
+        # PipelineLaunchRequest/AISTProjectLaunchConfig. The nullable pipeline binding also
+        # permits retained pipeline history after integration teardown. A sourceless DAST
+        # pipeline (no trigger version at all) is valid here.
         sourceless = AISTPipeline(
             id="dast-sourceless",
             project=self.project,

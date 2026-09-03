@@ -65,6 +65,7 @@ class DastReportValidationTests(SimpleTestCase):
             ({"type": "Generic Findings Import"}, {}, "scan type"),
             ({"findings": {}}, {}, "findings must be an array"),
             ({"dast_run_metadata": {"run_id": "", "target": "cloud-backend", "source_commits": {}}}, {}, "non-empty"),
+            ({}, {"expected_run_id": "another-run"}, "provider run being finalized"),
             ({}, {"target_id": "another-target"}, "selected binding is for target"),
             (
                 {"dast_run_metadata": {
@@ -195,6 +196,15 @@ class DastRunMetadataBestEffortTests(SimpleTestCase):
             "token_usage": {
                 "total": {"input": 5, "output": 7, "calls": 2},
                 "by_phase": {"verify": {"input": 5, "output": 7, "calls": 2}},
+                "economy": {
+                    "tokens_per_check": 498969,
+                    "tokens": 104284586,
+                    "checks": 209,
+                    "commands": 5629,
+                    "waits": 55,
+                    "artifact_reads": 995,
+                    "contract_reads": 0,
+                },
             },
         })
 
@@ -204,6 +214,21 @@ class DastRunMetadataBestEffortTests(SimpleTestCase):
         self.assertEqual(metadata.coverage.analysed_names, ("synthetic.example/api",))
         self.assertEqual(metadata.token_usage.total.output_tokens, 7)
         self.assertTrue(metadata.token_usage.accounting_consistent)
+        self.assertEqual(metadata.token_usage.economy.tokens_per_check, 498969)
+
+    def test_check_provenance_exclusion_survives_without_an_untrusted_identity(self):
+        report = _report()
+        report["dast_run_metadata"].update({
+            "excluded_findings": [{"validation_codes": ["CHECK_PROVENANCE_INVALID"]}],
+            "excluded_findings_total": 1,
+            "excluded_findings_truncated": False,
+        })
+
+        metadata = _validate(report).run_metadata
+
+        self.assertEqual(metadata.excluded_findings[0].validation_codes, ("CHECK_PROVENANCE_INVALID",))
+        self.assertIsNone(metadata.excluded_findings[0].finding_ref)
+        self.assertIsNone(metadata.excluded_findings[0].check_id)
 
     def test_descriptive_columns_are_read_independently_and_empty_values_are_null(self):
         report = _report()

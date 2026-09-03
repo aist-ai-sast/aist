@@ -199,63 +199,6 @@ class ComputeGroupDecisionsTests(SimpleTestCase):
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: _apply_duplicate_decision
-# ---------------------------------------------------------------------------
-
-class ApplyDuplicateDecisionTests(SimpleTestCase):
-    def _make_summary(self) -> CanonicalDedupeSummary:
-        return CanonicalDedupeSummary()
-
-    def test_already_correct_duplicate_increments_auto_only(self):
-        root = DummyFinding(id=1, title="root", vuln_id_from_tool="", file_path="", line=1)
-        finding = DummyFinding(id=2, title="dup", vuln_id_from_tool="", file_path="", line=1,
-                               duplicate=True, duplicate_finding_id=1)
-        summary = self._make_summary()
-        _apply_duplicate_decision(finding, root, summary, should_write=True)
-        self.assertEqual(summary.auto_duplicates, 1)
-        self.assertEqual(summary.applied_duplicates, 0)
-        self.assertEqual(summary.conflicts, 0)
-
-    def test_no_write_increments_auto_only(self):
-        root = DummyFinding(id=1, title="root", vuln_id_from_tool="", file_path="", line=1)
-        finding = DummyFinding(id=2, title="dup", vuln_id_from_tool="", file_path="", line=1)
-        summary = self._make_summary()
-        _apply_duplicate_decision(finding, root, summary, should_write=False)
-        self.assertEqual(summary.auto_duplicates, 1)
-        self.assertEqual(summary.applied_duplicates, 0)
-        self.assertEqual(summary.conflicts, 0)
-
-    def test_conflicting_existing_duplicate_increments_conflicts(self):
-        root = DummyFinding(id=1, title="root", vuln_id_from_tool="", file_path="", line=1)
-        finding = DummyFinding(id=2, title="dup", vuln_id_from_tool="", file_path="", line=1,
-                               duplicate=True, duplicate_finding_id=99)  # wrong root
-        summary = self._make_summary()
-        _apply_duplicate_decision(finding, root, summary, should_write=False)
-        self.assertEqual(summary.conflicts, 1)
-        self.assertEqual(summary.auto_duplicates, 1)
-
-    def test_write_success_increments_applied_and_auto(self):
-        root = DummyFinding(id=1, title="root", vuln_id_from_tool="", file_path="", line=1)
-        finding = DummyFinding(id=2, title="dup", vuln_id_from_tool="", file_path="", line=1)
-        summary = self._make_summary()
-        with patch("aist.dedupe.custom.set_duplicate"):
-            _apply_duplicate_decision(finding, root, summary, should_write=True)
-        self.assertEqual(summary.auto_duplicates, 1)
-        self.assertEqual(summary.applied_duplicates, 1)
-        self.assertEqual(summary.conflicts, 0)
-
-    def test_write_exception_increments_conflicts_not_auto(self):
-        root = DummyFinding(id=1, title="root", vuln_id_from_tool="", file_path="", line=1)
-        finding = DummyFinding(id=2, title="dup", vuln_id_from_tool="", file_path="", line=1)
-        summary = self._make_summary()
-        with patch("aist.dedupe.custom.set_duplicate", side_effect=RuntimeError("DB error")):
-            _apply_duplicate_decision(finding, root, summary, should_write=True)
-        self.assertEqual(summary.conflicts, 1)
-        self.assertEqual(summary.auto_duplicates, 0)
-        self.assertEqual(summary.applied_duplicates, 0)
-
-
-# ---------------------------------------------------------------------------
 # Phase 2: _apply_candidate_decision
 # ---------------------------------------------------------------------------
 

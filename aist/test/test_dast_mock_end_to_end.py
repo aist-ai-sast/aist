@@ -401,6 +401,7 @@ class DastMockEndToEndTests(_DastContractGatewayFixture):
         with self._runtime_patches(), self.captureOnCommitCallbacks(execute=True):
             pipeline_tasks._execute_dast_pipeline(clean_request.pipeline_id)
         clean_pipeline = AISTPipeline.objects.get(pk=clean_request.pipeline_id)
+        self.assertEqual(clean_pipeline.dast_binding_id, clean_request.dast_binding_id)
         self.assertEqual(clean_pipeline.project_version.version, ACTUAL_SHA)
         self.assertEqual(clean_pipeline.tests.first().finding_set.count(), 0)
         self.assertEqual(clean_pipeline.status, AISTStatus.FINISHED)
@@ -412,6 +413,7 @@ class DastMockEndToEndTests(_DastContractGatewayFixture):
         with self._runtime_patches(), self.captureOnCommitCallbacks(execute=False):
             pipeline_tasks._execute_dast_pipeline(finding_request.pipeline_id)
         finding_pipeline = AISTPipeline.objects.get(pk=finding_request.pipeline_id)
+        self.assertEqual(finding_pipeline.dast_binding_id, finding_request.dast_binding_id)
         self.assertEqual(finding_pipeline.project_version.version, ACTUAL_SHA)
         self.assertEqual(finding_pipeline.tests.first().finding_set.count(), 1)
         finish_pipeline(finding_pipeline.id)
@@ -453,6 +455,7 @@ class DastMockEndToEndTests(_DastContractGatewayFixture):
             pipeline_tasks._execute_dast_pipeline(request.pipeline_id)
 
         pipeline = AISTPipeline.objects.get(pk=request.pipeline_id)
+        self.assertEqual(pipeline.dast_binding_id, request.dast_binding_id)
         self.assertIsNone(pipeline.trigger_project_version_id)
         # The result belongs to the target itself, which is what makes it reachable below.
         self.assertEqual(pipeline.project_version.version, PERIMETER_TARGET)

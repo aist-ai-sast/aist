@@ -64,6 +64,16 @@ def _agents_total(buckets: list[dict[str, Any]] | None) -> int | None:
     return _sum_reported([bucket.get("agents") for bucket in buckets])
 
 
+def _economy_view(economy: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Expose the provider counters without using the ambiguous scalar API key ``tokens``."""
+    if economy is None:
+        return None
+    return {
+        ("total_tokens" if key == "tokens" else key): value
+        for key, value in economy.items()
+    }
+
+
 def _summary(row: DastRunMetadata) -> dict[str, Any]:
     return {
         "run_id": row.run_id,
@@ -121,6 +131,7 @@ def dast_run_detail(pipeline: AISTPipeline) -> dict[str, Any] | None:
         "tokens": {column: getattr(row, column) for column in _TOKEN_COUNTER_COLUMNS},
         "token_by_phase": _buckets_view(row.token_by_phase),
         "token_by_agent_type": _buckets_view(row.token_by_agent_type),
+        "economy": _economy_view(row.token_economy),
         "agents": _agents_total(row.token_by_agent_type),
         "token_accounting_consistent": row.token_accounting_consistent,
         "operator_actions_persisted": row.operator_actions_persisted,

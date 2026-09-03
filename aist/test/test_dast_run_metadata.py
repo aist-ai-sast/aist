@@ -10,6 +10,7 @@ from django.urls import reverse
 
 from aist.integrations.dast_report import (
     DastCoverage,
+    DastRunEconomy,
     DastTokenBucket,
     DastTokenUsage,
     ValidatedDastReport,
@@ -81,6 +82,15 @@ BY_AGENT = (
     ),
 )
 GRAND_TOTAL = 2234 + 951808 + 2578204 + 90024238
+ECONOMY = DastRunEconomy(
+    tokens_per_check=498969,
+    tokens=104284586,
+    checks=209,
+    commands=5629,
+    waits=55,
+    artifact_reads=995,
+    contract_reads=0,
+)
 
 
 def _metadata(**overrides) -> ValidatedDastRunMetadata:
@@ -99,6 +109,7 @@ def _metadata(**overrides) -> ValidatedDastRunMetadata:
             total=TOTAL,
             by_phase=BY_PHASE,
             by_agent_type=BY_AGENT,
+            economy=ECONOMY,
             accounting_consistent=True,
         ),
     }
@@ -284,6 +295,10 @@ class DastRunMetadataReadPathTests(AISTApiBase):
         self.assertEqual(payload["beyond_plan_names"], ["cloud-prod-hdw-mx"])
         self.assertEqual(payload["agents"], 22)
         self.assertEqual({bucket["key"] for bucket in payload["token_by_phase"]}, {"6", "4"})
+        self.assertEqual(payload["economy"], {
+            **{key: value for key, value in ECONOMY.as_wire().items() if key != "tokens"},
+            "total_tokens": ECONOMY.tokens,
+        })
 
     def test_the_detail_endpoint_returns_null_for_a_pipeline_without_an_accepted_report(self):
         response = self.client.get(reverse("aist_api:pipeline_dast_run", kwargs={"pipeline_id": self.sast.id}))

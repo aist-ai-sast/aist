@@ -131,29 +131,33 @@ see [pipeline execution](../product/pipeline-execution.md).
 Confirmation creates an import pipeline and applies the same result validation
 and finding lifecycle used by an autonomous result.
 
+The selected project binding defines the run's deduplication namespace. Findings
+imported through different bindings are never compared for either automatic DAST
+deduplication or candidate ranking; repeated imports through the same binding are
+eligible. The binding stays on the pipeline rather than being copied into finding
+metadata. If a binding is deleted its saved pipeline link becomes empty; recreating
+the configuration creates a new binding and therefore a new namespace. See
+[canonical deduplication](../aist-canonical-dedupe.md).
+
 ## Reported run metadata
 
 Besides its findings, a report may describe the run that produced them. AIST
-keeps whatever a validated report carries against the pipeline it was imported
-into — for an autonomous run and an operator upload alike — and presents it
-there: headline counters on the pipeline entry, the full inventory when that
-entry is expanded, and the same counters in the upload preview before the
-operator confirms the import.
+stores accepted metadata against the pipeline for autonomous runs and operator
+uploads alike. The import preview and pipeline list show headline counters; the
+pipeline detail API carries the full accepted inventory and diagnostics.
 
-A report can describe two things:
+| Report data | Stored and exposed by AIST |
+|---|---|
+| Run identity and context: target, run, stand, descriptors, and timestamps | Stored with the pipeline; identity is also used for binding and delivery checks, while context is returned by the detail API |
+| Coverage counts and analysed/beyond-plan names | Headline counts appear in the preview and pipeline list; names and derived duration/overshoot appear in the detail API |
+| Agent token totals and per-phase/per-agent breakdowns | Headline total appears in the preview and list; breakdowns appear in the detail API. Thinking tokens remain separate because the provider already includes them in output |
+| Provider `economy`: tokens per check, total tokens, checks, commands, waits, artifact reads, and contract reads | Recognized non-negative counters are stored as provider measurements without AIST recomputation. The detail API returns the stored `tokens` counter under the unambiguous name `total_tokens` |
+| Delivery quality, audit state, and finding completeness | Stored with the pipeline and returned by the summary and detail APIs |
+| Operator actions and excluded-finding diagnostics | Stored with the pipeline and returned by the detail API. An exclusion normally carries equal `finding_ref` and `check_id`; `CHECK_PROVENANCE_INVALID` may be identity-free when the producer could not establish that identity safely |
 
-- **Coverage** — what the run saw, counted in the unit the provider works in,
-  such as an endpoint: how much was discovered, how much of that was reachable,
-  how much was analysed, and how much the run had planned to analyse. A report
-  may also name every analysed item and mark which of them the run took on beyond
-  its plan. A run can exceed its own plan, so a planned figure below the analysed
-  figure is a normal result, not a contradiction.
-- **Agent token usage** — the model-token accounting for the run: a total, plus
-  breakdowns by run phase and by agent type, each of which may report how many
-  agents it used and how many model calls it made. The headline total covers
-  submitted, generated, and cached tokens; thinking tokens are reported alongside
-  it rather than added to it, because the provider already counts them inside its
-  generated total.
+Coverage may use a provider-defined unit such as an endpoint. A run can analyse
+more than it planned, so a planned figure below the analysed figure is a normal
+result, not a contradiction.
 
 Every descriptive field at every level is optional, including the two
 descriptions themselves. Absence, an empty string, and a value AIST cannot
@@ -172,10 +176,11 @@ single report-size limit bounds the complete input, including these descriptions
 | What the report carries | What AIST does |
 |---|---|
 | A descriptive value AIST cannot interpret: the wrong type, an empty string, list, or object, or a negative count | Stores `NULL` for the affected metadata value and imports the findings normally |
-| A descriptive field this version of AIST does not recognize — in the run metadata, in either description, or on an individual finding | Reads past it and imports the report normally. The stored report keeps the field exactly as it arrived |
+| An unrecognized report-envelope or run-metadata field | Reads past it and imports the report normally; recognized metadata fields are stored |
+| An unrecognized field on an individual finding | Rejects the import instead of silently discarding finding data |
 | A breakdown that is well formed but does not add up to its own reported total | Accepts it and marks the run's accounting as inconsistent, so the pipeline shows the disagreement. The findings are unaffected |
 
-The middle row is deliberate. A provider that has learned a new field is a newer
+The tolerant metadata row is deliberate. A provider that has learned a new field is a newer
 provider, not a broken one, and a report full of real findings should not be lost
 over a description AIST has nowhere to put. It applies only to descriptive
 material that no decision is made on; a finding that omits something the platform

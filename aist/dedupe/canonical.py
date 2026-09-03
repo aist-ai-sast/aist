@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from contextlib import suppress
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any
 
 from django.conf import settings
+from dojo.finding import deduplication as dojo_dedupe
+
+DAST_SCAN_TYPE = "DAST Autonomous Scan"
 
 
 class CanonicalFamily(StrEnum):
@@ -35,6 +39,11 @@ class MatchVerdict(StrEnum):
     NO_MATCH = "no_match"
 
 
+class CanonicalIdentityKind(StrEnum):
+    DAST_ROUTE = "dast_route"
+    DAST_CVE_COMPONENT = "dast_cve_component"
+
+
 DEFAULT_AUTO_DUPLICATE_THRESHOLD = 4
 DEFAULT_CANDIDATE_MIN_SCORE = 2
 SCORE_CWE_EXPLICIT_MATCH = 3
@@ -43,6 +52,9 @@ SCORE_FAMILY_MATCH = 3
 SCORE_RULE_MATCH = 2
 SCORE_COMPONENT_MATCH = 1
 SCORE_TITLE_TOKEN_OVERLAP = 1
+SCORE_VULNERABILITY_ID_MATCH = 3
+SCORE_PARAMETER_MATCH = 1
+SCORE_SERVICE_MATCH = 1
 TITLE_TOKEN_MIN_OVERLAP = 3
 TITLE_TOKEN_MIN_JACCARD = 0.4
 _TITLE_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
@@ -186,6 +198,73 @@ class CanonicalSignature:
     component_name: str
     component_version: str
     title_tokens: frozenset[str] = frozenset()
+    dynamic: bool = False
+    web_locations: tuple[WebLocation, ...] = ()
+    vulnerability_ids: frozenset[str] = frozenset()
+    parameter: str = ""
+    service: str = ""
+
+
+class LocationStrength(StrEnum):
+    NONE = "none"
+    SOURCE_EXACT = "source_exact"
+    ENDPOINT_EXACT = "endpoint_exact"
+    PATH_ONLY = "path_only"
+    ROOT_ONLY = "root_only"
+
+
+@dataclass(frozen=True, slots=True)
+class WebLocation:
+    scheme: str
+    host: str
+    port: int | None
+    path: tuple[str, ...]
+
+    def identity_shape(self) -> DastEndpointShape:
+        return DastEndpointShape(
+            scheme=self.scheme,
+            host=self.host if not self.path else "",
+            port=self.port,
+            path=self.path,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DastEndpointShape:
+
+    """One affected endpoint; concrete paths deliberately ignore deployment host."""
+
+    scheme: str
+    host: str
+    port: int | None
+    path: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DastRouteIdentity:
+    endpoints: frozenset[DastEndpointShape]
+    cwe: int
+    component_name: str
+    service: str
+    parameter: str
+
+    @property
+    def kind(self) -> CanonicalIdentityKind:
+        return CanonicalIdentityKind.DAST_ROUTE
+
+
+@dataclass(frozen=True, slots=True)
+class DastCveComponentIdentity:
+    cves: frozenset[str]
+    component_name: str
+    component_version: str
+
+    @property
+    def kind(self) -> CanonicalIdentityKind:
+        return CanonicalIdentityKind.DAST_CVE_COMPONENT
+
+
+DastIdentityKey = DastRouteIdentity | DastCveComponentIdentity
 
 
 @dataclass(slots=True)
@@ -193,6 +272,10 @@ class MatchScore:
     score: int
     verdict: MatchVerdict
     is_duplicate: bool
+    evidence_contributions: dict[str, int] = field(default_factory=dict)
+    location_strength: LocationStrength = LocationStrength.NONE
+    fallback_reason: str = ""
+    matching_identity_kinds: tuple[CanonicalIdentityKind, ...] = ()
 
 
 def normalize_file_path(file_path: str | None) -> str:
@@ -301,31 +384,157 @@ def canonical_scoring_thresholds() -> tuple[int, int]:
 
 
 def _component_evidence_matches(left: CanonicalSignature, right: CanonicalSignature) -> bool:
-    return (
+    return bool(
         left.component_name
         and right.component_name
-        and left.component_name == right.component_name
-    ) or (
+        and left.component_name == right.component_name,
+    )
+
+
+def _component_versions_conflict(left: CanonicalSignature, right: CanonicalSignature) -> bool:
+    return bool(
         left.component_version
         and right.component_version
-        and left.component_version == right.component_version
+        and left.component_version != right.component_version,
     )
+
+
+def dynamic_semantic_group_keys(signature: CanonicalSignature) -> tuple[tuple, ...]:
+    """
+    Structured DAST identities that may be compared without a shared URL.
+
+    These keys only make a pair reachable by the existing canonical scorer. They do not themselves
+    declare a duplicate: the scorer still applies the evidence policy and thresholds. CWE is useful
+    only together with an independently authored component or service; a product-wide CWE bucket
+    would be both noisy and needlessly expensive.
+    """
+    if not signature.dynamic:
+        return ()
+    keys: set[tuple] = {
+        ("vulnerability_id", vulnerability_id)
+        for vulnerability_id in signature.vulnerability_ids
+    }
+    if signature.cwe and not signature.cwe_inferred:
+        if signature.component_name:
+            keys.add(("component_cwe", signature.component_name, signature.cwe))
+        if signature.service:
+            keys.add(("service_cwe", signature.service, signature.cwe))
+    return tuple(sorted(keys))
+
+
+def _is_dast_finding(finding: Any) -> bool:
+    test = getattr(finding, "test", None)
+    test_type = getattr(test, "test_type", None)
+    return getattr(test_type, "name", "") == DAST_SCAN_TYPE
+
+
+def _finding_endpoints(finding: Any) -> tuple[WebLocation, ...]:
+    normalized = set()
+    urls = ()
+    with suppress(TypeError, ValueError):
+        urls = dojo_dedupe.get_endpoints_as_url(finding)
+    for url in urls:
+        if not url.scheme or not url.host:
+            continue
+        normalized.add(WebLocation(
+            scheme=url.scheme,
+            host=url.host,
+            port=url.port,
+            path=tuple(url.path),
+        ))
+    return tuple(sorted(normalized, key=lambda row: (row.scheme, row.host, row.port or 0, row.path)))
+
+
+def _finding_vulnerability_ids(finding: Any) -> frozenset[str]:
+    values = getattr(finding, "vulnerability_ids", ()) or ()
+    if callable(values):
+        values = values()
+    return frozenset(str(value).strip().upper() for value in values if str(value).strip())
+
+
+def dast_identity_keys(signature: CanonicalSignature) -> tuple[DastIdentityKey, ...]:
+    """Return exact producer-owned identities; similarity evidence is intentionally excluded."""
+    if not signature.dynamic:
+        return ()
+
+    keys: list[DastIdentityKey] = []
+    if (
+        signature.web_locations
+        and signature.cwe
+        and not signature.cwe_inferred
+        and signature.component_name
+        and signature.service
+        and signature.parameter
+    ):
+        keys.append(DastRouteIdentity(
+            endpoints=frozenset(location.identity_shape() for location in signature.web_locations),
+            cwe=signature.cwe,
+            component_name=signature.component_name,
+            service=signature.service,
+            parameter=signature.parameter,
+        ))
+    if signature.vulnerability_ids and signature.component_name and signature.component_version:
+        keys.append(DastCveComponentIdentity(
+            cves=signature.vulnerability_ids,
+            component_name=signature.component_name,
+            component_version=signature.component_version,
+        ))
+    return tuple(keys)
+
+
+def matching_dast_identity_keys(
+    left: CanonicalSignature,
+    right: CanonicalSignature,
+) -> tuple[DastIdentityKey, ...]:
+    return tuple(set(dast_identity_keys(left)) & set(dast_identity_keys(right)))
+
+
+def location_strength(left: CanonicalSignature, right: CanonicalSignature) -> LocationStrength:
+    """Return the strongest comparable location without using it as semantic identity."""
+    if left.dynamic or right.dynamic:
+        if not left.dynamic or not right.dynamic or not left.web_locations or not right.web_locations:
+            return LocationStrength.NONE
+        exact = set(left.web_locations) & set(right.web_locations)
+        if exact:
+            if any(location.path for location in exact):
+                return LocationStrength.ENDPOINT_EXACT
+            return LocationStrength.ROOT_ONLY
+        left_paths = {location.path for location in left.web_locations if location.path}
+        right_paths = {location.path for location in right.web_locations if location.path}
+        if left_paths & right_paths:
+            return LocationStrength.PATH_ONLY
+        return LocationStrength.NONE
+    if (
+        left.normalized_file_path
+        and right.normalized_file_path
+        and left.line is not None
+        and right.line is not None
+        and left.normalized_file_path == right.normalized_file_path
+        and left.line == right.line
+    ):
+        return LocationStrength.SOURCE_EXACT
+    return LocationStrength.NONE
 
 
 def finding_signature(finding: Any) -> CanonicalSignature:
     # Build a normalized, scanner-agnostic signature used by score_signatures().
     title = str(getattr(finding, "title", "") or "")
+    dynamic = _is_dast_finding(finding)
+    raw_rule = str(getattr(finding, "vuln_id_from_tool", "") or "")
     family = infer_canonical_family(
-        vuln_id=str(getattr(finding, "vuln_id_from_tool", "") or ""),
+        # DAST uses vuln_id_from_tool for technical occurrence identity, not a scanner rule.
+        vuln_id="" if dynamic else raw_rule,
         title=title,
     )
     cwe = _normalize_cwe(getattr(finding, "cwe", None))
-    cwe_inferred = cwe is None
+    # Imported DAST findings carry authored structured CWE/CVE data.  A family inferred from their title
+    # may help a reviewer, but it must not manufacture a CWE that was absent from the JSON contract.
+    cwe_inferred = cwe is None and not dynamic
     if cwe_inferred:
         cwe = cwe_for_family(family)
     normalized_rule = normalize_canonical_rule_key(
         family=family,
-        value=str(getattr(finding, "vuln_id_from_tool", "") or getattr(finding, "title", "") or ""),
+        value="" if dynamic else (raw_rule or title),
     )
     component_name = (str(getattr(finding, "component_name", "") or "")).strip().lower()
     component_version = (str(getattr(finding, "component_version", "") or "")).strip().lower()
@@ -340,25 +549,34 @@ def finding_signature(finding: Any) -> CanonicalSignature:
         component_name=component_name,
         component_version=component_version,
         title_tokens=tokenize_title(title),
+        dynamic=dynamic,
+        web_locations=_finding_endpoints(finding) if dynamic else (),
+        vulnerability_ids=_finding_vulnerability_ids(finding),
+        parameter=str(getattr(finding, "param", "") or "").strip().lower(),
+        service=str(getattr(finding, "service", "") or "").strip().lower(),
     )
 
 
 def score_signatures(left: CanonicalSignature, right: CanonicalSignature) -> MatchScore:
-    # Hard gate: canonical dedupe only compares findings on the same path and line.
-    if (
-        not left.normalized_file_path
-        or not right.normalized_file_path
-        or left.line is None
-        or right.line is None
-        or left.normalized_file_path != right.normalized_file_path
-        or left.line != right.line
-    ):
-        return MatchScore(score=0, verdict=MatchVerdict.NO_MATCH, is_duplicate=False)
+    strength = location_strength(left, right)
+    both_dynamic = left.dynamic and right.dynamic
+    if strength == LocationStrength.NONE and not both_dynamic:
+        return MatchScore(
+            score=0,
+            verdict=MatchVerdict.NO_MATCH,
+            is_duplicate=False,
+            location_strength=strength,
+            fallback_reason="locations_do_not_match",
+        )
 
     score = 0
+    contributions: dict[str, int] = {}
     cwe_match = False
     rule_match = False
     component_match = False
+    vulnerability_id_match = False
+    parameter_match = False
+    service_match = False
     family_match = left.family == right.family and left.family != CanonicalFamily.UNKNOWN
 
     # Evidence scoring is additive; final verdict is decided by thresholds.
@@ -366,23 +584,44 @@ def score_signatures(left: CanonicalSignature, right: CanonicalSignature) -> Mat
         if not left.cwe_inferred and not right.cwe_inferred:
             cwe_match = True
             score += SCORE_CWE_EXPLICIT_MATCH
+            contributions["cwe_explicit"] = SCORE_CWE_EXPLICIT_MATCH
         elif left.cwe_inferred != right.cwe_inferred:
             cwe_match = True
             score += SCORE_CWE_MIXED_CONFIDENCE_MATCH
+            contributions["cwe_mixed_confidence"] = SCORE_CWE_MIXED_CONFIDENCE_MATCH
     if family_match:
         score += SCORE_FAMILY_MATCH
+        contributions["family"] = SCORE_FAMILY_MATCH
     if left.normalized_rule and right.normalized_rule and left.normalized_rule == right.normalized_rule:
         rule_match = True
         score += SCORE_RULE_MATCH
+        contributions["rule"] = SCORE_RULE_MATCH
     if _component_evidence_matches(left, right):
         component_match = True
         score += SCORE_COMPONENT_MATCH
+        contributions["component"] = SCORE_COMPONENT_MATCH
+
+    if left.dynamic and right.dynamic:
+        if left.vulnerability_ids & right.vulnerability_ids:
+            vulnerability_id_match = True
+            score += SCORE_VULNERABILITY_ID_MATCH
+            contributions["vulnerability_id"] = SCORE_VULNERABILITY_ID_MATCH
+        if left.parameter and left.parameter == right.parameter:
+            parameter_match = True
+            score += SCORE_PARAMETER_MATCH
+            contributions["parameter"] = SCORE_PARAMETER_MATCH
+        if left.service and left.service == right.service:
+            service_match = True
+            score += SCORE_SERVICE_MATCH
+            contributions["service"] = SCORE_SERVICE_MATCH
 
     # Title-token overlap is a content-based corroboration signal. It is bounded
     # by Jaccard >= TITLE_TOKEN_MIN_JACCARD AND >= TITLE_TOKEN_MIN_OVERLAP shared
     # content tokens — strict enough that random title noise does not score.
     title_overlap = title_tokens_overlap_score(left.title_tokens, right.title_tokens)
     score += title_overlap
+    if title_overlap:
+        contributions["title"] = title_overlap
 
     # Avoid candidate matches based only on inferred family classification.
     if (
@@ -394,14 +633,128 @@ def score_signatures(left: CanonicalSignature, right: CanonicalSignature) -> Mat
         and left.cwe_inferred
         and right.cwe_inferred
     ):
-        return MatchScore(score=0, verdict=MatchVerdict.NO_MATCH, is_duplicate=False)
+        return MatchScore(
+            score=0,
+            verdict=MatchVerdict.NO_MATCH,
+            is_duplicate=False,
+            evidence_contributions={},
+            location_strength=strength,
+            fallback_reason="inferred_family_only",
+        )
 
     auto_threshold, candidate_threshold = canonical_scoring_thresholds()
+    if both_dynamic:
+        matching_identity_keys = matching_dast_identity_keys(left, right)
+        matching_identity_kinds = tuple(sorted({key.kind for key in matching_identity_keys}))
+        explicit_cwe_match = cwe_match and not left.cwe_inferred and not right.cwe_inferred
+        corroborating_structured_match = any((component_match, parameter_match, service_match))
+
+        # Dynamic auto decisions are deliberately absent from the similarity scorer. Exact
+        # identities are resolved as whole clusters by run_canonical_dedupe(), where collisions
+        # and keys pointing at different roots can be seen before any Finding is mutated.
+        if matching_identity_keys:
+            return MatchScore(
+                score=score,
+                verdict=MatchVerdict.CANDIDATE,
+                is_duplicate=False,
+                evidence_contributions=contributions,
+                location_strength=strength,
+                fallback_reason="exact_identity_requires_cluster_resolution",
+                matching_identity_kinds=matching_identity_kinds,
+            )
+        if strength == LocationStrength.NONE:
+            if vulnerability_id_match:
+                verdict = MatchVerdict.CANDIDATE \
+                    if score >= candidate_threshold and score > 0 else MatchVerdict.NO_MATCH
+                return MatchScore(
+                    score=score,
+                    verdict=verdict,
+                    is_duplicate=False,
+                    evidence_contributions=contributions,
+                    location_strength=strength,
+                    fallback_reason=(
+                        "cross_location_component_versions_conflict"
+                        if component_match and _component_versions_conflict(left, right)
+                        else "cross_location_cve_requires_exact_component_identity"
+                    ),
+                )
+            if (
+                explicit_cwe_match
+                and component_match
+                and service_match
+                and score >= candidate_threshold
+                and score > 0
+            ):
+                return MatchScore(
+                    score=score,
+                    verdict=MatchVerdict.CANDIDATE,
+                    is_duplicate=False,
+                    evidence_contributions=contributions,
+                    location_strength=strength,
+                    fallback_reason="semantic_match_without_location",
+                )
+            return MatchScore(
+                score=score,
+                verdict=MatchVerdict.NO_MATCH,
+                is_duplicate=False,
+                evidence_contributions=contributions,
+                location_strength=strength,
+                fallback_reason="locations_do_not_match",
+            )
+
+        path_semantic_match = (
+            vulnerability_id_match or explicit_cwe_match or corroborating_structured_match or family_match
+        )
+        if strength == LocationStrength.PATH_ONLY and not path_semantic_match:
+            return MatchScore(
+                score=score,
+                verdict=MatchVerdict.NO_MATCH,
+                is_duplicate=False,
+                evidence_contributions=contributions,
+                location_strength=strength,
+                fallback_reason="cross_host_path_lacks_semantic_evidence",
+            )
+        if score >= candidate_threshold and score > 0:
+            return MatchScore(
+                score=score,
+                verdict=MatchVerdict.CANDIDATE,
+                is_duplicate=False,
+                evidence_contributions=contributions,
+                location_strength=strength,
+                fallback_reason="similarity_requires_review",
+            )
+        return MatchScore(
+            score=score,
+            verdict=MatchVerdict.NO_MATCH,
+            is_duplicate=False,
+            evidence_contributions=contributions,
+            location_strength=strength,
+            fallback_reason="score_below_candidate_threshold",
+        )
     if score >= auto_threshold:
-        return MatchScore(score=score, verdict=MatchVerdict.DUPLICATE, is_duplicate=True)
+        return MatchScore(
+            score=score,
+            verdict=MatchVerdict.DUPLICATE,
+            is_duplicate=True,
+            evidence_contributions=contributions,
+            location_strength=strength,
+        )
     if candidate_threshold <= score < auto_threshold and score > 0:
-        return MatchScore(score=score, verdict=MatchVerdict.CANDIDATE, is_duplicate=False)
-    return MatchScore(score=score, verdict=MatchVerdict.NO_MATCH, is_duplicate=False)
+        return MatchScore(
+            score=score,
+            verdict=MatchVerdict.CANDIDATE,
+            is_duplicate=False,
+            evidence_contributions=contributions,
+            location_strength=strength,
+        )
+    return MatchScore(
+        score=score,
+        verdict=MatchVerdict.NO_MATCH,
+        is_duplicate=False,
+        evidence_contributions=contributions,
+        location_strength=strength,
+        fallback_reason="score_below_candidate_threshold",
+    )
 
 
 def score_findings(left: Any, right: Any) -> MatchScore:

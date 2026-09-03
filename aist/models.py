@@ -1464,6 +1464,14 @@ class AISTPipeline(models.Model):
         blank=True,
         help_text="Source version that triggered a DAST run; its effective version may be resolved later.",
     )
+    dast_binding = models.ForeignKey(
+        DastProjectBinding,
+        on_delete=models.SET_NULL,
+        related_name="pipelines",
+        null=True,
+        blank=True,
+        help_text="DAST target binding selected for this pipeline.",
+    )
     execution_type = models.CharField(
         max_length=24,
         choices=PipelineExecutionType.choices,
@@ -1526,8 +1534,13 @@ class AISTPipeline(models.Model):
                 errors["project_version"] = "SAST pipelines require an effective project version."
             if self.trigger_project_version_id:
                 errors["trigger_project_version"] = "SAST pipelines cannot have a DAST trigger version."
+            if self.dast_binding_id:
+                errors["dast_binding"] = "SAST pipelines cannot have a DAST binding."
         elif self.execution_type == PipelineExecutionType.MANUAL_IMPORT and self.trigger_project_version_id:
             errors["trigger_project_version"] = "Manual imports cannot have a DAST trigger version."
+
+        if self.dast_binding_id and self.dast_binding.project_id != self.project_id:
+            errors["dast_binding"] = "DAST binding must belong to the pipeline project."
 
         if errors:
             raise ValidationError(errors)
@@ -1643,6 +1656,10 @@ class DastRunMetadataManager(models.Manager):
             },
             "token_by_phase": self._reported_buckets(usage, "by_phase"),
             "token_by_agent_type": self._reported_buckets(usage, "by_agent_type"),
+            "token_economy": (
+                None if self._reported(usage, "economy") is None
+                else usage.economy.as_wire()
+            ),
             "token_accounting_consistent": self._reported(usage, "accounting_consistent"),
         }
 
@@ -1739,6 +1756,7 @@ class DastRunMetadata(models.Model):
     model_calls = models.PositiveIntegerField(null=True, blank=True)
     token_by_phase = models.JSONField(null=True, blank=True, default=None)
     token_by_agent_type = models.JSONField(null=True, blank=True, default=None)
+    token_economy = models.JSONField(null=True, blank=True, default=None)
     # False when a breakdown could be compared against the reported total and disagreed with
     # it. Recorded and surfaced rather than rejected: both sides are individually well-formed,
     # and a report full of real findings must not be lost to an accounting mismatch.

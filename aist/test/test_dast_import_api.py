@@ -272,6 +272,7 @@ class PipelineImportAPITests(TestCase):
 
         pipeline = AISTPipeline.objects.get(id=response.data["pipeline_id"])
         self.assertEqual(pipeline.project_id, self.project.id)
+        self.assertEqual(pipeline.dast_binding_id, self.binding.id)
         self.assertEqual(pipeline.execution_type, PipelineExecutionType.MANUAL_IMPORT)
         self.assertEqual(pipeline.status, AISTStatus.ADMITTED)
         mock_apply_async.assert_called_once()

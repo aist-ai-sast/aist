@@ -1212,6 +1212,7 @@ class Command(BaseCommand):
         project_version: AISTProjectVersion | None,
         trigger_project_version: AISTProjectVersion | None,
         execution_type: str,
+        dast_binding: DastProjectBinding | None = None,
         started,
         finished_at,
         launch_data: dict,
@@ -1223,6 +1224,7 @@ class Command(BaseCommand):
                 "project": project,
                 "project_version": project_version,
                 "trigger_project_version": trigger_project_version,
+                "dast_binding": dast_binding,
                 "execution_type": execution_type,
                 "status": AISTStatus.FINISHED,
                 "started": started,
@@ -1379,6 +1381,7 @@ class Command(BaseCommand):
                 project_version=pipeline_version,
                 trigger_project_version=pipeline_trigger_version,
                 execution_type=PipelineExecutionType.DAST,
+                dast_binding=binding,
                 started=started,
                 finished_at=finished_at,
                 launch_data={

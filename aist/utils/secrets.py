@@ -144,6 +144,7 @@ _NON_SENSITIVE_KEYS: frozenset[str] = frozenset(
         "token_by_phase",
         "token_by_agent_type",
         "token_accounting_consistent",
+        "tokens_per_check",
     },
 )
 

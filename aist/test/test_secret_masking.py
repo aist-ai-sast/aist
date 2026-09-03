@@ -375,6 +375,7 @@ class DastTokenAccountingMaskingTests(AISTApiBase):
                 "total_tokens": 93556484,
                 "model_calls": 1117,
                 "token_accounting_consistent": True,
+                "economy": {"tokens_per_check": 498969, "total_tokens": 104284586},
                 "tokens": {
                     "input_tokens": 2234,
                     "output_tokens": 951808,

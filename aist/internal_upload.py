@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -21,10 +20,6 @@ from dojo.models import (
 
 from aist.logging_transport import install_pipeline_logging
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
-
-_logger = logging.getLogger(__name__)
-
-_ALLOWED_ENDPOINT_SCHEMES = {"http", "https"}
 
 _import_sast_pipeline_package()
 
@@ -168,19 +163,6 @@ def ensure_engagement(product: Product, name: str, repo_params: RepoParams, stat
     )
 
 
-def _harden_imported_findings(findings: list[Finding]) -> None:
-    """Apply the shared http/https policy to imported endpoints."""
-    for finding in findings:
-        for endpoint in finding.endpoints.all():
-            protocol = (endpoint.protocol or "").lower()
-            if protocol and protocol not in _ALLOWED_ENDPOINT_SCHEMES:
-                _logger.warning(
-                    "Finding %s has endpoint %s with disallowed scheme %r; unlinking it",
-                    finding.id, endpoint.id, protocol,
-                )
-                finding.endpoints.remove(endpoint)
-
-
 def import_scan_via_default_importer(
     engagement: Engagement,
     scan_type: str,
@@ -247,7 +229,6 @@ def import_scan_file_via_default_importer(
     test_obj, *_rest = importer.process_scan(report_file)
     # Collect findings associated with the test
     findings = list(Finding.objects.filter(test=test_obj))
-    _harden_imported_findings(findings)
     return test_obj, findings
 
 

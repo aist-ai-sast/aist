@@ -10,6 +10,7 @@ from django.db import transaction
 from dojo.celery_dispatch import dojo_dispatch_task
 from dojo.finding import helper as finding_helper
 
+from aist.dedupe.canonical import DAST_SCAN_TYPE
 from aist.integrations.dast_report import ValidatedDastReport
 from aist.internal_upload import ensure_engagement, import_scan_file_via_default_importer
 from aist.launch_data import PipelineLaunchData
@@ -21,10 +22,8 @@ from aist.models import (
     DastProjectBinding,
     DastRunMetadata,
     PipelineExecutionType,
-    PipelineLaunchRequest,
     VersionType,
 )
-from aist.parser_overrides import DAST_SCAN_TYPE
 from aist.services.dast_result_versions import resolve_dast_result_version
 from aist.services.pipeline_lifecycle import transition_pipeline_status
 from aist.services.pipeline_results import (
@@ -121,6 +120,7 @@ def _verify_pipeline_binding(
     *,
     pipeline: AISTPipeline,
     binding: DastProjectBinding,
+    report_run_id: str,
 ) -> None:
     if pipeline.project_id != binding.project_id:
         msg = "DAST binding and pipeline must belong to the same project."
@@ -128,12 +128,17 @@ def _verify_pipeline_binding(
     if pipeline.execution_type not in {PipelineExecutionType.DAST, PipelineExecutionType.MANUAL_IMPORT}:
         msg = "Only DAST and explicit DAST manual-import pipelines can finalize a DAST report."
         raise DastFinalizationError(msg)
+    if pipeline.dast_binding_id != binding.pk:
+        msg = "DAST pipeline binding does not match the finalization binding."
+        raise DastFinalizationError(msg)
     if pipeline.execution_type == PipelineExecutionType.DAST:
-        request_binding_id = PipelineLaunchRequest.objects.filter(pipeline_id=pipeline.id).values_list(
-            "dast_binding_id",
-            flat=True,
-        ).first()
-        if request_binding_id != binding.pk:
+        execution_state = getattr(pipeline, "dast_execution_state", None)
+        if execution_state is None or execution_state.run_id != report_run_id:
+            msg = "DAST report run id does not match the provider run recorded for the pipeline."
+            raise DastFinalizationError(msg)
+        launch_request = getattr(pipeline, "launch_request", None)
+        request_binding_id = getattr(launch_request, "dast_binding_id", None)
+        if request_binding_id != pipeline.dast_binding_id:
             msg = "DAST pipeline launch binding does not match the finalization binding."
             raise DastFinalizationError(msg)
 
@@ -162,10 +167,19 @@ def finalize_dast_report(
         pipeline = (
             AISTPipeline.objects
             .select_for_update(of=("self",))
-            .select_related("project__repository", "trigger_project_version", "dast_execution_state")
+            .select_related(
+                "project__repository",
+                "trigger_project_version",
+                "dast_execution_state",
+                "launch_request",
+            )
             .get(pk=pipeline_id)
         )
-        _verify_pipeline_binding(pipeline=pipeline, binding=persisted_binding)
+        _verify_pipeline_binding(
+            pipeline=pipeline,
+            binding=persisted_binding,
+            report_run_id=report.run_id,
+        )
         correlation_id = pipeline.id if pipeline.execution_type == PipelineExecutionType.DAST else None
 
         # Ahead of the already-finalized short circuit below, so redelivering a report rewrites

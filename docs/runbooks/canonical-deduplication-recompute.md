@@ -11,12 +11,18 @@ Run the command inside the supported Django container:
 ```bash
 python3 manage.py recompute_aist_duplicates \
   --dry-run \
+  --explain-json \
   --product-id 12 \
   --since 2026-01-01
 ```
 
 Review the proposed duplicate roots and candidate changes. If the scope is too
 broad, filter by one pipeline, product, date, or result limit.
+
+`--explain-json` emits one JSON object per finding with the verdict, selected
+root, score contributions, location strength, fallback reason, number of
+database candidates, and decision duration. Retain these rows for historical
+replay evaluation and performance percentiles.
 
 ## Apply reviewed changes
 

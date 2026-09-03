@@ -15,6 +15,7 @@ from dojo.tools.semgrep.parser import SemgrepParser
 from dojo.tools.snyk_code.parser import SnykCodeParser
 
 from aist.dedupe.canonical import (
+    DAST_SCAN_TYPE,
     CanonicalFamily,
     cwe_for_family,
     infer_canonical_family,
@@ -41,71 +42,6 @@ CLAUDE_LINE_BUCKET_SIZE = 5
 # DAST analyzer (dast/runtime/reports/_plans/aist-dast-integration-plan.md) — a plain
 # "Generic Findings Import" scan_type is NOT covered by canonical dedupe's SUPPORTED_SCAN_TYPES
 # allowlist (aist/dedupe/custom.py), so DAST findings need their own scan_type to participate.
-DAST_SCAN_TYPE = "DAST Autonomous Scan"
-# Every field a finding in the Generic Findings envelope may carry: the set
-# GenericJSONParser._get_test_json accepts, plus the four it pops before that check
-# (vendor/defectdojo/dojo/tools/generic/json_parser.py). The vendor keeps it in a local variable
-# with no seam to read it from and vendor/ is read-only, so it is declared here — and
-# test_parser_overrides checks this declaration against the vendor's real behaviour field by field,
-# so a vendor change fails a test instead of drifting silently.
-PLATFORM_FINDING_FIELDS = frozenset({
-    "active",
-    "component_name",
-    "component_version",
-    "cve",
-    "cvssv3",
-    "cvssv3_score",
-    "cvssv4",
-    "cvssv4_score",
-    "cwe",
-    "date",
-    "description",
-    "dynamic_finding",
-    "effort_for_fixing",
-    "endpoints",
-    "epss_percentile",
-    "epss_score",
-    "false_p",
-    "file_path",
-    "files",
-    "fix_available",
-    "impact",
-    "is_mitigated",
-    "kev_date",
-    "known_exploited",
-    "line",
-    "mitigated",
-    "mitigation",
-    "nb_occurences",
-    "numerical_severity",
-    "out_of_scope",
-    "param",
-    "payload",
-    "planned_remediation_date",
-    "planned_remediation_version",
-    "publish_date",
-    "ransomware_used",
-    "references",
-    "risk_accepted",
-    "sast_sink_object",
-    "sast_source_file_path",
-    "sast_source_line",
-    "sast_source_object",
-    "scanner_confidence",
-    "service",
-    "severity",
-    "severity_justification",
-    "static_finding",
-    "steps_to_reproduce",
-    "tags",
-    "thread_id",
-    "title",
-    "under_review",
-    "unique_id_from_tool",
-    "verified",
-    "vuln_id_from_tool",
-    "vulnerability_ids",
-})
 SNYK_RULE_TITLE_OVERRIDES = {
     "OR": "Open Redirect Vulnerability",
 }
@@ -453,7 +389,7 @@ class DastReportParser(_SubtypedGenericParserBase):
     def get_description_for_scan_types(self, scan_type):
         return (
             "Redacted, deep-linked finding export from an autonomous DAST run, produced "
-            "by the integration gateway's dast-report-writer + `dast export-findings`."
+            "by the DAST provider workflow and its `dast export-findings` stage."
         )
 
     def get_tests(self, scan_type, filename):  # type: ignore[no-untyped-def]
@@ -468,33 +404,16 @@ class DastReportParser(_SubtypedGenericParserBase):
     @classmethod
     def _readable_report(cls, data: dict) -> dict:
         """
-        Hand the generic parser only the finding fields the platform can put somewhere.
+        Copy finding mappings because the generic parser consumes pseudo-fields with ``pop``.
 
-        A field the DAST side adds ahead of AIST is a newer producer, not a broken report, but the
-        generic parser refuses a finding carrying anything it does not model — which would discard
-        every finding over one attribute nothing here could have stored anyway. Dropping it is a
-        decision about *our* scan type, so it belongs in this override rather than in the caller.
-        What is dropped is logged, and the stored report file keeps it verbatim.
-
-        Everything else the generic parser enforces is untouched: a finding missing a required
-        field, or malformed, still fails.
+        The DAST override adds no second allowed-field list and drops nothing. The existing generic
+        parser and actual ``Finding`` constructor remain the one import contract, so an unsupported
+        producer field fails explicitly instead of disappearing from the imported business finding.
         """
         findings = data.get("findings")
         if not isinstance(findings, list):
             return data
-        unreadable: set[str] = set()
-        readable = []
-        for finding in findings:
-            if not isinstance(finding, dict):
-                readable.append(finding)
-                continue
-            unreadable |= set(finding) - PLATFORM_FINDING_FIELDS
-            readable.append({key: value for key, value in finding.items() if key in PLATFORM_FINDING_FIELDS})
-        if unreadable:
-            logger.info(
-                "Dropping DAST finding fields the platform does not model: %s",
-                ", ".join(sorted(unreadable)),
-            )
+        readable = [dict(finding) if isinstance(finding, dict) else finding for finding in findings]
         # A shallow copy is enough and keeps the caller's report object untouched — the generic
         # parser mutates the findings it is handed (it pops endpoints/tags off them).
         return {**data, "findings": readable}
