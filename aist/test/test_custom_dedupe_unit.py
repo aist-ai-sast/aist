@@ -23,7 +23,6 @@ from aist.dedupe.custom import (
     CanonicalDedupeSummary,
     CanonicalMatchDecision,
     _apply_candidate_decision,
-    _apply_duplicate_decision,
     _compute_group_decisions,
     run_canonical_dedupe,
 )

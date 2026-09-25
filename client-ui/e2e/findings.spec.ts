@@ -22,7 +22,7 @@ test("clicking file in card applies file filter and clear all resets it", async 
   await fileButton.click();
 
   await expect(page).toHaveURL(/file=/);
-  await page.getByRole("button", { name: "Clear all" }).click();
+  await page.getByRole("complementary").getByRole("button", { name: "Clear all" }).click();
   await expect(page).not.toHaveURL(/file=/);
 });
 
@@ -41,7 +41,7 @@ test("clear all resets prefilled findings filters in URL", async ({ page }) => {
   await expect(page).toHaveURL(/project_id=1/);
   await expect(page).toHaveURL(/active=false/);
 
-  await page.getByRole("button", { name: "Clear all" }).click();
+  await page.getByRole("complementary").getByRole("button", { name: "Clear all" }).click();
   await expect(page).not.toHaveURL(/project_id=/);
   await expect(page).not.toHaveURL(/active=false/);
 });

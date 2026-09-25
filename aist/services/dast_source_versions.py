@@ -17,7 +17,8 @@ def resolve_dast_source_version(
     report: ValidatedDastReport,
     binding: DastProjectBinding,
 ) -> AISTProjectVersion | None:
-    """Resolve one binding-selected actual commit without repository-name fallbacks.
+    """
+    Resolve one binding-selected actual commit without repository-name fallbacks.
 
     Returns None for a target with no repository requirement: such a report has no source
     commit to resolve, by contract (`dast_report._source_commits` requires it be empty), and

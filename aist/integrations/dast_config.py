@@ -22,7 +22,9 @@ class DastSecretParameterSchemaError(DastConfigError):
 
 
 class DastLaunchRequirement(StrEnum):
-    """One prerequisite a DAST target's scenario declares, mirrored from the provider's own
+
+    """
+    One prerequisite a DAST target's scenario declares, mirrored from the provider's own
     wire vocabulary (its `dastlib.scenarios.base.LaunchRequirement`). AIST only ever asks
     `requires_repository()`; the other two are carried for the same reason the provider carries
     all three on one target — so a future AIST behavior keyed on them is a new accessor here, not
@@ -36,6 +38,7 @@ class DastLaunchRequirement(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class DastLaunchRequirements:
+
     """The complete prerequisite set a DAST target's scenario declares."""
 
     values: frozenset[DastLaunchRequirement] = field(default_factory=frozenset)
