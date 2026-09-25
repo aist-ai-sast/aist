@@ -8,7 +8,7 @@ import TextInput from "./TextInput";
 import type { TagFilterValue } from "../lib/tagFilter";
 import { AI_STATUS_OPTIONS, WORK_ITEM_STATUS_OPTIONS } from "../lib/findingsFilterOptions";
 
-type FilterPanelProps = {
+export type FilterPanelProps = {
   products: Project[];
   selectedProjectId?: number;
   onProjectChange: (projectId?: number) => void;

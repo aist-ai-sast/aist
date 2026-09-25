@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import type {
   AIResponse,
@@ -18,6 +18,7 @@ import type {
   WorkItemLink,
 } from "../types";
 import { fetchJson, normalizeList } from "./api";
+import { type FindingsFilterUrlState, toFindingsApiFilters } from "./findingsFilterUrl";
 import { getRoute } from "./routes";
 
 type WorkItemLinkApi = {
@@ -244,7 +245,7 @@ const FINDING_TIMELINE_EVENT_TYPES: FindingTimelineEvent["eventType"][] = [
 
 type ListResponse<T> = { results?: T[]; count?: number; next?: string | null; previous?: string | null };
 
-function buildFindingsParams(
+export function buildFindingsParams(
   filters: FindingFilters,
   pagination?: { limit?: number; offset?: number },
 ): URLSearchParams {
@@ -280,6 +281,11 @@ function buildFindingsParams(
     ...(filters.ordering ? { ordering: filters.ordering } : {}),
     ...(filters.workItemStatus ? { work_item_status: filters.workItemStatus } : {}),
   });
+}
+
+/** API query for a Findings filter state: the Findings list and the dashboard summary share it. */
+export function buildFindingsQuery(state: FindingsFilterUrlState): URLSearchParams {
+  return buildFindingsParams(toFindingsApiFilters(state));
 }
 
 function mapFindingApiToUi(item: FindingApi): Finding {
@@ -973,15 +979,14 @@ export type DashboardSummary = {
   };
 };
 
-export function useDashboardSummary(projectId?: number) {
+export function useDashboardSummary(filters: FindingsFilterUrlState) {
+  const query = buildFindingsQuery(filters).toString();
   return useQuery({
-    queryKey: ["dashboard-summary", projectId ?? null],
-    queryFn: () => {
-      const url = new URL(getRoute("dashboard_summary_url"), window.location.origin);
-      if (projectId) url.searchParams.set("project_id", String(projectId));
-      return fetchJson<DashboardSummary>(url.toString());
-    },
+    queryKey: ["dashboard-summary", query],
+    queryFn: () => fetchJson<DashboardSummary>(`${getRoute("dashboard_summary_url")}${query ? `?${query}` : ""}`),
     staleTime: 5 * 60 * 1000,
+    // A filter change keeps the previous charts on screen (dimmed) instead of a skeleton flash.
+    placeholderData: keepPreviousData,
   });
 }
 

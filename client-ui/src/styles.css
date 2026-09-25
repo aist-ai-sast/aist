@@ -168,6 +168,13 @@
   color: #e5f3ff;
 }
 
+/* Toggle buttons (e.g. the dashboard's Filters) share the accent of selected chips. */
+.aist-icon-button[aria-pressed="true"] {
+  border-color: rgba(77, 212, 255, 0.6);
+  background: rgba(77, 212, 255, 0.2);
+  color: #e5f3ff;
+}
+
 .aist-clickable-text {
   color: #9fb3d6;
   transition: color 140ms ease;

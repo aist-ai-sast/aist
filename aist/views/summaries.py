@@ -18,6 +18,7 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.models import CWE, Finding
 
 from aist.api.common import API_SEVERITY_VALUES, compute_risk_score, empty_severity_counts
+from aist.api.findings import AISTFindingFilter
 from aist.launch_data import PipelineLaunchData
 from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus, WorkItemLink, WorkItemStatusCategory
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects, get_authorized_findings
@@ -219,10 +220,10 @@ def _build_pipeline_performance_trend(pipelines_qs) -> list[dict[str, Any]]:
     return series
 
 
-def _build_ai_verdict_analytics(*, pipelines_qs, product_ids: list[int]) -> dict[str, Any]:
+def _build_ai_verdict_analytics(*, pipelines_qs, findings_qs) -> dict[str, Any]:
     ai_qs = AISTAIFindingResponse.objects.filter(
         pipeline__in=pipelines_qs,
-        finding__test__engagement__product_id__in=product_ids,
+        finding__in=findings_qs.values("id"),
     )
     verdict_keys = [choice for choice, _label in AISTAIFindingResponse.Verdict.choices]
     verdict_counts = dict.fromkeys(verdict_keys, 0)
@@ -496,6 +497,17 @@ def dashboard_summary(request: HttpRequest) -> HttpResponse:
         .filter(test__engagement__product_id__in=product_ids)
         .order_by()
     )
+    # The dashboard shares the Findings page filter. It only narrows the
+    # authorized queryset; project scoping stays product-based above, so
+    # project_id is not handed to the filterset a second time. Filtering by
+    # id keeps the filter's M2M joins (tags, versions, work items) out of the
+    # aggregates below.
+    filter_data = request.GET.copy()
+    filter_data.pop("project_id", None)
+    filterset = AISTFindingFilter(data=filter_data, queryset=findings_qs, request=request)
+    if not filterset.is_valid():
+        return JsonResponse({field: list(errors) for field, errors in filterset.errors.items()}, status=400)
+    findings_qs = findings_qs.filter(id__in=filterset.qs.values("id"))
     pipelines_qs = get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
     if project_id is not None:
         pipelines_qs = pipelines_qs.filter(project_id=project_id)
@@ -552,7 +564,7 @@ def dashboard_summary(request: HttpRequest) -> HttpResponse:
     risk_trend = _build_risk_trend(findings_qs)
     pipeline_performance_trend = _build_pipeline_performance_trend(pipelines_qs)
     cwe_distribution = _build_cwe_distribution(findings_qs)
-    ai_verdict_analytics = _build_ai_verdict_analytics(pipelines_qs=pipelines_qs, product_ids=product_ids)
+    ai_verdict_analytics = _build_ai_verdict_analytics(pipelines_qs=pipelines_qs, findings_qs=findings_qs)
 
     active_finding_ids = findings_qs.filter(active=True).values("id")
     wi_status_counts = dict(

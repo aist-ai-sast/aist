@@ -2,11 +2,18 @@ import ReactECharts from "echarts-for-react";
 import { type ReactNode, useCallback, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import ActiveFiltersBar from "../components/ActiveFiltersBar";
+import FilterClearButton from "../components/FilterClearButton";
+import FilterPanel from "../components/FilterPanel";
 import PageErrorState from "../components/PageErrorState";
-import SelectField from "../components/SelectField";
+import { agingBucketRange, type DrilldownPatch, drilldownSearch, weekRange } from "../lib/dashboardDrilldown";
+import type { FindingsFilterUrlState } from "../lib/findingsFilterUrl";
 import type { DashboardSummary } from "../lib/queries";
+import type { Severity } from "../types";
 import { useDashboardSummary, useProjects } from "../lib/queries";
 import { getRoute } from "../lib/routes";
+import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
+import { useFindingsFilterState } from "../lib/useFindingsFilterState";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -101,16 +108,6 @@ function escapeTooltipText(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-function toDateParam(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
 /** "2024-03-11" → "Mar 11" */
 function formatWeekLabel(isoWeek: string): string {
   const parts = isoWeek.split("-");
@@ -168,9 +165,11 @@ const WI_STATUS_LABELS: Record<string, string> = {
 function WorkItemCoverageCard({
   coverage,
   onStatusClick,
+  notApplicable,
 }: {
   coverage: DashboardSummary["work_item_coverage"];
   onStatusClick: (status: string) => void;
+  notApplicable?: ReactNode;
 }) {
   const option = useMemo(
     () => ({
@@ -211,6 +210,7 @@ function WorkItemCoverageCard({
       title="Work Item Coverage"
       subtitle={`${coverage.coverage_pct}% covered · ${coverage.total_linked.toLocaleString()} linked findings · click a segment to filter`}
     >
+      {notApplicable ?? (
       <ReactECharts
         option={option}
         style={{ width: "100%", height: "120px" }}
@@ -224,6 +224,7 @@ function WorkItemCoverageCard({
           },
         }}
       />
+      )}
     </ChartCard>
   );
 }
@@ -231,19 +232,57 @@ function WorkItemCoverageCard({
 function ChartCard({
   title,
   subtitle,
+  badge,
   children,
 }: {
   title: string;
   subtitle?: string;
+  badge?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="rounded-2xl border border-night-500 bg-night-700/80 p-4">
-      <div className="mb-3">
-        <p className="text-sm font-semibold text-slate-200">{title}</p>
-        {subtitle && <p className="mt-0.5 text-xs text-slate-400">{subtitle}</p>}
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-200">{title}</p>
+          {subtitle && <p className="mt-0.5 text-xs text-slate-400">{subtitle}</p>}
+        </div>
+        {badge}
       </div>
       {children}
+    </div>
+  );
+}
+
+/** Marks a widget the finding filter does not reach, so an unchanged chart is not read as a filter bug. */
+function ScopeBadge({ label, hint }: { label: string; hint: string }) {
+  return (
+    <span
+      title={hint}
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-night-500 bg-night-600 px-2.5 py-0.5 text-[11px] text-slate-400"
+    >
+      <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 8v5M12 16v.5" />
+      </svg>
+      {label}
+      <span className="sr-only">: {hint}</span>
+    </span>
+  );
+}
+
+/** Shown instead of an active-findings chart when the Status filter excludes active findings. */
+function ChartNotApplicable({ height = 280, onResetStatus }: { height?: number; onResetStatus: () => void }) {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 px-6 text-center"
+      style={{ height }}
+    >
+      <p className="text-sm text-slate-300">Not applicable to the current filters</p>
+      <p className="text-xs text-slate-400">
+        This chart counts active findings only; Status is set to Non-Active.
+      </p>
+      <FilterClearButton label="Reset Status" onClick={onResetStatus} />
     </div>
   );
 }
@@ -281,19 +320,41 @@ function DashboardSkeleton() {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+const FILTER_PANEL_STORAGE_KEY = "aist.dashboard.filtersOpen";
+
+function readStoredPanelOpen(): boolean {
+  try {
+    return window.localStorage.getItem(FILTER_PANEL_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function storePanelOpen(open: boolean) {
+  try {
+    window.localStorage.setItem(FILTER_PANEL_STORAGE_KEY, open ? "1" : "0");
+  } catch {
+    // Storage blocked (private mode): the panel state is a per-visit convenience.
+  }
+}
+
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const projects = useProjects();
-  const [selectedProjectId, setSelectedProjectId] = useState<number | undefined>(undefined);
-  const dashboard = useDashboardSummary(selectedProjectId);
+  const projectsQuery = useProjects();
+  const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data]);
+  const filters = useFindingsFilterState({ projects });
+  const dashboard = useDashboardSummary(filters.debounced);
+  const hasFilters = filters.chips.length > 0;
+  // Status "Non-Active" empties every chart that counts active findings only.
+  const activeChartsNotApplicable = filters.debounced.status === "Non-Active";
+  const resetStatus = useCallback(() => filters.apply({ status: "All" }), [filters]);
 
-  const projectOptions = useMemo(
-    () => [
-      { value: "all", label: "All projects" },
-      ...(projects.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
-    ],
-    [projects.data],
-  );
+  // A shared link with filters opens the panel; otherwise the viewer's last choice.
+  const [filterPanelOpen, setFilterPanelOpen] = useState<boolean>(() => hasFilters || readStoredPanelOpen());
+  const toggleFilterPanel = () => {
+    storePanelOpen(!filterPanelOpen);
+    setFilterPanelOpen(!filterPanelOpen);
+  };
 
   // Stable reference: new Date() once per mount
   const now = useMemo(() => new Date(), []);
@@ -301,25 +362,18 @@ export default function DashboardPage() {
   // CSS var colours read once per mount (vars don't change in runtime)
   const cweAccentColors = useMemo(getCweAccentColors, []);
 
+  // Drill-down keeps the dashboard's whole filter; the click replaces only its own field.
   const buildFindingsLink = useCallback(
-    (extra: Record<string, string | undefined>) => {
-      const params = new URLSearchParams();
-      if (selectedProjectId) params.set("project", String(selectedProjectId));
-      Object.entries(extra).forEach(([key, value]) => {
-        if (value) params.set(key, value);
-      });
-      return `${getRoute("ui_findings_path")}?${params.toString()}`;
+    (patch: DrilldownPatch = {}) => {
+      const search = drilldownSearch(filters.debounced, patch);
+      return `${getRoute("ui_findings_path")}${search ? `?${search}` : ""}`;
     },
-    [selectedProjectId],
+    [filters.debounced],
   );
   const buildActiveFindingsLink = useCallback(
-    (extra: Record<string, string | undefined>) => buildFindingsLink({ active: "true", ...extra }),
+    (patch: DrilldownPatch) => buildFindingsLink({ status: "Active", ...patch }),
     [buildFindingsLink],
   );
-
-  if (dashboard.isError) {
-    return <PageErrorState error={dashboard.error} fallbackTitle="Dashboard unavailable" />;
-  }
 
   // ─── Raw data ──────────────────────────────────────────────────────────────
   const kpi = dashboard.data?.kpi;
@@ -780,293 +834,366 @@ export default function DashboardPage() {
       })
     : null;
 
+  const dashboardError = dashboard.isError ? dashboard.error : null;
+  // A filter change keeps the previous charts, dimmed, until the new summary arrives.
+  const isRefreshing = dashboard.isPlaceholderData;
+
   return (
-    <section className="space-y-4">
-      <header className="flex flex-col gap-3 rounded-2xl border border-night-500 bg-night-700/90 p-4">
-        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-slate-100">Security Dashboard</h1>
-            {lastUpdated ? (
-              <p className="text-sm text-slate-400">Last updated: {lastUpdated}</p>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="whitespace-nowrap text-xs text-slate-400">Project</span>
-            <div className="w-[220px]">
-              <SelectField
-                label="Project"
-                hideLabel
-                showIndicator={false}
-                value={selectedProjectId ? String(selectedProjectId) : "all"}
-                onChange={(value) =>
-                  setSelectedProjectId(value && value !== "all" ? Number(value) : undefined)
-                }
-                options={projectOptions}
-                placeholder="All projects"
-              />
-            </div>
-          </div>
+    <div className={filterPanelOpen ? "grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]" : ""}>
+      {filterPanelOpen ? (
+        <div className="aist-scrollbar mb-4 self-start overflow-auto lg:sticky lg:top-24 lg:mb-0 lg:max-h-[calc(100vh-140px)]">
+          <FilterPanel {...filters.panelProps} />
         </div>
-      </header>
-
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        <KpiCard label="Active Findings" value={kpi?.total_active ?? 0} />
-        <KpiCard
-          label="Critical & High"
-          value={kpi?.critical_high ?? 0}
-          accent="text-danger-500"
-        />
-        <KpiCard label="Total Findings" value={kpi?.total_findings ?? 0} />
-        <KpiCard
-          label="Risk Accepted"
-          value={kpi?.risk_accepted ?? 0}
-          accent="text-orange-400"
-        />
-        <KpiCard label="Projects" value={kpi?.projects_count ?? 0} />
-      </div>
-
-      {dashboard.data?.work_item_coverage ? (
-        <WorkItemCoverageCard
-          coverage={dashboard.data.work_item_coverage}
-          onStatusClick={(status) => navigate(buildFindingsLink({ work_item_status: status }))}
-        />
       ) : null}
 
-      {dashboard.isLoading ? (
-        <DashboardSkeleton />
-      ) : dashboard.data && kpi?.total_findings === 0 ? (
-        <div className="flex flex-col items-center gap-4 rounded-2xl border border-night-500 bg-night-700/80 px-6 py-16 text-center">
-          <svg viewBox="0 0 24 24" className="h-12 w-12 text-slate-600" aria-hidden="true">
-            <path fill="currentColor" d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Zm0 2.18 7 3.12V11c0 4.52-3.07 8.77-7 9.93-3.93-1.16-7-5.41-7-9.93V6.3l7-3.12Z" />
-          </svg>
-          <div>
-            <p className="text-sm font-semibold text-slate-300">No findings yet</p>
-            <p className="mt-1 text-xs text-slate-500">
-              {kpi?.projects_count === 0
-                ? "Set up a project and run a scan pipeline to start analysing your code."
-                : "Run a scan pipeline on your projects to start seeing results here."}
-            </p>
+      <section className="min-w-0 space-y-4">
+        <header className="flex flex-col gap-3 rounded-2xl border border-night-500 bg-night-700/90 p-4">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h1 className="flex items-center gap-2 text-lg font-semibold text-slate-100">
+                Security Dashboard
+                {dashboard.isFetching && !dashboard.isLoading ? (
+                  <svg
+                    className="h-3.5 w-3.5 animate-spin text-brand-500"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-label="Refreshing"
+                  >
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="40 20" strokeLinecap="round" />
+                  </svg>
+                ) : null}
+              </h1>
+              {lastUpdated ? (
+                <p className="text-sm text-slate-400">Last updated: {lastUpdated}</p>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="aist-icon-button h-9 px-3 text-xs font-semibold uppercase tracking-[0.14em]"
+                aria-pressed={filterPanelOpen}
+                onClick={toggleFilterPanel}
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                  <path fill="currentColor" d="M10 18h4v-2h-4v2Zm-7-10v2h18V8H3Zm3 7h12v-2H6v2Z" />
+                </svg>
+                Filters
+                {hasFilters ? (
+                  <span
+                    className={`grid h-[18px] min-w-[18px] place-items-center rounded-full border px-1 text-[10px] tracking-normal ${ACCENT_SELECTED_CLASS}`}
+                    aria-label={`${filters.chips.length} active`}
+                  >
+                    {filters.chips.length}
+                  </span>
+                ) : null}
+              </button>
+              <Link
+                to={buildFindingsLink()}
+                className="aist-icon-button h-9 px-3 text-xs font-semibold uppercase tracking-[0.14em]"
+              >
+                Open in Findings
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                  <path d="M5 12h14M13 6l6 6-6 6" />
+                </svg>
+              </Link>
+            </div>
           </div>
-          {kpi?.projects_count === 0 ? (
-            <Link
-              to={getRoute("ui_products_path")}
-              className="aist-icon-button h-9 px-4 text-xs font-semibold uppercase tracking-[0.14em]"
-            >
-              Set up a project
-            </Link>
-          ) : null}
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <ChartCard
-              title="Severity Distribution"
-              subtitle="Active findings by severity level · click a segment to filter"
-            >
-              <ReactECharts
-                option={severityDonutOption}
-                style={{ width: "100%", height: "280px" }}
-                opts={{ renderer: "svg" }}
-                onEvents={{
-                  click: (params: { name?: string; componentType?: string }) => {
-                    if (params.componentType === "series" && params.name) {
-                      navigate(buildActiveFindingsLink({ severity: params.name }));
-                    }
-                  },
-                }}
-              />
-            </ChartCard>
+        </header>
 
-            <ChartCard
-              title="Top Vulnerable Projects"
-              subtitle="Ranked by total active finding count · click to open findings"
-            >
-              {topProjects.length === 0 ? (
-                <ChartEmpty height={280} />
-              ) : (
-                <ReactECharts
-                  option={topProjectsOption}
-                  style={{ width: "100%", height: "280px" }}
-                  opts={{ renderer: "svg" }}
-                  onEvents={{
-                    click: (params: { dataIndex?: number }) => {
-                      const project = topProjects[params.dataIndex ?? -1];
-                      if (project?.project_id) {
-                        navigate(buildActiveFindingsLink({ project: String(project.project_id) }));
-                      }
-                    },
-                  }}
-                />
-              )}
-            </ChartCard>
-          </div>
+        {filterPanelOpen ? null : (
+          <ActiveFiltersBar chips={filters.chips} onRemove={filters.removeChip} onClearAll={filters.clearAll} />
+        )}
 
-          <ChartCard
-            title="Finding Status Breakdown"
-            subtitle="Lifecycle status distribution across all findings"
+        {dashboardError ? (
+          <PageErrorState error={dashboardError} fallbackTitle="Dashboard unavailable" />
+        ) : (
+          <div
+            aria-busy={isRefreshing}
+            className={["space-y-4 transition-opacity", isRefreshing ? "opacity-50" : ""].join(" ").trim()}
           >
-            <ReactECharts
-              option={statusBreakdownOption}
-              style={{ width: "100%", height: "120px" }}
-              opts={{ renderer: "svg" }}
-            />
-          </ChartCard>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <ChartCard
-              title="Findings Aging Heatmap"
-              subtitle="Open findings by age bracket and severity · click to filter"
-            >
-              {agingData.length === 0 ? (
-                <ChartEmpty height={320} />
-              ) : (
-                <ReactECharts
-                  option={agingHeatmapOption}
-                  style={{ width: "100%", height: "320px" }}
-                  opts={{ renderer: "svg" }}
-                  onEvents={{
-                    click: (params: { value?: [number, number, number] }) => {
-                      const value = params.value;
-                      if (!value) return;
-                      const bucket = agingBuckets[value[0]];
-                      const severity = agingSeverities[value[1]];
-                      if (!bucket || !severity) return;
-                      const createdTo = toDateParam(now);
-                      let createdFrom = "";
-                      if (bucket === "0_7") createdFrom = toDateParam(addDays(now, -7));
-                      if (bucket === "8_30") createdFrom = toDateParam(addDays(now, -30));
-                      if (bucket === "31_90") createdFrom = toDateParam(addDays(now, -90));
-                      navigate(
-                        buildActiveFindingsLink({
-                          severity,
-                          created_from: createdFrom || undefined,
-                          created_to: createdTo,
-                        }),
-                      );
-                    },
-                  }}
-                />
-              )}
-            </ChartCard>
-
-            <ChartCard
-              title="Risk Trend"
-              subtitle="Weekly new vs resolved · Net Delta = New − Mitigated · click a point to filter"
-            >
-              {riskTrend.length === 0 ? (
-                <ChartEmpty height={320} />
-              ) : (
-                <ReactECharts
-                  option={riskTrendOption}
-                  style={{ width: "100%", height: "320px" }}
-                  opts={{ renderer: "svg" }}
-                  onEvents={{
-                    click: (params: { dataIndex?: number; seriesName?: string }) => {
-                      const idx = params.dataIndex ?? -1;
-                      const row = riskTrend[idx];
-                      if (!row) return;
-                      const weekStart = row.week;
-                      const weekEnd = toDateParam(
-                        addDays(new Date(`${row.week}T00:00:00`), 6),
-                      );
-                      const extra: Record<string, string | undefined> = {
-                        created_from: weekStart,
-                        created_to: weekEnd,
-                      };
-                      if (params.seriesName === "Mitigated") extra.active = "false";
-                      navigate(
-                        params.seriesName === "Mitigated"
-                          ? buildFindingsLink(extra)
-                          : buildActiveFindingsLink(extra),
-                      );
-                    },
-                  }}
-                />
-              )}
-            </ChartCard>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <ChartCard
-              title="Top CWE Exposure"
-              subtitle="Active findings by vulnerability class (CWE) · click to filter"
-            >
-              {cweDistribution.length === 0 ? (
-                <ChartEmpty height={320} />
-              ) : (
-                <ReactECharts
-                  option={cweBarOption}
-                  style={{ width: "100%", height: "320px" }}
-                  opts={{ renderer: "svg" }}
-                  onEvents={{
-                    click: (params: { data?: { cwe?: number } }) => {
-                      const cwe = params.data?.cwe;
-                      if (!cwe) return;
-                      navigate(buildActiveFindingsLink({ cwe: String(cwe) }));
-                    },
-                  }}
-                />
-              )}
-            </ChartCard>
-
-            <ChartCard
-              title="AI Verdict Analytics"
-              subtitle="AI-assisted triage: verdict distribution and severity breakdown · click to filter"
-            >
-              <div className="grid grid-cols-1 gap-3">
-                <ReactECharts
-                  option={aiVerdictOption}
-                  style={{ width: "100%", height: "200px" }}
-                  opts={{ renderer: "svg" }}
-                  onEvents={{
-                    click: (params: { name?: string }) => {
-                      const map: Record<string, string> = {
-                        [VERDICT_LABELS.true_positive]: "ai_tp",
-                        [VERDICT_LABELS.false_positive]: "ai_fp",
-                        [VERDICT_LABELS.uncertain]: "ai_u",
-                      };
-                      const aiStatus = params.name ? map[params.name] : "";
-                      if (!aiStatus) return;
-                      navigate(buildFindingsLink({ ai_status: aiStatus }));
-                    },
-                  }}
-                />
-                <ReactECharts
-                  option={aiSeverityOption}
-                  style={{ width: "100%", height: "180px" }}
-                  opts={{ renderer: "svg" }}
-                  onEvents={{
-                    click: (params: { name?: string; seriesName?: string }) => {
-                      const map: Record<string, string> = {
-                        [VERDICT_LABELS.true_positive]: "ai_tp",
-                        [VERDICT_LABELS.false_positive]: "ai_fp",
-                        [VERDICT_LABELS.uncertain]: "ai_u",
-                      };
-                      const aiStatus = params.seriesName ? map[params.seriesName] : "";
-                      const severity = params.name;
-                      if (!aiStatus || !severity) return;
-                      navigate(buildFindingsLink({ ai_status: aiStatus, severity }));
-                    },
-                  }}
-                />
-              </div>
-            </ChartCard>
-          </div>
-
-          {pipelineTrend.length > 0 && (
-            <ChartCard
-              title="Pipeline Performance"
-              subtitle="Weekly scan run count and warning rate"
-            >
-              <ReactECharts
-                option={pipelineTrendOption}
-                style={{ width: "100%", height: "280px" }}
-                opts={{ renderer: "svg" }}
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+              <KpiCard label="Active Findings" value={kpi?.total_active ?? 0} />
+              <KpiCard
+                label="Critical & High"
+                value={kpi?.critical_high ?? 0}
+                accent="text-danger-500"
               />
-            </ChartCard>
-          )}
-        </>
-      )}
-    </section>
+              <KpiCard label="Total Findings" value={kpi?.total_findings ?? 0} />
+              <KpiCard
+                label="Risk Accepted"
+                value={kpi?.risk_accepted ?? 0}
+                accent="text-orange-400"
+              />
+              <KpiCard label="Projects" value={kpi?.projects_count ?? 0} />
+            </div>
+
+            {dashboard.data?.work_item_coverage ? (
+              <WorkItemCoverageCard
+                coverage={dashboard.data.work_item_coverage}
+                onStatusClick={(status) =>
+                  navigate(buildFindingsLink({ workItemStatus: status as FindingsFilterUrlState["workItemStatus"] }))
+                }
+                notApplicable={
+                  activeChartsNotApplicable ? <ChartNotApplicable height={120} onResetStatus={resetStatus} /> : undefined
+                }
+              />
+            ) : null}
+
+            {dashboard.isLoading ? (
+              <DashboardSkeleton />
+            ) : dashboard.data && kpi?.total_findings === 0 && hasFilters ? (
+              <div className="flex flex-col items-center gap-4 rounded-2xl border border-night-500 bg-night-700/80 px-6 py-16 text-center">
+                <div>
+                  <p className="text-sm font-semibold text-slate-300">No findings match the current filters</p>
+                  <p className="mt-1 text-xs text-slate-500">Try adjusting or clearing your filters to see more results.</p>
+                </div>
+                <button
+                  type="button"
+                  className="aist-icon-button h-9 px-4 text-xs font-semibold uppercase tracking-[0.14em]"
+                  onClick={filters.clearAll}
+                >
+                  Clear filters
+                </button>
+              </div>
+            ) : dashboard.data && kpi?.total_findings === 0 ? (
+              <div className="flex flex-col items-center gap-4 rounded-2xl border border-night-500 bg-night-700/80 px-6 py-16 text-center">
+                <svg viewBox="0 0 24 24" className="h-12 w-12 text-slate-600" aria-hidden="true">
+                  <path fill="currentColor" d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Zm0 2.18 7 3.12V11c0 4.52-3.07 8.77-7 9.93-3.93-1.16-7-5.41-7-9.93V6.3l7-3.12Z" />
+                </svg>
+                <div>
+                  <p className="text-sm font-semibold text-slate-300">No findings yet</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {kpi?.projects_count === 0
+                      ? "Set up a project and run a scan pipeline to start analysing your code."
+                      : "Run a scan pipeline on your projects to start seeing results here."}
+                  </p>
+                </div>
+                {kpi?.projects_count === 0 ? (
+                  <Link
+                    to={getRoute("ui_products_path")}
+                    className="aist-icon-button h-9 px-4 text-xs font-semibold uppercase tracking-[0.14em]"
+                  >
+                    Set up a project
+                  </Link>
+                ) : null}
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <ChartCard
+                    title="Severity Distribution"
+                    subtitle="Active findings by severity level · click a segment to filter"
+                  >
+                    {activeChartsNotApplicable ? (
+                      <ChartNotApplicable onResetStatus={resetStatus} />
+                    ) : (
+                      <ReactECharts
+                        option={severityDonutOption}
+                        style={{ width: "100%", height: "280px" }}
+                        opts={{ renderer: "svg" }}
+                        onEvents={{
+                          click: (params: { name?: string; componentType?: string }) => {
+                            if (params.componentType === "series" && params.name) {
+                              navigate(buildActiveFindingsLink({ severities: [params.name as Severity] }));
+                            }
+                          },
+                        }}
+                      />
+                    )}
+                  </ChartCard>
+
+                  <ChartCard
+                    title="Top Vulnerable Projects"
+                    subtitle="Ranked by total active finding count · click to open findings"
+                  >
+                    {activeChartsNotApplicable ? (
+                      <ChartNotApplicable onResetStatus={resetStatus} />
+                    ) : topProjects.length === 0 ? (
+                      <ChartEmpty height={280} />
+                    ) : (
+                      <ReactECharts
+                        option={topProjectsOption}
+                        style={{ width: "100%", height: "280px" }}
+                        opts={{ renderer: "svg" }}
+                        onEvents={{
+                          click: (params: { dataIndex?: number }) => {
+                            const project = topProjects[params.dataIndex ?? -1];
+                            if (project?.project_id) {
+                              navigate(buildActiveFindingsLink({ projectId: project.project_id, projectVersion: "" }));
+                            }
+                          },
+                        }}
+                      />
+                    )}
+                  </ChartCard>
+                </div>
+
+                <ChartCard
+                  title="Finding Status Breakdown"
+                  subtitle="Lifecycle status distribution across the selected findings"
+                >
+                  <ReactECharts
+                    option={statusBreakdownOption}
+                    style={{ width: "100%", height: "120px" }}
+                    opts={{ renderer: "svg" }}
+                  />
+                </ChartCard>
+
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <ChartCard
+                    title="Findings Aging Heatmap"
+                    subtitle="Open findings by age bracket and severity · click to filter"
+                  >
+                    {activeChartsNotApplicable ? (
+                      <ChartNotApplicable height={320} onResetStatus={resetStatus} />
+                    ) : agingData.length === 0 ? (
+                      <ChartEmpty height={320} />
+                    ) : (
+                      <ReactECharts
+                        option={agingHeatmapOption}
+                        style={{ width: "100%", height: "320px" }}
+                        opts={{ renderer: "svg" }}
+                        onEvents={{
+                          click: (params: { value?: [number, number, number] }) => {
+                            const value = params.value;
+                            if (!value) return;
+                            const bucket = agingBuckets[value[0]];
+                            const severity = agingSeverities[value[1]];
+                            if (!bucket || !severity) return;
+                            navigate(
+                              buildActiveFindingsLink({
+                                severities: [severity as Severity],
+                                ...agingBucketRange(bucket, now),
+                              }),
+                            );
+                          },
+                        }}
+                      />
+                    )}
+                  </ChartCard>
+
+                  <ChartCard
+                    title="Risk Trend"
+                    subtitle="Weekly new vs resolved · Net Delta = New − Mitigated · click a point to filter"
+                  >
+                    {riskTrend.length === 0 ? (
+                      <ChartEmpty height={320} />
+                    ) : (
+                      <ReactECharts
+                        option={riskTrendOption}
+                        style={{ width: "100%", height: "320px" }}
+                        opts={{ renderer: "svg" }}
+                        onEvents={{
+                          click: (params: { dataIndex?: number; seriesName?: string }) => {
+                            const idx = params.dataIndex ?? -1;
+                            const row = riskTrend[idx];
+                            if (!row) return;
+                            const range = weekRange(row.week);
+                            navigate(
+                              params.seriesName === "Mitigated"
+                                ? buildFindingsLink({ ...range, status: "Non-Active" })
+                                : buildActiveFindingsLink(range),
+                            );
+                          },
+                        }}
+                      />
+                    )}
+                  </ChartCard>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <ChartCard
+                    title="Top CWE Exposure"
+                    subtitle="Active findings by vulnerability class (CWE) · click to filter"
+                  >
+                    {activeChartsNotApplicable ? (
+                      <ChartNotApplicable height={320} onResetStatus={resetStatus} />
+                    ) : cweDistribution.length === 0 ? (
+                      <ChartEmpty height={320} />
+                    ) : (
+                      <ReactECharts
+                        option={cweBarOption}
+                        style={{ width: "100%", height: "320px" }}
+                        opts={{ renderer: "svg" }}
+                        onEvents={{
+                          click: (params: { data?: { cwe?: number } }) => {
+                            const cwe = params.data?.cwe;
+                            if (!cwe) return;
+                            navigate(buildActiveFindingsLink({ cwe: String(cwe) }));
+                          },
+                        }}
+                      />
+                    )}
+                  </ChartCard>
+
+                  <ChartCard
+                    title="AI Verdict Analytics"
+                    subtitle="AI-assisted triage: verdict distribution and severity breakdown · click to filter"
+                  >
+                    <div className="grid grid-cols-1 gap-3">
+                      <ReactECharts
+                        option={aiVerdictOption}
+                        style={{ width: "100%", height: "200px" }}
+                        opts={{ renderer: "svg" }}
+                        onEvents={{
+                          click: (params: { name?: string }) => {
+                            const map: Record<string, string> = {
+                              [VERDICT_LABELS.true_positive]: "ai_tp",
+                              [VERDICT_LABELS.false_positive]: "ai_fp",
+                              [VERDICT_LABELS.uncertain]: "ai_u",
+                            };
+                            const aiStatus = params.name ? map[params.name] : "";
+                            if (!aiStatus) return;
+                            navigate(buildFindingsLink({ aiStatus }));
+                          },
+                        }}
+                      />
+                      <ReactECharts
+                        option={aiSeverityOption}
+                        style={{ width: "100%", height: "180px" }}
+                        opts={{ renderer: "svg" }}
+                        onEvents={{
+                          click: (params: { name?: string; seriesName?: string }) => {
+                            const map: Record<string, string> = {
+                              [VERDICT_LABELS.true_positive]: "ai_tp",
+                              [VERDICT_LABELS.false_positive]: "ai_fp",
+                              [VERDICT_LABELS.uncertain]: "ai_u",
+                            };
+                            const aiStatus = params.seriesName ? map[params.seriesName] : "";
+                            const severity = params.name;
+                            if (!aiStatus || !severity) return;
+                            navigate(buildFindingsLink({ aiStatus, severities: [severity as Severity] }));
+                          },
+                        }}
+                      />
+                    </div>
+                  </ChartCard>
+                </div>
+
+                {pipelineTrend.length > 0 && (
+                  <ChartCard
+                    title="Pipeline Performance"
+                    subtitle="Weekly scan run count and warning rate"
+                    badge={
+                      <ScopeBadge
+                        label="Project filter only"
+                        hint="Pipelines are scans, not findings: only the Project filter applies here."
+                      />
+                    }
+                  >
+                    <ReactECharts
+                      option={pipelineTrendOption}
+                      style={{ width: "100%", height: "280px" }}
+                      opts={{ renderer: "svg" }}
+                    />
+                  </ChartCard>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
