@@ -6,6 +6,8 @@ from unittest.mock import patch
 from django.http import JsonResponse
 from django.test import Client, RequestFactory
 from django.urls import reverse
+from django.utils import timezone
+from dojo.models import Engagement, Finding, Test, Test_Type
 
 from aist.celery_signals import _update_action_run
 from aist.logging_transport import get_pipeline_log_path, install_pipeline_logging, uninstall_pipeline_file_logging
@@ -432,3 +434,94 @@ class DastTokenAccountingMaskingTests(AISTApiBase):
         self.assertEqual(masked["total_tokens"], 93556484)
         self.assertEqual(masked["api_token"], MASKED_VALUE)
         self.assertEqual(masked["vpn_password"], MASKED_VALUE)
+
+
+# Real scanner tag names from production whose *names* trip Django's API|TOKEN|KEY|SECRET|PASS|SIGNATURE
+# heuristic ("SSLVerificationBypass" through the "Pass" in "Bypass").
+SECRET_LOOKING_TAG_NAMES = (
+    "HardcodedNonCryptoSecret",
+    "HardcodedSecret",
+    "NoHardcodedPasswords",
+    "SSLVerificationBypass",
+    "TooSmallKeySize",
+)
+
+
+class DataKeyedCountsMaskingTests(AISTApiBase):
+
+    """Keys of "counts" are tag names (data), so they are not judged by the key-name heuristic."""
+
+    def test_tag_names_really_trip_the_sensitive_key_heuristic(self):
+        for name in (*SECRET_LOOKING_TAG_NAMES, *(n.lower() for n in SECRET_LOOKING_TAG_NAMES)):
+            with self.subTest(tag=name):
+                self.assertEqual(mask_sensitive_data({name: 42})[name], MASKED_VALUE)
+
+    def test_production_tag_counts_reproduction(self):
+        payload = {"tags": ["NoHardcodedPasswords", "XSS", "TooSmallKeySize"],
+                   "counts": {"NoHardcodedPasswords": 42, "XSS": 7, "TooSmallKeySize": 3}}
+
+        self.assertEqual(mask_sensitive_data(payload), payload)
+
+    def test_anything_but_an_integer_count_inside_counts_is_masked_as_before(self):
+        masked = mask_sensitive_data({
+            "counts": {
+                "note": "clone with glpat-abcdefgh12345678",
+                "nested": {"api_token": "x"},
+                "vpn_password": "hunter2",
+                "client_key": "-----BEGIN PRIVATE KEY-----",
+                "HardcodedSecret": "not-a-count",
+                "api_token": None,
+            },
+        })["counts"]
+
+        self.assertNotIn("glpat-abcdefgh12345678", masked["note"])
+        self.assertEqual(masked["nested"]["api_token"], MASKED_VALUE)
+        self.assertEqual(masked["vpn_password"], MASKED_VALUE)
+        self.assertEqual(masked["client_key"], MASKED_VALUE)
+        self.assertEqual(masked["HardcodedSecret"], MASKED_VALUE)
+        self.assertEqual(masked["api_token"], MASKED_VALUE)
+
+    def test_other_payloads_are_masked_exactly_as_before(self):
+        """The exemption is limited to the "counts" mapping; nothing else changes."""
+        self.assertEqual(mask_sensitive_data({"stats": {"NoHardcodedPasswords": 42}})["stats"]["NoHardcodedPasswords"], MASKED_VALUE)
+        self.assertEqual(mask_sensitive_data({"NoHardcodedPasswords": 42})["NoHardcodedPasswords"], MASKED_VALUE)
+        self.assertEqual(mask_sensitive_data({"tokens": {"api_token": "glpat-abcdefgh12345678"}})["tokens"]["api_token"], MASKED_VALUE)
+        self.assertEqual(mask_sensitive_data({"counts": 5}), {"counts": 5})
+
+
+class FindingTagFilterCountsMaskingTests(AISTApiBase):
+
+    """The findings tag filter shows per-tag counts as numbers for secret-looking tag names."""
+
+    def setUp(self):
+        super().setUp()
+        engagement = Engagement.objects.create(
+            name="Engage", target_start=timezone.now(), target_end=timezone.now(), product=self.product,
+        )
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=Test_Type.objects.create(name="Semgrep"),
+        )
+        # Tag i gets i+1 findings so every count is distinct; "XSS" is a harmless control.
+        self.expected_counts = {name: index + 1 for index, name in enumerate(SECRET_LOOKING_TAG_NAMES)}
+        self.expected_counts["XSS"] = 2
+        for name, count in self.expected_counts.items():
+            for n in range(count):
+                finding = Finding.objects.create(
+                    test=test, title=f"{name} #{n}", severity="High", date=timezone.now(), reporter=self.user,
+                )
+                finding.tags = name
+                finding.save()
+
+    def test_tag_filter_counts_arrive_as_numbers(self):
+        resp = self.client.get(reverse("aist_api:finding_tags"), data={"project_id": self.project.id})
+
+        self.assertEqual(resp.status_code, 200)
+        # Parse the bytes the browser receives, after the response-masking layer ran.
+        payload = json.loads(resp.content)
+        # Tag storage may normalise case (tagulous force_lowercase); the heuristic is case-insensitive.
+        expected = {name.lower(): count for name, count in self.expected_counts.items()}
+        self.assertEqual({name.lower(): count for name, count in payload["counts"].items()}, expected)
+        self.assertNotIn(MASKED_VALUE, resp.content.decode("utf-8"))

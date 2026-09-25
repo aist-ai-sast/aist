@@ -94,4 +94,57 @@ describe("useFileSnippet", () => {
     expect(result.current.snippet).not.toBeNull();
     expect(result.current.isWarming).toBe(false);
   });
+  // Production scenario: the organization's GitLab PAT expired and the blob endpoint
+  // answers 502 {"code":"scm_auth_failed"}. The body arrives as text (blobs are fetched
+  // with responseType "text"), so the hook must parse it.
+  function scmError(code: string) {
+    return new ApiError({
+      status: 502,
+      code: "http_error",
+      payload: JSON.stringify({ detail: "The source code repository rejected ...", code }),
+      url: "/api/v2/aist/projects_version/60/files/blob/cloud/cloud/settings.py",
+    });
+  }
+
+  it("explains an expired SCM integration token and does not retry it", async () => {
+    mockedFetchFileContent.mockReset();
+    mockedFetchFileContent.mockRejectedValue(scmError("scm_auth_failed"));
+    const { result } = renderHook(
+      () => useFileSnippet({ sourceFileLink: "/expired-token.txt", line: 5 }),
+      { wrapper: ({ children }) => withQueryClient(children) },
+    );
+
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 3000 });
+    expect(result.current.scmErrorMessage).toMatch(/SCM integration token/);
+    expect(result.current.isSourceUnavailable).toBe(false);
+    expect(result.current.isWarming).toBe(false);
+    // Retrying a rejected credential only repeats the failed login against the SCM.
+    expect(mockedFetchFileContent).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains a temporarily unavailable SCM", async () => {
+    mockedFetchFileContent.mockReset();
+    mockedFetchFileContent.mockRejectedValue(scmError("scm_unavailable"));
+    const { result } = renderHook(
+      () => useFileSnippet({ sourceFileLink: "/scm-down.txt", line: 5 }),
+      { wrapper: ({ children }) => withQueryClient(children) },
+    );
+
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 });
+    expect(result.current.scmErrorMessage).toMatch(/temporarily unavailable/);
+  });
+
+  it("does not claim an SCM problem for an unrelated 502 (e.g. proxy HTML page)", async () => {
+    mockedFetchFileContent.mockReset();
+    mockedFetchFileContent.mockRejectedValue(
+      new ApiError({ status: 502, code: "http_error", payload: "<html>Bad Gateway</html>", url: "/proxy.txt" }),
+    );
+    const { result } = renderHook(
+      () => useFileSnippet({ sourceFileLink: "/proxy.txt", line: 5 }),
+      { wrapper: ({ children }) => withQueryClient(children) },
+    );
+
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 });
+    expect(result.current.scmErrorMessage).toBeNull();
+  });
 });

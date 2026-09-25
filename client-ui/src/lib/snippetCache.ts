@@ -10,6 +10,31 @@ const WARMING_MAX_RETRIES = 15;
 const DEFAULT_RETRY_DELAY_MS = 500;
 const DEFAULT_MAX_RETRIES = 2;
 
+// The blob endpoint answers 502 with one of these codes when the SCM itself refused
+// or failed the fetch (as opposed to the file being absent, which is a 404).
+type ScmErrorCode = "scm_auth_failed" | "scm_unavailable";
+
+const SCM_ERROR_MESSAGES: Record<ScmErrorCode, string> = {
+  scm_auth_failed:
+    "The repository rejected the organization's SCM integration token. Ask an organization admin to update it in the integration settings.",
+  scm_unavailable: "The source repository is temporarily unavailable. Try again later.",
+};
+
+function scmErrorCode(error: unknown): ScmErrorCode | null {
+  if (!(error instanceof ApiError) || error.status !== 502) return null;
+  let payload = error.payload;
+  // File content is requested as text, so an error body arrives as an unparsed string.
+  if (typeof payload === "string") {
+    try {
+      payload = JSON.parse(payload);
+    } catch {
+      return null;
+    }
+  }
+  const code = (payload as { code?: unknown } | null)?.code;
+  return code === "scm_auth_failed" || code === "scm_unavailable" ? code : null;
+}
+
 type SnippetParams = {
   sourceFileLink?: string;
   line?: number;
@@ -27,8 +52,13 @@ export function useFileSnippet({ sourceFileLink, line, context = 3, enabled: ena
     queryKey: ["file", sourceFileLink],
     queryFn: () => fetchFileContent(sourceFileLink!),
     enabled,
-    retry: (failureCount, error) =>
-      isSourceWarmingError(error) ? failureCount < WARMING_MAX_RETRIES : failureCount < DEFAULT_MAX_RETRIES,
+    retry: (failureCount, error) => {
+      if (isSourceWarmingError(error)) return failureCount < WARMING_MAX_RETRIES;
+      // A rejected credential stays rejected until an admin rotates it; retrying only
+      // repeats the failed authentication against the SCM.
+      if (scmErrorCode(error) === "scm_auth_failed") return false;
+      return failureCount < DEFAULT_MAX_RETRIES;
+    },
     retryDelay: (_failureCount, error) =>
       isSourceWarmingError(error) ? error.retryAfter * 1000 : DEFAULT_RETRY_DELAY_MS,
     refetchOnMount: "always",
@@ -57,11 +87,14 @@ export function useFileSnippet({ sourceFileLink, line, context = 3, enabled: ena
   }, [query.data, line, context]);
 
   const isSourceUnavailable = query.error instanceof ApiError && query.error.status === 404;
+  const scmError = scmErrorCode(query.error);
+  const scmErrorMessage = scmError ? SCM_ERROR_MESSAGES[scmError] : null;
 
   return {
     ...query,
     snippet,
     isSourceUnavailable,
     isWarming,
+    scmErrorMessage,
   };
 }

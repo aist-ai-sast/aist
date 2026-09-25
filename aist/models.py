@@ -39,6 +39,7 @@ from aist.integrations.dast_config import (
     DastIntegrationConfig,
     DastTargetSnapshot,
 )
+from aist.integrations.scm_errors import ScmFetchError
 from aist.profile import ProjectProfile
 
 _repo_part_validator = RegexValidator(
@@ -393,6 +394,8 @@ class ScmGerritBinding(models.Model):
         When ``proxy_url`` is set the request routes through the warm per-VPN
         egress proxy; connection/timeout errors are then re-raised so the caller
         can detect a cold tunnel and answer ``202 warming`` instead of ``404``.
+        A non-404 failure status (401/403 for rejected credentials, 5xx) raises
+        :class:`ScmFetchError` instead of masquerading as a missing file.
         """
         import requests as _requests  # noqa: PLC0415
 
@@ -403,8 +406,12 @@ class ScmGerritBinding(models.Model):
             resp = _requests.get(url, headers=self.get_auth_headers(), timeout=10, proxies=proxies)
             if resp.status_code == 404:
                 return None
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # Not "file missing": surface it so the endpoint can say why (e.g. expired password).
+                raise ScmFetchError(resp.status_code)
             return base64.b64decode(resp.text)
+        except ScmFetchError:
+            raise
         except (_requests.ConnectionError, _requests.Timeout):
             if proxy_url:
                 raise  # cold egress → let the endpoint return 202 warming

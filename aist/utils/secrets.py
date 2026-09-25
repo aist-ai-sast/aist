@@ -161,6 +161,14 @@ _ALWAYS_SENSITIVE_KEYS: frozenset[str] = frozenset(
 )
 
 
+# Mappings whose keys are *data*, not field names, so the key-name heuristic must not be applied
+# to them. "counts" — /findings/tags/ facet counts keyed by tag name (aist/api/tags.py): scanner
+# tags such as "NoHardcodedPasswords" or "TooSmallKeySize" would otherwise be taken for sensitive
+# field names and their counts replaced by the mask. Only integer counts are exempt; any other
+# value under such a mapping is masked exactly as it would be anywhere else.
+_DATA_KEYED_MAPPINGS: frozenset[str] = frozenset({"counts"})
+
+
 def mask_sensitive_data(value: dict | list | tuple | str | None) -> dict | list | tuple | str | None:
     if value is None:
         return None
@@ -172,7 +180,12 @@ def mask_sensitive_data(value: dict | list | tuple | str | None) -> dict | list 
             # A container (list/dict) is always recursed into, regardless of whether its
             # key name looks sensitive — a key like "tokens" must not collapse the whole
             # list just because "tokens" matches the sensitive-substring heuristic.
-            if isinstance(item, (Mapping, list, tuple)):
+            if isinstance(item, Mapping) and str(key).lower() in _DATA_KEYED_MAPPINGS:
+                masked[key] = {
+                    data_key: data_value if isinstance(data_value, int) else mask_sensitive_data({data_key: data_value})[data_key]
+                    for data_key, data_value in item.items()
+                }
+            elif isinstance(item, (Mapping, list, tuple)):
                 masked[key] = mask_sensitive_data(item)
             elif _is_sensitive_key(str(key)) and str(key).lower() not in _NON_SENSITIVE_KEYS:
                 masked[key] = MASKED_VALUE

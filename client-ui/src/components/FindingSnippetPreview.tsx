@@ -36,7 +36,7 @@ export default function FindingSnippetPreview({
     return () => observer.disconnect();
   }, [isVisible]);
 
-  const { snippet, isLoading, isError, isSourceUnavailable, isWarming } = useFileSnippet({
+  const { snippet, isLoading, isError, isSourceUnavailable, isWarming, scmErrorMessage } = useFileSnippet({
     sourceFileLink,
     line: line ?? undefined,
     enabled: isVisible,
@@ -71,7 +71,7 @@ export default function FindingSnippetPreview({
         <span className="font-mono text-slate-400">
           {isSourceUnavailable
             ? "Source file is unavailable for this project version."
-            : "Snippet preview unavailable"}
+            : (scmErrorMessage ?? "Snippet preview unavailable")}
         </span>
       );
     }

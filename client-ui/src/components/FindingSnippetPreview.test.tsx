@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import FindingSnippetPreview from "./FindingSnippetPreview";
@@ -36,5 +36,22 @@ describe("FindingSnippetPreview", () => {
   it("shows unavailable when sourceFileLink is missing", () => {
     render(<FindingSnippetPreview line={12} />);
     expect(screen.getByText("Snippet preview unavailable")).toBeTruthy();
+  });
+  it("shows the SCM credential problem instead of a generic failure", () => {
+    mockedUseFileSnippet.mockReturnValue({
+      snippet: null,
+      isLoading: false,
+      isError: true,
+      isSourceUnavailable: false,
+      isWarming: false,
+      scmErrorMessage: "The repository rejected the organization's SCM integration token.",
+      error: null,
+    } as ReturnType<typeof useFileSnippet>);
+
+    const { container } = render(<FindingSnippetPreview sourceFileLink="/settings.py" line={10} />);
+    const view = within(container);
+
+    expect(view.getByText("The repository rejected the organization's SCM integration token.")).toBeTruthy();
+    expect(view.queryByText("Snippet preview unavailable")).toBeNull();
   });
 });

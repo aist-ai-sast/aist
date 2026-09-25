@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import CodeSnippet from "./CodeSnippet";
@@ -78,5 +78,22 @@ describe("CodeSnippet", () => {
 
     render(<CodeSnippet sourceFileLink="/missing.txt" filePath="src/a.js" line={10} />);
     expect(screen.getByText("Source file is unavailable for this project version.")).toBeTruthy();
+  });
+  it("shows the SCM credential problem instead of a generic failure", () => {
+    mockedUseFileSnippet.mockReturnValue({
+      snippet: null,
+      isLoading: false,
+      isError: true,
+      isSourceUnavailable: false,
+      scmErrorMessage: "The repository rejected the organization's SCM integration token.",
+      error: null,
+    } as ReturnType<typeof useFileSnippet>);
+
+    const { container } = render(
+      <CodeSnippet sourceFileLink="/settings.py" filePath="cloud/settings.py" line={10} fallback="Custom fallback" />,
+    );
+    const view = within(container);
+    expect(view.getByText("The repository rejected the organization's SCM integration token.")).toBeTruthy();
+    expect(view.queryByText("Custom fallback")).toBeNull();
   });
 });

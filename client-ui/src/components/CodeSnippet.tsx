@@ -18,7 +18,7 @@ export default function CodeSnippet({
   line,
   fallback,
 }: CodeSnippetProps) {
-  const { snippet, isLoading, isError, isSourceUnavailable } = useFileSnippet({
+  const { snippet, isLoading, isError, isSourceUnavailable, scmErrorMessage } = useFileSnippet({
     sourceFileLink,
     line: line ?? undefined,
   });
@@ -117,7 +117,7 @@ export default function CodeSnippet({
       <div className="rounded-xl border border-night-500 bg-night-900 px-4 py-3 text-xs text-slate-400">
         {isSourceUnavailable
           ? "Source file is unavailable for this project version."
-          : (fallback ?? "Snippet failed to load.")}
+          : (scmErrorMessage ?? fallback ?? "Snippet failed to load.")}
       </div>
     );
   }

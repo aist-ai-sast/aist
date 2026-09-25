@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from mimetypes import guess_type
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAuthzMixin, ResourcePolicy
 from aist.integrations import egress
+from aist.integrations.scm_errors import ScmFetchError
 from aist.link_builder import LinkBuilder
 from aist.models import AISTProjectVersion, VersionType
 
@@ -24,6 +26,18 @@ from aist.models import AISTProjectVersion, VersionType
 ERR_FILE_NOT_FOUND_IN_ARCHIVE = "File not found in version archive"
 ERR_FILE_NOT_FOUND_IN_REPOSITORY = "File not found in remote repository"
 ERR_BRANCH_HAS_NO_RESOLVED_COMMIT = "Branch has no resolved commit yet"
+# Client-facing SCM failures. Deliberately generic: they never name the SCM host,
+# the ref, the request URL, or the credential.
+ERR_SCM_AUTH_FAILED = (
+    "The source code repository rejected the organization's SCM integration credentials. "
+    "The access token may be expired, revoked, or lack access to this repository — "
+    "update it in the organization's integration settings."
+)
+ERR_SCM_UNAVAILABLE = "The source code repository is temporarily unavailable. Try again later."
+SCM_AUTH_FAILED_CODE = "scm_auth_failed"
+SCM_UNAVAILABLE_CODE = "scm_unavailable"
+
+logger = logging.getLogger(__name__)
 
 # Seconds the UI should wait before retrying while a cold VPN egress warms up.
 WARMING_RETRY_AFTER_SECONDS = 3
@@ -73,6 +87,12 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
                 description="Raw file content (binary stream)",
             ),
             404: OpenApiResponse(description="Project version or file not found"),
+            502: OpenApiResponse(
+                description=(
+                    'SCM rejected the fetch: `code` is "scm_auth_failed" (integration credentials '
+                    'rejected, 401/403 upstream) or "scm_unavailable" (any other upstream failure)'
+                ),
+            ),
         },
     )
     @staticmethod
@@ -104,7 +124,8 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
 
         if response.status_code == 404:
             raise Http404(ERR_FILE_NOT_FOUND_IN_REPOSITORY)
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise ScmFetchError(response.status_code)
 
         return self._bytes_response(response.content, filename)
 
@@ -161,6 +182,8 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
 
         try:
             return self._fetch_git_file(project_version, repo_obj, ref, subpath, proxy_url)
+        except ScmFetchError as exc:
+            return self._scm_error_response(project_version, repo_obj, exc)
         except (requests.ConnectionError, requests.Timeout):
             if proxy_url is None:
                 raise  # public SCM: preserve prior behaviour (propagate)
@@ -173,6 +196,29 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
                 status=status.HTTP_202_ACCEPTED,
                 headers={"Retry-After": str(WARMING_RETRY_AFTER_SECONDS)},
             )
+
+    @staticmethod
+    def _scm_error_response(project_version, repo_obj, exc: ScmFetchError) -> Response:
+        """
+        Translate an upstream SCM failure into a 502 the UI can explain.
+
+        502 Bad Gateway: this endpoint acts as a gateway to the SCM and the upstream
+        answered with a failure. The client's own session is valid, so 401/403 would be
+        wrong — and the UI treats a 401 as "your AIST session expired" and logs the user
+        out. 503 would claim AIST itself is down. The ``code`` field lets the UI tell a
+        credential problem (admin must rotate the integration token) from a transient one.
+        """
+        logger.warning(
+            "SCM file fetch failed: project_version_id=%s repo=%s upstream_status=%s",
+            project_version.id,
+            repo_obj.repo_full,
+            exc.status_code,
+        )
+        if exc.is_auth_failure:
+            body = {"detail": ERR_SCM_AUTH_FAILED, "code": SCM_AUTH_FAILED_CODE}
+        else:
+            body = {"detail": ERR_SCM_UNAVAILABLE, "code": SCM_UNAVAILABLE_CODE}
+        return Response(body, status=status.HTTP_502_BAD_GATEWAY)
 
     def _fetch_git_file(self, project_version, repo_obj, ref: str, subpath: str, proxy_url: str | None):
         """Fetch a single file from the SCM (binding, or public raw URL) at ``ref``."""
