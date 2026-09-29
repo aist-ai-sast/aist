@@ -7,7 +7,6 @@ from django.core.management import call_command
 from django.utils import timezone
 from dojo.models import Engagement, Finding, Test, Test_Type
 
-from aist.dedupe.custom import AIST_DEDUPE_CANDIDATE_TAG
 from aist.models import AISTPipeline, AISTStatus
 from aist.test.test_api import AISTApiBase
 
@@ -377,9 +376,12 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
         imported.refresh_from_db()
         unsafe_imported.refresh_from_db()
 
+        unsafe_root.refresh_from_db()
+
         self.assertFalse(imported.duplicate)
         self.assertFalse(unsafe_imported.duplicate)
-        self.assertIn("processed=2 exact_duplicates=1", dry_run_out.getvalue())
+        self.assertEqual(unsafe_root.severity, "Low")
+        self.assertIn("processed=2 exact_duplicates=2", dry_run_out.getvalue())
         explanations = [
             json.loads(line)
             for line in dry_run_out.getvalue().splitlines()
@@ -388,7 +390,9 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
         unsafe_explanation = next(
             row for row in explanations if row["finding_id"] == unsafe_imported.id
         )
-        self.assertEqual(unsafe_explanation["verdict"], "candidate")
+        # A static rescan with a higher severity merges into the existing root; the root keeps
+        # its triage history and is raised to the new severity when the merge is applied.
+        self.assertEqual(unsafe_explanation["verdict"], "duplicate")
         self.assertEqual(unsafe_explanation["source"], "unique_id_from_tool")
         self.assertEqual(unsafe_explanation["root_id"], unsafe_root.id)
         self.assertEqual(unsafe_explanation["root_severity"], "Low")
@@ -404,16 +408,15 @@ class RecomputeAistDuplicatesCommandTests(AISTApiBase):
         )
         imported.refresh_from_db()
         unsafe_imported.refresh_from_db()
+        unsafe_root.refresh_from_db()
 
         self.assertTrue(imported.duplicate)
         self.assertEqual(imported.duplicate_finding_id, root.id)
-        self.assertFalse(unsafe_imported.duplicate)
-        self.assertTrue(unsafe_imported.active)
-        self.assertIn(
-            AIST_DEDUPE_CANDIDATE_TAG,
-            set(unsafe_imported.tags.values_list("name", flat=True)),
-        )
-        self.assertIn("processed=2 exact_duplicates=1", apply_out.getvalue())
+        self.assertTrue(unsafe_imported.duplicate)
+        self.assertEqual(unsafe_imported.duplicate_finding_id, unsafe_root.id)
+        self.assertTrue(unsafe_root.active)
+        self.assertEqual(unsafe_root.severity, "Critical")
+        self.assertIn("processed=2 exact_duplicates=2", apply_out.getvalue())
         self.assertIn("promoted_candidates=0", apply_out.getvalue())
 
     def test_line_zero_uses_fallback_hash_dedupe(self):

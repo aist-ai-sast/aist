@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import re
 
+from django.db.models import Q
 from dojo.finding.deduplication import set_duplicate
 from dojo.models import DojoMeta, Finding
 
@@ -9,19 +11,21 @@ logger = logging.getLogger(__name__)
 
 AIST_EVOLUTION_TAG = "aist:evolved:auto"
 AIST_LHASH_META_NAME = "aist:lhash"
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]")
 
 
 def _normalize_vuln_id(vuln_id: str) -> str:
     """
     Normalize a scanner rule identifier so that format changes between scanner
-    versions (dots/hyphens vs underscores) do not prevent evolution matching.
+    versions (dots/hyphens/slashes vs underscores) do not prevent evolution matching.
 
     Examples:
       "javascript.browser.security.insufficient-postmessage-origin-validation"
       → "javascript_browser_security_insufficient_postmessage_origin_validation"
+      "python/XSS" → "python_xss"
 
     """
-    return vuln_id.replace(".", "_").replace("-", "_").lower()
+    return _NON_ALNUM_RE.sub("_", vuln_id.lower())
 
 
 def run_evolution_dedup(
@@ -85,15 +89,20 @@ def run_evolution_dedup(
     # FP / OOS / Risk-Accepted findings ARE included as valid ancestors:  #
     # if the same code was already reviewed and dismissed, the new        #
     # finding should inherit that decision without re-triggering triage.  #
+    # Closing a finding as FP also sets is_mitigated, so the reviewed     #
+    # statuses must be matched explicitly rather than via is_mitigated.   #
     # ------------------------------------------------------------------ #
     ancestor_metas = list(
         DojoMeta.objects
         .filter(
+            Q(finding__is_mitigated=False)
+            | Q(finding__false_p=True)
+            | Q(finding__out_of_scope=True)
+            | Q(finding__risk_accepted=True),
             name=AIST_LHASH_META_NAME,
             value__in=all_hashes,
             finding__test__engagement__product_id__in=product_ids,
             finding__duplicate=False,
-            finding__is_mitigated=False,
         )
         .exclude(finding__test_id__in=test_id_set)
         .select_related("finding__test__engagement", "finding__test__test_type")
@@ -132,7 +141,10 @@ def run_evolution_dedup(
             lhash,
         )
         ancestor = ancestor_index.get(key)
-        if ancestor is None:
+        # The index holds the oldest match; if even that one is newer, the current
+        # finding is the root of the chain. Pointing it at a newer finding inverts
+        # the chain and later breaks set_duplicate's re-parenting of its children.
+        if ancestor is None or (ancestor.created, ancestor.id) >= (finding.created, finding.id):
             continue
         if dry_run:
             matched += 1

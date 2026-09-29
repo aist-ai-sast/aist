@@ -10,6 +10,7 @@ All tests use mocks/stubs; no database or filesystem is required.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -65,6 +66,7 @@ class _Finding:
     test: _Test = field(default_factory=_Test)
     finding_meta: _MetaManager = field(default_factory=lambda: _MetaManager([]))
     tags: MagicMock = field(default_factory=MagicMock)
+    created: datetime = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +99,10 @@ class NormalizeVulnIdTests(SimpleTestCase):
     def test_already_normalized(self):
         s = "python_sqli_injection"
         self.assertEqual(_normalize_vuln_id(s), s)
+
+    def test_slash_rule_id_matches_underscored_format(self):
+        """Snyk Code switched from "python/XSS" to "python_xss"; both must normalize equally."""
+        self.assertEqual(_normalize_vuln_id("python/XSS"), _normalize_vuln_id("python_xss"))
 
 
 # ---------------------------------------------------------------------------
@@ -532,8 +538,9 @@ class RunEvolutionDedupTests(SimpleTestCase):
     def test_mitigated_excluded_fp_oos_ra_included_in_ancestor_query(self, mock_finding, mock_dojometa):
         """
         Mitigated ancestors must be excluded (new occurrence = regression).
-        FP / OOS / RA ancestors must NOT be filtered out: a finding already
-        reviewed and dismissed should suppress the same code without re-triage.
+        FP / OOS / RA ancestors must stay eligible even though closing a
+        finding as FP also sets is_mitigated: a finding already reviewed and
+        dismissed should suppress the same code without re-triage.
         """
         new_f = self._make_finding(2, lhash="abc123def456abcd", test_id=200)
 
@@ -548,10 +555,17 @@ class RunEvolutionDedupTests(SimpleTestCase):
 
         run_evolution_dedup(pipeline_id="pipe-7", test_ids=[200], logger=MagicMock())
 
-        filter_kwargs = mock_dojometa.objects.filter.call_args.kwargs
-        # Only mitigated findings are excluded from ancestry
-        self.assertEqual(filter_kwargs.get("finding__is_mitigated"), False)
-        # FP / OOS / RA are NOT filtered — reviewed decisions should suppress new findings
-        self.assertNotIn("finding__false_p", filter_kwargs)
-        self.assertNotIn("finding__out_of_scope", filter_kwargs)
-        self.assertNotIn("finding__risk_accepted", filter_kwargs)
+        call = mock_dojometa.objects.filter.call_args
+        # A bare is_mitigated=False kwarg would drop every FP-closed ancestor.
+        self.assertNotIn("finding__is_mitigated", call.kwargs)
+        (status_q,) = call.args
+        self.assertEqual(status_q.connector, "OR")
+        self.assertCountEqual(
+            status_q.children,
+            [
+                ("finding__is_mitigated", False),
+                ("finding__false_p", True),
+                ("finding__out_of_scope", True),
+                ("finding__risk_accepted", True),
+            ],
+        )

@@ -64,10 +64,21 @@ itself the durable identity.
 For DAST, score never authorizes automatic linking. It only ranks candidates.
 Automatic linking requires equality of one complete identity after the binding
 scope and cluster-ambiguity checks. Severity is reported independently and never
-participates in identity. Applying an exact match has a separate safety gate: its
-root must still be actionable and at least as severe as the new finding. A root
-that was closed, accepted, marked false positive/out of scope, or has lower
-severity leaves the new finding active as a review candidate.
+participates in identity. Applying a match has a separate safety gate, which
+depends on what the root's status means:
+
+- **DAST.** A DAST verdict belongs to the environment where it was observed. The
+  root must still be active and at least as severe as the new finding. A root that
+  was closed, accepted, marked false positive/out of scope, or has lower severity
+  leaves the new finding active as a review candidate.
+- **Static analysis.** A static verdict is about the code, so a human dismissal
+  carries over. A root marked false positive, out of scope, or risk accepted absorbs
+  the new finding, even though closing as false positive also sets `is_mitigated`.
+  A root that was fixed without a human dismissal leaves the new finding active as
+  a regression candidate. The existing root always stays the root, so its triage
+  history and work items survive. If the new finding is more severe, the root is
+  raised to that severity. Because duplicates are deleted, a new finding that
+  carries a work item the root lacks stays a review candidate.
 
 DAST CWE and CVE values are read only from their imported structured fields. The
 canonical family classifier never turns a DAST title into a synthetic CWE.

@@ -10,7 +10,7 @@ from dojo.models import Endpoint, Engagement, Finding, Test, Test_Type, Vulnerab
 
 from aist.dedupe.custom import AIST_DEDUPE_AUTO_TAG, AIST_DEDUPE_CANDIDATE_TAG
 from aist.logging_transport import get_pipeline_log_path
-from aist.models import AISTPipeline, Organization, PipelineExecutionType
+from aist.models import AISTPipeline, Organization, PipelineExecutionType, WorkItemLink
 from aist.test import dast_fixtures
 from aist.test.test_api import AISTApiBase
 
@@ -173,10 +173,109 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
         self.assertEqual(imported.duplicate_finding_id, original.id)
         self.assertIn(AIST_DEDUPE_AUTO_TAG, set(imported.tags.values_list("name", flat=True)))
 
-    def test_exact_reimport_keeps_a_higher_severity_finding_active_for_review(self):
+    def _exact_semgrep_pair(self, *, original_severity: str = "High", imported_severity: str = "High"):
+        original = self._create_finding(
+            test=self._create_test("Semgrep JSON Report"),
+            title="SQL injection",
+            vuln_id="semgrep-sql-injection",
+            unique_id="semgrep-result-91",
+            file_path="src/query.py",
+            line=19,
+            cwe=89,
+            severity=original_severity,
+        )
+        imported = self._create_finding(
+            test=self._create_test("Semgrep JSON Report"),
+            title="SQL injection",
+            vuln_id="semgrep-sql-injection",
+            unique_id="semgrep-result-91",
+            file_path="src/query.py",
+            line=19,
+            cwe=89,
+            severity=imported_severity,
+        )
+        return original, imported
+
+    def _link_ticket(self, finding: Finding, key: str) -> None:
+        WorkItemLink.objects.create(
+            finding=finding,
+            external_key=key,
+            external_url=f"https://jira.example.test/browse/{key}",
+        )
+
+    def test_rescan_of_code_closed_as_false_positive_inherits_the_decision(self):
+        original, imported = self._exact_semgrep_pair()
+        Finding.objects.filter(pk=original.pk).update(
+            active=False, false_p=True, is_mitigated=True, mitigated=timezone.now(),
+        )
+
+        dedupe_batch_of_findings([imported])
+        imported.refresh_from_db()
+
+        self.assertTrue(imported.duplicate)
+        self.assertFalse(imported.active)
+        self.assertEqual(imported.duplicate_finding_id, original.id)
+        self.assertIn(AIST_DEDUPE_AUTO_TAG, set(imported.tags.values_list("name", flat=True)))
+
+    def test_rescan_after_a_fix_stays_active_as_a_regression(self):
+        original, imported = self._exact_semgrep_pair()
+        Finding.objects.filter(pk=original.pk).update(
+            active=False, is_mitigated=True, mitigated=timezone.now(),
+        )
+
+        dedupe_batch_of_findings([imported])
+        imported.refresh_from_db()
+
+        self.assertFalse(imported.duplicate)
+        self.assertTrue(imported.active)
+        self.assertIn(AIST_DEDUPE_CANDIDATE_TAG, set(imported.tags.values_list("name", flat=True)))
+
+    def test_ticketed_copy_is_not_merged_into_a_dismissed_root(self):
+        original, imported = self._exact_semgrep_pair()
+        Finding.objects.filter(pk=original.pk).update(
+            active=False, false_p=True, is_mitigated=True, mitigated=timezone.now(),
+        )
+        self._link_ticket(imported, "CLOUD-101")
+
+        dedupe_batch_of_findings([imported])
+        imported.refresh_from_db()
+
+        self.assertFalse(imported.duplicate)
+        self.assertTrue(imported.work_item_links.exists())
+        self.assertIn(AIST_DEDUPE_CANDIDATE_TAG, set(imported.tags.values_list("name", flat=True)))
+
+    def test_higher_severity_rescan_raises_the_ticketed_root(self):
+        original, imported = self._exact_semgrep_pair(original_severity="Low", imported_severity="Critical")
+        self._link_ticket(original, "CLOUD-102")
+
+        dedupe_batch_of_findings([imported])
+        imported.refresh_from_db()
+        original.refresh_from_db()
+
+        self.assertTrue(imported.duplicate)
+        self.assertEqual(imported.duplicate_finding_id, original.id)
+        self.assertFalse(original.duplicate)
+        self.assertTrue(original.active)
+        self.assertEqual(original.severity, "Critical")
+        self.assertTrue(original.work_item_links.filter(external_key="CLOUD-102").exists())
+
+    def test_ticketed_copy_is_not_merged_into_an_untracked_active_root(self):
+        original, imported = self._exact_semgrep_pair()
+        self._link_ticket(imported, "CLOUD-103")
+
+        dedupe_batch_of_findings([imported])
+        imported.refresh_from_db()
+        original.refresh_from_db()
+
+        self.assertFalse(imported.duplicate)
+        self.assertFalse(original.duplicate)
+        self.assertTrue(imported.work_item_links.exists())
+        self.assertIn(AIST_DEDUPE_CANDIDATE_TAG, set(imported.tags.values_list("name", flat=True)))
+
+    def test_exact_reimport_with_higher_severity_keeps_the_root_and_raises_it(self):
         original_test = self._create_test("Semgrep JSON Report")
         repeated_test = self._create_test("Semgrep JSON Report")
-        self._create_finding(
+        original = self._create_finding(
             test=original_test,
             title="SQL injection",
             vuln_id="semgrep-sql-injection",
@@ -199,12 +298,14 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
 
         dedupe_batch_of_findings([imported])
         imported.refresh_from_db()
+        original.refresh_from_db()
 
-        self.assertFalse(imported.duplicate)
-        self.assertTrue(imported.active)
-        self.assertEqual(imported.severity, "Critical")
-        self.assertIn(AIST_DEDUPE_CANDIDATE_TAG, set(imported.tags.values_list("name", flat=True)))
-        self.assertNotIn(AIST_DEDUPE_AUTO_TAG, set(imported.tags.values_list("name", flat=True)))
+        self.assertTrue(imported.duplicate)
+        self.assertEqual(imported.duplicate_finding_id, original.id)
+        self.assertIn(AIST_DEDUPE_AUTO_TAG, set(imported.tags.values_list("name", flat=True)))
+        self.assertFalse(original.duplicate)
+        self.assertTrue(original.active)
+        self.assertEqual(original.severity, "Critical")
 
     def test_batch_hook_auto_matches_score_two(self):
         original_test = self._create_test("Semgrep JSON Report")

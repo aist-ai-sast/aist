@@ -21,6 +21,7 @@ from aist.dedupe.canonical import (
     DastIdentityKey,
     LocationStrength,
     MatchVerdict,
+    _is_dast_finding,
     dast_identity_keys,
     dynamic_semantic_group_keys,
     finding_signature,
@@ -269,20 +270,57 @@ def _prepare_root_for_set_duplicate(finding: Finding) -> Finding:
     return finding
 
 
-def _automatic_merge_blocker(finding: Finding, root: Finding) -> str | None:
-    """Return why an exact identity match is unsafe to apply without human review."""
+def _work_item_keys(finding: Finding) -> set[str]:
+    return {link.external_key or link.external_url for link in finding.work_item_links.all()}
+
+
+def _is_human_dismissed(finding: Finding) -> bool:
+    return bool(finding.false_p or finding.out_of_scope or finding.risk_accepted)
+
+
+def _raises_severity(finding: Finding, root: Finding) -> bool:
+    return _SEVERITY_RANK.get(root.severity, -1) < _SEVERITY_RANK.get(finding.severity, -1)
+
+
+def _dynamic_merge_blocker(finding: Finding, root: Finding) -> str | None:
+    # A DAST verdict is tied to the environment it was observed in: a dismissal on one
+    # deployment does not prove the same route is safe on another.
     if (
         not root.active
-        or root.false_p
-        or root.out_of_scope
-        or root.risk_accepted
+        or _is_human_dismissed(root)
         or root.is_mitigated
         or root.mitigated is not None
     ):
         return "canonical_root_is_not_actionable"
-    if _SEVERITY_RANK.get(root.severity, -1) < _SEVERITY_RANK.get(finding.severity, -1):
+    if _raises_severity(finding, root):
         return "canonical_root_would_lower_severity"
     return None
+
+
+def _static_merge_blocker(finding: Finding, root: Finding) -> str | None:
+    # A SAST verdict is about the code, so a human dismissal carries over to the same code.
+    # Closing as FP also sets is_mitigated, hence the dismissal check comes first.
+    if not _is_human_dismissed(root) and (not root.active or root.is_mitigated or root.mitigated is not None):
+        return "canonical_root_is_fixed"
+    # Duplicates are deleted, and a work item link would go with them.
+    if _work_item_keys(finding) - _work_item_keys(root):
+        return "duplicate_has_own_work_items"
+    return None
+
+
+def _automatic_merge_blocker(finding: Finding, root: Finding) -> str | None:
+    """Return why a duplicate match is unsafe to apply without human review."""
+    if _is_dast_finding(finding):
+        return _dynamic_merge_blocker(finding, root)
+    return _static_merge_blocker(finding, root)
+
+
+def _carry_severity_to_active_root(finding: Finding, root: Finding) -> None:
+    """Keep the root (and its triage history) but never let the merge hide a higher severity."""
+    if _is_dast_finding(finding) or not root.active or not _raises_severity(finding, root):
+        return
+    root.severity = finding.severity
+    root.save(dedupe_option=False, issue_updater_option=False, push_to_jira=False)
 
 
 def _lock_dynamic_identity_tables() -> None:
@@ -804,7 +842,7 @@ def _apply_duplicate_decision(
             blocker = None
             if root.duplicate_finding_id is not None:
                 blocker = "canonical_root_changed_before_apply"
-            elif exact_decision or dynamic_decision:
+            elif exact_decision or dynamic_decision or not _is_dast_finding(finding):
                 blocker = _automatic_merge_blocker(finding, root)
             if blocker is not None:
                 _downgrade_duplicate_at_apply(
@@ -814,6 +852,7 @@ def _apply_duplicate_decision(
                     reason=blocker,
                 )
                 return
+            _carry_severity_to_active_root(finding, root)
             set_duplicate(finding, _prepare_root_for_set_duplicate(root))
             _clear_tag(finding, AIST_DEDUPE_CANDIDATE_TAG)
             _set_tag(finding, AIST_DEDUPE_AUTO_TAG)

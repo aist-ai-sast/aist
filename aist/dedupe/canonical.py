@@ -91,6 +91,11 @@ _FAMILY_PATTERNS: dict[CanonicalFamily, tuple[re.Pattern[str], ...]] = {
         re.compile(r"hardcodednoncryptosecret", re.IGNORECASE),
         re.compile(r"detected[_\s-]?secret", re.IGNORECASE),
         re.compile(r"detected[_\s-]?jwt[_\s-]?token", re.IGNORECASE),
+        # LLM analyzers: "GitLab Project Access Token With Write Scope Committed to the Repository".
+        re.compile(
+            r"\b(token|secret|password|credentials?|api[_\s-]?key)\b[^.\n]{0,60}\bcommitted\b",
+            re.IGNORECASE,
+        ),
     ),
     CanonicalFamily.SSL_VERIFICATION: (
         re.compile(r"ssl[_\s-]?(verify|verification)", re.IGNORECASE),
@@ -129,6 +134,8 @@ _FAMILY_PATTERNS: dict[CanonicalFamily, tuple[re.Pattern[str], ...]] = {
     CanonicalFamily.POSTMESSAGE_ORIGIN: (
         re.compile(r"postmessage", re.IGNORECASE),
         re.compile(r"origin[_\s-]?check", re.IGNORECASE),
+        # Horusec: "Origins Should Be Verified During Cross-Origin Communication(s)".
+        re.compile(r"origins?[_\s-]+should[_\s-]+be[_\s-]+verified", re.IGNORECASE),
     ),
     CanonicalFamily.MISSING_AUTHENTICATION: (
         re.compile(r"(no|missing|without|absent|lack(?:s|ing)?\s+of)\s+(authentication|authn|auth)\b", re.IGNORECASE),

@@ -123,6 +123,19 @@ Production values (from `aist_site/settings.py`): `AUTO_THRESHOLD = 2`, `CANDIDA
 previous finding is itself already a duplicate, its `duplicate_finding` is used as
 root (chain resolution).
 
+Before a DUPLICATE is applied, `_automatic_merge_blocker` may downgrade it to a
+CANDIDATE:
+
+| Root state | Static finding | DAST finding |
+|---|---|---|
+| False positive / out of scope / risk accepted | merge (human decision inherited) | candidate |
+| Fixed (mitigated, not dismissed) | candidate (`canonical_root_is_fixed`, regression) | candidate |
+| Active, lower severity than the new finding | merge; the root is raised to the new severity | candidate |
+| Any root, new finding has a work item the root lacks | candidate (`duplicate_has_own_work_items`) | — |
+
+The existing root is never demoted: duplicates are physically deleted on this
+instance (`max_dupes=0`), and demoting the root would delete its triage history.
+
 ---
 
 ### Fallback deduplication

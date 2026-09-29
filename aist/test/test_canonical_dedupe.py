@@ -229,6 +229,81 @@ class CanonicalDedupeTests(SimpleTestCase):
         self.assertNotIn("endpoints", tokens)
         self.assertIn("authentication", tokens)
 
+    def test_score_duplicate_for_semgrep_and_horusec_postmessage_origin(self):
+        # Horusec reports no CWE and words the rule differently from Semgrep.
+        semgrep = DummyFinding(
+            title="Insufficient Postmessage Origin Validation",
+            vuln_id_from_tool=(
+                "javascript_browser_security_insufficient_postmessage_origin_validation"
+                "_insufficient_postmessage_origin_validation"
+            ),
+            file_path="front_end/experiments/monitoring/src/main.ts",
+            line=74,
+            cwe=345,
+        )
+        horusec = DummyFinding(
+            title="Origins Should Be Verified During Cross-Origin Communication",
+            vuln_id_from_tool="origins_should_be_verified_during_cross_origin_communication",
+            file_path="front_end/experiments/monitoring/src/main.ts",
+            line=74,
+            cwe=0,
+        )
+
+        self.assertEqual(finding_signature(horusec).family, CanonicalFamily.POSTMESSAGE_ORIGIN)
+        match = score_findings(semgrep, horusec)
+        self.assertEqual(match.verdict, MatchVerdict.DUPLICATE)
+
+    def test_score_duplicate_for_llm_committed_token_and_snyk_hardcoded_secret(self):
+        # Same secret on the same line, worded by an LLM analyzer as a committed token.
+        snyk = DummyFinding(
+            title="Hardcoded Non-Cryptographic Secret",
+            vuln_id_from_tool="python_hardcodednoncryptosecret",
+            file_path="plugins/plugin-inventory/scripts/report.py",
+            line=28,
+            cwe=547,
+        )
+        claude = DummyFinding(
+            title="GitLab Project Access Token With Write Scope Committed to the Repository",
+            vuln_id_from_tool="claude:798:plugins/plugin-inventory/scripts/report.py:5:unknown",
+            file_path="plugins/plugin-inventory/scripts/report.py",
+            line=28,
+            cwe=798,
+        )
+
+        self.assertEqual(finding_signature(claude).family, CanonicalFamily.HARDCODED_SECRET)
+        match = score_findings(snyk, claude)
+        self.assertEqual(match.verdict, MatchVerdict.DUPLICATE)
+
+    def test_explicit_cwe_alone_does_not_assign_family(self):
+        # A family match alone reaches the production auto-duplicate threshold, so a
+        # CWE bucket must not stand in for a recognised rule or title.
+        finding = DummyFinding(
+            title="Publisher-Controlled Track Count Becomes an Unbounded Array Index",
+            vuln_id_from_tool="claude:89:src/recorder.cpp:78:unknown",
+            file_path="src/recorder.cpp",
+            line=392,
+            cwe=89,
+        )
+        self.assertEqual(finding_signature(finding).family, CanonicalFamily.UNKNOWN)
+
+    def test_different_cookie_flags_on_same_line_do_not_match(self):
+        # Secure (CWE-614) and HttpOnly (CWE-1004) are separate weaknesses on one set_cookie call.
+        semgrep = DummyFinding(
+            title="Django Secure Set Cookie",
+            vuln_id_from_tool="python_django_security_audit_secure_cookies_django_secure_set_cookie",
+            file_path="cloud/api/views/utils.py",
+            line=196,
+            cwe=614,
+        )
+        bearer = DummyFinding(
+            title="Missing HTTP Only Option in Cookie Configuration",
+            vuln_id_from_tool="python_django_cookie_missing_http_only",
+            file_path="cloud/api/views/utils.py",
+            line=196,
+            cwe=1004,
+        )
+        self.assertEqual(score_findings(semgrep, bearer).verdict, MatchVerdict.NO_MATCH)
+
     def test_score_duplicate_for_cross_scanner_jwt_secret_variants(self):
         semgrep = DummyFinding(
             title="JWT token detected",
