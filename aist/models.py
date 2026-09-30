@@ -56,6 +56,7 @@ ERR_GITHASH_PARENT_PROJECT_MISMATCH = "resolved_from_branch must belong to the s
 ERR_RESOLVED_FROM_BRANCH_ONLY_FOR_GITHASH = "resolved_from_branch is allowed only for GIT_HASH versions."
 ERR_SOURCELESS_REQUIRES_VERSION = "A version with no source revision must still name what it identifies."
 ERR_SOURCELESS_REJECTS_SOURCE = "A version with no source revision cannot carry a source archive."
+ERR_SCRIPT_BINDING_REQUIRES_BRANCH = "A generated script can be bound only to a GIT_BRANCH version."
 
 
 class ScmType(models.TextChoices):
@@ -1026,14 +1027,10 @@ class AISTProject(models.Model):
     @property
     def active_script(self) -> AISTProjectScript:
         """
-        Return the current effective script for this project.
+        Return the script the latest version runs (see ``AISTProjectVersion.effective_script``).
 
-        Resolution order:
-        1. Latest version's script (authoritative for pipeline history)
-        2. Latest project-scoped revision (set at creation before any version exists)
-        3. Shared default singleton
-
-        This property replaces the former stored FK.
+        A project without versions runs nothing yet and shows the shared default.
+        A revision not bound to any version is never reported as active.
         Do NOT call in list-view loops without prefetching; see views/projects.py.
         """
         latest_version = (
@@ -1042,11 +1039,8 @@ class AISTProject(models.Model):
             .select_related("script")
             .first()
         )
-        if latest_version and latest_version.script_id:
-            return latest_version.script
-        latest_revision = self.script_revisions.order_by("-created_at").first()
-        if latest_revision:
-            return latest_revision
+        if latest_version:
+            return latest_version.effective_script
         return AISTProjectScript.get_shared_default()
 
     def get_launch_schedule(self) -> LaunchSchedule | None:
@@ -1211,6 +1205,56 @@ class AISTProjectScript(models.Model):
             created_by=user,
         ), True
 
+    @classmethod
+    def for_new_version(cls, project: AISTProject) -> AISTProjectScript:
+        """
+        Return the script a newly created version of ``project`` starts with.
+
+        The latest project revision (set at project creation or via API), else a
+        project-scoped copy of the shared default. Every code path that creates a
+        version without an explicit script uses this, so a new version never runs
+        something other than what the project was configured with.
+        """
+        latest_revision = project.script_revisions.order_by("-created_at").first()
+        if latest_revision:
+            return latest_revision
+        script, _ = cls.get_or_create_for_project(
+            content=cls.get_shared_default().content,
+            project=project,
+        )
+        return script
+
+    @classmethod
+    def create_for_version(
+        cls,
+        content: str,
+        version: AISTProjectVersion,
+        user=None,
+    ) -> tuple[AISTProjectScript, bool]:
+        """
+        Store ``content`` as a project revision and make it the script of ``version``.
+
+        Only a GIT_BRANCH version is accepted: branch pipelines copy the branch
+        script into each resolved GIT_HASH version, so binding the branch is what
+        makes the script run. No other version is touched. The project row lock
+        serializes concurrent calls, so identical content never yields two revisions.
+        """
+        with transaction.atomic():
+            # Lock order project → version, parent before child.
+            project = AISTProject.objects.select_for_update().get(pk=version.project_id)
+            locked_version = (
+                AISTProjectVersion.objects
+                .select_for_update()
+                .get(pk=version.pk, project=project)
+            )
+            if locked_version.version_type != VersionType.GIT_BRANCH:
+                raise ValidationError({"version": ERR_SCRIPT_BINDING_REQUIRES_BRANCH})
+            script, created = cls.get_or_create_for_project(content=content, project=project, user=user)
+            locked_version.script = script
+            locked_version.clean()
+            locked_version.save(update_fields=["script", "updated"])
+        return script, created
+
 
 class VersionType(models.TextChoices):
     GIT_BRANCH = "GIT_BRANCH", "Git branch"
@@ -1369,6 +1413,11 @@ class AISTProjectVersion(models.Model):
 
     def is_git(self) -> bool:
         return self.version_type in {VersionType.GIT_BRANCH, VersionType.GIT_HASH}
+
+    @property
+    def effective_script(self) -> AISTProjectScript:
+        """Return the script a pipeline for this version runs: its own, else the shared default."""
+        return self.script or AISTProjectScript.get_shared_default()
 
     def ensure_extracted(self) -> Path | None:
         """

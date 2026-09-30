@@ -232,3 +232,69 @@ class GitlabIntegrationAPITests(TestCase):
         )
 
         self.assertEqual(resp.status_code, 409)
+
+    # auto_analyze targets the branch version the import itself created — nothing else.
+
+    def _import_with_auto_analyze(self, mock_delay, mock_cfg, *, default_branch: str | None):
+        org = Organization.objects.create(name=f"Org AA {default_branch}")
+        self._create_gitlab_integration(org)
+        mock_cfg.return_value = Mock(convert_languages=Mock(return_value=["python"]))
+        info = {
+            "ok": True,
+            "path_with_namespace": "group/analyzed-repo",
+            "description": "desc",
+            "web_url": "https://gitlab.example.com/group/analyzed-repo",
+            "inferred_base": "https://gitlab.example.com",
+            "langs_raw": {"Python": 100.0},
+        }
+        if default_branch:
+            info["default_branch"] = default_branch
+        mock_delay.return_value.get.return_value = info
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(
+                self._url(),
+                data={"project_id": 321, "organization_id": org.id, "auto_analyze": True},
+                format="json",
+            )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        return AISTProject.objects.get(id=resp.data["aist_project_id"])
+
+    @patch("aist.tasks.claude.analyze_project_after_import.delay")
+    @patch("aist.api.gitlab_integration._load_analyzers_config")
+    @patch("aist.api.gitlab_integration.fetch_gitlab_project_info.delay")
+    def test_queues_analysis_for_the_imported_default_branch(self, mock_delay, mock_cfg, mock_analyze):
+        project = self._import_with_auto_analyze(mock_delay, mock_cfg, default_branch="main")
+
+        main = project.versions.get(version="main", version_type=VersionType.GIT_BRANCH)
+        mock_analyze.assert_called_once_with(project.id, main.id)
+        # Until Claude binds its script, main runs the project's own copy of the default.
+        self.assertEqual(main.script.project_id, project.id)
+
+    @patch("aist.models.ScmGitlabBinding.get_project_info", return_value=None)
+    @patch("aist.tasks.claude.analyze_project_after_import.delay")
+    @patch("aist.api.gitlab_integration._load_analyzers_config")
+    @patch("aist.api.gitlab_integration.fetch_gitlab_project_info.delay")
+    def test_unknown_default_branch_skips_analysis_with_warning(self, mock_delay, mock_cfg, mock_analyze, mock_info):
+        with self.assertLogs("aist.scm_import", level="WARNING") as logs:
+            self._import_with_auto_analyze(mock_delay, mock_cfg, default_branch=None)
+
+        mock_analyze.assert_not_called()
+        self.assertIn("auto-analyze not queued", "\n".join(logs.output))
+
+    @patch("aist.tasks.claude.analyze_project_after_import.delay")
+    @patch("aist.api.gitlab_integration._load_analyzers_config")
+    @patch("aist.api.gitlab_integration.fetch_gitlab_project_info.delay")
+    def test_reimport_of_existing_project_does_not_queue_analysis(self, mock_delay, mock_cfg, mock_analyze):
+        project = self._import_with_auto_analyze(mock_delay, mock_cfg, default_branch="main")
+        mock_analyze.reset_mock()
+
+        with self.assertLogs("aist.scm_import", level="WARNING"), self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(
+                self._url(),
+                data={"project_id": 321, "organization_id": project.organization_id, "auto_analyze": True},
+                format="json",
+            )
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data["aist_project_id"], project.id)
+        mock_analyze.assert_not_called()

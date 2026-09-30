@@ -229,6 +229,32 @@ class GerritIntegrationAPITests(TestCase):
         )
         self.assertEqual(resp.status_code, 409)
 
+    @patch("aist.tasks.claude.analyze_project_after_import.delay")
+    @patch("aist.api.gerrit_integration.fetch_gerrit_project_info.delay")
+    def test_auto_analyze_targets_imported_default_branch(self, mock_delay, mock_analyze):
+        org = Organization.objects.create(name="Org AutoAnalyze")
+        self._create_gerrit_integration(org)
+        mock_delay.return_value.get.return_value = {
+            "ok": True,
+            "project_path": "platform/build/soong",
+            "description": "desc",
+            "web_url": "https://gerrit.example.com/admin/repos/platform/build/soong",
+            "inferred_base": "https://gerrit.example.com",
+            "default_branch": "main",
+        }
+
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(
+                self._url(),
+                data={"project_path": "platform/build/soong", "organization_id": org.id, "auto_analyze": True},
+                format="json",
+            )
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        project = AISTProject.objects.get(id=resp.data["aist_project_id"])
+        main = project.versions.get(version="main", version_type=VersionType.GIT_BRANCH)
+        mock_analyze.assert_called_once_with(project.id, main.id)
+
 
 class GerritProjectsListViewTests(TestCase):
     def setUp(self):

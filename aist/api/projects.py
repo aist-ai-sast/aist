@@ -10,7 +10,6 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
 from aist.api.project_versions import (
-    SCRIPT_SOURCE_PROJECT_REVISION,
     SCRIPT_SOURCE_SHARED_DEFAULT,
     SCRIPT_SOURCE_VERSION,
     _serialize_version_script,
@@ -20,7 +19,14 @@ from aist.authz import Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy, quer
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.integrations.claude import claude_auth_env
 from aist.integrations.resolver import resolve_integration
-from aist.models import AISTProject, AISTProjectScript, Organization, OrgIntegrationType
+from aist.models import (
+    AISTProject,
+    AISTProjectScript,
+    AISTProjectVersion,
+    Organization,
+    OrgIntegrationType,
+    VersionType,
+)
 from aist.profile import ProjectProfile
 from aist.utils.pipeline_imports import _load_analyzers_config
 
@@ -319,39 +325,66 @@ class AISTProjectDetailAPI(AISTAuthzMixin, generics.RetrieveDestroyAPIView):
         return Response({"ok": True, "project": payload})
 
 
+class RegenerateAnalysisRequestSerializer(serializers.Serializer):
+    project_version_id = serializers.IntegerField(
+        min_value=1,
+        help_text="GIT_BRANCH version of this project to clone and bind the generated init script to.",
+    )
+
+
 class AISTProjectRegenerateAnalysisAPI(AISTAPIView):
 
     """
     Manually re-trigger the Claude-based init-script + exclusion-profile
-    generation for an existing project.
+    generation for one branch version of an existing project.
 
     Reuses the exact same Celery task (``analyze_project_after_import``) that
     otherwise only runs once, automatically, at SCM import time when
     ``auto_analyze=True`` — so a project can be regenerated on demand at any
     later point (e.g. after fixing a broken SCM credential, or after the repo
-    has changed significantly).
+    has changed significantly). The caller names the branch: it is cloned, and
+    the generated script is bound to exactly that version.
     """
 
     authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
-        request=None,
+        request=RegenerateAnalysisRequestSerializer,
         responses={
             202: {"type": "object", "properties": {"queued": {"type": "boolean"}}},
-            400: OpenApiResponse(description="Project has no repository or no active Claude Code integration"),
+            400: OpenApiResponse(
+                description=(
+                    "Missing or invalid project_version_id, version is not GIT_BRANCH, "
+                    "project has no repository, or no active Claude Code integration"
+                ),
+            ),
+            404: OpenApiResponse(description="Project or version not found"),
         },
         tags=[AISTApiTag.PROJECTS.value],
         summary="Regenerate init script and exclusions",
         description=(
             "Re-runs the Claude-based init-script-generator and project-profile-analyzer "
-            "skills against a fresh clone of the project's repository — the same analysis "
+            "skills against a fresh clone of the chosen branch — the same analysis "
             "that runs once automatically at SCM import time when auto_analyze is enabled. "
-            "Requires the project to have a repository and the organization to have an "
-            "active Claude Code integration."
+            "The generated init script is bound to that GIT_BRANCH version; exclusions "
+            "stay project-level. Requires the project to have a repository and the "
+            "organization to have an active Claude Code integration."
         ),
     )
     def post(self, request, project_id: int, *args, **kwargs) -> Response:
         project = self.resolve(id=project_id)
+        serializer = RegenerateAnalysisRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        version = self.resolve(
+            resource=AISTProjectVersion,
+            pk=serializer.validated_data["project_version_id"],
+            project=project,
+        )
+        if version.version_type != VersionType.GIT_BRANCH:
+            return Response(
+                {"project_version_id": ["Init script generation needs a GIT_BRANCH version."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not project.repository:
             return Response(
@@ -371,7 +404,7 @@ class AISTProjectRegenerateAnalysisAPI(AISTAPIView):
 
         from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415
 
-        analyze_project_after_import.delay(project.id)
+        analyze_project_after_import.delay(project.id, version.id)
         return Response({"queued": True}, status=status.HTTP_202_ACCEPTED)
 
 
@@ -494,7 +527,7 @@ class AISTProjectActiveScriptAPI(AISTAPIView):
         summary="Get active script",
         description=(
             "Returns the active script for the project. "
-            "Resolution order: latest version's script → latest project-scoped revision → shared default. "
+            "The latest version's script, else the shared default — the script its next pipeline runs. "
             "Always returns 200 — the shared default is the final fallback. "
             "Response includes `inherited` and `source` flags matching the version-script endpoint."
         ),
@@ -514,8 +547,6 @@ class AISTProjectActiveScriptAPI(AISTAPIView):
         )
         if latest_version and latest_version.script_id:
             return SCRIPT_SOURCE_VERSION
-        if project.script_revisions.exists():
-            return SCRIPT_SOURCE_PROJECT_REVISION
         return SCRIPT_SOURCE_SHARED_DEFAULT
 
 

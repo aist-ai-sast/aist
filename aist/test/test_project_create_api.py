@@ -23,14 +23,15 @@ class AISTProjectCreateAPITests(AISTApiBase):
     def test_create_empty_project_success(self):
         org = self._make_maintainer_org("PT")
 
-        resp = self.client.post(
-            self.url,
-            data={
-                "organization_id": org.id,
-                "product_name": "New Empty Product",
-            },
-            format="json",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(
+                self.url,
+                data={
+                    "organization_id": org.id,
+                    "product_name": "New Empty Product",
+                },
+                format="json",
+            )
 
         self.assertEqual(resp.status_code, 201)
         self.assertTrue(resp.data["ok"])
@@ -48,8 +49,14 @@ class AISTProjectCreateAPITests(AISTApiBase):
         org_a = self._make_maintainer_org("SharedA")
         org_b = self._make_maintainer_org("SharedB")
 
-        resp_a = self.client.post(self.url, data={"organization_id": org_a.id, "product_name": "Proj A"}, format="json")
-        resp_b = self.client.post(self.url, data={"organization_id": org_b.id, "product_name": "Proj B"}, format="json")
+        with self.captureOnCommitCallbacks(execute=True):
+            resp_a = self.client.post(
+                self.url, data={"organization_id": org_a.id, "product_name": "Proj A"}, format="json",
+            )
+        with self.captureOnCommitCallbacks(execute=True):
+            resp_b = self.client.post(
+                self.url, data={"organization_id": org_b.id, "product_name": "Proj B"}, format="json",
+            )
 
         self.assertEqual(resp_a.status_code, 201)
         self.assertEqual(resp_b.status_code, 201)
@@ -83,19 +90,23 @@ class AISTProjectCreateAPITests(AISTApiBase):
         org = Organization.objects.create(name="Org SC", product_type=target_pt)
         custom_content = "#!/bin/bash\necho custom"
 
-        resp = self.client.post(
-            self.url,
-            data={
-                "organization_id": org.id,
-                "product_name": "Custom Script Product",
-                "script_content": custom_content,
-            },
-            format="json",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(
+                self.url,
+                data={
+                    "organization_id": org.id,
+                    "product_name": "Custom Script Product",
+                    "script_content": custom_content,
+                },
+                format="json",
+            )
 
         self.assertEqual(resp.status_code, 201)
         project = AISTProject.objects.get(id=resp.data["project"]["id"])
-        self.assertIsNotNone(project.active_script)
+        # The script given at creation is what the first (auto-created) branch runs.
+        first_version = project.versions.get()
+        self.assertEqual(first_version.version_type, VersionType.GIT_BRANCH)
+        self.assertEqual(first_version.script.content, custom_content)
         self.assertEqual(project.active_script.content, custom_content)
 
     def test_create_empty_project_forbidden_without_add_permission(self):
@@ -210,8 +221,8 @@ class AISTProjectActiveScriptAPITests(AISTApiBase):
         self.assertTrue(resp.data["inherited"])
         self.assertEqual(resp.data["source"], "shared_default")
 
-    def test_inherited_flag_when_project_revision(self):
-        """When project has a revision but no version-attached script, source=project_revision."""
+    def test_unbound_revision_is_not_reported_as_active(self):
+        """A revision no version uses does not run, so the endpoint reports the shared default."""
         AISTProjectScript.objects.create(
             project=self.project,
             is_shared=False,
@@ -222,7 +233,8 @@ class AISTProjectActiveScriptAPITests(AISTApiBase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.data["inherited"])
-        self.assertEqual(resp.data["source"], "project_revision")
+        self.assertEqual(resp.data["source"], "shared_default")
+        self.assertEqual(resp.data["id"], AISTProjectScript.get_shared_default().id)
 
     def test_inherited_flag_false_when_version_has_script(self):
         """When the latest version has its own script, inherited=False and source=version."""

@@ -349,11 +349,11 @@ class SastPipelineArguments:
         Write the version's script to a temp file and yield its path.
         The temp file is removed when the context exits.
 
-        Every AISTProjectVersion always has a script set (enforced by data migration
-        and creation logic). Falls back to shared default only as a last-resort guard.
+        The script is ``AISTProjectVersion.effective_script`` — the same rule the
+        version-script API shows — so what the UI reports is what runs.
         """
         pv_id = (self.project_version or {}).get("id")
-        script = None
+        pv = None
         if pv_id:
             pv = (
                 AISTProjectVersion.objects
@@ -361,14 +361,12 @@ class SastPipelineArguments:
                 .filter(pk=pv_id, project=self.project)
                 .first()
             )
-            if pv:
-                script = pv.script
-        if script is None:
+        if pv is None or pv.script_id is None:
             _logger.warning(
                 "Project version for project %s has no script; falling back to shared default.",
                 self.project.id,
             )
-            script = AISTProjectScript.get_shared_default()
+        script = pv.effective_script if pv is not None else AISTProjectScript.get_shared_default()
         script_path = self._write_script_to_temp(script)
         try:
             yield script_path

@@ -11,7 +11,7 @@ from django.conf import settings
 
 from aist.integrations.claude import claude_auth_env
 from aist.integrations.resolver import resolve_integration
-from aist.models import AISTProject, OrgIntegrationType
+from aist.models import AISTProject, OrgIntegrationType, VersionType
 from aist.pipeline_args import PipelineArguments
 from aist.utils.vpn import vpn_sidecar_context
 
@@ -24,6 +24,7 @@ def _send_to_bridge(
     project_id: int | str,
     source_path: str,
     subprocess_env: dict[str, str] | None = None,
+    extra_args: str = "",
 ) -> bool:
     """
     Send an analyze request to the claude-bridge via Unix domain socket.
@@ -43,6 +44,7 @@ def _send_to_bridge(
         "source_path": source_path,
         "callback_url": "",  # analyze skills persist directly; no callback needed
         "subprocess_env": dict(subprocess_env or {}),
+        "extra_args": extra_args,
     }
     try:
         transport = httpx.HTTPTransport(uds=socket_path)
@@ -56,7 +58,14 @@ def _send_to_bridge(
     return True
 
 
-def _clone_project_via_vpn(project, vpn_resolved, execution_id: str, clone_dir: str, project_id: int) -> None:
+def _clone_project_via_vpn(
+    project,
+    vpn_resolved,
+    execution_id: str,
+    clone_dir: str,
+    project_id: int,
+    branch: str,
+) -> None:
     with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_vpn_container, vpn_proxy):
         clone_url = project.repository.clone_url
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
@@ -66,9 +75,10 @@ def _clone_project_via_vpn(project, vpn_resolved, execution_id: str, clone_dir: 
 
         shutil.rmtree(clone_dir, ignore_errors=True)
         os.makedirs(clone_dir, exist_ok=True)  # noqa: PTH103
-        logger.info("Cloning project %s to %s", project_id, clone_dir)
+        logger.info("Cloning project %s branch %s to %s", project_id, branch, clone_dir)
+        # ``--`` ends option parsing, so neither the branch nor the URL can act as a git option.
         subprocess.run(
-            ["git", "clone", "--depth=1", clone_url, clone_dir],  # noqa: S607
+            ["git", "clone", "--depth=1", "--branch", branch, "--", clone_url, clone_dir],  # noqa: S607
             env=env,
             check=True,
             capture_output=True,
@@ -77,16 +87,19 @@ def _clone_project_via_vpn(project, vpn_resolved, execution_id: str, clone_dir: 
 
 
 @shared_task(bind=True)
-def analyze_project_after_import(self, project_id: int, async_user=None) -> None:
+def analyze_project_after_import(self, project_id: int, project_version_id: int, async_user=None) -> None:
     """
-    Clone a project repository and run Claude analysis skills.
+    Clone one branch of a project repository and run Claude analysis skills.
 
-    Triggered after project import when ``auto_analyze=True``.
+    Triggered after project import when ``auto_analyze=True`` and by the
+    regenerate-analysis API. ``project_version_id`` names the GIT_BRANCH version
+    the analysis is for: that branch is cloned, and the generated init script is
+    bound to exactly that version.
     Uses existing integration infrastructure for auth (GitHub tokens, GitLab PATs)
     and VPN connectivity.
 
     Two skills are executed sequentially on the same clone:
-    1. ``aist-init-script-generator`` — generates a project-specific init script
+    1. ``aist-init-script-generator`` — generates the init script for the version
     2. ``aist-project-profile-analyzer`` — generates path exclusions for the project profile
     """
     try:
@@ -101,6 +114,15 @@ def analyze_project_after_import(self, project_id: int, async_user=None) -> None
 
     if not project.repository:
         logger.warning("Project %s has no repository; skipping auto-analyze", project_id)
+        return
+
+    version = project.versions.filter(pk=project_version_id).first()
+    if version is None or version.version_type != VersionType.GIT_BRANCH:
+        logger.error(
+            "Project version %s is not a GIT_BRANCH version of project %s; skipping auto-analyze",
+            project_version_id,
+            project_id,
+        )
         return
 
     # Resolve Claude credentials BEFORE cloning — no point pulling source
@@ -120,12 +142,14 @@ def analyze_project_after_import(self, project_id: int, async_user=None) -> None
         return
 
     project_name = PipelineArguments.normalize_project_name(project)
+    # One clone per version: the bridge reads it asynchronously, so a regenerate for
+    # another branch must not replace the tree a running analysis is still reading.
     clone_dir = os.path.join(  # noqa: PTH118
         getattr(settings, "AIST_PROJECTS_BUILD_DIR", "/tmp/aist/projects"),  # noqa: S108
         project_name,
-        "claude-analysis",
+        f"claude-analysis-{version.id}",
     )
-    execution_id = f"claude-analyze-{project_id}"
+    execution_id = f"claude-analyze-{project_id}-{version.id}"
 
     # ── 1. Clone via integrations (auth + VPN) ──────────────────────────────
     try:
@@ -135,7 +159,7 @@ def analyze_project_after_import(self, project_id: int, async_user=None) -> None
         vpn_resolved = None
 
     try:
-        _clone_project_via_vpn(project, vpn_resolved, execution_id, clone_dir, project_id)
+        _clone_project_via_vpn(project, vpn_resolved, execution_id, clone_dir, project_id, version.version)
     except subprocess.TimeoutExpired:
         # Do NOT log the exception object: its str() includes the git argv,
         # and clone_url embeds credentials (PAT / Gerrit HTTP password).
@@ -161,6 +185,7 @@ def analyze_project_after_import(self, project_id: int, async_user=None) -> None
         project_id=project_id,
         source_path=clone_dir,
         subprocess_env=claude_subprocess_env,
+        extra_args=f"project_version_id={version.id}",
     )
     _send_to_bridge(
         skill_name="aist-project-profile-analyzer",

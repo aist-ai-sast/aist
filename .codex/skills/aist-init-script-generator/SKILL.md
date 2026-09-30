@@ -22,6 +22,12 @@ This skill adapts generic AIST initialization behavior to a real project.
 * `project_id` **(required)**
   AIST project ID. Used to persist the generated script in the platform database.
 
+* `project_version_id` **(required)**
+  ID of the `GIT_BRANCH` project version the script is generated for. `target_repo_path`
+  is a clone of exactly that branch, and the script is bound to exactly this version:
+  its pipelines, and the commits they resolve, run it. If it is missing, stop and
+  report the error. Do not persist to the project without a version.
+
 * `target_repo_path` **(required)**
   Absolute path to the repository that must be prepared for build and SAST analysis.
 
@@ -149,18 +155,22 @@ Produce a **full Python script** that:
 ## Persistence (MANDATORY)
 
 1. Use `docker compose` to persist the generated script to the platform database.
-2. Create an `AISTProjectScript` record for the project via Django ORM:
+2. Store the script and bind it to the version through Django ORM. The version is
+   looked up inside the project, so an ID from another project fails instead of binding:
    ```
    docker compose exec uwsgi python manage.py shell -c "
-   from aist.models import AISTProject, AISTProjectScript
-   project = AISTProject.objects.get(id=<project_id>)
-   script, created = AISTProjectScript.get_or_create_for_project(
+   from aist.models import AISTProjectScript, AISTProjectVersion
+   version = AISTProjectVersion.objects.get(pk=<project_version_id>, project_id=<project_id>)
+   script, created = AISTProjectScript.create_for_version(
        content='''<generated script content>''',
-       project=project,
+       version=version,
    )
-   print(f'Script {script.id} {"created" if created else "reused"} for project {project.id}')
+   print(f'Script {script.id} {"created" if created else "reused"}, bound to version {version.id} ({version.version})')
    "
    ```
+   `create_for_version` accepts only a `GIT_BRANCH` version and changes no other version.
+   Never call `get_or_create_for_project` directly: a revision that no version uses
+   never runs.
 3. Do NOT write the script to a file on disk as primary output.
 4. The chat response is secondary to the persisted database state.
 
@@ -194,7 +204,7 @@ Save script via `docker compose exec` as described in Persistence section above.
 
 ### 7. Summary
 
-What was persisted and the script ID.
+What was persisted: the script ID, and the version ID and branch name it is bound to.
 
 ---
 
@@ -216,7 +226,8 @@ What was persisted and the script ID.
 * Project-specific logic correctly adapted
 * Script prepares repo for SAST
 * Works in CI
-* `AISTProjectScript` record created in the database for the given `project_id`
+* `AISTProjectScript` record created or reused in the database for the given `project_id`
+* The `GIT_BRANCH` version `project_version_id` now has `script` set to that record; no other version changed
 
 ---
 
@@ -226,10 +237,11 @@ What was persisted and the script ID.
 Use this skill:
 
 project_id=42
+project_version_id=108
 target_repo_path="/tmp/aist/projects/my-project/codex-analysis"
 ```
 
 Result:
 
 * project-specific init script generated
-* persisted as AISTProjectScript in the database
+* persisted as AISTProjectScript in the database and bound to version 108

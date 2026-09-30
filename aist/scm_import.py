@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,7 @@ from aist.api.projects import _create_initial_script
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import (
     AISTProject,
+    AISTProjectScript,
     AISTProjectVersion,
     Organization,
     OrgIntegration,
@@ -22,6 +24,8 @@ from aist.models import (
 
 if TYPE_CHECKING:
     from django.contrib.auth.base_user import AbstractBaseUser
+
+logger = logging.getLogger(__name__)
 
 
 class ScmImportConflictError(Exception):
@@ -60,6 +64,49 @@ class ScmImportRequest:
     @property
     def repo_full(self) -> str:
         return f"{self.repo_owner}/{self.repo_name}" if self.repo_owner else self.repo_name
+
+
+def seed_imported_project(project: AISTProject, default_branch: str) -> AISTProjectVersion | None:
+    """
+    Give a newly imported project its initial script and default-branch version.
+
+    Call inside the import transaction, only when the project was just created.
+    Seeding the real default branch here — resolved by the caller's VPN-aware
+    fetch — pre-empts create_default_master_version's own "master" fallback
+    lookup, which has no VPN/proxy awareness. Returns the branch version, or
+    ``None`` when the default branch is unknown.
+    """
+    _create_initial_script(project, DEFAULT_ENTRYPOINT_SCRIPT)
+    if not default_branch:
+        return None
+    version, _ = AISTProjectVersion.objects.get_or_create(
+        project=project,
+        version=default_branch,
+        version_type=VersionType.GIT_BRANCH,
+        defaults={"script": AISTProjectScript.for_new_version(project)},
+    )
+    return version
+
+
+def queue_import_auto_analyze(project: AISTProject, version: AISTProjectVersion | None) -> None:
+    """
+    Queue Claude analysis for the branch version this import created, after commit.
+
+    Without such a version (default branch unknown, or the project already
+    existed) nothing is queued: analysis always targets an explicit branch, and
+    the user picks one later with Regenerate.
+    """
+    if version is None:
+        logger.warning(
+            "Project %s: import created no default-branch version; auto-analyze not queued. "
+            "Use Regenerate with a chosen branch.",
+            project.id,
+        )
+        return
+    from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415
+
+    project_id, version_id = project.id, version.id
+    transaction.on_commit(lambda: analyze_project_after_import.delay(project_id, version_id))
 
 
 def import_scm_project(req: ScmImportRequest) -> tuple[AISTProject, str]:
@@ -103,6 +150,7 @@ def import_scm_project(req: ScmImportRequest) -> tuple[AISTProject, str]:
         defaults={"base_url": req.inferred_base},
     )
 
+    initial_version = None
     with transaction.atomic():
         aist_project, project_created = AISTProject.objects.get_or_create(
             product=product,
@@ -130,20 +178,9 @@ def import_scm_project(req: ScmImportRequest) -> tuple[AISTProject, str]:
             binding.save(update_fields=["org_integration"])
 
         if project_created:
-            _create_initial_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
-            if req.default_branch:
-                # Seed the initial version with the real default branch now,
-                # while it's still committed inside this transaction — this
-                # pre-empts create_default_master_version's own "master"
-                # fallback lookup (it only runs if no version exists yet).
-                AISTProjectVersion.objects.get_or_create(
-                    project=aist_project,
-                    version=req.default_branch,
-                    defaults={"version_type": VersionType.GIT_BRANCH},
-                )
+            initial_version = seed_imported_project(aist_project, req.default_branch)
 
     if req.auto_analyze and aist_project.repository:
-        from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415
-        analyze_project_after_import.delay(aist_project.id)
+        queue_import_auto_analyze(aist_project, initial_version)
 
     return aist_project, repo_full

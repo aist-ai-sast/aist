@@ -6,11 +6,13 @@ from unittest.mock import MagicMock, patch
 from aist.api.github_integration import GithubImportExecuteSerializer
 from aist.api.gitlab_integration import ImportGitlabRequestSerializer
 from aist.models import (
+    AISTProjectVersion,
     Organization,
     OrgIntegration,
     OrgIntegrationType,
     RepositoryInfo,
     ScmType,
+    VersionType,
 )
 from aist.tasks.claude import _send_to_bridge, analyze_project_after_import
 from aist.test.test_api import AISTApiBase
@@ -54,25 +56,37 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
             is_active=True,
             config={"auth_mode": "oauth"},
         )
+        self.main = AISTProjectVersion.objects.create(
+            project=self.project, version="main", version_type=VersionType.GIT_BRANCH,
+        )
 
     @patch("aist.tasks.claude._send_to_bridge")
     @patch("aist.tasks.claude.subprocess")
     @patch("aist.tasks.claude.vpn_sidecar_context", _fake_vpn_ctx)
     @patch("aist.tasks.claude.resolve_integration", return_value=None)
-    def test_clones_and_sends_two_skills(self, mock_resolve, mock_subprocess, mock_bridge):
+    def test_clones_requested_branch_and_binds_generator_to_it(self, mock_resolve, mock_subprocess, mock_bridge):
         mock_bridge.return_value = True
+        AISTProjectVersion.objects.create(
+            project=self.project, version="develop", version_type=VersionType.GIT_BRANCH,
+        )
 
-        analyze_project_after_import(self.project.id)
+        analyze_project_after_import(self.project.id, self.main.id)
 
         mock_subprocess.run.assert_called_once()
-        clone_args = mock_subprocess.run.call_args
-        self.assertIn("git", clone_args[0][0])
-        self.assertIn("clone", clone_args[0][0])
+        argv = mock_subprocess.run.call_args[0][0]
+        self.assertEqual(argv[:6], ["git", "clone", "--depth=1", "--branch", "main", "--"])
+        self.assertEqual(argv[6], self.repo_info.clone_url)
+        self.assertTrue(argv[7].endswith(f"claude-analysis-{self.main.id}"))
+        for bridge_call in mock_bridge.call_args_list:
+            self.assertEqual(bridge_call[1]["source_path"], argv[7])
 
         self.assertEqual(mock_bridge.call_count, 2)
         calls = mock_bridge.call_args_list
         self.assertEqual(calls[0][1]["skill_name"], "aist-init-script-generator")
+        self.assertEqual(calls[0][1]["extra_args"], f"project_version_id={self.main.id}")
+        # Exclusions stay project-level: the profile analyzer gets no version.
         self.assertEqual(calls[1][1]["skill_name"], "aist-project-profile-analyzer")
+        self.assertNotIn("extra_args", calls[1][1])
         # Per Task 8 — the bridge payload must carry the Claude token via
         # the generic subprocess_env channel introduced in Task 4. Both
         # calls share the same env mapping for this project.
@@ -87,7 +101,7 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
     @patch("aist.tasks.claude.vpn_sidecar_context", _fake_vpn_ctx)
     @patch("aist.tasks.claude.resolve_integration", return_value=None)
     def test_clone_failure_does_not_call_bridge(self, mock_resolve, mock_run, mock_bridge):
-        analyze_project_after_import(self.project.id)
+        analyze_project_after_import(self.project.id, self.main.id)
 
         mock_bridge.assert_not_called()
 
@@ -102,18 +116,32 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
         self.claude_integration.is_active = False
         self.claude_integration.save(update_fields=["is_active"])
 
-        analyze_project_after_import(self.project.id)
+        analyze_project_after_import(self.project.id, self.main.id)
+
+        mock_subprocess.run.assert_not_called()
+        mock_bridge.assert_not_called()
+
+    @patch("aist.tasks.claude._send_to_bridge")
+    @patch("aist.tasks.claude.subprocess")
+    def test_rejects_version_that_is_not_a_branch_of_this_project(self, mock_subprocess, mock_bridge):
+        other_branch = AISTProjectVersion.objects.create(
+            project=self.other_project, version="main", version_type=VersionType.GIT_BRANCH,
+        )
+        # self.pv is a GIT_HASH version of this project.
+        for version_id in (self.pv.id, other_branch.id, 999999):
+            with self.subTest(version_id=version_id), self.assertLogs("aist.tasks.claude", level="ERROR"):
+                analyze_project_after_import(self.project.id, version_id)
 
         mock_subprocess.run.assert_not_called()
         mock_bridge.assert_not_called()
 
     def test_nonexistent_project_is_noop(self):
-        analyze_project_after_import(999999)
+        analyze_project_after_import(999999, self.main.id)
 
     def test_project_without_repo_is_noop(self):
         self.project.repository = None
         self.project.save(update_fields=["repository"])
-        analyze_project_after_import(self.project.id)
+        analyze_project_after_import(self.project.id, self.main.id)
 
 
 class SendToBridgeTests(AISTApiBase):
@@ -144,6 +172,23 @@ class SendToBridgeTests(AISTApiBase):
         self.assertEqual(payload["project_id"], "1")
         # Task 4 generic field — bridge merges into spawn env.
         self.assertEqual(payload["subprocess_env"], {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test-value"})
+        self.assertEqual(payload["extra_args"], "")
+
+    @patch("aist.tasks.claude.httpx")
+    def test_extra_args_reach_bridge_payload(self, mock_httpx):
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_httpx.Client.return_value = mock_client
+
+        _send_to_bridge(
+            skill_name="aist-init-script-generator",
+            project_id=1,
+            source_path="/tmp/test",  # noqa: S108
+            extra_args="project_version_id=7",
+        )
+
+        self.assertEqual(mock_client.post.call_args[1]["json"]["extra_args"], "project_version_id=7")
 
     @patch("aist.tasks.claude.httpx")
     def test_failure_returns_false(self, mock_httpx):

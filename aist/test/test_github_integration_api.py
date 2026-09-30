@@ -193,6 +193,40 @@ class GithubIntegrationAPITests(TestCase):
         self.assertEqual(versions[0].version, "main")
         self.assertEqual(versions[0].version_type, VersionType.GIT_BRANCH)
 
+    @patch("aist.tasks.claude.analyze_project_after_import.delay")
+    @patch("aist.api.github_integration._fetch_repository_details")
+    @patch("aist.api.github_integration._list_installation_repositories")
+    @patch("aist.api.github_integration._load_analyzers_config")
+    def test_auto_analyze_targets_imported_default_branch(
+        self, mock_cfg, mock_list_repos, mock_fetch_details, mock_analyze,
+    ):
+        org = Organization.objects.create(name="Org AutoAnalyze")
+        mock_cfg.return_value = _AnalyzerConfigStub()
+        mock_list_repos.return_value = [
+            {"id": 1, "full_name": "owner/repo-aa", "private": True, "default_branch": "trunk"},
+        ]
+        mock_fetch_details.return_value = (
+            {"html_url": "https://github.com/owner/repo-aa", "description": "d", "default_branch": "trunk"},
+            {"Python": 100},
+        )
+
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(
+                reverse("aist_api:github_import_execute"),
+                data={
+                    "organization_id": org.id,
+                    "installation_id": 77,
+                    "repositories": ["owner/repo-aa"],
+                    "auto_analyze": True,
+                },
+                format="json",
+            )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        project = AISTProject.objects.get(repository__repo_owner="owner", repository__repo_name="repo-aa")
+        trunk = project.versions.get(version="trunk", version_type=VersionType.GIT_BRANCH)
+        mock_analyze.assert_called_once_with(project.id, trunk.id)
+
     @patch("aist.api.github_integration._import_github_repository")
     @patch("aist.api.github_integration._list_installation_repositories")
     def test_import_execute_returns_failed_item_details(self, mock_list_repos, mock_import_repo):

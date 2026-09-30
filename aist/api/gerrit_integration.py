@@ -6,21 +6,18 @@ from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.response import Response
 
-from aist.api.projects import _create_initial_script
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy
-from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import (
     AISTProject,
-    AISTProjectVersion,
     Organization,
     OrgIntegration,
     OrgIntegrationType,
     RepositoryInfo,
     ScmGerritBinding,
     ScmType,
-    VersionType,
 )
+from aist.scm_import import queue_import_auto_analyze, seed_imported_project
 from aist.tasks.integrations import fetch_gerrit_project_info
 
 
@@ -136,6 +133,7 @@ class ImportProjectFromGerritAPI(AISTAPIView):
             binding.org_integration = integration
             binding.save(update_fields=["org_integration"])
 
+        initial_version = None
         with transaction.atomic():
             aist_project, project_created = AISTProject.objects.get_or_create(
                 product=product,
@@ -149,28 +147,15 @@ class ImportProjectFromGerritAPI(AISTAPIView):
                 },
             )
             if project_created:
-                _create_initial_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
-                default_branch = proj_data.get("default_branch") or ""
-                if default_branch:
-                    # Seed the initial version with the real default branch now,
-                    # while it's still committed inside this transaction — this
-                    # pre-empts create_default_master_version's own "master"
-                    # fallback lookup (which has no VPN/proxy awareness and
-                    # would silently fall back when Gerrit is only reachable
-                    # via VPN). fetch_gerrit_project_info already resolved this
-                    # correctly through the VPN-aware scoped_session above.
-                    AISTProjectVersion.objects.get_or_create(
-                        project=aist_project,
-                        version=default_branch,
-                        defaults={"version_type": VersionType.GIT_BRANCH},
-                    )
+                # VPN-aware: fetch_gerrit_project_info resolved default_branch through
+                # the scoped session above.
+                initial_version = seed_imported_project(aist_project, proj_data.get("default_branch") or "")
             elif aist_project.organization_id and aist_project.organization_id != organization.id:
                 msg = "Project is already linked to another organization."
                 return Response({"detail": msg}, status=status.HTTP_409_CONFLICT)
 
         if serializer.validated_data.get("auto_analyze") and aist_project.repository:
-            from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415
-            analyze_project_after_import.delay(aist_project.id)
+            queue_import_auto_analyze(aist_project, initial_version)
 
         out = ImportGerritResponseSerializer(
             {

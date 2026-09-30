@@ -21,19 +21,16 @@ from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
-from aist.api.projects import _create_initial_script
 from aist.api.schema import AISTApiTag
 from aist.authz import PUBLIC, Action, AISTAPIView, ResourcePolicy, queryset_for_action
-from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import (
     AISTProject,
-    AISTProjectVersion,
     Organization,
     RepositoryInfo,
     ScmGithubBinding,
     ScmType,
-    VersionType,
 )
+from aist.scm_import import queue_import_auto_analyze, seed_imported_project
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 STATE_SALT = "aist.github.connect"
@@ -659,25 +656,10 @@ def _import_github_repository(
         )
 
         if created_project:
-            _create_initial_script(aist_project, DEFAULT_ENTRYPOINT_SCRIPT)
-            default_branch = details.get("default_branch") or ""
-            if default_branch:
-                # Seed the initial version with the real default branch now,
-                # while it's still committed inside this transaction — this
-                # pre-empts create_default_master_version's own "master"
-                # fallback lookup (which has no VPN/proxy awareness and would
-                # silently fall back for GitHub Enterprise hosts only
-                # reachable via VPN). `details` already carries this from the
-                # GitHub API fetch above.
-                AISTProjectVersion.objects.get_or_create(
-                    project=aist_project,
-                    version=default_branch,
-                    defaults={"version_type": VersionType.GIT_BRANCH},
-                )
+            # `details` already carries default_branch from the GitHub API fetch above.
+            initial_version = seed_imported_project(aist_project, details.get("default_branch") or "")
             if auto_analyze:
-                from aist.tasks.claude import analyze_project_after_import  # noqa: PLC0415
-                pid = aist_project.id
-                transaction.on_commit(lambda: analyze_project_after_import.delay(pid))
+                queue_import_auto_analyze(aist_project, initial_version)
         else:
             if aist_project.organization_id and aist_project.organization_id != organization.id:
                 reason = "project_linked_to_another_organization"

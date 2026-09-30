@@ -17,7 +17,10 @@ def to_pretty_json(value):
 def versions_json(queryset):
     """Serialize a project versions queryset to a JSON array for use in data-* HTML attributes."""
     try:
-        data = [{"id": str(v.id), "label": str(v)} for v in queryset]
+        data = [
+            {"id": str(v.id), "label": str(v), "version": v.version, "type": str(v.version_type)}
+            for v in queryset
+        ]
         return json.dumps(data, ensure_ascii=True)
     except Exception:
         return "[]"

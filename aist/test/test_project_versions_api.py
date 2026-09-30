@@ -328,31 +328,22 @@ class ProjectVersionScriptGetAPITests(AISTApiBase):
         self.assertEqual(data["source"], "version")
         self.assertFalse(data["is_shared"])
 
-    def test_falls_back_to_latest_project_revision_when_version_has_no_script(self):
-        # version intentionally created without script in AISTApiBase.setUp
+    def test_version_without_script_shows_shared_default_even_with_revisions(self):
+        """The version runs the shared default, so an unbound revision must not be shown instead."""
         self.assertIsNone(self.pv.script_id)
-
-        older_rev = AISTProjectScript.objects.create(
+        AISTProjectScript.objects.create(
             project=self.project,
             is_shared=False,
-            content="#!/bin/bash\necho old\n",
-        )
-        newer_rev = AISTProjectScript.objects.create(
-            project=self.project,
-            is_shared=False,
-            content="#!/bin/bash\necho new\n",
+            content="#!/bin/bash\necho unbound\n",
         )
 
         resp = self.client.get(self._url(self.project.id, self.pv.id))
         self.assertEqual(resp.status_code, 200)
         data = self._json(resp)
-        self.assertEqual(data["id"], newer_rev.id)
-        newer_rev.refresh_from_db()
-        self.assertEqual(data["content"].rstrip("\n"), newer_rev.content.rstrip("\n"))
-        self.assertNotEqual(data["id"], older_rev.id)
+        self.assertEqual(data["id"], AISTProjectScript.get_shared_default().id)
         self.assertTrue(data["inherited"])
-        self.assertEqual(data["source"], "project_revision")
-        self.assertFalse(data["is_shared"])
+        self.assertEqual(data["source"], "shared_default")
+        self.assertTrue(data["is_shared"])
 
     def test_falls_back_to_shared_default_when_no_revisions(self):
         self.assertIsNone(self.pv.script_id)

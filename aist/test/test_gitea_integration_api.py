@@ -219,6 +219,33 @@ class GiteaIntegrationAPITests(TestCase):
         )
         self.assertEqual(resp.status_code, 409)
 
+    @patch("aist.tasks.claude.analyze_project_after_import.delay")
+    @patch("aist.api.gitea_integration.fetch_gitea_project_info.delay")
+    def test_auto_analyze_targets_imported_default_branch(self, mock_delay, mock_analyze):
+        org = Organization.objects.create(name="Org AutoAnalyze")
+        self._create_gitea_integration(org)
+        mock_delay.return_value.get.return_value = {
+            "ok": True,
+            "path_with_namespace": "myorg/myrepo",
+            "description": "desc",
+            "web_url": "https://gitea.example.com/myorg/myrepo",
+            "inferred_base": "https://gitea.example.com",
+            "default_branch": "develop",
+            "langs_raw": {"Python": 1234},
+        }
+
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(
+                self._url(),
+                data={"repo_full_name": "myorg/myrepo", "organization_id": org.id, "auto_analyze": True},
+                format="json",
+            )
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        project = AISTProject.objects.get(id=resp.data["aist_project_id"])
+        develop = project.versions.get(version="develop", version_type=VersionType.GIT_BRANCH)
+        mock_analyze.assert_called_once_with(project.id, develop.id)
+
 
 class GiteaProjectsListViewTests(TestCase):
     def setUp(self):

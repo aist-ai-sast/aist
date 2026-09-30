@@ -15,6 +15,7 @@ from aist.models import (
     AISTLaunchConfigAction,
     AISTPipeline,
     AISTProject,
+    AISTProjectScript,
     AISTProjectVersion,
     AISTTestMeta,
     PipelineLaunchRequest,
@@ -48,7 +49,10 @@ def create_default_master_version(sender, instance: AISTProject, created: bool, 
         AISTProjectVersion.objects.get_or_create(
             project=instance,
             version=default_branch,
-            defaults={"version_type": VersionType.GIT_BRANCH},
+            defaults={
+                "version_type": VersionType.GIT_BRANCH,
+                "script": AISTProjectScript.for_new_version(instance),
+            },
         )
 
     transaction.on_commit(_create_if_absent)

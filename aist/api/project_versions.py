@@ -15,27 +15,7 @@ from aist.models import (
 )
 
 SCRIPT_SOURCE_VERSION = "version"
-SCRIPT_SOURCE_PROJECT_REVISION = "project_revision"
 SCRIPT_SOURCE_SHARED_DEFAULT = "shared_default"
-
-
-def _resolve_script_for_new_version(project) -> AISTProjectScript:
-    """
-    Return the script to use for a new version when no script_id is specified.
-
-    Resolution order:
-    1. Latest project-scoped script revision (set at project creation or via API)
-    2. Project-scoped copy of the shared default (created on demand)
-    """
-    latest_revision = project.script_revisions.order_by("-created_at").first()
-    if latest_revision:
-        return latest_revision
-    global_default = AISTProjectScript.get_shared_default()
-    script, _ = AISTProjectScript.get_or_create_for_project(
-        content=global_default.content,
-        project=project,
-    )
-    return script
 
 
 class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
@@ -97,7 +77,7 @@ class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         # Ensure every version always has a project-scoped script.
         if "script" not in validated_data or validated_data.get("script") is None:
-            validated_data["script"] = _resolve_script_for_new_version(validated_data["project"])
+            validated_data["script"] = AISTProjectScript.for_new_version(validated_data["project"])
         # for FILE_HASH without explicit version the model will set sha256 in save()
         return AISTProjectVersion.objects.create(**validated_data)
 
@@ -164,19 +144,13 @@ class ProjectVersionCreateAPI(AISTAPIView):
 
 def _resolve_version_script(version, project) -> tuple[AISTProjectScript, str]:
     """
-    Return the script for a project version with inheritance fallback.
+    Return the script a pipeline for this version runs, and where it comes from.
 
-    Resolution order:
-    1. version.script (source="version")
-    2. latest project-scoped revision (source="project_revision")
-    3. shared default singleton (source="shared_default")
+    ``version.script`` (source="version"), else the shared default
+    (source="shared_default") — ``AISTProjectVersion.effective_script``.
     """
-    if version.script_id:
-        return version.script, SCRIPT_SOURCE_VERSION
-    latest_revision = project.script_revisions.order_by("-created_at").first()
-    if latest_revision:
-        return latest_revision, SCRIPT_SOURCE_PROJECT_REVISION
-    return AISTProjectScript.get_shared_default(), SCRIPT_SOURCE_SHARED_DEFAULT
+    source = SCRIPT_SOURCE_VERSION if version.script_id else SCRIPT_SOURCE_SHARED_DEFAULT
+    return version.effective_script, source
 
 
 def _serialize_version_script(script: AISTProjectScript, source: str) -> dict:
@@ -209,8 +183,8 @@ class ProjectVersionScriptUpdateAPI(AISTAPIView):
         summary="Get version script",
         description=(
             "Returns the script used for a specific project version. "
-            "If the version has no own script, falls back to the latest project-scoped "
-            "revision; if none exists, returns the shared default. The response "
+            "If the version has no own script, returns the shared default — exactly "
+            "what a pipeline for this version runs. The response "
             "includes `inherited` and `source` flags so the UI can label the script."
         ),
     )
@@ -239,7 +213,7 @@ class ProjectVersionScriptUpdateAPI(AISTAPIView):
         summary="Set version script override",
         description=(
             "Set or clear the script override for a specific project version. "
-            "Pass script_id=null to clear the override (falls back to project active_script)."
+            "Pass script_id=null to clear the override (the version then runs the shared default)."
         ),
     )
     def patch(self, request, project_id, version_id):
