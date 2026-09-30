@@ -90,6 +90,7 @@
                     <tr data-project-id="{{ p.id }}"
                         data-project-name="{{ p.product.name|default_if_none:'' }}"
                         data-project-active-script-id="{{ p.active_script.id }}"
+                        data-project-active-version-id="{{ p.active_version.id|default_if_none:'' }}"
                         data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
                         data-project-langs="{{ p.supported_languages|join:', ' }}"
                         data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
@@ -116,6 +117,7 @@
                         <td class="script-cell">
                             {% with p.active_script as s %}
                                 <code title="{{ s.sha256 }}">{{ s.sha256|slice:":8" }}&hellip;</code>
+                                <span class="text-muted small">{% if s.is_shared %}default{% else %}{{ p.active_version.version|truncatechars:24 }}{% endif %}</span>
                             {% endwith %}
                         </td>
                         <td class="langs-cell">
@@ -169,6 +171,7 @@
                             <tr data-project-id="{{ p.id }}"
                                 data-project-name="{{ p.product.name|default_if_none:'' }}"
                                 data-project-active-script-id="{{ p.active_script.id }}"
+                                data-project-active-version-id="{{ p.active_version.id|default_if_none:'' }}"
                                 data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
                                 data-project-langs="{{ p.supported_languages|join:', ' }}"
                                 data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
@@ -195,6 +198,7 @@
                                 <td class="script-cell">
                                     {% with p.active_script as s %}
                                         <code title="{{ s.sha256 }}">{{ s.sha256|slice:":8" }}&hellip;</code>
+                                        <span class="text-muted small">{% if s.is_shared %}default{% else %}{{ p.active_version.version|truncatechars:24 }}{% endif %}</span>
                                     {% endwith %}
                                 </td>
                                 <td class="langs-cell">
@@ -248,6 +252,7 @@
                             <tr data-project-id="{{ p.id }}"
                                 data-project-name="{{ p.product.name|default_if_none:'' }}"
                                 data-project-active-script-id="{{ p.active_script.id }}"
+                                data-project-active-version-id="{{ p.active_version.id|default_if_none:'' }}"
                                 data-project-compilable="{{ p.compilable|yesno:'true,false' }}"
                                 data-project-langs="{{ p.supported_languages|join:', ' }}"
                                 data-project-profile="{{ p.profile|default:'{}'|escapejs }}"
@@ -274,6 +279,7 @@
                                 <td class="script-cell">
                                     {% with p.active_script as s %}
                                         <code title="{{ s.sha256 }}">{{ s.sha256|slice:":8" }}&hellip;</code>
+                                        <span class="text-muted small">{% if s.is_shared %}default{% else %}{{ p.active_version.version|truncatechars:24 }}{% endif %}</span>
                                     {% endwith %}
                                 </td>
                                 <td class="langs-cell">
@@ -835,11 +841,9 @@
                             {# Version selector — visible only for local scope #}
                             <div id="ap-script-version-group" style="display:none;margin-bottom:8px;">
                                 <label for="ap-script-version">Apply to version</label>
-                                <select class="form-control" id="ap-script-version">
-                                    <option value="">— Latest version (default) —</option>
-                                </select>
+                                <select class="form-control" id="ap-script-version"></select>
                                 <p class="help-block" style="margin-top:4px;margin-bottom:0;">
-                                    Assign this script to a specific version, or leave as default to update the latest.
+                                    Preselected: the version the next run uses (newest branch).
                                 </p>
                             </div>
 
@@ -1195,6 +1199,33 @@
                 updateVersionGroupVisibility();
             }
 
+            // Re-render a row's Script cell from the active-script API, so the cell only ever
+            // shows the script the next run uses (a save to another version leaves it as is).
+            function refreshScriptCell(row) {
+                if (!row) return;
+                var projectId = row.getAttribute("data-project-id");
+                fetch(activeScriptUrlTemplate.replace("/0/", "/" + projectId + "/"), {credentials: "same-origin"})
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .then(function (data) {
+                        if (!data || !data.sha256) return;
+                        var cell = row.querySelector(".script-cell");
+                        if (cell) {
+                            var code = document.createElement("code");
+                            code.title = data.sha256;
+                            code.textContent = data.sha256.slice(0, 8) + "\u2026";
+                            var label = document.createElement("span");
+                            label.className = "text-muted small";
+                            var name = data.source === "version" && data.version ? data.version.version : "default";
+                            // Same cap as the server-rendered cell (truncatechars:24).
+                            label.textContent = name.length > 24 ? name.slice(0, 23) + "\u2026" : name;
+                            cell.replaceChildren(code, " ", label);
+                        }
+                        row.setAttribute("data-project-active-script-id", String(data.id));
+                        row.setAttribute("data-project-active-version-id", data.version ? String(data.version.id) : "");
+                    })
+                    .catch(function () { /* cell keeps its previous value */ });
+            }
+
             function loadScriptForCurrentSelection(projectId) {
                 if (!projectId) return;
                 var versionId = (fieldScriptVersion && fieldScriptVersion.value) || "";
@@ -1375,7 +1406,7 @@
                 if (scriptScopeBlock) scriptScopeBlock.style.display = "none";
                 if (scriptVersionGroup) scriptVersionGroup.style.display = "none";
                 if (fieldScriptVersion) {
-                    fieldScriptVersion.innerHTML = '<option value="">— Latest version (default) —</option>';
+                    fieldScriptVersion.innerHTML = "";
                 }
 
                 // Populate version selector from the row's data attribute (pre-rendered by server).
@@ -1389,7 +1420,18 @@
                             opt.textContent = v.label;
                             fieldScriptVersion.appendChild(opt);
                         });
-                    } catch (e) { /* selector keeps default-only option */ }
+                    } catch (e) { /* no versions: fall through to the empty option */ }
+                    if (!fieldScriptVersion.options.length) {
+                        // No version yet: the script is stored as a revision, which the
+                        // first version starts from.
+                        var none = document.createElement("option");
+                        none.value = "";
+                        none.textContent = "— No version yet (first version will use it) —";
+                        fieldScriptVersion.appendChild(none);
+                    }
+                    // Default to the version the next run uses — the one the Script cell shows.
+                    var activeVersionId = row.getAttribute("data-project-active-version-id") || "";
+                    if (activeVersionId) fieldScriptVersion.value = activeVersionId;
                     // Sync Bootstrap Select widget with the updated native <select> options.
                     if (window.jQuery && window.jQuery.fn.selectpicker) {
                         window.jQuery(fieldScriptVersion).selectpicker("refresh");
@@ -1675,14 +1717,8 @@
                             }
                             originalScriptContent = newScript;
                             currentScriptIsShared = !!scriptResult.data.is_shared;
-                            // Update script cell and scope UI.
+                            // Update scope UI; the Script cell is refreshed from the server once assigned.
                             if (currentRow && scriptResult.data && scriptResult.data.sha256) {
-                                var cell = currentRow.querySelector(".script-cell");
-                                if (cell) {
-                                    cell.innerHTML = '<code title="' + scriptResult.data.sha256 + '">' +
-                                        scriptResult.data.sha256.slice(0, 8) + '&hellip;</code>';
-                                }
-                                currentRow.setAttribute("data-project-active-script-id", String(scriptResult.data.id));
                                 if (scriptMeta) {
                                     var badge = currentScriptIsShared
                                         ? ' <span class="label label-default">shared default</span>' : "";
@@ -1718,6 +1754,7 @@
                                         }
                                         return;
                                     }
+                                    refreshScriptCell(currentRow);
                                     doProjectSave();
                                 }).catch(function () {
                                     if (errorBox) {
@@ -1726,6 +1763,7 @@
                                     }
                                 });
                             } else {
+                                refreshScriptCell(currentRow);
                                 doProjectSave();
                             }
                         }).catch(function () {

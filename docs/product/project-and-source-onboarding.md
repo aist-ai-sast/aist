@@ -75,9 +75,23 @@ rejected. The client UI has no Regenerate control.
 A pipeline runs its source version's own script, or the shared default when the
 version has none. A branch run copies the branch's script to the commit version
 it resolves, so a script assigned to a branch applies to its later runs. The
-script shown for a version, and the project's active script (that of its latest
-version), are exactly what that version's next pipeline runs; a project revision
-that no version uses is never shown as active.
+script shown for a version is exactly what that version's next pipeline runs; a
+project revision that no version uses is never shown as active.
+
+A project's active script is the script its next run uses, taken from its
+active version:
+
+- the newest `GIT_BRANCH` version;
+- when the project has no branch, the newest version that has a source (DAST
+  targets carry no source and run no script);
+- when the project has no such version, the shared default.
+
+While a project has a branch, the commit versions its runs resolved never
+determine the active script. The administrative AIST projects page shows the
+active script's short digest with the active version's name, or "default" for
+the shared default. Its script editor preselects the active version for a
+project-scoped save; a save that marks the script active without naming a
+version assigns it to the active version.
 
 ## Result
 

@@ -93,6 +93,27 @@ class AISTProjectScriptContentSerializer(serializers.ModelSerializer):
         fields = ["id", "content", "sha256", "is_shared", "created_at", "created_by_id", "created_by_username"]
 
 
+class ActiveScriptVersionSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    version = serializers.CharField()
+    type = serializers.ChoiceField(choices=VersionType.choices)
+
+
+class AISTProjectActiveScriptSerializer(AISTProjectScriptContentSerializer):
+
+    """Response of the active-script endpoint: the script the project's next run uses."""
+
+    inherited = serializers.BooleanField(help_text="True when the script is the shared default.")
+    source = serializers.ChoiceField(choices=[SCRIPT_SOURCE_VERSION, SCRIPT_SOURCE_SHARED_DEFAULT])
+    version = ActiveScriptVersionSerializer(
+        allow_null=True,
+        help_text="The version whose next run uses this script (newest branch), or null without versions.",
+    )
+
+    class Meta(AISTProjectScriptContentSerializer.Meta):
+        fields = [*AISTProjectScriptContentSerializer.Meta.fields, "inherited", "source", "version"]
+
+
 def _validate_script_content(value: str) -> str:
     """Shared validator: size cap only. Shellcheck is advisory — see validate_with_shellcheck."""
     if len(value.encode()) > _SCRIPT_MAX_BYTES:
@@ -478,10 +499,15 @@ class AISTProjectScriptListCreateAPI(AISTAPIView):
                 user=request.user,
             )
             if set_active:
-                latest_version = project.versions.order_by("-created").select_related("script").first()
-                if latest_version and latest_version.script_id != script.pk:
-                    latest_version.script = script
-                    latest_version.save(update_fields=["script", "updated"])
+                # "Active" means the version the next run uses — never a stale commit version.
+                # The project row lock (same order as create_for_version) keeps the choice and
+                # the write together against a concurrent bind or a new branch.
+                with transaction.atomic():
+                    AISTProject.objects.select_for_update().only("pk").get(pk=project.pk)
+                    active_version = project.active_version
+                    if active_version and active_version.script_id != script.pk:
+                        active_version.script = script
+                        active_version.save(update_fields=["script", "updated"])
             response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
 
         return Response(AISTProjectScriptContentSerializer(script).data, status=response_status)
@@ -521,33 +547,28 @@ class AISTProjectActiveScriptAPI(AISTAPIView):
 
     @extend_schema(
         responses={
-            200: AISTProjectScriptContentSerializer,
+            200: AISTProjectActiveScriptSerializer,
         },
         tags=[AISTApiTag.PROJECTS.value],
         summary="Get active script",
         description=(
-            "Returns the active script for the project. "
-            "The latest version's script, else the shared default — the script its next pipeline runs. "
-            "Always returns 200 — the shared default is the final fallback. "
-            "Response includes `inherited` and `source` flags matching the version-script endpoint."
+            "Returns the script the project's next run uses: that of its newest GIT_BRANCH "
+            "version (without branches, its newest version that has a source), else the "
+            "shared default. `version` names that version; `source` says whether the script "
+            "is the version's own or the shared default. Always returns 200."
         ),
     )
     def get(self, request, project_id: int) -> Response:
         project = self.resolve(id=project_id)
-        source = self._resolve_active_script_source(project)
-        return Response(_serialize_version_script(project.active_script, source))
-
-    @staticmethod
-    def _resolve_active_script_source(project: AISTProject) -> str:
-        latest_version = (
-            project.versions
-            .order_by("-created")
-            .only("id", "script_id")
-            .first()
+        AISTProject.prefetch_active_scripts([project])
+        version = project.active_version
+        source = SCRIPT_SOURCE_VERSION if version is not None and version.script_id else SCRIPT_SOURCE_SHARED_DEFAULT
+        payload = _serialize_version_script(project.active_script, source)
+        payload["version"] = (
+            {"id": version.id, "version": version.version, "type": version.version_type}
+            if version is not None else None
         )
-        if latest_version and latest_version.script_id:
-            return SCRIPT_SOURCE_VERSION
-        return SCRIPT_SOURCE_SHARED_DEFAULT
+        return Response(payload)
 
 
 def project_meta_payload(project: AISTProject) -> dict:
@@ -617,7 +638,7 @@ def update_project_from_payload(*, project: AISTProject, payload: dict):
     return {
         "id": project.id,
         "product_name": getattr(project.product, "name", str(project.id)),
-        "active_script_id": project.active_script.id if project.active_script else None,
+        "active_script_id": project.active_script.id,
         "compilable": project.compilable,
         "supported_languages": project.supported_languages,
         "profile": project.profile,

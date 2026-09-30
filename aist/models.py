@@ -22,6 +22,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
+from django.db.models import Prefetch, prefetch_related_objects
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 from django_github_app.models import Installation
@@ -1024,24 +1025,69 @@ class AISTProject(models.Model):
     def get_excluded_severities(self) -> list[str]:
         return ProjectProfile.from_dict(self.profile).get_excluded_severities()
 
+    @staticmethod
+    def _pick_active_version(versions) -> AISTProjectVersion | None:
+        """
+        Choose the version whose script the project's next run uses.
+
+        The newest GIT_BRANCH wins: branch runs copy its script into each commit
+        they resolve. A project without branches (e.g. only uploaded archives) uses
+        its newest version that has a source; sourceless DAST targets run no script.
+        """
+        candidates = [v for v in versions if v.version_type not in SOURCELESS_VERSION_TYPES]
+        branches = [v for v in candidates if v.version_type == VersionType.GIT_BRANCH]
+        return max(branches or candidates, key=lambda v: (v.created, v.pk), default=None)
+
+    @classmethod
+    def prefetch_active_scripts(cls, projects) -> None:
+        """
+        Resolve ``active_version`` / ``active_script`` for many projects in two queries.
+
+        Prefetches every project's versions (with scripts, newest first, so
+        ``project.versions.all()`` is served from the same prefetch) and fetches the
+        shared default once; the properties then read the cached values.
+        """
+        prefetch_related_objects(
+            projects,
+            Prefetch("versions", queryset=AISTProjectVersion.objects.select_related("script").order_by("-created")),
+        )
+        shared_default = AISTProjectScript.get_shared_default()
+        for project in projects:
+            version = cls._pick_active_version(project.versions.all())
+            project._active_version = version
+            project._active_script = version.script if version is not None and version.script_id else shared_default
+
+    @property
+    def active_version(self) -> AISTProjectVersion | None:
+        """
+        The version the next run uses (rule: ``_pick_active_version``).
+
+        Served from the ``prefetch_active_scripts`` cache when present; otherwise two
+        indexed queries, so a project's many commit versions are never loaded.
+        """
+        if "_active_version" in self.__dict__:
+            return self._active_version
+        with_source = (
+            self.versions
+            .exclude(version_type__in=SOURCELESS_VERSION_TYPES)
+            .select_related("script")
+            .order_by("-created", "-pk")
+        )
+        return with_source.filter(version_type=VersionType.GIT_BRANCH).first() or with_source.first()
+
     @property
     def active_script(self) -> AISTProjectScript:
         """
-        Return the script the latest version runs (see ``AISTProjectVersion.effective_script``).
+        Return the script the project's next run uses: ``active_version``'s effective script.
 
-        A project without versions runs nothing yet and shows the shared default.
-        A revision not bound to any version is never reported as active.
-        Do NOT call in list-view loops without prefetching; see views/projects.py.
+        A project without such a version shows the shared default. A revision not
+        bound to any version is never reported as active. List views must call
+        ``prefetch_active_scripts`` first; see views/projects.py.
         """
-        latest_version = (
-            self.versions
-            .order_by("-created")
-            .select_related("script")
-            .first()
-        )
-        if latest_version:
-            return latest_version.effective_script
-        return AISTProjectScript.get_shared_default()
+        if "_active_script" in self.__dict__:
+            return self._active_script
+        version = self.active_version
+        return version.effective_script if version is not None else AISTProjectScript.get_shared_default()
 
     def get_launch_schedule(self) -> LaunchSchedule | None:
         try:

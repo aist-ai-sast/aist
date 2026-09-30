@@ -142,6 +142,8 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
         .select_related("product__prod_type__aist_organization", "repository")
         .order_by("product__name", "id"),
     )
+    # Script cell + version pickers: two queries for the whole list, not per row.
+    AISTProject.prefetch_active_scripts(projects)
     organizations = list(
         get_authorized_aist_organizations(Permissions.Product_View, user=request.user)
         .order_by("name"),
