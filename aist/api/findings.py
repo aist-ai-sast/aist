@@ -38,6 +38,13 @@ from aist.findings_bulk_lock import (
     release_bulk_locks,
 )
 from aist.models import AISTAIFindingResponse, AISTPipeline, VersionType
+from aist.work_items.finding_state import (
+    LINKED_AT_FIELD,
+    NO_WORK_ITEM,
+    STATE_FIELD,
+    with_work_item_linked_at,
+    with_work_item_state,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +195,8 @@ class AISTFindingFilter(ApiFindingFilter):
         choices=[(value, value) for value in FINDING_API_CHOICES.ai_status],
     )
     work_item_status = django_filters.CharFilter(method="filter_work_item_status")
+    work_item_linked_gte = django_filters.IsoDateTimeFilter(method="filter_work_item_linked_gte")
+    work_item_linked_lte = django_filters.IsoDateTimeFilter(method="filter_work_item_linked_lte")
     ordering = django_filters.OrderingFilter(
         fields=tuple(
             (field_name, param_name)
@@ -235,11 +244,11 @@ class AISTFindingFilter(ApiFindingFilter):
         value = (value or "").strip()
         if not value or value == "all":
             return queryset
-        if value == "none":
+        if value == NO_WORK_ITEM:
             return queryset.filter(work_item_links__isnull=True)
         if value == "any":
             return queryset.filter(work_item_links__isnull=False).distinct()
-        return queryset.filter(work_item_links__status_category=value).distinct()
+        return with_work_item_state(queryset).filter(**{STATE_FIELD: value})
 
     def _is_date_only_bound(self, key: str) -> bool:
         raw_value = (self.data.get(key) or "").strip()
@@ -333,6 +342,18 @@ class AISTFindingFilter(ApiFindingFilter):
         value = self._normalize_datetime_bound("mitigated_lte", value, upper=True)
         return queryset.filter(mitigated__lte=value)
 
+    def filter_work_item_linked_gte(self, queryset, name, value):
+        if not value:
+            return queryset
+        value = self._normalize_datetime_bound("work_item_linked_gte", value, upper=False)
+        return with_work_item_linked_at(queryset).filter(**{f"{LINKED_AT_FIELD}__gte": value})
+
+    def filter_work_item_linked_lte(self, queryset, name, value):
+        if not value:
+            return queryset
+        value = self._normalize_datetime_bound("work_item_linked_lte", value, upper=True)
+        return with_work_item_linked_at(queryset).filter(**{f"{LINKED_AT_FIELD}__lte": value})
+
     def filter_ai_status(self, queryset, name, value):
         status_value = (value or "").strip().lower()
         if not status_value:
@@ -391,6 +412,18 @@ class AISTFindingListAPI(AISTAPIView):
             OpenApiParameter(name="processed_lte", required=False, type=str),
             OpenApiParameter(name="mitigated_gte", required=False, type=str),
             OpenApiParameter(name="mitigated_lte", required=False, type=str),
+            OpenApiParameter(
+                name="work_item_status", required=False, type=str,
+                description="none, any, or the status category of the finding's deciding ticket.",
+            ),
+            OpenApiParameter(
+                name="work_item_linked_gte", required=False, type=str,
+                description="The finding got its first ticket at or after this moment.",
+            ),
+            OpenApiParameter(
+                name="work_item_linked_lte", required=False, type=str,
+                description="The finding got its first ticket at or before this moment.",
+            ),
             OpenApiParameter(name="project_version", required=False, type=str),
             OpenApiParameter(name="file", required=False, type=str),
             OpenApiParameter(name="title", required=False, type=str),

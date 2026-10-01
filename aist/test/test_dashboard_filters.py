@@ -8,7 +8,7 @@ user may already see, and widgets that are not finding-based stay put.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -247,8 +247,104 @@ class DashboardFindingsParityTests(DashboardFilterBase):
         self.assertEqual(payload["findings_aging_heatmap"]["matrix"]["Critical"]["0_7"], 0)
         self.assertEqual(payload["findings_aging_heatmap"]["matrix"]["High"]["0_7"], 2)
         self.assertEqual([row["cwe"] for row in payload["cwe_distribution"]], [79])
-        self.assertEqual(payload["work_item_coverage"]["total_linked"], 0)
+        self.assertEqual(payload["triage_progress"]["ticketed"], 0)
         self.assertEqual(sum(row["new_findings"] for row in payload["risk_trend"]), 3)
+
+
+class TriageProgressParityTests(DashboardFilterBase):
+
+    """Scenario: a click on any triage number opens exactly the findings it counts."""
+
+    QUERIES = ({}, {"tags": "auth"}, {"severity": "Critical,High"})
+
+    def setUp(self):
+        super().setUp()
+        # f_critical already has an OPEN ticket; a second one in progress decides its state.
+        WorkItemLink.objects.create(
+            finding=self.f_critical,
+            external_url="https://gitlab.example.com/dash/issues/2",
+            external_key="dash#2",
+            status_category=WorkItemStatusCategory.IN_PROGRESS,
+        )
+        stale = WorkItemLink.objects.create(
+            finding=self.f_high,
+            external_url="https://jira.example.com/DASH-3",
+            external_key="DASH-3",
+            status_category=WorkItemStatusCategory.OPEN,
+        )
+        WorkItemLink.objects.filter(pk=stale.pk).update(created=timezone.now() - timedelta(days=45))
+        WorkItemLink.objects.create(
+            finding=self.f_medium,
+            external_url="https://jira.example.com/DASH-4",
+            external_key="DASH-4",
+            status_category=WorkItemStatusCategory.DONE,
+        )
+
+    def test_every_state_segment_matches_the_findings_list(self):
+        for query in self.QUERIES:
+            triage = self._dashboard_ok(self.maintainer, query)["triage_progress"]
+            for row in triage["by_state"]:
+                with self.subTest(query=query, state=row["state"]):
+                    self.assertEqual(
+                        row["count"],
+                        self._findings_count(
+                            self.maintainer, {**query, "active": "true", "work_item_status": row["state"]},
+                        ),
+                    )
+
+    def test_untriaged_severity_rows_match_the_findings_list(self):
+        triage = self._dashboard_ok(self.maintainer)["triage_progress"]
+        for row in triage["by_severity"]:
+            with self.subTest(severity=row["severity"]):
+                self.assertEqual(
+                    row["total"] - row["ticketed"],
+                    self._findings_count(
+                        self.maintainer, {"severity": row["severity"], "active": "true", "work_item_status": "none"},
+                    ),
+                )
+        self.assertEqual(
+            triage["untriaged_critical_high"],
+            self._findings_count(
+                self.maintainer, {"severity": "Critical,High", "active": "true", "work_item_status": "none"},
+            ),
+        )
+
+    def test_ticketed_recently_and_stale_open_match_the_findings_list(self):
+        triage = self._dashboard_ok(self.maintainer)["triage_progress"]
+        recent = triage["ticketed_recently"]
+        stale = triage["stale_open"]
+
+        self.assertEqual(recent["count"], 2)
+        self.assertEqual(
+            recent["count"],
+            self._findings_count(self.maintainer, {"work_item_linked_gte": recent["linked_from"]}),
+        )
+        self.assertEqual(stale["count"], 1)
+        self.assertEqual(
+            stale["count"],
+            self._findings_count(
+                self.maintainer,
+                {"active": "true", "work_item_status": "OPEN", "work_item_linked_lte": stale["linked_until"]},
+            ),
+        )
+
+    def test_weekly_ticketed_matches_the_findings_list_for_that_week(self):
+        current = self._dashboard_ok(self.maintainer)["triage_progress"]["weekly"][-1]
+
+        self.assertEqual(current["ticketed"], 2)
+        self.assertEqual(
+            current["ticketed"],
+            self._findings_count(
+                self.maintainer,
+                {"work_item_linked_gte": current["week"], "work_item_linked_lte": current["week_end"]},
+            ),
+        )
+        self.assertEqual(
+            current["new_findings"],
+            self._findings_count(
+                self.maintainer, {"created_gte": current["week"], "created_lte": current["week_end"]},
+            ),
+        )
 
 
 class DashboardFilterValidationTests(DashboardFilterBase):
@@ -276,7 +372,7 @@ class DashboardFilterIsolationTests(DashboardFilterBase):
         self.assertEqual(payload["kpi"]["total_active"], 0)
         self.assertEqual(payload["top_projects"], [])
         self.assertEqual(payload["ai_verdict_analytics"]["total"], 0)
-        self.assertEqual(payload["work_item_coverage"]["total_linked"], 0)
+        self.assertEqual(payload["triage_progress"]["ticketed"], 0)
 
     def test_other_org_pipeline_tag_and_project_yield_nothing(self):
         self._assert_empty(self._dashboard_ok(self.maintainer, {"pipeline_id": self.pipe_b.id}))
@@ -294,7 +390,7 @@ class DashboardFilterIsolationTests(DashboardFilterBase):
         self.assertEqual(payload["kpi"]["total_findings"], 4)
         self.assertEqual(payload["kpi"]["projects_count"], 1)
         self.assertEqual(payload["ai_verdict_analytics"]["total"], 2)
-        self.assertEqual(payload["work_item_coverage"]["total_linked"], 1)
+        self.assertEqual(payload["triage_progress"]["ticketed"], 1)
 
         self._assert_empty(self._dashboard_ok(reader, {"project_id": self.p2.id}))
         self._assert_empty(self._dashboard_ok(reader, {"tags": "p2only"}))

@@ -32,6 +32,8 @@ export type FindingFilters = {
   processedLte?: string;
   mitigatedGte?: string;
   mitigatedLte?: string;
+  workItemLinkedGte?: string;
+  workItemLinkedLte?: string;
   projectVersion?: string;
   file?: string;
   severities?: Severity[];

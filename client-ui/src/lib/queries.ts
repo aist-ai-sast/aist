@@ -15,7 +15,9 @@ import type {
   ProductSummary,
   Project,
   ProjectVersionType,
+  Severity,
   WorkItemLink,
+  WorkItemStatusCategory,
 } from "../types";
 import { fetchJson, normalizeList } from "./api";
 import { type FindingsFilterUrlState, toFindingsApiFilters } from "./findingsFilterUrl";
@@ -263,6 +265,8 @@ export function buildFindingsParams(
     ...(filters.processedLte ? { processed_lte: filters.processedLte } : {}),
     ...(filters.mitigatedGte ? { mitigated_gte: filters.mitigatedGte } : {}),
     ...(filters.mitigatedLte ? { mitigated_lte: filters.mitigatedLte } : {}),
+    ...(filters.workItemLinkedGte ? { work_item_linked_gte: filters.workItemLinkedGte } : {}),
+    ...(filters.workItemLinkedLte ? { work_item_linked_lte: filters.workItemLinkedLte } : {}),
     ...(filters.projectVersion ? { project_version: filters.projectVersion } : {}),
     ...(filters.file ? { file: filters.file } : {}),
     ...(filters.aiStatus ? { ai_status: filters.aiStatus } : {}),
@@ -972,11 +976,43 @@ export type DashboardSummary = {
     >;
     uncertainty_buckets: Record<"low" | "medium" | "high", number>;
   };
-  work_item_coverage: {
-    total_linked: number;
-    coverage_pct: number;
-    by_status: Record<string, number>;
+  triage_progress: TriageProgress;
+};
+
+/** Work item state of a finding: ``none`` without tickets, else its deciding ticket's status. */
+export type TriageState = "none" | WorkItemStatusCategory;
+
+export type TriageProgress = {
+  total_active: number;
+  ticketed: number;
+  coverage_pct: number;
+  untriaged_critical_high: number;
+  by_state: Array<{ state: TriageState; count: number }>;
+  by_severity: Array<{
+    severity: Severity;
+    total: number;
+    ticketed: number;
+    ticketed_pct: number;
+    untriaged_pct: number;
+    target_pct: number;
+    below_target: boolean;
+  }>;
+  ticketed_recently: {
+    days: number;
+    linked_from: string;
+    count: number;
+    previous_count: number;
+    delta_pct: number | null;
   };
+  stale_open: { days: number; linked_until: string; count: number };
+  weekly: Array<{
+    week: string;
+    week_end: string;
+    new_findings: number;
+    ticketed: number;
+    dismissed: number;
+    untriaged_at_week_end: number;
+  }>;
 };
 
 export function useDashboardSummary(filters: FindingsFilterUrlState) {

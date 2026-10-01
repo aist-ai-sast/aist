@@ -74,6 +74,13 @@ export function describeActiveFilters(
     });
   }
 
+  if (state.workItemLinkedFrom || state.workItemLinkedTo) {
+    neutral("work_item_linked", "Ticketed", rangeValue(state.workItemLinkedFrom, state.workItemLinkedTo), {
+      workItemLinkedFrom: "",
+      workItemLinkedTo: "",
+    });
+  }
+
   const tagLabel = state.tags.include.length > 1 && state.tags.matchMode === "all" ? "All tags" : "Tag";
   state.tags.include.forEach((tag) => {
     chips.push({ id: `tag:include:${tag}`, label: tagLabel, value: tag, tone: "include", patch: { tags: setTagState(state.tags, tag, "none") } });

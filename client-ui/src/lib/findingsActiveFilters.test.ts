@@ -50,4 +50,16 @@ describe("describeActiveFilters", () => {
     expect(byId.work_item.value).toBe("Open");
     expect(byId.created.value).toBe("from 2026-01-01");
   });
+
+  it("shows the ticketed range a dashboard click applied and removes it as one chip", () => {
+    const chips = describeActiveFilters({
+      ...DEFAULT_FINDINGS_FILTERS,
+      workItemStatus: "OPEN",
+      workItemLinkedTo: "2026-09-01",
+    });
+    const ticketed = chips.find((chip) => chip.id === "work_item_linked")!;
+
+    expect([ticketed.label, ticketed.value]).toEqual(["Ticketed", "until 2026-09-01"]);
+    expect(ticketed.patch).toEqual({ workItemLinkedFrom: "", workItemLinkedTo: "" });
+  });
 });

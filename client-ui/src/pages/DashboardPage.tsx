@@ -7,8 +7,8 @@ import FilterClearButton from "../components/FilterClearButton";
 import FilterPanel from "../components/FilterPanel";
 import PageErrorState from "../components/PageErrorState";
 import { agingBucketRange, type DrilldownPatch, drilldownSearch, weekRange } from "../lib/dashboardDrilldown";
-import type { FindingsFilterUrlState } from "../lib/findingsFilterUrl";
-import type { DashboardSummary } from "../lib/queries";
+import { optionLabel, WORK_ITEM_STATUS_OPTIONS } from "../lib/findingsFilterOptions";
+import type { TriageProgress, TriageState } from "../lib/queries";
 import type { Severity } from "../types";
 import { useDashboardSummary, useProjects } from "../lib/queries";
 import { getRoute } from "../lib/routes";
@@ -135,97 +135,428 @@ function getCweAccentColors(): string[] {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function KpiCard({ label, value, accent }: { label: string; value: number; accent?: string }) {
-  return (
-    <div className="rounded-2xl border border-night-500 bg-night-700/90 p-4">
+function KpiCard({
+  label,
+  value,
+  accent,
+  hint,
+  to,
+  alert = false,
+}: {
+  label: string;
+  value: number | string;
+  accent?: string;
+  hint?: ReactNode;
+  to?: string;
+  alert?: boolean;
+}) {
+  const className = [
+    "block rounded-2xl border p-4",
+    alert ? "border-danger-500/50 bg-danger-500/10" : "border-night-500 bg-night-700/90",
+    to ? "transition-colors hover:border-brand-500/60 focus-visible:border-brand-500 focus-visible:outline-none" : "",
+  ].join(" ");
+  const body = (
+    <>
       <div className="text-xs uppercase tracking-[0.16em] text-slate-400">{label}</div>
       <div className={["mt-2 text-3xl font-bold", accent ?? "text-slate-100"].join(" ")}>
-        {value.toLocaleString()}
+        {typeof value === "number" ? value.toLocaleString() : value}
       </div>
-    </div>
+      {hint ? <div className="mt-1.5 text-xs text-slate-400">{hint}</div> : null}
+    </>
+  );
+  return to ? (
+    <Link to={to} className={className}>
+      {body}
+    </Link>
+  ) : (
+    <div className={className}>{body}</div>
   );
 }
 
-const WI_STATUS_COLORS: Record<string, string> = {
+const TRIAGE_STATE_COLORS: Record<TriageState, string> = {
+  none: "rgba(100,116,139,0.16)",
   OPEN: "#fbbf24",
   IN_PROGRESS: "#4dd4ff",
   DONE: "#34d399",
   CANCELLED: "#64748b",
   UNKNOWN: "#475569",
 };
-const WI_STATUS_LABELS: Record<string, string> = {
-  OPEN: "Open",
-  IN_PROGRESS: "In Progress",
-  DONE: "Done",
-  CANCELLED: "Cancelled",
-  UNKNOWN: "Unknown",
+
+// Untriaged work is drawn as an empty, hatched track: what is filled is done.
+const UNTRIAGED_DECAL = {
+  symbol: "rect",
+  symbolSize: 1,
+  dashArrayX: [1, 0],
+  dashArrayY: [2, 5],
+  rotation: -Math.PI / 4,
+  color: "rgba(148,163,184,0.35)",
 };
 
+function triageStateLabel(state: TriageState): string {
+  return optionLabel(WORK_ITEM_STATUS_OPTIONS, state);
+}
 
-function WorkItemCoverageCard({
-  coverage,
-  onStatusClick,
+function stateCount(triage: TriageProgress, state: TriageState): number {
+  return triage.by_state.find((row) => row.state === state)?.count ?? 0;
+}
+
+function TicketHealthRow({
+  title,
+  detail,
+  count,
+  pill,
+  pillClassName,
+  to,
+}: {
+  title: string;
+  detail: string;
+  count: number;
+  pill: string;
+  pillClassName: string;
+  to: string;
+}) {
+  return (
+    <Link
+      to={to}
+      className="flex items-center justify-between gap-3 rounded-xl border border-night-500 bg-night-600/60 px-3 py-2.5 transition-colors hover:border-brand-500/60 focus-visible:border-brand-500 focus-visible:outline-none"
+    >
+      <span className="min-w-0">
+        <span className="block text-sm text-slate-200">{title}</span>
+        <span className="block text-xs text-slate-400">{detail}</span>
+      </span>
+      <span className="flex shrink-0 flex-col items-end gap-1">
+        <span className="text-lg font-bold tabular-nums text-slate-100">{count.toLocaleString()}</span>
+        <span
+          className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${pillClassName}`}
+        >
+          {pill}
+        </span>
+      </span>
+    </Link>
+  );
+}
+
+/**
+ * Triage progress of the selected findings. Every number, share and target
+ * comes from the summary; a click opens the Findings filter that reproduces it.
+ */
+function TriageProgressSection({
+  triage,
+  findingsLink,
   notApplicable,
 }: {
-  coverage: DashboardSummary["work_item_coverage"];
-  onStatusClick: (status: string) => void;
+  triage: TriageProgress;
+  findingsLink: (patch: DrilldownPatch) => string;
   notApplicable?: ReactNode;
 }) {
-  const option = useMemo(
+  const navigate = useNavigate();
+  const recent = triage.ticketed_recently;
+
+  const stateOption = useMemo(
     () => ({
       backgroundColor: "transparent",
-      tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, ...TOOLTIP_STYLE },
-      legend: {
-        textStyle: { color: CHART_TEXT_COLOR },
-        itemWidth: 10,
-        itemHeight: 10,
-      },
+      tooltip: { trigger: "item", ...TOOLTIP_STYLE },
+      legend: { textStyle: { color: CHART_TEXT_COLOR }, itemWidth: 10, itemHeight: 10 },
       grid: { left: "2%", right: "2%", top: "40px", bottom: "16px", containLabel: true },
       xAxis: {
         type: "value",
+        max: Math.max(triage.total_active, 1),
         axisLine: { lineStyle: { color: CHART_AXIS_COLOR } },
         splitLine: { lineStyle: { color: CHART_AXIS_COLOR } },
         axisLabel: { color: CHART_TEXT_COLOR },
       },
       yAxis: {
         type: "category",
-        data: ["Findings"],
+        data: ["Active"],
         axisLabel: { color: CHART_TEXT_COLOR },
         axisLine: { lineStyle: { color: CHART_AXIS_COLOR } },
       },
-      series: Object.keys(WI_STATUS_LABELS).map((status) => ({
-        name: WI_STATUS_LABELS[status],
+      series: triage.by_state.map((row) => ({
+        name: triageStateLabel(row.state),
         type: "bar",
         stack: "total",
         barMaxWidth: 32,
-        itemStyle: { color: WI_STATUS_COLORS[status] ?? "#475569" },
-        data: [coverage.by_status[status] ?? 0],
+        cursor: "pointer",
+        itemStyle: {
+          color: TRIAGE_STATE_COLORS[row.state],
+          ...(row.state === "none" ? { decal: UNTRIAGED_DECAL } : {}),
+        },
+        data: [{ value: row.count, state: row.state }],
       })),
     }),
-    [coverage],
+    [triage],
   );
 
-  return (
+  const severityOption = useMemo(
+    () => ({
+      backgroundColor: "transparent",
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, ...TOOLTIP_STYLE },
+      legend: { textStyle: { color: CHART_TEXT_COLOR }, itemWidth: 10, itemHeight: 10 },
+      grid: { left: "2%", right: "2%", top: "40px", bottom: "8px", containLabel: true },
+      xAxis: {
+        type: "value",
+        max: 100,
+        axisLine: { lineStyle: { color: CHART_AXIS_COLOR } },
+        splitLine: { lineStyle: { color: CHART_AXIS_COLOR } },
+        axisLabel: { color: CHART_TEXT_COLOR, formatter: "{value}%" },
+      },
+      yAxis: [
+        {
+          type: "category",
+          inverse: true,
+          data: triage.by_severity.map((row) => row.severity),
+          axisLabel: { color: CHART_TEXT_COLOR },
+          axisLine: { lineStyle: { color: CHART_AXIS_COLOR } },
+        },
+        {
+          type: "category",
+          inverse: true,
+          position: "right",
+          data: triage.by_severity.map((row) => `${row.ticketed} / ${row.total} · ${row.ticketed_pct}%`),
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: {
+            color: (_value: string, index: number) =>
+              triage.by_severity[index]?.below_target ? SEVERITY_COLORS.Critical : CHART_TEXT_COLOR,
+          },
+        },
+      ],
+      series: [
+        {
+          name: "Ticketed",
+          type: "bar",
+          stack: "share",
+          barMaxWidth: 14,
+          cursor: "pointer",
+          itemStyle: { color: TRIAGE_STATE_COLORS.IN_PROGRESS },
+          data: triage.by_severity.map((row) => ({ value: row.ticketed_pct, severity: row.severity, state: "any" })),
+        },
+        {
+          name: triageStateLabel("none"),
+          type: "bar",
+          stack: "share",
+          barMaxWidth: 14,
+          cursor: "pointer",
+          itemStyle: { color: TRIAGE_STATE_COLORS.none, decal: UNTRIAGED_DECAL },
+          data: triage.by_severity.map((row) => ({ value: row.untriaged_pct, severity: row.severity, state: "none" })),
+        },
+        {
+          name: "Target",
+          type: "scatter",
+          symbol: "rect",
+          symbolSize: [3, 22],
+          itemStyle: { color: "#e2e8f0" },
+          tooltip: { valueFormatter: (value: number) => `${value}%` },
+          data: triage.by_severity.map((row) => (row.target_pct > 0 ? row.target_pct : null)),
+        },
+      ],
+    }),
+    [triage],
+  );
+
+  const throughputOption = useMemo(
+    () => ({
+      backgroundColor: "transparent",
+      tooltip: { trigger: "axis", ...TOOLTIP_STYLE },
+      legend: { textStyle: { color: CHART_TEXT_COLOR } },
+      grid: { left: "3%", right: "3%", bottom: "10%", top: "42px", containLabel: true },
+      xAxis: {
+        type: "category",
+        data: triage.weekly.map((row) => formatWeekLabel(row.week)),
+        axisLine: { lineStyle: { color: CHART_AXIS_COLOR } },
+        axisLabel: { color: CHART_TEXT_COLOR, rotate: triage.weekly.length > 8 ? 30 : 0 },
+      },
+      yAxis: [
+        {
+          type: "value",
+          name: "Findings",
+          nameTextStyle: { color: CHART_TEXT_COLOR },
+          axisLine: { lineStyle: { color: CHART_AXIS_COLOR } },
+          splitLine: { lineStyle: { color: CHART_AXIS_COLOR } },
+          axisLabel: { color: CHART_TEXT_COLOR },
+          minInterval: 1,
+        },
+        {
+          type: "value",
+          name: "Backlog",
+          nameTextStyle: { color: CHART_TEXT_COLOR },
+          axisLine: { lineStyle: { color: CHART_AXIS_COLOR } },
+          splitLine: { show: false },
+          axisLabel: { color: CHART_TEXT_COLOR },
+          minInterval: 1,
+        },
+      ],
+      series: [
+        {
+          name: "Ticketed",
+          type: "bar",
+          stack: "decisions",
+          barMaxWidth: 24,
+          cursor: "pointer",
+          itemStyle: { color: TRIAGE_STATE_COLORS.IN_PROGRESS },
+          data: triage.weekly.map((row) => row.ticketed),
+        },
+        {
+          name: "Dismissed",
+          type: "bar",
+          stack: "decisions",
+          barMaxWidth: 24,
+          itemStyle: { color: "#64748b", borderRadius: [3, 3, 0, 0] },
+          data: triage.weekly.map((row) => row.dismissed),
+        },
+        {
+          name: "New findings",
+          type: "line",
+          smooth: true,
+          cursor: "pointer",
+          itemStyle: { color: "#fbbf24" },
+          data: triage.weekly.map((row) => row.new_findings),
+        },
+        {
+          name: "Untriaged backlog",
+          type: "line",
+          yAxisIndex: 1,
+          smooth: true,
+          lineStyle: { type: "dashed" },
+          itemStyle: { color: "#f87171" },
+          data: triage.weekly.map((row) => row.untriaged_at_week_end),
+        },
+      ],
+    }),
+    [triage],
+  );
+
+  const throughputCard = (
     <ChartCard
-      title="Work Item Coverage"
-      subtitle={`${coverage.coverage_pct}% covered · ${coverage.total_linked.toLocaleString()} linked findings · click a segment to filter`}
+      title="Triage Throughput"
+      subtitle="Weekly triage decisions vs new findings · dashed line = untriaged backlog at week end · click to filter"
     >
-      {notApplicable ?? (
       <ReactECharts
-        option={option}
-        style={{ width: "100%", height: "120px" }}
+        option={throughputOption}
+        style={{ width: "100%", height: "280px" }}
         opts={{ renderer: "svg" }}
         onEvents={{
-          click: (params: { seriesName?: string }) => {
-            const status = Object.keys(WI_STATUS_LABELS).find(
-              (k) => WI_STATUS_LABELS[k] === params.seriesName,
-            );
-            if (status) onStatusClick(status);
+          click: (params: { dataIndex?: number; seriesName?: string }) => {
+            const row = triage.weekly[params.dataIndex ?? -1];
+            if (!row) return;
+            if (params.seriesName === "Ticketed") {
+              navigate(findingsLink({ workItemLinkedFrom: row.week, workItemLinkedTo: row.week_end }));
+            }
+            if (params.seriesName === "New findings") {
+              navigate(findingsLink({ createdFrom: row.week, createdTo: row.week_end }));
+            }
           },
         }}
       />
-      )}
     </ChartCard>
+  );
+
+  if (notApplicable) {
+    return (
+      <div className="space-y-4">
+        <ChartCard title="Triage Progress" subtitle="Active findings by work item state">
+          {notApplicable}
+        </ChartCard>
+        {throughputCard}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <KpiCard
+          label="Untriaged Critical & High"
+          value={triage.untriaged_critical_high}
+          accent={triage.untriaged_critical_high > 0 ? "text-danger-500" : undefined}
+          alert={triage.untriaged_critical_high > 0}
+          hint="Active, no work item yet"
+          to={findingsLink({ severities: ["Critical", "High"], status: "Active", workItemStatus: "none" })}
+        />
+        <KpiCard
+          label="Triage Coverage"
+          value={`${triage.coverage_pct}%`}
+          hint={`${triage.ticketed.toLocaleString()} of ${triage.total_active.toLocaleString()} active findings ticketed`}
+          to={findingsLink({ status: "Active", workItemStatus: "any" })}
+        />
+        <KpiCard
+          label={`Ticketed · ${recent.days} days`}
+          value={recent.count}
+          hint={
+            recent.delta_pct === null
+              ? `None in the previous ${recent.days} days`
+              : `${recent.delta_pct >= 0 ? "▲" : "▼"} ${Math.abs(recent.delta_pct)}% vs previous ${recent.days} days`
+          }
+          to={findingsLink({ workItemLinkedFrom: recent.linked_from, workItemLinkedTo: "" })}
+        />
+      </div>
+
+      <ChartCard
+        title="Triage Progress"
+        subtitle="Active findings by work item state · a finding with several tickets counts once · click to filter"
+      >
+        <ReactECharts
+          option={stateOption}
+          style={{ width: "100%", height: "120px" }}
+          opts={{ renderer: "svg" }}
+          onEvents={{
+            click: (params: { data?: { state?: TriageState } }) => {
+              const state = params.data?.state;
+              if (state) navigate(findingsLink({ status: "Active", workItemStatus: state }));
+            },
+          }}
+        />
+        <ReactECharts
+          option={severityOption}
+          style={{ width: "100%", height: "220px" }}
+          opts={{ renderer: "svg" }}
+          onEvents={{
+            click: (params: { data?: { severity?: Severity; state?: "any" | "none" } }) => {
+              const { severity, state } = params.data ?? {};
+              if (!severity || !state) return;
+              navigate(findingsLink({ severities: [severity], status: "Active", workItemStatus: state }));
+            },
+          }}
+        />
+      </ChartCard>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        {throughputCard}
+        <ChartCard title="Ticket Health" subtitle="Ticketed findings that need a follow-up · click to filter">
+          <div className="space-y-2.5">
+            <TicketHealthRow
+              title={`Open for more than ${triage.stale_open.days} days`}
+              detail="Ticket created but nobody picked it up"
+              count={triage.stale_open.count}
+              pill="Stale"
+              pillClassName="border-amber-400/40 bg-amber-400/10 text-amber-400"
+              to={findingsLink({
+                status: "Active",
+                workItemStatus: "OPEN",
+                workItemLinkedFrom: "",
+                workItemLinkedTo: triage.stale_open.linked_until,
+              })}
+            />
+            <TicketHealthRow
+              title="Done in tracker, still detected"
+              detail="The latest scan still reports the finding"
+              count={stateCount(triage, "DONE")}
+              pill="Verify"
+              pillClassName="border-danger-500/40 bg-danger-500/10 text-danger-500"
+              to={findingsLink({ status: "Active", workItemStatus: "DONE" })}
+            />
+            <TicketHealthRow
+              title="Status unknown"
+              detail="Manual link or tracker sync failed"
+              count={stateCount(triage, "UNKNOWN")}
+              pill="Sync"
+              pillClassName="border-night-500 bg-night-600 text-slate-400"
+              to={findingsLink({ status: "Active", workItemStatus: "UNKNOWN" })}
+            />
+          </div>
+        </ChartCard>
+      </div>
+    </div>
   );
 }
 
@@ -928,14 +1259,12 @@ export default function DashboardPage() {
               <KpiCard label="Projects" value={kpi?.projects_count ?? 0} />
             </div>
 
-            {dashboard.data?.work_item_coverage ? (
-              <WorkItemCoverageCard
-                coverage={dashboard.data.work_item_coverage}
-                onStatusClick={(status) =>
-                  navigate(buildFindingsLink({ workItemStatus: status as FindingsFilterUrlState["workItemStatus"] }))
-                }
+            {dashboard.data?.triage_progress ? (
+              <TriageProgressSection
+                triage={dashboard.data.triage_progress}
+                findingsLink={buildFindingsLink}
                 notApplicable={
-                  activeChartsNotApplicable ? <ChartNotApplicable height={120} onResetStatus={resetStatus} /> : undefined
+                  activeChartsNotApplicable ? <ChartNotApplicable height={200} onResetStatus={resetStatus} /> : undefined
                 }
               />
             ) : null}

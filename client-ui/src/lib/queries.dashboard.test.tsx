@@ -29,6 +29,8 @@ const FULL_STATE: FindingsFilterUrlState = {
   statusUpdatedTo: "2026-09-03",
   mitigatedFrom: "2026-09-04",
   mitigatedTo: "2026-09-05",
+  workItemLinkedFrom: "2026-09-06",
+  workItemLinkedTo: "2026-09-07",
   projectVersion: "main",
   file: "src/app.py",
   cwe: "79,89",

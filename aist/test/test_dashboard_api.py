@@ -439,79 +439,145 @@ class DashboardSummaryViewTests(TestCase):
         self.assertEqual(distribution[1]["cwe"], 89)
         self.assertEqual(distribution[1]["count"], 1)
 
-    def test_work_item_coverage_zero_when_no_links(self):
-        response = self.client.get(self._url())
+    # -- triage progress ---------------------------------------------------
+
+    def _link(self, finding, key, status_category, *, created=None):
+        link = WorkItemLink.objects.create(
+            finding=finding,
+            external_url=f"https://jira.example.com/{key}",
+            external_key=key,
+            status_category=status_category,
+        )
+        if created is not None:
+            # ``created`` is auto_now_add: backdate it the way an old ticket looks.
+            WorkItemLink.objects.filter(pk=link.pk).update(created=created)
+        return link
+
+    def _triage(self, **query):
+        response = self.client.get(self._url(), data=query)
         self.assertEqual(response.status_code, 200)
-        coverage = response.json()["work_item_coverage"]
+        return response.json()["triage_progress"]
 
-        self.assertEqual(coverage["total_linked"], 0)
-        self.assertAlmostEqual(coverage["coverage_pct"], 0.0)
-        # by_status must include all known categories
-        for cat in WorkItemStatusCategory.values:
-            self.assertIn(cat, coverage["by_status"])
-            self.assertEqual(coverage["by_status"][cat], 0)
+    @staticmethod
+    def _states(triage):
+        return {row["state"]: row["count"] for row in triage["by_state"]}
 
-    def test_work_item_coverage_counts_linked_active_findings(self):
-        # Link two active findings; one inactive finding link must not be counted
-        WorkItemLink.objects.create(
-            finding=self.finding_critical,
-            external_url="https://jira.example.com/PROJ-1",
-            external_key="PROJ-1",
-            status_category=WorkItemStatusCategory.OPEN,
+    def test_triage_progress_without_tickets_leaves_every_active_finding_untriaged(self):
+        triage = self._triage()
+
+        self.assertEqual(triage["total_active"], 4)
+        self.assertEqual(triage["ticketed"], 0)
+        self.assertAlmostEqual(triage["coverage_pct"], 0.0)
+        self.assertEqual(triage["untriaged_critical_high"], 2)
+        self.assertEqual(
+            [row["state"] for row in triage["by_state"]],
+            ["none", "OPEN", "IN_PROGRESS", "DONE", "CANCELLED", "UNKNOWN"],
         )
-        WorkItemLink.objects.create(
-            finding=self.finding_high,
-            external_url="https://jira.example.com/PROJ-2",
-            external_key="PROJ-2",
-            status_category=WorkItemStatusCategory.IN_PROGRESS,
+        self.assertEqual(self._states(triage)["none"], 4)
+        severities = {row["severity"]: row for row in triage["by_severity"]}
+        self.assertEqual([row["severity"] for row in triage["by_severity"]], ["Critical", "High", "Medium", "Low", "Info"])
+        self.assertTrue(severities["Critical"]["below_target"])
+        # No Info findings: an empty severity is never reported as behind its target.
+        self.assertEqual(severities["Info"]["total"], 0)
+        self.assertFalse(severities["Info"]["below_target"])
+
+    def test_triage_progress_counts_each_finding_once_by_its_deciding_ticket(self):
+        # Jira and GitLab tickets on one finding: the one still in progress decides.
+        self._link(self.finding_critical, "SEC-1", WorkItemStatusCategory.OPEN)
+        self._link(self.finding_critical, "SEC-2", WorkItemStatusCategory.IN_PROGRESS)
+        # Done only because no ticket is left open.
+        self._link(self.finding_high, "SEC-3", WorkItemStatusCategory.DONE)
+        self._link(self.finding_high, "SEC-4", WorkItemStatusCategory.CANCELLED)
+        # A fixed finding's ticket is not triage progress of active findings.
+        self._link(self.finding_mitigated, "SEC-5", WorkItemStatusCategory.OPEN)
+
+        triage = self._triage()
+        states = self._states(triage)
+
+        self.assertEqual(states, {"none": 2, "OPEN": 0, "IN_PROGRESS": 1, "DONE": 1, "CANCELLED": 0, "UNKNOWN": 0})
+        self.assertEqual(sum(states.values()), triage["total_active"])
+        self.assertEqual(triage["ticketed"], 2)
+        self.assertAlmostEqual(triage["coverage_pct"], 50.0)
+        self.assertEqual(triage["untriaged_critical_high"], 0)
+        severities = {row["severity"]: row for row in triage["by_severity"]}
+        self.assertEqual((severities["High"]["ticketed"], severities["High"]["total"]), (1, 1))
+        self.assertFalse(severities["High"]["below_target"])
+        self.assertEqual((severities["Medium"]["ticketed"], severities["Medium"]["total"]), (0, 2))
+        self.assertAlmostEqual(severities["Medium"]["untriaged_pct"], 100.0)
+        self.assertTrue(severities["Medium"]["below_target"])
+
+    def test_ticketed_recently_counts_a_finding_by_its_first_ticket(self):
+        now = timezone.now()
+        self._link(self.finding_critical, "SEC-10", WorkItemStatusCategory.OPEN, created=now - timedelta(days=5))
+        # Ticketed 40 days ago; a second ticket this week does not make it newly ticketed.
+        self._link(self.finding_high, "SEC-11", WorkItemStatusCategory.DONE, created=now - timedelta(days=40))
+        self._link(self.finding_high, "SEC-12", WorkItemStatusCategory.OPEN, created=now - timedelta(days=2))
+        self._link(self.finding_medium, "SEC-13", WorkItemStatusCategory.OPEN, created=now - timedelta(days=75))
+
+        recent = self._triage()["ticketed_recently"]
+
+        self.assertEqual(recent["count"], 1)
+        self.assertEqual(recent["previous_count"], 1)
+        self.assertEqual(recent["delta_pct"], 0)
+        self.assertEqual(recent["linked_from"], (timezone.localdate() - timedelta(days=30)).isoformat())
+
+    def test_ticketed_recently_has_no_delta_without_a_previous_window(self):
+        self._link(self.finding_critical, "SEC-20", WorkItemStatusCategory.OPEN)
+
+        recent = self._triage()["ticketed_recently"]
+
+        self.assertEqual(recent["count"], 1)
+        self.assertEqual(recent["previous_count"], 0)
+        self.assertIsNone(recent["delta_pct"])
+
+    def test_stale_open_counts_open_tickets_nobody_picked_up(self):
+        now = timezone.now()
+        self._link(self.finding_critical, "SEC-30", WorkItemStatusCategory.OPEN, created=now - timedelta(days=45))
+        self._link(self.finding_high, "SEC-31", WorkItemStatusCategory.OPEN, created=now - timedelta(days=3))
+        self._link(self.finding_medium, "SEC-32", WorkItemStatusCategory.IN_PROGRESS, created=now - timedelta(days=45))
+
+        stale = self._triage()["stale_open"]
+
+        self.assertEqual(stale["count"], 1)
+        self.assertEqual(stale["days"], 30)
+        self.assertEqual(stale["linked_until"], (timezone.localdate() - timedelta(days=30)).isoformat())
+
+    def test_weekly_series_tracks_new_ticketed_dismissed_and_backlog(self):
+        self._link(self.finding_critical, "SEC-40", WorkItemStatusCategory.OPEN)
+        Finding.objects.filter(pk=self.finding_high.pk).update(
+            active=False, false_p=True, last_status_update=timezone.now(),
         )
-        # Link for an inactive (mitigated) finding — must not contribute to coverage
-        WorkItemLink.objects.create(
-            finding=self.finding_mitigated,
-            external_url="https://jira.example.com/PROJ-3",
-            external_key="PROJ-3",
-            status_category=WorkItemStatusCategory.DONE,
-        )
 
-        response = self.client.get(self._url())
-        self.assertEqual(response.status_code, 200)
-        coverage = response.json()["work_item_coverage"]
+        triage = self._triage()
+        weekly = triage["weekly"]
 
-        # 2 out of 4 active findings are linked → 50 %
-        self.assertEqual(coverage["total_linked"], 2)
-        self.assertAlmostEqual(coverage["coverage_pct"], 50.0)
-        self.assertEqual(coverage["by_status"][WorkItemStatusCategory.OPEN], 1)
-        self.assertEqual(coverage["by_status"][WorkItemStatusCategory.IN_PROGRESS], 1)
-        self.assertEqual(coverage["by_status"][WorkItemStatusCategory.DONE], 0)
+        self.assertEqual(len(weekly), 12)
+        current_week = max(weekly, key=itemgetter("week"))
+        week_start = datetime.fromisoformat(current_week["week"]).date()
+        self.assertEqual(current_week["week_end"], (week_start + timedelta(days=6)).isoformat())
+        self.assertEqual(current_week["new_findings"], 5)
+        self.assertEqual(current_week["ticketed"], 1)
+        self.assertEqual(current_week["dismissed"], 1)
+        # This week ends with the queue the progress bar shows today.
+        self.assertEqual(current_week["untriaged_at_week_end"], 2)
+        self.assertEqual(current_week["untriaged_at_week_end"], self._states(triage)["none"])
+        # Every finding was found this week, so earlier weeks had nothing to triage.
+        self.assertTrue(all(row["untriaged_at_week_end"] == 0 for row in weekly[:-1]))
 
-    def test_work_item_coverage_multiple_links_per_finding_count_once(self):
-        # Two links on the same finding — finding must be counted only once for coverage_pct
-        WorkItemLink.objects.create(
-            finding=self.finding_critical,
-            external_url="https://jira.example.com/PROJ-10",
-            external_key="PROJ-10",
-            status_category=WorkItemStatusCategory.OPEN,
-        )
-        WorkItemLink.objects.create(
-            finding=self.finding_critical,
-            external_url="https://jira.example.com/PROJ-11",
-            external_key="PROJ-11",
-            status_category=WorkItemStatusCategory.IN_PROGRESS,
-        )
+    def test_weekly_backlog_shrinks_on_the_week_a_finding_got_its_ticket(self):
+        now = timezone.now()
+        Finding.objects.filter(pk=self.finding_critical.pk).update(date=(now - timedelta(days=21)).date())
+        self._link(self.finding_critical, "SEC-50", WorkItemStatusCategory.OPEN, created=now - timedelta(days=7))
 
-        response = self.client.get(self._url())
-        self.assertEqual(response.status_code, 200)
-        coverage = response.json()["work_item_coverage"]
+        weekly = self._triage()["weekly"]
+        by_week = {row["week"]: row for row in weekly}
+        found_week = (now - timedelta(days=21)).date()
+        found_week -= timedelta(days=found_week.weekday())
 
-        # 1 distinct active finding linked out of 4 active → 25 %
-        self.assertEqual(coverage["total_linked"], 1)
-        self.assertAlmostEqual(coverage["coverage_pct"], 25.0)
-        # by_status counts individual links (not distinct findings)
-        self.assertEqual(coverage["by_status"][WorkItemStatusCategory.OPEN], 1)
-        self.assertEqual(coverage["by_status"][WorkItemStatusCategory.IN_PROGRESS], 1)
+        self.assertEqual(by_week[found_week.isoformat()]["untriaged_at_week_end"], 1)
+        self.assertEqual(weekly[-1]["untriaged_at_week_end"], 3)
 
-    def test_work_item_coverage_filtered_by_project(self):
-        # Create a second project with its own findings and links
+    def test_triage_progress_follows_the_project_filter(self):
         product2 = Product.objects.create(
             name="Coverage Product 2",
             description="p2",
@@ -543,15 +609,10 @@ class DashboardSummaryViewTests(TestCase):
             active=True,
             reporter=self.user,
         )
-        WorkItemLink.objects.create(
-            finding=finding_p2,
-            external_url="https://jira.example.com/P2-1",
-            external_key="P2-1",
-            status_category=WorkItemStatusCategory.DONE,
-        )
-        # No links on project 1 findings
-        response = self.client.get(self._url(), data={"project_id": self.project.id})
-        self.assertEqual(response.status_code, 200)
-        coverage = response.json()["work_item_coverage"]
-        self.assertEqual(coverage["total_linked"], 0)
-        self.assertAlmostEqual(coverage["coverage_pct"], 0.0)
+        self._link(finding_p2, "P2-1", WorkItemStatusCategory.DONE)
+
+        triage = self._triage(project_id=self.project.id)
+
+        self.assertEqual(triage["total_active"], 4)
+        self.assertEqual(triage["ticketed"], 0)
+        self.assertEqual(self._states(triage)["DONE"], 0)

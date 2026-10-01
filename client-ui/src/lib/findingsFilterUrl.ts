@@ -14,6 +14,8 @@ export type FindingsFilterUrlState = {
   statusUpdatedTo: string;
   mitigatedFrom: string;
   mitigatedTo: string;
+  workItemLinkedFrom: string;
+  workItemLinkedTo: string;
   projectVersion: string;
   file: string;
   cwe: string;
@@ -37,6 +39,8 @@ export const DEFAULT_FINDINGS_FILTERS: FindingsFilterUrlState = {
   statusUpdatedTo: "",
   mitigatedFrom: "",
   mitigatedTo: "",
+  workItemLinkedFrom: "",
+  workItemLinkedTo: "",
   projectVersion: "",
   file: "",
   cwe: "",
@@ -148,6 +152,8 @@ export function parseFindingsFiltersFromSearch(params: URLSearchParams): Finding
       ?? "",
     mitigatedFrom: params.get("mitigated_from") ?? params.get("mitigated_gte") ?? "",
     mitigatedTo: params.get("mitigated_to") ?? params.get("mitigated_lte") ?? "",
+    workItemLinkedFrom: params.get("work_item_linked_gte") ?? "",
+    workItemLinkedTo: params.get("work_item_linked_lte") ?? "",
     projectVersion: params.get("project_version") ?? "",
     file: params.get("file") ?? "",
     cwe: params.get("cwe") ?? "",
@@ -171,6 +177,8 @@ export function buildFindingsFilterSearch(state: FindingsFilterUrlState): URLSea
   if (state.statusUpdatedTo) params.set("processed_lte", state.statusUpdatedTo);
   if (state.mitigatedFrom) params.set("mitigated_gte", state.mitigatedFrom);
   if (state.mitigatedTo) params.set("mitigated_lte", state.mitigatedTo);
+  if (state.workItemLinkedFrom) params.set("work_item_linked_gte", state.workItemLinkedFrom);
+  if (state.workItemLinkedTo) params.set("work_item_linked_lte", state.workItemLinkedTo);
   if (state.projectVersion) params.set("project_version", state.projectVersion);
   if (state.file) params.set("file", state.file);
   if (state.cwe) params.set("cwe", state.cwe);
@@ -204,6 +212,8 @@ export function toFindingsApiFilters(
     processedLte: state.statusUpdatedTo || undefined,
     mitigatedGte: state.mitigatedFrom || undefined,
     mitigatedLte: state.mitigatedTo || undefined,
+    workItemLinkedGte: state.workItemLinkedFrom || undefined,
+    workItemLinkedLte: state.workItemLinkedTo || undefined,
     projectVersion: state.projectVersion || undefined,
     file: state.file || undefined,
     aiStatus:

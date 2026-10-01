@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -531,6 +532,58 @@ class HasWorkItemFilterTests(WorkItemBaseTestCase):
         ids = [f["id"] for f in response.data["results"]]
         self.assertIn(self.finding.pk, ids)
         self.assertNotIn(self.finding_no_link.pk, ids)
+
+    def test_filter_work_item_status_uses_the_ticket_still_in_progress(self):
+        # Jira ticket still open, GitLab issue already in progress: the finding is in progress.
+        WorkItemLink.objects.create(
+            finding=self.finding,
+            external_key="SEC-1",
+            external_url="https://example.com/SEC-1",
+            status_category=WorkItemStatusCategory.OPEN,
+        )
+        WorkItemLink.objects.create(
+            finding=self.finding,
+            external_key="sec#1",
+            external_url="https://example.com/sec-1",
+            status_category=WorkItemStatusCategory.IN_PROGRESS,
+        )
+
+        def ids_for(status_value):
+            response = self.client.get(self._findings_url(), {"work_item_status": status_value})
+            self.assertEqual(response.status_code, 200)
+            return [f["id"] for f in response.data["results"]]
+
+        self.assertIn(self.finding.pk, ids_for("IN_PROGRESS"))
+        self.assertNotIn(self.finding.pk, ids_for("OPEN"))
+
+    def test_filter_work_item_linked_range_uses_the_first_ticket(self):
+        first = WorkItemLink.objects.create(
+            finding=self.finding,
+            external_key="SEC-2",
+            external_url="https://example.com/SEC-2",
+        )
+        WorkItemLink.objects.filter(pk=first.pk).update(created=timezone.now() - timedelta(days=40))
+        # A ticket added today does not move the finding into today's range.
+        WorkItemLink.objects.create(
+            finding=self.finding,
+            external_key="SEC-3",
+            external_url="https://example.com/SEC-3",
+        )
+        WorkItemLink.objects.create(
+            finding=self.finding_no_link,
+            external_key="SEC-4",
+            external_url="https://example.com/SEC-4",
+        )
+        today = timezone.localdate().isoformat()
+
+        response = self.client.get(self._findings_url(), {"work_item_linked_gte": today})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([f["id"] for f in response.data["results"]], [self.finding_no_link.pk])
+
+        old_until = (timezone.localdate() - timedelta(days=30)).isoformat()
+        response = self.client.get(self._findings_url(), {"work_item_linked_lte": old_until})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([f["id"] for f in response.data["results"]], [self.finding.pk])
 
     def test_filter_work_item_status_all_returns_all_findings(self):
         WorkItemLink.objects.create(

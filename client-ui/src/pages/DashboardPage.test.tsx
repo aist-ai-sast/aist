@@ -38,7 +38,30 @@ function summary(overrides: Partial<DashboardSummary["kpi"]> = {}): DashboardSum
       },
       uncertainty_buckets: { low: 1, medium: 0, high: 0 },
     },
-    work_item_coverage: { total_linked: 1, coverage_pct: 33.3, by_status: { OPEN: 1 } },
+    triage_progress: {
+      total_active: 3,
+      ticketed: 1,
+      coverage_pct: 33.3,
+      untriaged_critical_high: 1,
+      by_state: [
+        { state: "none", count: 2 },
+        { state: "OPEN", count: 1 },
+        { state: "IN_PROGRESS", count: 0 },
+        { state: "DONE", count: 0 },
+        { state: "CANCELLED", count: 0 },
+        { state: "UNKNOWN", count: 0 },
+      ],
+      by_severity: [
+        { severity: "Critical", total: 1, ticketed: 1, ticketed_pct: 100, untriaged_pct: 0, target_pct: 100, below_target: false },
+        { severity: "High", total: 1, ticketed: 0, ticketed_pct: 0, untriaged_pct: 100, target_pct: 90, below_target: true },
+        { severity: "Medium", total: 1, ticketed: 0, ticketed_pct: 0, untriaged_pct: 100, target_pct: 60, below_target: true },
+        { severity: "Low", total: 0, ticketed: 0, ticketed_pct: 0, untriaged_pct: 0, target_pct: 30, below_target: false },
+        { severity: "Info", total: 0, ticketed: 0, ticketed_pct: 0, untriaged_pct: 0, target_pct: 0, below_target: false },
+      ],
+      ticketed_recently: { days: 30, linked_from: "2026-09-01", count: 4, previous_count: 3, delta_pct: 33 },
+      stale_open: { days: 30, linked_until: "2026-09-01", count: 1 },
+      weekly: [{ week: "2026-09-21", week_end: "2026-09-27", new_findings: 2, ticketed: 1, dismissed: 0, untriaged_at_week_end: 2 }],
+    },
   };
 }
 
@@ -177,11 +200,49 @@ describe("DashboardPage filter", () => {
   it("marks active-only charts as not applicable for non-active findings and resets the status", () => {
     renderAt("/dashboard?active=false");
 
-    // Work Item Coverage, Severity Distribution, Top Projects, Aging Heatmap, Top CWE.
+    // Triage Progress, Severity Distribution, Top Projects, Aging Heatmap, Top CWE.
     expect(screen.getAllByText("Not applicable to the current filters")).toHaveLength(5);
     fireEvent.click(screen.getAllByRole("button", { name: "Reset Status" })[0]);
     expect(currentSearch().get("active")).toBeNull();
     expect(screen.queryByText("Not applicable to the current filters")).not.toBeInTheDocument();
+  });
+
+  it("opens the untriaged critical and high findings from the triage headline", () => {
+    renderAt("/dashboard?project_id=5");
+
+    expect(screen.getByRole("link", { name: /Untriaged Critical & High/ })).toHaveAttribute(
+      "href",
+      "/findings?project_id=5&severity=Critical%2CHigh&active=true&work_item_status=none",
+    );
+    expect(screen.getByRole("link", { name: /Ticketed · 30 days/ })).toHaveTextContent("▲ 33% vs previous 30 days");
+    expect(screen.getByRole("link", { name: /Triage Coverage/ })).toHaveTextContent("1 of 3 active findings ticketed");
+  });
+
+  it("opens each ticket health follow-up with the filter that reproduces its count", () => {
+    renderAt("/dashboard?project_id=5");
+
+    const stale = screen.getByRole("link", { name: /Open for more than 30 days/ });
+    expect(stale).toHaveTextContent("1");
+    expect(stale).toHaveAttribute(
+      "href",
+      "/findings?project_id=5&work_item_linked_lte=2026-09-01&active=true&work_item_status=OPEN",
+    );
+    expect(screen.getByRole("link", { name: /Done in tracker, still detected/ })).toHaveAttribute(
+      "href",
+      "/findings?project_id=5&active=true&work_item_status=DONE",
+    );
+    expect(screen.getByRole("link", { name: /Status unknown/ })).toHaveAttribute(
+      "href",
+      "/findings?project_id=5&active=true&work_item_status=UNKNOWN",
+    );
+  });
+
+  it("keeps only the throughput of triage when the filter is set to non-active findings", () => {
+    renderAt("/dashboard?active=false");
+
+    expect(screen.getByText("Triage Throughput")).toBeInTheDocument();
+    expect(screen.queryByText("Ticket Health")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Untriaged Critical & High/ })).not.toBeInTheDocument();
   });
 
   it("labels pipeline performance as outside the finding filter", () => {

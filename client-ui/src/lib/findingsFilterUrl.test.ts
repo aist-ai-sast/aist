@@ -19,6 +19,8 @@ describe("parseFindingsFiltersFromSearch", () => {
       processed_lte: "2026-03-03",
       mitigated_gte: "2026-03-01",
       mitigated_lte: "2026-03-02",
+      work_item_linked_gte: "2026-03-07",
+      work_item_linked_lte: "2026-03-08",
       project_version: "master",
       file: "src/app.ts",
       cwe: "79,89",
@@ -42,6 +44,8 @@ describe("parseFindingsFiltersFromSearch", () => {
       statusUpdatedTo: "2026-03-03",
       mitigatedFrom: "2026-03-01",
       mitigatedTo: "2026-03-02",
+      workItemLinkedFrom: "2026-03-07",
+      workItemLinkedTo: "2026-03-08",
       projectVersion: "master",
       file: "src/app.ts",
       cwe: "79,89",
@@ -89,6 +93,8 @@ describe("buildFindingsFilterSearch", () => {
       statusUpdatedTo: "2026-03-04",
       mitigatedFrom: "2026-03-05",
       mitigatedTo: "2026-03-06",
+      workItemLinkedFrom: "2026-03-07",
+      workItemLinkedTo: "2026-03-08",
       projectVersion: "release",
       file: "src/main.ts",
       cwe: "79",
@@ -100,7 +106,7 @@ describe("buildFindingsFilterSearch", () => {
     });
 
     expect(query.toString()).toBe(
-      "project_id=42&pipeline_id=abc&title=XSS&created_gte=2026-03-01&created_lte=2026-03-02&processed_gte=2026-03-03&processed_lte=2026-03-04&mitigated_gte=2026-03-05&mitigated_lte=2026-03-06&project_version=release&file=src%2Fmain.ts&cwe=79&severity=Critical%2CHigh&tags=a%2Cb&active=true&risk_accepted=true&is_mitigated=true&ai_status=ai_u",
+      "project_id=42&pipeline_id=abc&title=XSS&created_gte=2026-03-01&created_lte=2026-03-02&processed_gte=2026-03-03&processed_lte=2026-03-04&mitigated_gte=2026-03-05&mitigated_lte=2026-03-06&work_item_linked_gte=2026-03-07&work_item_linked_lte=2026-03-08&project_version=release&file=src%2Fmain.ts&cwe=79&severity=Critical%2CHigh&tags=a%2Cb&active=true&risk_accepted=true&is_mitigated=true&ai_status=ai_u",
     );
   });
 });
@@ -160,6 +166,8 @@ describe("toFindingsApiFilters", () => {
         statusUpdatedTo: "2026-03-04",
         mitigatedFrom: "2026-03-05",
         mitigatedTo: "2026-03-06",
+        workItemLinkedFrom: "2026-03-07",
+        workItemLinkedTo: "",
         projectVersion: "main",
         file: "src/a.ts",
         cwe: "79",
@@ -185,6 +193,8 @@ describe("toFindingsApiFilters", () => {
       processedLte: "2026-03-04",
       mitigatedGte: "2026-03-05",
       mitigatedLte: "2026-03-06",
+      workItemLinkedGte: "2026-03-07",
+      workItemLinkedLte: undefined,
       projectVersion: "main",
       file: "src/a.ts",
       aiStatus: "ai_fp",

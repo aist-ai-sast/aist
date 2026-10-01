@@ -20,12 +20,19 @@ from dojo.models import CWE, Finding
 from aist.api.common import API_SEVERITY_VALUES, compute_risk_score, empty_severity_counts
 from aist.api.findings import AISTFindingFilter
 from aist.launch_data import PipelineLaunchData
-from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus, WorkItemLink, WorkItemStatusCategory
+from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus, WorkItemStatusCategory
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects, get_authorized_findings
 from aist.services.dast_outcomes import public_dast_outcome_code
 from aist.services.dast_run_metadata import dast_run_summary
 from aist.utils.cwe_lookup import fetch_cwe_meta, load_cwe_fixture_lookup, trim_text
 from aist.utils.project_version_refs import resolve_project_version_git_refs
+from aist.work_items.finding_state import (
+    LINKED_AT_FIELD,
+    NO_WORK_ITEM,
+    STATE_FIELD,
+    with_work_item_linked_at,
+    with_work_item_state,
+)
 
 PIPELINE_ORDERING = {"created", "-created", "updated", "-updated"}
 PIPELINE_STATUS = {status for status, _label in AISTStatus.choices}
@@ -33,6 +40,13 @@ TREND_WEEKS = 12
 AGE_BUCKETS = ("0_7", "8_30", "31_90", "90_plus")
 CWE_DISTRIBUTION_LIMIT = 12
 CWE_META_CACHE_TIMEOUT_SECONDS = 60 * 60 * 24
+# Ticketed share of active findings each severity is expected to reach.
+TRIAGE_COVERAGE_TARGETS = {"Critical": 100, "High": 100, "Medium": 60, "Low": 30, "Info": 0}
+# Untriaged first, then the tracker categories in their declared order.
+TRIAGE_STATE_ORDER = (NO_WORK_ITEM, *WorkItemStatusCategory.values)
+TRIAGE_ROLLING_DAYS = 30
+STALE_TICKET_DAYS = 30
+DISMISSED_FINDING = Q(false_p=True) | Q(out_of_scope=True) | Q(risk_accepted=True)
 
 
 def _build_cwe_distribution(findings_qs) -> list[dict[str, Any]]:
@@ -103,6 +117,24 @@ def _week_key(dt: datetime.datetime) -> str:
     return dt.date().isoformat()
 
 
+def _with_event_at(findings_qs):
+    return findings_qs.annotate(event_at=Coalesce("date", "created", output_field=DateTimeField()))
+
+
+def _count_by_week(queryset, field: str, start_week: datetime.datetime) -> dict[str, int]:
+    rows = (
+        queryset.filter(**{f"{field}__gte": start_week})
+        .annotate(week=TruncWeek(field))
+        .values("week")
+        .annotate(total=Count("id"))
+    )
+    return {_week_key(row["week"]): int(row["total"]) for row in rows if row["week"]}
+
+
+def _week_starts(start_week: datetime.datetime) -> list[datetime.datetime]:
+    return [start_week + datetime.timedelta(weeks=idx) for idx in range(TREND_WEEKS)]
+
+
 def _build_findings_aging_heatmap(findings_qs) -> dict[str, Any]:
     now = timezone.now()
     rows = findings_qs.filter(active=True).values("severity", "date", "created")
@@ -142,27 +174,11 @@ def _build_findings_aging_heatmap(findings_qs) -> dict[str, Any]:
 def _build_risk_trend(findings_qs) -> list[dict[str, Any]]:
     now = timezone.now()
     start_week = _series_start_week(now)
-    created_rows = (
-        findings_qs.annotate(event_at=Coalesce("date", "created", output_field=DateTimeField()))
-        .filter(event_at__gte=start_week)
-        .annotate(week=TruncWeek("event_at"))
-        .values("week")
-        .annotate(total=Count("id"))
-    )
-    mitigated_rows = (
-        findings_qs.filter(active=False)
-        .exclude(last_status_update__isnull=True)
-        .filter(last_status_update__gte=start_week)
-        .annotate(week=TruncWeek("last_status_update"))
-        .values("week")
-        .annotate(total=Count("id"))
-    )
-    created_by_week = {_week_key(row["week"]): int(row["total"]) for row in created_rows if row["week"]}
-    mitigated_by_week = {_week_key(row["week"]): int(row["total"]) for row in mitigated_rows if row["week"]}
+    created_by_week = _count_by_week(_with_event_at(findings_qs), "event_at", start_week)
+    mitigated_by_week = _count_by_week(findings_qs.filter(active=False), "last_status_update", start_week)
 
     series: list[dict[str, Any]] = []
-    for idx in range(TREND_WEEKS):
-        week_dt = start_week + datetime.timedelta(weeks=idx)
+    for week_dt in _week_starts(start_week):
         week = _week_key(week_dt)
         new_findings = created_by_week.get(week, 0)
         mitigated_findings = mitigated_by_week.get(week, 0)
@@ -175,6 +191,132 @@ def _build_risk_trend(findings_qs) -> list[dict[str, Any]]:
             },
         )
     return series
+
+
+def _percent(part: int, whole: int) -> float:
+    return round(100 * part / whole, 1) if whole else 0.0
+
+
+def _untriaged_backlog(linked_findings, week_starts: list[datetime.datetime]) -> list[int]:
+    """Findings already found, still without a ticket and not closed at the end of each week."""
+    week_ends = [week_dt + datetime.timedelta(weeks=1) for week_dt in week_starts]
+    first_end = week_ends[0]
+    # Only findings that are still in the queue at the end of the first week can count.
+    rows = (
+        _with_event_at(linked_findings)
+        .filter(Q(**{f"{LINKED_AT_FIELD}__isnull": True}) | Q(**{f"{LINKED_AT_FIELD}__gte": first_end}))
+        .filter(Q(active=True) | Q(last_status_update__gte=first_end))
+        .values_list("event_at", LINKED_AT_FIELD, "active", "last_status_update")
+    )
+    backlog = [0] * len(week_ends)
+    for found_at, linked_at, active, closed_at in rows.iterator():
+        for idx, week_end in enumerate(week_ends):
+            found = found_at is not None and found_at < week_end
+            ticketed = linked_at is not None and linked_at < week_end
+            closed = not active and (closed_at is None or closed_at < week_end)
+            if found and not ticketed and not closed:
+                backlog[idx] += 1
+    return backlog
+
+
+def _build_triage_progress(findings_qs) -> dict[str, Any]:
+    """
+    How far triage of the selected findings has come.
+
+    Every count is of findings, each counted once by its work item state, so a
+    segment equals the Findings list for ``work_item_status=<state>``. Day
+    bounds are local dates because the Findings date filters read them so.
+    """
+    active = with_work_item_state(with_work_item_linked_at(findings_qs.filter(active=True)))
+    counts = {
+        (row["severity"], row[STATE_FIELD] or NO_WORK_ITEM): int(row["total"])
+        for row in active.values("severity", STATE_FIELD).annotate(total=Count("id"))
+    }
+
+    def tally(*, severity: str | None = None, state: str | None = None) -> int:
+        return sum(
+            total for (row_severity, row_state), total in counts.items()
+            if severity in {None, row_severity} and state in {None, row_state}
+        )
+
+    total_active = tally()
+    ticketed = total_active - tally(state=NO_WORK_ITEM)
+    by_severity = []
+    for severity in reversed(API_SEVERITY_VALUES):
+        severity_total = tally(severity=severity)
+        severity_ticketed = severity_total - tally(severity=severity, state=NO_WORK_ITEM)
+        ticketed_pct = _percent(severity_ticketed, severity_total)
+        target_pct = TRIAGE_COVERAGE_TARGETS[severity]
+        by_severity.append(
+            {
+                "severity": severity,
+                "total": severity_total,
+                "ticketed": severity_ticketed,
+                "ticketed_pct": ticketed_pct,
+                "untriaged_pct": _percent(severity_total - severity_ticketed, severity_total),
+                "target_pct": target_pct,
+                "below_target": severity_total > 0 and ticketed_pct < target_pct,
+            },
+        )
+
+    today = timezone.localdate()
+    rolling_from = today - datetime.timedelta(days=TRIAGE_ROLLING_DAYS)
+    previous_from = rolling_from - datetime.timedelta(days=TRIAGE_ROLLING_DAYS)
+    linked = with_work_item_linked_at(findings_qs)
+    linked_day = f"{LINKED_AT_FIELD}__date"
+    rolling = linked.aggregate(
+        current=Count("id", filter=Q(**{f"{linked_day}__gte": rolling_from})),
+        previous=Count("id", filter=Q(**{f"{linked_day}__gte": previous_from, f"{linked_day}__lt": rolling_from})),
+    )
+    stale_until = today - datetime.timedelta(days=STALE_TICKET_DAYS)
+    stale_open = active.filter(
+        **{STATE_FIELD: WorkItemStatusCategory.OPEN, f"{linked_day}__lte": stale_until},
+    ).count()
+
+    start_week = _series_start_week(timezone.now())
+    week_starts = _week_starts(start_week)
+    new_by_week = _count_by_week(_with_event_at(findings_qs), "event_at", start_week)
+    ticketed_by_week = _count_by_week(linked, LINKED_AT_FIELD, start_week)
+    dismissed_by_week = _count_by_week(findings_qs.filter(DISMISSED_FINDING), "last_status_update", start_week)
+    backlog = _untriaged_backlog(linked, week_starts)
+
+    return {
+        "total_active": total_active,
+        "ticketed": ticketed,
+        "coverage_pct": _percent(ticketed, total_active),
+        "untriaged_critical_high": (
+            tally(severity="Critical", state=NO_WORK_ITEM) + tally(severity="High", state=NO_WORK_ITEM)
+        ),
+        "by_state": [{"state": state, "count": tally(state=state)} for state in TRIAGE_STATE_ORDER],
+        "by_severity": by_severity,
+        "ticketed_recently": {
+            "days": TRIAGE_ROLLING_DAYS,
+            "linked_from": rolling_from.isoformat(),
+            "count": rolling["current"],
+            "previous_count": rolling["previous"],
+            "delta_pct": (
+                round(100 * (rolling["current"] - rolling["previous"]) / rolling["previous"])
+                if rolling["previous"] else None
+            ),
+        },
+        "stale_open": {
+            "days": STALE_TICKET_DAYS,
+            "linked_until": stale_until.isoformat(),
+            "count": stale_open,
+        },
+        "weekly": [
+            {
+                "week": _week_key(week_dt),
+                # Last day of the week, inclusive: the Findings date filters read it so.
+                "week_end": _week_key(week_dt + datetime.timedelta(days=6)),
+                "new_findings": new_by_week.get(_week_key(week_dt), 0),
+                "ticketed": ticketed_by_week.get(_week_key(week_dt), 0),
+                "dismissed": dismissed_by_week.get(_week_key(week_dt), 0),
+                "untriaged_at_week_end": untriaged,
+            }
+            for week_dt, untriaged in zip(week_starts, backlog, strict=True)
+        ],
+    }
 
 
 def _build_pipeline_performance_trend(pipelines_qs) -> list[dict[str, Any]]:
@@ -201,8 +343,7 @@ def _build_pipeline_performance_trend(pipelines_qs) -> list[dict[str, Any]]:
             bucket["warnings"] += 1
 
     series: list[dict[str, Any]] = []
-    for idx in range(TREND_WEEKS):
-        week_dt = start_week + datetime.timedelta(weeks=idx)
+    for week_dt in _week_starts(start_week):
         week = _week_key(week_dt)
         data = grouped.get(week, {"durations": [], "runs": 0, "warnings": 0})
         runs = int(data["runs"])
@@ -566,18 +707,7 @@ def dashboard_summary(request: HttpRequest) -> HttpResponse:
     cwe_distribution = _build_cwe_distribution(findings_qs)
     ai_verdict_analytics = _build_ai_verdict_analytics(pipelines_qs=pipelines_qs, findings_qs=findings_qs)
 
-    active_finding_ids = findings_qs.filter(active=True).values("id")
-    wi_status_counts = dict(
-        WorkItemLink.objects.filter(finding_id__in=active_finding_ids)
-        .values("status_category")
-        .annotate(n=Count("id"))
-        .values_list("status_category", "n"),
-    )
-    linked_findings_count = (
-        findings_qs.filter(active=True, work_item_links__isnull=False).distinct().count()
-    )
-    total_active = kpi["total_active"]
-    coverage_pct = round(100 * linked_findings_count / total_active, 1) if total_active else 0.0
+    triage_progress = _build_triage_progress(findings_qs)
 
     return JsonResponse(
         {
@@ -603,10 +733,6 @@ def dashboard_summary(request: HttpRequest) -> HttpResponse:
             "pipeline_performance_trend": pipeline_performance_trend,
             "cwe_distribution": cwe_distribution,
             "ai_verdict_analytics": ai_verdict_analytics,
-            "work_item_coverage": {
-                "total_linked": linked_findings_count,
-                "coverage_pct": coverage_pct,
-                "by_status": {cat: wi_status_counts.get(cat, 0) for cat in WorkItemStatusCategory.values},
-            },
+            "triage_progress": triage_progress,
         },
     )
