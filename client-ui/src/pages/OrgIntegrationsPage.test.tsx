@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { ReactNode } from "react";
 
 let canManage = true;
@@ -12,8 +12,9 @@ vi.mock("../components/PermissionGate", () => ({
     canManage ? children : fallback,
 }));
 
+const toastPush = vi.fn();
 vi.mock("../components/ToastProvider", () => ({
-  useToast: () => ({ push: vi.fn() }),
+  useToast: () => ({ push: toastPush }),
 }));
 
 let mockIntegrations: Array<{
@@ -24,8 +25,9 @@ let mockIntegrations: Array<{
   has_secret: boolean;
   config: Record<string, string>;
   vpn_integration: number | null;
-  dast_state?: { validation_state: string };
+  dast_state?: { validation_state: string; sync_status?: string; sync_error_code?: string };
 }> = [];
+let mockValidationStatus: { state: string; valid: boolean | null; detail: string } | undefined;
 let mockProjects: Array<{ id: number; name: string; organizationId: number; productId: number }> = [];
 let mockDastTargets: Array<Record<string, unknown>> = [];
 let mockDastBindings: Array<Record<string, unknown>> = [];
@@ -40,7 +42,8 @@ const syncCapabilitiesMutateAsync = vi.fn().mockResolvedValue({ task_id: "sync-1
 const disableDastMutateAsync = vi.fn().mockResolvedValue({ id: 7, is_active: false });
 const deleteIntegrationMutateAsync = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("../lib/queries", () => ({
+vi.mock("../lib/queries", async () => ({
+  isDastSyncInFlight: (await vi.importActual<typeof import("../lib/queries")>("../lib/queries")).isDastSyncInFlight,
   useManageableOrgs: () => ({ data: [{ id: 1, name: "Acme" }], isLoading: false }),
   useOrgIntegrations: () => ({ data: mockIntegrations, isLoading: false, isError: false }),
   useWorkItemProviders: () => ({ data: [], isLoading: false, isError: false }),
@@ -48,11 +51,16 @@ vi.mock("../lib/queries", () => ({
   useProjects: () => ({ data: mockProjects }),
   useOrganizationDastTargets: () => ({ data: mockDastTargets, isLoading: false }),
   useProjectDastBindings: () => ({ data: mockDastBindings, isLoading: false }),
-  useValidationStatus: () => ({ data: undefined }),
+  useValidationStatus: (_id: number | null, taskId: string | null) => ({
+    data: taskId ? mockValidationStatus : undefined,
+  }),
   useWorkItemProviderValidationStatus: () => ({ data: undefined }),
 }));
 
-vi.mock("../lib/mutations", () => ({
+vi.mock("../lib/mutations", async () => ({
+  invalidateDastLifecycleQueries: (
+    await vi.importActual<typeof import("../lib/mutations")>("../lib/mutations")
+  ).invalidateDastLifecycleQueries,
   useCreateOrgIntegration: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateOrgIntegration: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useDeleteOrgIntegration: () => ({ mutateAsync: deleteIntegrationMutateAsync, isPending: false }),
@@ -74,18 +82,21 @@ vi.mock("../lib/mutations", () => ({
 
 import OrgIntegrationsPage from "./OrgIntegrationsPage";
 
-function renderPage() {
-  const queryClient = new QueryClient({
+function renderPage(
+  queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
-  });
-  return render(
+  }),
+) {
+  const tree = () => (
     <QueryClientProvider client={queryClient}>
       <OrgIntegrationsPage />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = render(tree());
+  return { ...view, rerenderPage: () => view.rerender(tree()) };
 }
 
 describe("OrgIntegrationsPage — DAST integration", () => {
@@ -662,5 +673,125 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
     renderPage();
 
     expect(screen.queryByRole("button", { name: /Synchronize/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("OrgIntegrationsPage — DAST catalog sync", () => {
+  const dastIntegration = (syncStatus: string, extra: Record<string, string> = {}) => ({
+    id: 7,
+    name: "Primary DAST gateway",
+    integration_type: "DAST",
+    is_active: true,
+    has_secret: true,
+    config: { gateway_url: "https://gateway.example" },
+    vpn_integration: null,
+    dast_state: { validation_state: "READY", sync_status: syncStatus, sync_error_code: "", ...extra },
+  });
+
+  function invalidatedKeys(spy: MockInstance<QueryClient["invalidateQueries"]>) {
+    return spy.mock.calls.map(([filters]) => JSON.stringify(filters?.queryKey));
+  }
+
+  let queryClient: QueryClient;
+  let invalidateSpy: MockInstance<QueryClient["invalidateQueries"]>;
+
+  beforeEach(() => {
+    canManage = true;
+    mockProjects = [];
+    mockDastTargets = [];
+    mockDastBindings = [];
+    mockValidationStatus = undefined;
+    vi.clearAllMocks();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+  });
+
+  afterEach(() => cleanup());
+
+  it("keeps Synchronizing until the worker finishes, then refetches DAST data including bindings", async () => {
+    mockIntegrations = [dastIntegration("SUCCEEDED")];
+    const { rerenderPage } = renderPage(queryClient);
+
+    // The 202 only reserves the sync; the refetched list now reports it in flight.
+    syncCapabilitiesMutateAsync.mockImplementationOnce(async () => {
+      mockIntegrations = [dastIntegration("PENDING")];
+      return { task_id: "sync-1" };
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Synchronize/ }));
+    await waitFor(() => expect(syncCapabilitiesMutateAsync).toHaveBeenCalledWith(7));
+    rerenderPage();
+
+    expect(screen.getByRole("button", { name: /Synchronizing…/ })).toBeDisabled();
+    mockIntegrations = [dastIntegration("RUNNING")];
+    rerenderPage();
+    expect(screen.getByRole("button", { name: /Synchronizing…/ })).toBeDisabled();
+    expect(invalidatedKeys(invalidateSpy)).not.toContain(JSON.stringify(["dast-bindings"]));
+    expect(toastPush).not.toHaveBeenCalled();
+
+    mockIntegrations = [dastIntegration("SUCCEEDED")];
+    rerenderPage();
+
+    await waitFor(() => expect(toastPush).toHaveBeenCalledWith("DAST target catalog synchronized.", "success"));
+    const keys = invalidatedKeys(invalidateSpy);
+    expect(keys).toContain(JSON.stringify(["dast-bindings"]));
+    expect(keys).toContain(JSON.stringify(["dast-targets", 1]));
+    expect(keys).toContain(JSON.stringify(["org-integrations", 1]));
+    expect(screen.getByRole("button", { name: /^Synchronize$/ })).toBeEnabled();
+  });
+
+  it("reports a failed sync with its error code", async () => {
+    mockIntegrations = [dastIntegration("SUCCEEDED")];
+    const { rerenderPage } = renderPage(queryClient);
+    syncCapabilitiesMutateAsync.mockImplementationOnce(async () => {
+      mockIntegrations = [dastIntegration("RUNNING")];
+      return { task_id: "sync-1" };
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Synchronize/ }));
+    await waitFor(() => expect(syncCapabilitiesMutateAsync).toHaveBeenCalled());
+    rerenderPage();
+
+    mockIntegrations = [dastIntegration("FAILED", { sync_error_code: "CATALOG_INVALID" })];
+    rerenderPage();
+
+    await waitFor(() => expect(toastPush).toHaveBeenCalledWith("Synchronization failed: CATALOG_INVALID", "error"));
+    expect(invalidatedKeys(invalidateSpy)).toContain(JSON.stringify(["dast-bindings"]));
+  });
+
+  it("shows a sync started elsewhere (periodic refresh) as in progress without a toast", () => {
+    mockIntegrations = [dastIntegration("RUNNING")];
+
+    renderPage(queryClient);
+
+    expect(screen.getByRole("button", { name: /Synchronizing…/ })).toBeDisabled();
+    expect(toastPush).not.toHaveBeenCalled();
+  });
+
+  it("lets the operator retry once an in-flight sync is reported stalled", () => {
+    mockIntegrations = [dastIntegration("STALLED")];
+
+    renderPage(queryClient);
+
+    expect(screen.getByRole("button", { name: /^Synchronize$/ })).toBeEnabled();
+  });
+
+  it("after a successful Validate waits for the chained catalog sync before refreshing DAST data", async () => {
+    mockIntegrations = [dastIntegration("SUCCEEDED")];
+    const { rerenderPage } = renderPage(queryClient);
+
+    fireEvent.click(screen.getByRole("button", { name: /Validate/ }));
+    // Validation READY is committed together with the reserved sync.
+    mockIntegrations = [dastIntegration("PENDING")];
+    mockValidationStatus = { state: "READY", valid: true, detail: "" };
+    rerenderPage();
+
+    await waitFor(() => expect(toastPush).toHaveBeenCalledWith("Credentials are valid.", "success"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Synchronizing…/ })).toBeDisabled());
+    expect(invalidatedKeys(invalidateSpy)).not.toContain(JSON.stringify(["dast-bindings"]));
+
+    mockIntegrations = [dastIntegration("SUCCEEDED")];
+    rerenderPage();
+
+    await waitFor(() => expect(toastPush).toHaveBeenCalledWith("DAST target catalog synchronized.", "success"));
+    expect(invalidatedKeys(invalidateSpy)).toContain(JSON.stringify(["dast-bindings"]));
   });
 });

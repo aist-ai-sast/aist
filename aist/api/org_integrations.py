@@ -17,6 +17,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.execution.observability import AuditContext, audit_event
+from aist.integrations.dast_capability_sync import SYNC_STATUS_STALLED, reported_sync_status
 from aist.integrations.dast_config import (
     DastConfigError,
     DastIntegrationConfig,
@@ -28,6 +29,7 @@ from aist.integrations.dast_validation import (
 )
 from aist.models import (
     AISTProject,
+    DastCapabilitySyncStatus,
     DastOnboardingBundleUse,
     Organization,
     OrgIntegration,
@@ -376,6 +378,10 @@ class DastIntegrationStateSerializer(serializers.Serializer):
     capabilities_etag = serializers.CharField(allow_blank=True)
     capabilities_synced_at = serializers.DateTimeField(allow_null=True)
     sync_error_code = serializers.CharField(allow_blank=True)
+    sync_status = serializers.ChoiceField(
+        choices=[*DastCapabilitySyncStatus.values, SYNC_STATUS_STALLED],
+        help_text="Lifecycle of the latest catalog synchronization; STALLED once an in-flight sync is presumed lost.",
+    )
 
 
 class OrgIntegrationSerializer(serializers.ModelSerializer):
@@ -446,6 +452,7 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             "capabilities_etag": state.capabilities_etag,
             "capabilities_synced_at": state.capabilities_synced_at,
             "sync_error_code": state.sync_error_code,
+            "sync_status": reported_sync_status(state),
         }
 
     def validate(self, attrs):

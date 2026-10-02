@@ -9,6 +9,7 @@ from aist.models import (
     AISTPipeline,
     AISTProject,
     AISTProjectLaunchConfig,
+    DastCapabilitySyncStatus,
     DastIntegrationState,
     DastIntegrationValidationState,
     DastOnboardingBundleUse,
@@ -78,6 +79,7 @@ def disable_dast_integration(integration_id: int) -> DastDisableResult:
         state.sync_task_id = ""
         state.sync_claimed_at = None
         state.sync_error_code = "INTEGRATION_DISABLED"
+        state.sync_status = DastCapabilitySyncStatus.IDLE
         state.save(update_fields=[
             "validation_generation",
             "validation_task_id",
@@ -88,6 +90,7 @@ def disable_dast_integration(integration_id: int) -> DastDisableResult:
             "sync_task_id",
             "sync_claimed_at",
             "sync_error_code",
+            "sync_status",
             "updated",
         ])
         disabled_schedule_count = LaunchSchedule.objects.filter(

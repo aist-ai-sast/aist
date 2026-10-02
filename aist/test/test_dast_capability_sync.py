@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from django.db import connection
@@ -7,7 +8,10 @@ from django.utils import timezone
 from dojo.models import Product_Type
 
 from aist.integrations.dast_capability_sync import (
+    SYNC_IN_FLIGHT_GRACE,
+    SYNC_STATUS_STALLED,
     prepare_dast_capability_sync,
+    reported_sync_status,
     run_dast_capability_sync,
 )
 from aist.integrations.dast_config import DastTargetSnapshot
@@ -16,6 +20,7 @@ from aist.integrations.dast_gateway_client import (
     DastTargetCatalog,
 )
 from aist.models import (
+    DastCapabilitySyncStatus,
     DastIntegrationState,
     DastIntegrationValidationState,
     DastTarget,
@@ -23,6 +28,7 @@ from aist.models import (
     OrgIntegration,
     OrgIntegrationType,
 )
+from aist.services.dast_integration_lifecycle import disable_dast_integration
 from aist.services.dast_targets import refresh_dast_targets
 
 
@@ -157,3 +163,109 @@ class DastCapabilitySyncTests(TransactionTestCase):
         self.assertTrue(result["stale"])
         self.assertEqual(self.state.capabilities_etag, "")
         self.assertFalse(DastTarget.objects.filter(integration=self.integration).exists())
+
+    def _sync_status(self):
+        self.state.refresh_from_db()
+        return self.state.sync_status
+
+    def test_operator_sync_reports_pending_running_then_succeeded(self):
+        """The Synchronize button waits on this status; each phase must be observable."""
+        ticket = prepare_dast_capability_sync(self.integration)
+        self.assertEqual(self._sync_status(), DastCapabilitySyncStatus.PENDING)
+        observed = {}
+        client = MagicMock()
+
+        def catalog(**_kwargs):
+            observed["during_fetch"] = DastIntegrationState.objects.get(pk=self.state.pk).sync_status
+            return DastTargetCatalog(contract_version="2.0", etag="catalog-1", targets=(_target(),))
+
+        client.catalog.side_effect = catalog
+
+        run_dast_capability_sync(ticket, client_context_factory=self._client_context(client))
+
+        self.assertEqual(observed["during_fetch"], DastCapabilitySyncStatus.RUNNING)
+        self.assertEqual(self._sync_status(), DastCapabilitySyncStatus.SUCCEEDED)
+
+    def test_gateway_failure_reports_failed_with_its_code(self):
+        ticket = prepare_dast_capability_sync(self.integration)
+        client = MagicMock()
+        client.catalog.side_effect = DastGatewayClientError("CATALOG_INVALID")
+
+        run_dast_capability_sync(ticket, client_context_factory=self._client_context(client))
+
+        self.assertEqual(self._sync_status(), DastCapabilitySyncStatus.FAILED)
+        self.assertEqual(self.state.sync_error_code, "CATALOG_INVALID")
+
+    def test_a_new_sync_clears_the_previous_failure(self):
+        self.state.sync_status = DastCapabilitySyncStatus.FAILED
+        self.state.sync_error_code = "CATALOG_INVALID"
+        self.state.save(update_fields=["sync_status", "sync_error_code"])
+
+        prepare_dast_capability_sync(self.integration)
+
+        self.assertEqual(self._sync_status(), DastCapabilitySyncStatus.PENDING)
+        self.assertEqual(self.state.sync_error_code, "")
+
+    def test_superseded_sync_leaves_the_newer_sync_pending(self):
+        ticket = prepare_dast_capability_sync(self.integration)
+        client = MagicMock()
+
+        def supersede_during_catalog(**_kwargs):
+            prepare_dast_capability_sync(self.integration)
+            return DastTargetCatalog(contract_version="2.0", etag="stale", targets=(_target(),))
+
+        client.catalog.side_effect = supersede_during_catalog
+
+        run_dast_capability_sync(ticket, client_context_factory=self._client_context(client))
+
+        self.assertEqual(self._sync_status(), DastCapabilitySyncStatus.PENDING)
+
+    def test_unchanged_catalog_refreshes_last_seen_of_available_targets_only(self):
+        listed, delisted = refresh_dast_targets(self.integration, (_target("app"), _target("gone")))
+        refresh_dast_targets(self.integration, (_target("app"),))
+        earlier = timezone.now() - timedelta(days=2)
+        DastTarget.objects.filter(integration=self.integration).update(last_seen_at=earlier)
+        self.state.capabilities_etag = "catalog-1"
+        self.state.save(update_fields=["capabilities_etag"])
+        ticket = prepare_dast_capability_sync(self.integration)
+        client = MagicMock()
+        client.catalog.return_value = DastTargetCatalog(
+            contract_version="", etag="catalog-1", targets=(), not_modified=True,
+        )
+
+        run_dast_capability_sync(ticket, client_context_factory=self._client_context(client))
+
+        listed.refresh_from_db()
+        delisted.refresh_from_db()
+        self.assertGreater(listed.last_seen_at, earlier)
+        self.assertEqual(delisted.last_seen_at, earlier)
+        self.assertEqual(self._sync_status(), DastCapabilitySyncStatus.SUCCEEDED)
+
+    def test_in_flight_sync_is_reported_stalled_after_the_grace_window(self):
+        prepare_dast_capability_sync(self.integration)
+        self.state.refresh_from_db()
+        past_grace = self.state.sync_requested_at + SYNC_IN_FLIGHT_GRACE + timedelta(seconds=1)
+
+        self.assertEqual(reported_sync_status(self.state), DastCapabilitySyncStatus.PENDING)
+        self.assertEqual(reported_sync_status(self.state, now=past_grace), SYNC_STATUS_STALLED)
+
+        self.state.sync_status = DastCapabilitySyncStatus.RUNNING
+        self.state.sync_claimed_at = past_grace
+        self.assertEqual(reported_sync_status(self.state, now=past_grace), DastCapabilitySyncStatus.RUNNING)
+        self.assertEqual(
+            reported_sync_status(self.state, now=past_grace + SYNC_IN_FLIGHT_GRACE + timedelta(seconds=1)),
+            SYNC_STATUS_STALLED,
+        )
+
+        self.state.sync_status = DastCapabilitySyncStatus.SUCCEEDED
+        self.assertEqual(
+            reported_sync_status(self.state, now=past_grace + timedelta(days=1)),
+            DastCapabilitySyncStatus.SUCCEEDED,
+        )
+
+    def test_disabling_the_integration_cancels_an_in_flight_sync(self):
+        prepare_dast_capability_sync(self.integration)
+
+        disable_dast_integration(self.integration.pk)
+
+        self.assertEqual(self._sync_status(), DastCapabilitySyncStatus.IDLE)

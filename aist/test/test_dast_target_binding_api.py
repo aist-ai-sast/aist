@@ -414,6 +414,24 @@ class DastTargetBindingAPITests(AISTApiBase):
         self.integration.dast_state.save(update_fields=["validation_state"])
         self.assertEqual(self.client.post(sync_url, format="json").status_code, 409)
 
+    @patch("aist.integrations.dast_capability_sync.current_app.send_task")
+    def test_integration_list_reports_sync_progress_the_ui_waits_on(self, mock_send_task):
+        sync_url = reverse(
+            "aist_api:dast_integration_sync_capabilities",
+            kwargs={"integration_id": self.integration.pk},
+        )
+        list_url = reverse("aist_api:org_integration_list_create", kwargs={"org_id": self.organization.pk})
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.assertEqual(self.client.post(sync_url, format="json").status_code, 202)
+        listed = self.client.get(list_url)
+
+        self.assertEqual(listed.status_code, 200)
+        rows = listed.data if isinstance(listed.data, list) else listed.data["results"]
+        row = next(item for item in rows if item["id"] == self.integration.pk)
+        self.assertEqual(row["dast_state"]["sync_status"], "PENDING")
+        mock_send_task.assert_called_once()
+
     def test_binding_can_be_deleted_through_authorized_binding_root(self):
         created = self.client.post(self.bindings_url, self._binding_payload(), format="json")
         self.assertEqual(created.status_code, 200, created.data)

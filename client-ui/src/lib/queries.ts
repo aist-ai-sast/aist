@@ -1187,8 +1187,17 @@ export type OrgIntegration = {
     capabilities_etag: string;
     capabilities_synced_at: string | null;
     sync_error_code: string;
+    sync_status: DastSyncStatus;
   } | null;
 };
+
+/** Lifecycle of the latest DAST catalog sync, as reported by the backend. */
+export type DastSyncStatus = "IDLE" | "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "STALLED";
+
+export function isDastSyncInFlight(integration: OrgIntegration): boolean {
+  const status = integration.dast_state?.sync_status;
+  return status === "PENDING" || status === "RUNNING";
+}
 
 export type ProjectIntegrationOverride = {
   id: number;
@@ -1344,6 +1353,8 @@ export function useOrgIntegrations(orgId?: number) {
       return Array.isArray(payload) ? payload : (payload.results ?? []);
     },
     enabled: Boolean(orgId),
+    // A DAST catalog sync runs in a worker; keep the list fresh until it finishes.
+    refetchInterval: (query) => (query.state.data?.some(isDastSyncInFlight) ? 2000 : false),
   });
 }
 

@@ -16,7 +16,12 @@ logs.
 1. In **Organization → Integrations**, import the onboarding bundle.
 2. Select the DAST VPN when the gateway is private.
 3. Run integration validation.
-4. Synchronize targets and capabilities.
+4. Wait for target and capability synchronization. A validation that reaches
+   **Ready** starts it automatically. While it is pending or running, the
+   integration's **Synchronize** button shows **Synchronizing…**; when it
+   settles, a notification reports the result and the page reloads targets,
+   bindings, readiness, and launch configurations. Use **Synchronize** later to
+   refresh the catalog on demand.
 
 Continue only when validation is **Ready**, synchronization succeeded, and at
 least one target is available. A private gateway without an active credentialed
@@ -30,6 +35,10 @@ wait for **Ready** again before relying on the integration.
 
 API clients use the organization DAST import, integration validation,
 capability synchronization, and target-list endpoints under `/api/v2/aist/`.
+Starting a synchronization only reserves it; poll the organization integration
+and read `dast_state.sync_status` until it leaves `PENDING` or `RUNNING`. The
+states are described in
+[catalog synchronization](../integrations/dast.md#catalog-synchronization).
 
 ## Bind a target to a project
 
@@ -212,6 +221,8 @@ promotion.
 | Validation reports a TLS handshake failure | Gateway certificate chain, the CA carried in the bundle, and whether the gateway serves the hostname in the gateway URL. This is a certificate or naming fault, not a network one |
 | Validation reports an unreachable gateway | DAST VPN health, gateway availability, and the listening port |
 | Ready, but no targets to bind | Whether the gateway accepts a target-catalog request from this integrator identity. Reaching the gateway and being allowed to list its targets are separate permissions on the DAST side, so validation can succeed while the catalog is refused |
+| Synchronization failed | The error code shown with the result, then the same gateway, token, and VPN checks as for validation |
+| Synchronization stalled | Whether a background worker is running and consuming tasks. A stalled attempt is presumed lost after 30 minutes; start **Synchronize** again once workers are healthy |
 | Binding stale | Capability revision, schema digest, target availability, and parameter snapshot |
 | Launch remains pending | Stored authority, readiness, capacity, and request expiry |
 | Cancellation remains pending | Provider reachability and reconciliation progress |

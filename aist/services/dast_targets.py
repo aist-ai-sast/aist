@@ -56,3 +56,10 @@ def refresh_dast_targets(
         stale = DastTarget.objects.filter(integration=integration).exclude(provider_id__in=provider_ids)
         stale.update(is_available=False)
     return refreshed
+
+
+def touch_dast_targets(integration: OrgIntegration, *, seen_at=None) -> int:
+    """Record that an unchanged catalog (304 or same ETag) still lists every available target."""
+    return DastTarget.objects.filter(integration=integration, is_available=True).update(
+        last_seen_at=seen_at or timezone.now(),
+    )

@@ -135,7 +135,7 @@ export default function App() {
     <div className="min-h-screen bg-night-800 text-slate-100">
       <RequireAuth forceLogin={forceLogin} onLoginSuccess={handleLoginSuccess}>
         <div
-          className="grid min-h-screen lg:grid-cols-[var(--sidebar-width)_1fr]"
+          className="grid min-h-screen grid-cols-1 lg:grid-cols-[var(--sidebar-width)_minmax(0,1fr)]"
           style={
             {
               "--sidebar-width": sidebarCollapsed ? "64px" : "208px",

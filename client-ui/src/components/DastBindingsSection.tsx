@@ -139,17 +139,17 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
           {bindingsQuery.isLoading && <div className="text-sm text-slate-400">Loading DAST bindings...</div>}
           {bindings.map((binding) => (
             <div key={binding.id} className="rounded-xl border border-night-500/60 bg-night-800/50 px-3 py-3">
-              <div className="flex items-start gap-3">
+              <div className="flex flex-wrap items-start gap-3">
                 <TypeBadge type="DAST" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-slate-200">{binding.target.display_name}</div>
+                <div className="min-w-0 flex-1 basis-48">
+                  <div className="break-words text-sm font-medium text-slate-200">{binding.target.display_name}</div>
                   {/*
                     Provider digests (schema_digest / capability_revision) are launch-admission
                     machinery, not operator-facing facts — the backend already fails a launch when
                     they drift. Showing them here only added noise nobody could act on.
                   */}
                   {targetRequiresSourceRepository(binding.target) ? (
-                    <div className="mt-1 text-xs text-slate-400">
+                    <div className="mt-1 break-words text-xs text-slate-400">
                       Source repository: {binding.source_repo_key}
                     </div>
                   ) : null}
@@ -160,14 +160,14 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
                   {binding.readiness.ready ? (
                     <div className="mt-2 text-xs text-emerald-300">Ready to launch</div>
                   ) : (
-                    <ul className="mt-2 space-y-1 text-xs text-amber-300">
+                    <ul className="mt-2 space-y-1 break-words text-xs text-amber-300">
                       {binding.readiness.issues.map((issue) => (
                         <li key={issue.code}>{issue.detail}</li>
                       ))}
                     </ul>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2">
                   <button className="text-xs text-brand-300 hover:text-brand-200" onClick={() => startEdit(binding)}>
                     Edit
                   </button>
@@ -184,7 +184,7 @@ function DastBindingsSectionContent({ orgId }: { orgId: number }) {
           )}
 
           {formState && selectedTarget && (
-            <div className="space-y-3 rounded-xl border border-brand-500/30 bg-night-800/70 p-4">
+            <div className="min-w-0 space-y-3 rounded-xl border border-brand-500/30 bg-night-800/70 p-3 sm:p-4">
               {/*
                 Binding metadata is ours, not the provider's, so its controls stay outside the
                 schema form even though both now render through the same components.

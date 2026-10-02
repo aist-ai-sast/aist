@@ -53,7 +53,7 @@ export default function SelectField({
             hideLabel ? "mt-0" : "mt-2",
           ].join(" ")}
         >
-          <Select.Value placeholder={placeholder} />
+          <Select.Value className="min-w-0 truncate" placeholder={placeholder} />
           {showIndicator ? (
             <Select.Icon className="text-slate-400">
               <svg
@@ -74,7 +74,7 @@ export default function SelectField({
             side={side}
             // Above the highest overlay z-index in the app (the Manage-access
             // drawer at z-[80]) so the dropdown never renders behind it.
-            className="z-[100] overflow-hidden rounded-xl border border-night-500 bg-night-900 shadow-panel"
+            className="z-[100] max-w-[var(--radix-select-content-available-width)] overflow-hidden rounded-xl border border-night-500 bg-night-900 shadow-panel"
             style={{ minWidth: "var(--radix-select-trigger-width)" }}
           >
             <Select.Viewport className="p-1">

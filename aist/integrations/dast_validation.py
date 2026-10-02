@@ -35,6 +35,7 @@ class DastValidationTicket:
 
 
 ClientContextFactory = Callable[..., object]
+OnReady = Callable[[OrgIntegration], object]
 
 # How long a scheduled validation waits before the worker may pick it up. Long enough that a
 # burst of connection writes collapses into one gateway probe (later generations supersede the
@@ -133,8 +134,14 @@ def run_dast_validation(
     ticket: DastValidationTicket,
     *,
     client_context_factory: ClientContextFactory = scoped_dast_gateway_client,
+    on_ready: OnReady | None = None,
 ) -> dict:
-    """Claim, perform, and persist one validation without holding a DB lock during network I/O."""
+    """
+    Claim, perform, and persist one validation without holding a DB lock during network I/O.
+
+    `on_ready` runs inside the transaction that records READY, so whatever the caller chains
+    after a successful validation is committed together with it and never observed apart.
+    """
     with transaction.atomic():
         state = DastIntegrationState.objects.select_for_update().select_related("integration").get(
             integration_id=ticket.integration_id,
@@ -164,7 +171,7 @@ def run_dast_validation(
     except Exception:
         logger.exception("DAST validation[%s] failed unexpectedly", ticket.integration_id)
         return _finish_validation(ticket, error_code="INTERNAL_VALIDATION_ERROR")
-    return _finish_validation(ticket, contract_version=ping.contract_version)
+    return _finish_validation(ticket, contract_version=ping.contract_version, on_ready=on_ready)
 
 
 def _finish_validation(
@@ -172,6 +179,7 @@ def _finish_validation(
     *,
     contract_version: str = "",
     error_code: str = "",
+    on_ready: OnReady | None = None,
 ) -> dict:
     with transaction.atomic():
         state = DastIntegrationState.objects.select_for_update().get(integration_id=ticket.integration_id)
@@ -196,6 +204,8 @@ def _finish_validation(
             transaction.on_commit(
                 lambda: operational_alert(code="validation_failed", execution_type="dast", count=1),
             )
+        elif on_ready is not None:
+            on_ready(state.integration)
         return _validation_result(state)
 
 

@@ -1,10 +1,11 @@
 from contextlib import contextmanager
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.db import connection
 from django.test import TransactionTestCase
 from dojo.models import Product_Type
 
+from aist.integrations.dast_capability_sync import schedule_dast_capability_sync
 from aist.integrations.dast_gateway_client import DastGatewayClientError, DastGatewayPing
 from aist.integrations.dast_validation import (
     mark_dast_validation_pending,
@@ -12,6 +13,7 @@ from aist.integrations.dast_validation import (
     run_dast_validation,
 )
 from aist.models import (
+    DastCapabilitySyncStatus,
     DastIntegrationValidationState,
     Organization,
     OrgIntegration,
@@ -115,3 +117,42 @@ class DastValidationTests(TransactionTestCase):
 
         self.assertEqual(result["error_code"], "INTEGRATION_DISABLED")
         context_factory.assert_not_called()
+
+    def test_successful_validation_reserves_the_catalog_sync_in_the_same_commit(self):
+        """
+        Operator presses Validate on a DAST integration. The UI waits on `dast_state` and must
+        never see READY without the follow-up catalog sync already reserved, or it would stop
+        waiting before the targets were refreshed.
+        """
+        ticket = prepare_dast_validation(self.integration)
+        client = MagicMock()
+        client.ping.return_value = DastGatewayPing(contract_version="2.0", gateway_version="2026.7", status="ok")
+
+        with patch("aist.integrations.dast_capability_sync.current_app.send_task") as send_task:
+            run_dast_validation(
+                ticket,
+                client_context_factory=self._client_context(client),
+                on_ready=schedule_dast_capability_sync,
+            )
+
+        state = self.integration.dast_state
+        state.refresh_from_db()
+        self.assertEqual(state.validation_state, DastIntegrationValidationState.READY)
+        self.assertEqual(state.sync_status, DastCapabilitySyncStatus.PENDING)
+        self.assertNotEqual(state.sync_task_id, "")
+        send_task.assert_called_once()
+        self.assertEqual(send_task.call_args.kwargs["task_id"], state.sync_task_id)
+
+    def test_failed_validation_does_not_start_a_catalog_sync(self):
+        ticket = prepare_dast_validation(self.integration)
+        client = MagicMock()
+        client.ping.side_effect = DastGatewayClientError("TOKEN_REJECTED")
+        on_ready = MagicMock()
+
+        run_dast_validation(ticket, client_context_factory=self._client_context(client), on_ready=on_ready)
+
+        state = self.integration.dast_state
+        state.refresh_from_db()
+        on_ready.assert_not_called()
+        self.assertEqual(state.sync_status, DastCapabilitySyncStatus.IDLE)
+        self.assertEqual(state.sync_task_id, "")

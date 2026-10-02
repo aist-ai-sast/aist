@@ -8,6 +8,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from aist.integrations.dast_capability_sync import (
+    SYNC_IN_FLIGHT_GRACE,
     DastCapabilitySyncTicket,
     run_dast_capability_sync,
     schedule_dast_capability_sync,
@@ -96,17 +97,14 @@ def validate_dast_integration(
         generation=generation,
         task_id=self.request.id,
     )
-    result = run_dast_validation(ticket)
-    if result["valid"] and not result["stale"]:
-        schedule_dast_capability_sync(OrgIntegration.objects.get(pk=integration_id))
-    return result
+    return run_dast_validation(ticket, on_ready=schedule_dast_capability_sync)
 
 
 @shared_task(name="aist.tasks.validate.refresh_dast_capability_catalogs", bind=True)
 def refresh_dast_capability_catalogs(
     self,
     refresh_after_hours: int = 12,
-    in_flight_grace_minutes: int = 30,
+    in_flight_grace_minutes: int = int(SYNC_IN_FLIGHT_GRACE.total_seconds() // 60),
     async_user=None,
 ) -> dict:
     """

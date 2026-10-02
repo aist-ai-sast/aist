@@ -21,7 +21,9 @@ selected on the DAST integration.
 1. Import the provider-generated onboarding bundle into the organization.
 2. Select an organization VPN when the gateway is on a private network.
 3. Validate gateway connectivity and credentials.
-4. Synchronize the provider's targets and capabilities.
+4. Wait for the provider's targets and capabilities to synchronize. A
+   successful validation starts this automatically; see
+   [catalog synchronization](#catalog-synchronization).
 5. Bind an eligible target to one AIST project. A target that declares a
    repository-trigger requirement also needs a source identity for the
    binding; a target with no such requirement (a fixed-surface or
@@ -45,6 +47,40 @@ Replacing the connection or moving the integration to a different route
 revalidates it, so the integration is not ready again until the new probe
 succeeds. A rename cannot change what a probe would reach, so a ready
 integration stays ready through it.
+
+## Catalog synchronization
+
+Synchronization copies the provider's target catalog and capability snapshot
+into AIST. It always runs in a background worker, never in the request that
+asks for it. Three things start one:
+
+- a successful validation, which reserves the synchronization in the same step
+  that marks the integration ready, so a ready integration never exists without
+  a synchronization completed or on its way;
+- an operator choosing **Synchronize** on the integration;
+- a periodic refresh that keeps a ready catalog inside the freshness window that
+  launch [readiness](#readiness) requires.
+
+The integration reports the state of its latest synchronization:
+
+| State | Meaning |
+|---|---|
+| Idle | No synchronization has been requested since the integration was created or disabled |
+| Pending | Requested and waiting for a worker |
+| Running | A worker is fetching the catalog from the gateway |
+| Succeeded | The catalog is current as of the recorded synchronization time |
+| Failed | The latest attempt failed; its error code says why |
+| Stalled | Pending or running for more than 30 minutes, so the attempt is presumed lost and a new one should be started |
+
+Only the latest request counts. A newer request supersedes an older one, and a
+superseded attempt that finishes late cannot change the result or the state of
+the request that replaced it. The periodic refresh leaves a running attempt
+alone for the same 30 minutes before reserving a replacement.
+
+When the provider reports that the catalog is unchanged, synchronization still
+succeeds and records that every available target was seen again, so a target's
+last-seen time reflects the latest successful check rather than the latest
+catalog change.
 
 ## Readiness
 

@@ -17,6 +17,7 @@ import {
   useValidateWorkItemProvider,
   useSetProjectIntegrationOverride,
   useDeleteProjectIntegrationOverride,
+  invalidateDastLifecycleQueries,
   type OrgIntegrationPayload,
   type DastOnboardingBundle,
   type VpnSecretPayload,
@@ -30,6 +31,7 @@ import {
   useProjects,
   useValidationStatus,
   useWorkItemProviderValidationStatus,
+  isDastSyncInFlight,
   type OrgIntegration,
   type VpnSecretStatus,
   type WorkItemProviderSummary,
@@ -117,38 +119,40 @@ function ResourceRow({
   destructiveTitle?: string;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-night-500/80 bg-night-800/75 px-4 py-3">
-      <TypeBadge type={typeKey} />
-      <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-100">{name}</span>
-      {statusLabel && <span className="text-[10px] uppercase tracking-wide text-slate-400">{statusLabel}</span>}
-      {fingerprint && <span className="max-w-40 truncate font-mono text-[10px] text-slate-500" title={fingerprint}>{fingerprint}</span>}
-      <div className="flex shrink-0 items-center gap-1.5 text-[11px]">
-        {vpnName && (
-          <span className="flex items-center gap-1 rounded-full border border-slate-500/30 bg-slate-500/10 px-2 py-0.5 text-[10px] text-slate-400">
-            <svg viewBox="0 0 24 24" className="h-2.5 w-2.5 shrink-0" aria-hidden="true">
-              <path fill="currentColor" d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Z" />
-            </svg>
-            via VPN · {vpnName}
-          </span>
-        )}
-        {isDefault && (
-          <span className="rounded-full border border-brand-500/40 bg-brand-500/10 px-2 py-0.5 text-[10px] text-brand-300">
-            default
-          </span>
-        )}
-        {hasSecret && (
-          <span className="text-slate-400" title="Has stored credential">
-            <LockIcon />
-          </span>
-        )}
-        {!isActive && (
-          <span className="rounded-full border border-slate-500/40 bg-slate-500/10 px-2 py-0.5 text-slate-400">
-            inactive
-          </span>
-        )}
+    <div className="flex flex-col gap-2 rounded-2xl border border-night-500/80 bg-night-800/75 px-4 py-3 sm:flex-row sm:items-center sm:gap-3">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5">
+        <TypeBadge type={typeKey} />
+        <span className="min-w-0 flex-1 basis-32 truncate text-sm font-medium text-slate-100" title={name}>{name}</span>
+        {statusLabel && <span className="text-[10px] uppercase tracking-wide text-slate-400">{statusLabel}</span>}
+        {fingerprint && <span className="max-w-40 truncate font-mono text-[10px] text-slate-500" title={fingerprint}>{fingerprint}</span>}
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 text-[11px]">
+          {vpnName && (
+            <span className="flex min-w-0 max-w-full items-center gap-1 rounded-full border border-slate-500/30 bg-slate-500/10 px-2 py-0.5 text-[10px] text-slate-400" title={`via VPN · ${vpnName}`}>
+              <svg viewBox="0 0 24 24" className="h-2.5 w-2.5 shrink-0" aria-hidden="true">
+                <path fill="currentColor" d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Z" />
+              </svg>
+              <span className="truncate">via VPN · {vpnName}</span>
+            </span>
+          )}
+          {isDefault && (
+            <span className="rounded-full border border-brand-500/40 bg-brand-500/10 px-2 py-0.5 text-[10px] text-brand-300">
+              default
+            </span>
+          )}
+          {hasSecret && (
+            <span className="text-slate-400" title="Has stored credential">
+              <LockIcon />
+            </span>
+          )}
+          {!isActive && (
+            <span className="rounded-full border border-slate-500/40 bg-slate-500/10 px-2 py-0.5 text-slate-400">
+              inactive
+            </span>
+          )}
+        </div>
       </div>
       <PermissionGate action="manage_access" organizationId={organizationId}>
-      <div className="flex shrink-0 gap-1">
+      <div className="flex flex-wrap gap-1 sm:shrink-0">
         <button
           className="aist-icon-button border-night-400/60 bg-night-700/60 text-slate-300 text-[11px] px-2.5 py-1.5"
           disabled={isPendingValidate}
@@ -226,7 +230,7 @@ function SaveCancelButtons({
   label?: string;
 }) {
   return (
-    <div className="flex gap-2">
+    <div className="flex flex-wrap gap-2">
       <button
         className="aist-icon-button border-brand-500/50 bg-brand-500/15 text-brand-100 hover:border-brand-400/70 hover:bg-brand-500/25"
         disabled={isPending || disabled}
@@ -827,7 +831,7 @@ function OrgIntegrationForm({
       <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
         {editing ? "Edit Integration" : "New Integration"}
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="sm:col-span-2">
           <SelectField
             label="Type"
@@ -980,6 +984,9 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [validatingState, setValidatingState] = useState<{ integrationId: number; taskId: string } | null>(null);
+  // DAST integrations whose catalog sync the operator started here (directly or via Validate) and
+  // is waiting on; the result toast fires once the backend reports the sync settled.
+  const [awaitingSyncIds, setAwaitingSyncIds] = useState<number[]>([]);
 
   const integrations = integrationsQuery.data ?? [];
   const editingIntegration = integrations.find((i) => i.id === editingId) ?? null;
@@ -1001,10 +1008,41 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
           : `Validation failed: ${data.detail || "Check integration configuration."}`,
         data.valid ? "success" : "error",
       );
+      const { integrationId } = validatingState;
+      const isDast = integrations.find((i) => i.id === integrationId)?.integration_type === "DAST";
       setValidatingState(null);
-      queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
+      // A successful DAST validation reserves a catalog sync in the same commit; wait on it too.
+      queryClient
+        .invalidateQueries({ queryKey: ["org-integrations", orgId] })
+        .then(() => { if (isDast && data.valid) awaitSync(integrationId); });
     }
   }, [validationStatus.data?.state]);
+
+  // Resolve awaited DAST catalog syncs once the backend reports them settled
+  useEffect(() => {
+    if (awaitingSyncIds.length === 0 || !integrationsQuery.data) return;
+    const settled = awaitingSyncIds.filter((id) => {
+      const integration = integrationsQuery.data.find((i) => i.id === id);
+      return !integration || !isDastSyncInFlight(integration);
+    });
+    if (settled.length === 0) return;
+    for (const id of settled) {
+      const state = integrationsQuery.data.find((i) => i.id === id)?.dast_state;
+      if (state?.sync_status === "SUCCEEDED") {
+        toast.push("DAST target catalog synchronized.", "success");
+      } else if (state?.sync_status === "FAILED") {
+        toast.push(`Synchronization failed: ${state.sync_error_code || "check the DAST integration."}`, "error");
+      } else if (state?.sync_status === "STALLED") {
+        toast.push("Synchronization did not finish. Try again.", "error");
+      }
+    }
+    setAwaitingSyncIds((ids) => ids.filter((id) => !settled.includes(id)));
+    invalidateDastLifecycleQueries(queryClient, orgId);
+  }, [integrationsQuery.data, awaitingSyncIds]);
+
+  function awaitSync(integrationId: number) {
+    setAwaitingSyncIds((ids) => (ids.includes(integrationId) ? ids : [...ids, integrationId]));
+  }
 
   // First active integration per type is the auto-selected default by resolver
   const defaultIds = new Set<number>();
@@ -1054,7 +1092,7 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
   async function handleSynchronize(integration: OrgIntegration) {
     try {
       await syncCapabilities.mutateAsync(integration.id);
-      toast.push("DAST target catalog refresh started.", "success");
+      awaitSync(integration.id);
     } catch (error) {
       toast.push(toUserMessage(error), "error");
     }
@@ -1113,7 +1151,8 @@ function OrgIntegrationsSection({ orgId }: { orgId: number }) {
               validatingState?.integrationId === integration.id
             }
             isPendingSynchronize={
-              syncCapabilities.isPending && syncCapabilities.variables === integration.id
+              (syncCapabilities.isPending && syncCapabilities.variables === integration.id) ||
+              isDastSyncInFlight(integration)
             }
             organizationId={orgId}
             destructiveLabel={
@@ -1258,7 +1297,7 @@ function WorkItemProviderForm({
       <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
         {editing ? "Edit Provider" : "New Work Item Provider"}
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="sm:col-span-2">
           <SelectField
             label="Type"
@@ -1282,7 +1321,7 @@ function WorkItemProviderForm({
             Base URL
             {form.provider_type === "JIRA" && (
               <span className="ml-1 text-slate-500">
-                — instance root only, e.g. <code className="text-slate-300">https://company.atlassian.net</code>
+                — instance root only, e.g. <code className="break-all text-slate-300">https://company.atlassian.net</code>
                 {" "}<span className="text-danger-400/70">(not the project URL)</span>
               </span>
             )}
@@ -1557,10 +1596,10 @@ function ProjectOverridesSection({ orgId }: { orgId: number }) {
             if (type === "VPN") {
               const isDisabled = override?.is_disabled ?? false;
               return (
-                <div key={type} className="flex items-center gap-3 rounded-xl border border-night-500/60 bg-night-800/50 px-3 py-2.5">
+                <div key={type} className="flex flex-wrap items-center gap-3 rounded-xl border border-night-500/60 bg-night-800/50 px-3 py-2.5">
                   <TypeBadge type={type} />
                   <div className="flex-1 text-sm text-slate-300">VPN</div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {isDisabled && (
                       <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-400">
                         disabled for this project
@@ -1585,7 +1624,7 @@ function ProjectOverridesSection({ orgId }: { orgId: number }) {
             return (
               <div key={type} className="flex items-center gap-3 rounded-xl border border-night-500/60 bg-night-800/50 px-3 py-2.5">
                 <TypeBadge type={type} />
-                <div className="flex-1">
+                <div className="min-w-0 flex-1">
                   <SelectField
                     label={TYPE_LABELS[type]}
                     hideLabel

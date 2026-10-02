@@ -773,6 +773,14 @@ class DastIntegrationValidationState(models.TextChoices):
     INVALID = "INVALID", "Invalid"
 
 
+class DastCapabilitySyncStatus(models.TextChoices):
+    IDLE = "IDLE", "Idle"
+    PENDING = "PENDING", "Pending"
+    RUNNING = "RUNNING", "Running"
+    SUCCEEDED = "SUCCEEDED", "Succeeded"
+    FAILED = "FAILED", "Failed"
+
+
 class DastIntegrationState(models.Model):
     integration = models.OneToOneField(
         OrgIntegration,
@@ -796,6 +804,12 @@ class DastIntegrationState(models.Model):
     sync_generation = models.PositiveBigIntegerField(default=0)
     sync_task_id = models.CharField(max_length=255, blank=True, default="")
     sync_claimed_at = models.DateTimeField(null=True, blank=True)
+    sync_requested_at = models.DateTimeField(null=True, blank=True)
+    sync_status = models.CharField(
+        max_length=16,
+        choices=DastCapabilitySyncStatus.choices,
+        default=DastCapabilitySyncStatus.IDLE,
+    )
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 

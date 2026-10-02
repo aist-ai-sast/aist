@@ -536,13 +536,13 @@ export function useSyncDastCapabilities(orgId: number) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (integrationId: number) =>
-      fetchJson(getRoute("dast_integration_sync_capabilities_url", { integration_id: integrationId }), {
-        method: "POST",
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
-      queryClient.invalidateQueries({ queryKey: ["dast-targets", orgId] });
-    },
+      fetchJson<{ task_id: string }>(
+        getRoute("dast_integration_sync_capabilities_url", { integration_id: integrationId }),
+        { method: "POST" },
+      ),
+    // The 202 only reserves the sync. Refetch so the list reports it in flight; the page refreshes
+    // the DAST data once the reported sync_status settles.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] }),
   });
 }
 
@@ -595,7 +595,7 @@ export function useDeleteOrgIntegration(orgId: number) {
   });
 }
 
-function invalidateDastLifecycleQueries(queryClient: ReturnType<typeof useQueryClient>, orgId: number) {
+export function invalidateDastLifecycleQueries(queryClient: ReturnType<typeof useQueryClient>, orgId: number) {
   queryClient.invalidateQueries({ queryKey: ["org-integrations", orgId] });
   queryClient.invalidateQueries({ queryKey: ["dast-targets", orgId] });
   queryClient.invalidateQueries({ queryKey: ["dast-bindings"] });
