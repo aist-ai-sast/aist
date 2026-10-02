@@ -557,7 +557,9 @@ class DashboardSummaryViewTests(TestCase):
         self.assertEqual(current_week["week_end"], (week_start + timedelta(days=6)).isoformat())
         self.assertEqual(current_week["new_findings"], 5)
         self.assertEqual(current_week["ticketed"], 1)
-        self.assertEqual(current_week["dismissed"], 1)
+        # The false positive marked above and the fixture's risk-accepted finding: both are
+        # triage decisions that close a finding without a ticket.
+        self.assertEqual(current_week["dismissed"], 2)
         # This week ends with the queue the progress bar shows today.
         self.assertEqual(current_week["untriaged_at_week_end"], 2)
         self.assertEqual(current_week["untriaged_at_week_end"], self._states(triage)["none"])
