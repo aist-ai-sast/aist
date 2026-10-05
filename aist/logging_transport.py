@@ -76,6 +76,23 @@ def get_pipeline_bridge_log_path(pipeline_id: str) -> Path:
     return log_dir / f"{pipeline_id}.bridge.log"
 
 
+class PipelineSourceFormatter(logging.Formatter):
+
+    """
+    Formats a pipeline record, naming its source when the record does not name one.
+
+    A containerised step tags its own lines with the analyzer's catalog name
+    (``[dast] …``); everything else in the file comes from the platform.
+    """
+
+    source = "[aist]"
+
+    def formatMessage(self, record: logging.LogRecord) -> str:
+        if not record.message.startswith("["):
+            record.message = f"{self.source} {record.message}"
+        return super().formatMessage(record)
+
+
 def install_pipeline_logging(pipeline_id: str, level=logging.INFO) -> logging.Logger:
     def _attach_handler(logger: logging.Logger, handler: logging.Handler) -> None:
         """
@@ -90,7 +107,7 @@ def install_pipeline_logging(pipeline_id: str, level=logging.INFO) -> logging.Lo
             logger.addHandler(handler)
         logger.setLevel(level)
 
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    fmt = PipelineSourceFormatter("%(asctime)s [%(levelname)s] %(message)s")
 
     # Build log file path
     log_path = get_pipeline_log_path(pipeline_id)

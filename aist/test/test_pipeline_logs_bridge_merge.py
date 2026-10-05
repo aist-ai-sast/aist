@@ -11,6 +11,7 @@ and the path resolution in ``get_pipeline_bridge_log_path``.
 """
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -22,6 +23,8 @@ from aist.logging_transport import (
     _aist_log_dir,
     get_pipeline_bridge_log_path,
     get_pipeline_log_path,
+    install_pipeline_logging,
+    uninstall_pipeline_file_logging,
 )
 from aist.models import AISTPipeline, AISTStatus
 from aist.test.test_api import AISTApiBase
@@ -165,7 +168,13 @@ class PipelineLogsFullMergeTests(AISTApiBase):
 
 class PipelineLogsProgressiveMergeTests(AISTApiBase):
 
-    """Progressive endpoint serves merged delta + per-source size headers."""
+    """
+    Progressive endpoint serves merged delta + per-source size headers.
+
+    The progressive endpoint renders records for reading, so its bodies carry
+    ``HH:MM:SS,mmm`` without the date -- see
+    ``PipelineLogsProgressiveDayRenderingTests``.
+    """
 
     def setUp(self):
         super().setUp()
@@ -205,7 +214,7 @@ class PipelineLogsProgressiveMergeTests(AISTApiBase):
         resp = self.client.get(self.url, data={"tail": 100})
         body = resp.content.decode("utf-8")
         self.assertIn("[INFO] m1", body)
-        self.assertIn("[bridge] 2026-04-29 10:00:00,500 [INFO] b1", body)
+        self.assertIn("[bridge] 10:00:00,500 [INFO] b1", body)
 
     def test_delta_uses_independent_offsets(self):
         # Step 1: client receives initial tail.
@@ -226,7 +235,7 @@ class PipelineLogsProgressiveMergeTests(AISTApiBase):
         delta = self.client.get(self.url, data={"start": main_off, "bridge_start": bridge_off})
         body = delta.content.decode("utf-8")
         self.assertIn("[INFO] m2", body)
-        self.assertIn("[bridge] 2026-04-29 10:00:03,000 [INFO] b2", body)
+        self.assertIn("[bridge] 10:00:03,000 [INFO] b2", body)
         # Old lines MUST NOT reappear in the delta — that's the duplication
         # guarantee the per-source offsets buy us.
         self.assertNotIn("[INFO] m1", body)
@@ -246,7 +255,7 @@ class PipelineLogsProgressiveMergeTests(AISTApiBase):
         )
         delta = self.client.get(self.url, data={"start": main_off, "bridge_start": bridge_off})
         body = delta.content.decode("utf-8")
-        self.assertIn("[bridge] 2026-04-29 10:00:05,000 [INFO] late-bridge", body)
+        self.assertIn("[bridge] 10:00:05,000 [INFO] late-bridge", body)
         # Main file unchanged → no main delta.
         self.assertNotIn("[INFO] m1", body)
         # X-Log-Size unchanged; X-Bridge-Log-Size grew.
@@ -391,3 +400,191 @@ class PipelineLogsFullRotatedMergeTests(AISTApiBase):
         # No leakage from prior pipelines or rotated siblings.
         self.assertNotIn(".log.1", body)
         self.assertNotIn(".log.2", body)
+
+
+class PipelineLogsProgressiveDayRenderingTests(AISTApiBase):
+
+    """
+    What an operator watching the Logs panel actually sees.
+
+    The date is identical on every record of a run that virtually always fits
+    inside one day, and it cost ~11 characters of every line in a panel that is
+    already too wide to read. The backend therefore strips it and announces the
+    day instead; the page only echoes ``X-Log-Day`` back. The files keep their
+    full timestamps -- ``_merge_log_chunks`` sorts on them and the byte offsets
+    index the files verbatim -- which is why ``Full log`` and ``Download`` must
+    keep serving them unchanged.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.pipeline = AISTPipeline.objects.create(
+            id="pipe-log-day",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINISHED,
+        )
+        self.main_path = get_pipeline_log_path(self.pipeline.id)
+        self.bridge_path = get_pipeline_bridge_log_path(self.pipeline.id)
+        self.main_path.parent.mkdir(parents=True, exist_ok=True)
+        self.url = reverse(
+            "aist_api:pipeline_logs_progressive",
+            kwargs={"pipeline_id": self.pipeline.id},
+        )
+
+    def _write(self, *, main: str = "", bridge: str = "") -> None:
+        self.main_path.write_text(main, encoding="utf-8")
+        self.bridge_path.write_text(bridge, encoding="utf-8")
+
+    def test_opening_the_panel_announces_the_day_once_and_drops_it_from_records(self):
+        self._write(
+            main=(
+                "2026-10-04 18:25:00,885 [INFO] [dast][run] run admitted\n"
+                "2026-10-04 18:25:10,247 [INFO] [dast][p0] launch resolved\n"
+            ),
+            bridge="2026-10-04 18:25:05,000 [INFO] skill invoked\n",
+        )
+        resp = self.client.get(self.url, data={"tail": 100})
+        body = resp.content.decode("utf-8")
+
+        self.assertEqual(body.count("──────── 2026-10-04 ────────"), 1)
+        self.assertNotIn("2026-10-04 18:25", body)
+        self.assertIn("18:25:00,885 [INFO] [dast][run] run admitted", body)
+        self.assertIn("18:25:10,247 [INFO] [dast][p0] launch resolved", body)
+        # The bridge tag sits BEFORE the timestamp and must survive the strip.
+        self.assertIn("[bridge] 18:25:05,000 [INFO] skill invoked", body)
+        self.assertEqual(resp["X-Log-Day"], "2026-10-04")
+
+    def test_poll_does_not_repeat_a_day_the_client_already_has(self):
+        self._write(main="2026-10-04 18:25:00,885 [INFO] first\n")
+        first = self.client.get(self.url, data={"tail": 100})
+        offset = int(first["X-Log-Size"])
+        day = first["X-Log-Day"]
+
+        with self.main_path.open("a", encoding="utf-8") as handle:
+            handle.write("2026-10-04 18:25:30,100 [INFO] second\n")
+
+        delta = self.client.get(
+            self.url,
+            data={"start": offset, "bridge_start": 0, "day": day},
+        )
+        body = delta.content.decode("utf-8")
+        self.assertNotIn("────", body)
+        self.assertIn("18:25:30,100 [INFO] second", body)
+        self.assertEqual(delta["X-Log-Day"], "2026-10-04")
+
+    def test_a_run_crossing_midnight_announces_the_new_day(self):
+        self._write(main="2026-10-04 23:59:59,900 [INFO] before midnight\n")
+        first = self.client.get(self.url, data={"tail": 100})
+        offset = int(first["X-Log-Size"])
+
+        with self.main_path.open("a", encoding="utf-8") as handle:
+            handle.write("2026-10-05 00:00:01,100 [INFO] after midnight\n")
+
+        delta = self.client.get(
+            self.url,
+            data={"start": offset, "bridge_start": 0, "day": first["X-Log-Day"]},
+        )
+        body = delta.content.decode("utf-8")
+        self.assertIn("──────── 2026-10-05 ────────", body)
+        self.assertIn("00:00:01,100 [INFO] after midnight", body)
+        self.assertEqual(delta["X-Log-Day"], "2026-10-05")
+
+    def test_continuation_lines_of_a_multiline_record_are_untouched(self):
+        self._write(
+            main=(
+                "2026-10-04 18:25:00,885 [ERROR] job failed\n"
+                "  Traceback (most recent call last):\n"
+                "  RuntimeError: boom\n"
+            ),
+        )
+        body = self.client.get(self.url, data={"tail": 100}).content.decode("utf-8")
+        self.assertIn("\n  Traceback (most recent call last):\n", body)
+        self.assertIn("\n  RuntimeError: boom", body)
+
+    def test_full_log_and_download_still_carry_the_date(self):
+        self._write(
+            main="2026-10-04 18:25:00,885 [INFO] keep my date\n",
+            bridge="2026-10-04 18:25:01,000 [INFO] bridge keeps it too\n",
+        )
+        for name in ("pipeline_logs_full", "pipeline_logs_download"):
+            with self.subTest(endpoint=name):
+                resp = self.client.get(
+                    reverse(f"aist_api:{name}", kwargs={"pipeline_id": self.pipeline.id}),
+                )
+                body = resp.content.decode("utf-8")
+                self.assertIn("2026-10-04 18:25:00,885 [INFO] keep my date", body)
+                self.assertIn("[bridge] 2026-10-04 18:25:01,000 [INFO] bridge keeps it too", body)
+                self.assertNotIn("────", body)
+
+    def test_a_malformed_day_is_rejected_instead_of_silently_ignored(self):
+        self._write(main="2026-10-04 18:25:00,885 [INFO] x\n")
+        resp = self.client.get(self.url, data={"start": 0, "day": "yesterday"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("day", resp.json())
+
+
+class PipelineLogSourceTaggingTests(AISTApiBase):
+
+    """
+    Every line in a pipeline log names where it came from.
+
+    A containerised step tags its own lines with the analyzer's catalog name before they
+    reach this file (``[dast] …``, from ``pipeline.docker_utils``); the platform's own
+    lines had nothing, so two analyzers and the worker were indistinguishable once their
+    output interleaved.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.pipeline = AISTPipeline.objects.create(
+            id="pipe-log-source",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINISHED,
+        )
+        self.log_path = get_pipeline_log_path(self.pipeline.id)
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        # The handler appends, and the log dir outlives the test database.
+        self.log_path.write_text("", encoding="utf-8")
+        self.addCleanup(uninstall_pipeline_file_logging, self.pipeline.id)
+
+    def _written_lines(self) -> list[str]:
+        return [line for line in self.log_path.read_text(encoding="utf-8").splitlines() if line]
+
+    def test_a_platform_record_names_the_platform(self):
+        logger = install_pipeline_logging(self.pipeline.id)
+        logger.info("deduplication finished: 12 findings")
+
+        line, = self._written_lines()
+        self.assertIn("[INFO] [aist] deduplication finished: 12 findings", line)
+
+    def test_a_record_that_already_names_its_source_is_left_alone(self):
+        logger = install_pipeline_logging(self.pipeline.id)
+        logger.info("[dast][p8/publish] triage board -> reports/triage.html")
+
+        line, = self._written_lines()
+        self.assertIn("[INFO] [dast][p8/publish] triage board -> reports/triage.html", line)
+        self.assertNotIn("[aist]", line)
+
+    def test_two_pipelines_sharing_the_logger_do_not_double_tag(self):
+        """Concurrent pipelines each add a handler to the shared ``pipeline`` logger."""
+        other = AISTPipeline.objects.create(
+            id="pipe-log-source-2",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINISHED,
+        )
+        other_path = get_pipeline_log_path(other.id)
+        other_path.write_text("", encoding="utf-8")
+        self.addCleanup(uninstall_pipeline_file_logging, other.id)
+        install_pipeline_logging(self.pipeline.id)
+        install_pipeline_logging(other.id)
+
+        logging.getLogger("pipeline").info("uploading results")
+
+        for path in (self.log_path, other_path):
+            with self.subTest(log=path.name):
+                line, = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln]
+                self.assertIn("[aist] uploading results", line)
+                self.assertNotIn("[aist] [aist]", line)

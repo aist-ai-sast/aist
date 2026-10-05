@@ -29,11 +29,16 @@ def pipeline_logs_progressive(request, pipeline_id: str):
     - bridge_start=<int>: byte offset into <id>.bridge.log (claude-bridge). Default 0.
     - tail=<int>: last N merged lines to return initially (ignored if start
       / bridge_start are provided).
+    - day=<YYYY-MM-DD>: the day the client was last told about (use the previous
+      X-Log-Day). Records belonging to it are served without their date.
     Response headers:
     - X-Log-Size: current size of <id>.log (use as next start).
     - X-Bridge-Log-Size: current size of <id>.bridge.log (use as next bridge_start).
+    - X-Log-Day: day of the last dated record in the body (use as next day).
     Body:
     - timestamp-merged delta from both files; bridge lines prefixed `[bridge] `.
+      The repeated date is stripped and the day is announced as a separator line
+      whenever it changes. `pipeline_logs_full` / `_download` keep the raw file.
     """
     pipeline = get_object_or_404(
         get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
@@ -47,6 +52,7 @@ def pipeline_logs_progressive(request, pipeline_id: str):
         start=serializer.validated_data.get("start"),
         tail=serializer.validated_data.get("tail"),
         bridge_start=serializer.validated_data.get("bridge_start"),
+        day=serializer.validated_data.get("day"),
     )
 
 

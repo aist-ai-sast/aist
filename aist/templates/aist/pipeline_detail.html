@@ -659,14 +659,20 @@
             let autoScroll = true;
             let logOffset = 0;
             let bridgeLogOffset = 0;
+            // The day the server has already announced. It strips the date off every
+            // record and emits a separator when the day changes; echoing the day back
+            // is all this page has to do to keep a delta from re-announcing it.
+            let logDay = "";
             const tailCount = 1000; // how many lines to load initially
             const fetchIntervalMs = 1000; // polling interval
 
             function initLog() {
+                // No day is sent: the tail replaces the box, so it must be announced again.
                 fetch("{% url 'aist:pipeline_logs_progressive' pipeline.id %}?tail=" + tailCount)
                     .then(resp => {
                         logOffset = parseInt(resp.headers.get("X-Log-Size") || "0", 10);
                         bridgeLogOffset = parseInt(resp.headers.get("X-Bridge-Log-Size") || "0", 10);
+                        logDay = resp.headers.get("X-Log-Day") || "";
                         return resp.text();
                     })
                     .then(txt => {
@@ -680,11 +686,13 @@
             function pollNewLogs() {
                 const url = "{% url 'aist:pipeline_logs_progressive' pipeline.id %}"
                     + "?start=" + logOffset
-                    + "&bridge_start=" + bridgeLogOffset;
+                    + "&bridge_start=" + bridgeLogOffset
+                    + (logDay ? "&day=" + encodeURIComponent(logDay) : "");
                 fetch(url)
                     .then(resp => {
                         const newSize = parseInt(resp.headers.get("X-Log-Size") || logOffset, 10);
                         const newBridgeSize = parseInt(resp.headers.get("X-Bridge-Log-Size") || bridgeLogOffset, 10);
+                        logDay = resp.headers.get("X-Log-Day") || logDay;
                         return resp.text().then(txt => ({txt, newSize, newBridgeSize}));
                     })
                     .then(({txt, newSize, newBridgeSize}) => {

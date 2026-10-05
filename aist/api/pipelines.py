@@ -6,7 +6,7 @@ import re
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime  # noqa: TC003 -- drf-spectacular resolves serializer type hints at runtime
+from datetime import date, datetime  # noqa: TC003 -- drf-spectacular resolves serializer type hints at runtime
 from io import BytesIO, StringIO
 from operator import itemgetter
 from typing import TYPE_CHECKING
@@ -169,6 +169,11 @@ class PipelineLogsProgressiveQuerySerializer(serializers.Serializer):
     # both X-Log-Size (main) and X-Bridge-Log-Size headers so the client can
     # advance each cursor without losing byte stability per source.
     bridge_start = serializers.IntegerField(required=False, min_value=0)
+    # The day the client has already been told about. The response strips the
+    # repeated date from every record and announces the day once (see
+    # ``_render_log_days``); echoing it back is what lets a delta poll know the
+    # announcement is still standing.
+    day = serializers.DateField(required=False)
 
 
 class PipelineStartAPI(AISTAPIView):
@@ -603,12 +608,49 @@ def _annotate_bridge_lines(bridge_text: str) -> str:
     return "\n".join(f"[bridge] {line}" for line in bridge_text.splitlines())
 
 
+# Rendering contract for the in-page log viewer. The log files themselves keep the
+# full ``YYYY-MM-DD HH:MM:SS,mmm`` timestamp -- ``_merge_log_chunks`` sorts on it and
+# the byte offsets index those files verbatim -- so the date is dropped here, on the
+# way out, and only for the progressive endpoint the detail page polls. ``Full log``
+# and ``Download`` keep serving the file as it is written. A bridge line carries its
+# ``[bridge] `` tag BEFORE the timestamp, so the tag is matched and re-emitted.
+_LOG_DATE_RE = re.compile(r"^(\[bridge\] )?(\d{4}-\d{2}-\d{2}) (?=\d{2}:\d{2}:\d{2})")
+
+LOG_DAY_SEPARATOR = "──────── {day} ────────"
+
+
+def _render_log_days(text: str, *, previous_day: str | None) -> tuple[str, str | None]:
+    """
+    Drop the date repeated on every record and announce the day instead.
+
+    Returns the rendered text and the day of its last dated record. The client
+    echoes that day back on the next poll, so a delta only re-announces a day
+    that actually changed -- which is what keeps a run crossing midnight
+    unambiguous without printing the date 10 000 times. Lines with no leading
+    timestamp (continuation lines of a multi-line record) pass through untouched.
+    """
+    day = previous_day
+    rendered: list[str] = []
+    for line in text.split("\n"):
+        match = _LOG_DATE_RE.match(line)
+        if not match:
+            rendered.append(line)
+            continue
+        tag, line_day = match.group(1) or "", match.group(2)
+        if line_day != day:
+            day = line_day
+            rendered.append(LOG_DAY_SEPARATOR.format(day=line_day))
+        rendered.append(tag + line[match.end():])
+    return "\n".join(rendered), day
+
+
 def pipeline_logs_progressive_response(
     *,
     pipeline: AISTPipeline,
     start: int | None,
     tail: int | None,
     bridge_start: int | None = None,
+    day: date | None = None,
 ) -> HttpResponse:
     """
     Progressive log read merging celeryworker + aist-triage-bridge files.
@@ -622,6 +664,10 @@ def pipeline_logs_progressive_response(
     offsets, with bridge lines prefixed ``[bridge] `` so operators can
     distinguish sources at a glance. Initial requests use ``tail=N`` to
     fetch the last N merged lines.
+
+    Records are rendered for reading: the date is stripped off each one and the
+    day is announced as a separator whenever it changes against ``day``, the day
+    the client was last told about. ``X-Log-Day`` carries the day to echo back.
     """
     main_path = get_pipeline_log_path(pipeline.id)
     bridge_path = get_pipeline_bridge_log_path(pipeline.id)
@@ -637,9 +683,12 @@ def pipeline_logs_progressive_response(
         bridge_chunk, bridge_size = _read_file_chunk(bridge_path, start=bridge_start, tail=None)
         body = _merge_log_chunks(main_chunk, bridge_chunk)
 
+    body, last_day = _render_log_days(body, previous_day=day.isoformat() if day else None)
+
     resp = HttpResponse(body, content_type="text/plain; charset=utf-8")
     resp["X-Log-Size"] = str(main_size)
     resp["X-Bridge-Log-Size"] = str(bridge_size)
+    resp["X-Log-Day"] = last_day or ""
     return resp
 
 
@@ -944,6 +993,7 @@ class PipelineLogsProgressiveAPI(AISTAPIView):
             start=serializer.validated_data.get("start"),
             tail=serializer.validated_data.get("tail"),
             bridge_start=serializer.validated_data.get("bridge_start"),
+            day=serializer.validated_data.get("day"),
         )
 
 
