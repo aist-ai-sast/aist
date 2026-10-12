@@ -100,10 +100,11 @@ test("manual DAST import requires a binding and never sends a commit override", 
   await openPipelines(page);
   await page.getByRole("button", { name: "Import pipeline launch" }).click();
   const dialog = page.getByRole("dialog", { name: "Import report" });
-  const selects = dialog.getByRole("combobox");
-  await selects.nth(0).click();
+  // Both fields are the searchable SelectField: a trigger button named by the field,
+  // then a listbox portalled to the page body.
+  await dialog.getByRole("button", { name: "Target project" }).click();
   await page.getByRole("option").first().click();
-  await selects.nth(1).click();
+  await dialog.getByRole("button", { name: "DAST target" }).click();
   await page.getByRole("option", { name: "E2E cloud app · backend" }).click();
   const fileInput = dialog.locator('input[type="file"]');
   await expect(fileInput).toBeEnabled();

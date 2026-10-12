@@ -1,10 +1,11 @@
 import ReactECharts from "echarts-for-react";
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import ActiveFiltersBar from "../components/ActiveFiltersBar";
 import FilterClearButton from "../components/FilterClearButton";
 import FilterPanel from "../components/FilterPanel";
+import FilterToggleButton from "../components/FilterToggleButton";
 import PageErrorState from "../components/PageErrorState";
 import { agingBucketRange, type DrilldownPatch, drilldownSearch, weekRange } from "../lib/dashboardDrilldown";
 import { optionLabel, WORK_ITEM_STATUS_OPTIONS } from "../lib/findingsFilterOptions";
@@ -12,7 +13,7 @@ import type { TriageProgress, TriageState } from "../lib/queries";
 import type { Severity } from "../types";
 import { useDashboardSummary, useProjects } from "../lib/queries";
 import { getRoute } from "../lib/routes";
-import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
+import { useFilterPanelOpen } from "../lib/useFilterPanelOpen";
 import { useFindingsFilterState } from "../lib/useFindingsFilterState";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -651,24 +652,6 @@ function DashboardSkeleton() {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-const FILTER_PANEL_STORAGE_KEY = "aist.dashboard.filtersOpen";
-
-function readStoredPanelOpen(): boolean {
-  try {
-    return window.localStorage.getItem(FILTER_PANEL_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function storePanelOpen(open: boolean) {
-  try {
-    window.localStorage.setItem(FILTER_PANEL_STORAGE_KEY, open ? "1" : "0");
-  } catch {
-    // Storage blocked (private mode): the panel state is a per-visit convenience.
-  }
-}
-
 export default function DashboardPage() {
   const navigate = useNavigate();
   const projectsQuery = useProjects();
@@ -680,12 +663,10 @@ export default function DashboardPage() {
   const activeChartsNotApplicable = filters.debounced.status === "Non-Active";
   const resetStatus = useCallback(() => filters.apply({ status: "All" }), [filters]);
 
-  // A shared link with filters opens the panel; otherwise the viewer's last choice.
-  const [filterPanelOpen, setFilterPanelOpen] = useState<boolean>(() => hasFilters || readStoredPanelOpen());
-  const toggleFilterPanel = () => {
-    storePanelOpen(!filterPanelOpen);
-    setFilterPanelOpen(!filterPanelOpen);
-  };
+  const { open: filterPanelOpen, toggle: toggleFilterPanel } = useFilterPanelOpen({
+    page: "dashboard",
+    hasFilters,
+  });
 
   // Stable reference: new Date() once per mount
   const now = useMemo(() => new Date(), []);
@@ -1199,25 +1180,11 @@ export default function DashboardPage() {
               ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="aist-icon-button h-9 px-3 text-xs font-semibold uppercase tracking-[0.14em]"
-                aria-pressed={filterPanelOpen}
-                onClick={toggleFilterPanel}
-              >
-                <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                  <path fill="currentColor" d="M10 18h4v-2h-4v2Zm-7-10v2h18V8H3Zm3 7h12v-2H6v2Z" />
-                </svg>
-                Filters
-                {hasFilters ? (
-                  <span
-                    className={`grid h-[18px] min-w-[18px] place-items-center rounded-full border px-1 text-[10px] tracking-normal ${ACCENT_SELECTED_CLASS}`}
-                    aria-label={`${filters.chips.length} active`}
-                  >
-                    {filters.chips.length}
-                  </span>
-                ) : null}
-              </button>
+              <FilterToggleButton
+                open={filterPanelOpen}
+                onToggle={toggleFilterPanel}
+                activeCount={filters.chips.length}
+              />
               <Link
                 to={buildFindingsLink()}
                 className="aist-icon-button h-9 px-3 text-xs font-semibold uppercase tracking-[0.14em]"

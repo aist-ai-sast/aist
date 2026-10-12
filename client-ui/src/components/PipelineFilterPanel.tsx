@@ -59,6 +59,8 @@ export default function PipelineFilterPanel({
             value={selectedProjectId ? String(selectedProjectId) : "all"}
             onChange={(value) => onProjectChange(value && value !== "all" ? Number(value) : undefined)}
             placeholder="All projects"
+            searchable
+            searchPlaceholder="Search projects…"
             options={projectOptions}
           />
         </div>

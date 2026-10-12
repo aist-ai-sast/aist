@@ -95,6 +95,8 @@ export default function FilterPanel({
             value={selectedProjectId ? String(selectedProjectId) : "all"}
             onChange={(value) => onProjectChange(value && value !== "all" ? Number(value) : undefined)}
             placeholder="All projects"
+            searchable
+            searchPlaceholder="Search projects…"
             options={[
               { value: "all", label: "All projects" },
               ...products.map((product) => ({

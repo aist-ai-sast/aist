@@ -163,6 +163,8 @@ export default function MyTokensSection() {
               value: String(organization.organization_id),
               label: organization.organization_name,
             }))}
+            searchable
+            searchPlaceholder="Search organizations…"
             disabled={createToken.isPending || organizations.length === 0}
           />
           <SelectField

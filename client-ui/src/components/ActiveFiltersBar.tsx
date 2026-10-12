@@ -1,21 +1,37 @@
 import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
-import type { ActiveFilterChip } from "../lib/findingsActiveFilters";
+import type { ActiveFilterTone } from "../lib/findingsActiveFilters";
 import FilterClearButton from "./FilterClearButton";
 
-type ActiveFiltersBarProps = {
-  chips: ActiveFilterChip[];
-  onRemove: (chip: ActiveFilterChip) => void;
+/**
+ * What the bar needs to render a chip. Each page keeps its own chip type — findings carry
+ * a findings-shaped removal patch, pipelines a pipelines-shaped one — and the bar stays
+ * generic over it, handing the whole chip back to `onRemove` untouched.
+ */
+export type RenderableFilterChip = {
+  id: string;
+  label: string;
+  value: string;
+  tone: ActiveFilterTone;
+};
+
+type ActiveFiltersBarProps<TChip extends RenderableFilterChip> = {
+  chips: TChip[];
+  onRemove: (chip: TChip) => void;
   onClearAll: () => void;
 };
 
-const TONE_CLASS: Record<ActiveFilterChip["tone"], string> = {
+const TONE_CLASS: Record<ActiveFilterTone, string> = {
   neutral: "border-night-500 bg-night-600 text-slate-200",
   include: ACCENT_SELECTED_CLASS,
   exclude: "border-danger-500/50 bg-danger-500/10 text-danger-500",
 };
 
 /** Mirrors the filter panel above the results so exclusions stay visible when the panel is scrolled or collapsed. */
-export default function ActiveFiltersBar({ chips, onRemove, onClearAll }: ActiveFiltersBarProps) {
+export default function ActiveFiltersBar<TChip extends RenderableFilterChip>({
+  chips,
+  onRemove,
+  onClearAll,
+}: ActiveFiltersBarProps<TChip>) {
   if (chips.length === 0) return null;
   return (
     <div

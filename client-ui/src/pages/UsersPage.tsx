@@ -83,6 +83,8 @@ export default function UsersPage() {
               value={orgId ? String(orgId) : ""}
               onChange={(value) => setOrgId(value ? Number(value) : null)}
               options={orgsQuery.data.map((org) => ({ value: String(org.id), label: org.name }))}
+              searchable
+              searchPlaceholder="Search organizations…"
             />
           </div>
         ) : null}

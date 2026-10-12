@@ -2,9 +2,12 @@
 import "@testing-library/jest-dom/vitest";
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { installPopoverTestEnv } from "../lib/testPopoverEnv";
 import ImportPipelineDialog from "./ImportPipelineDialog";
+
+beforeAll(installPopoverTestEnv);
 
 const pushToast = vi.fn();
 const validateMutateAsync = vi.fn();
@@ -46,13 +49,21 @@ function reportFile(name = "generic-aist-report.json") {
   return new File(["irrelevant — the backend parses this, not the browser"], name, { type: "application/json" });
 }
 
-// The project field is the app's Radix-based SelectField — button/listbox-driven:
-// open it with a click, then click the option (see ProjectAccessEditor.test.tsx).
+/**
+ * Both fields are the app's SelectField in its searchable form: a trigger button labelled
+ * by the field, then a cmdk listbox. Open the trigger by its label, then click the option.
+ */
+function pickOption(field: RegExp, option: string) {
+  fireEvent.click(screen.getByRole("button", { name: field }));
+  fireEvent.click(screen.getByRole("option", { name: option }));
+}
+
+const PROJECT_FIELD = /target project/i;
+const DAST_FIELD = /dast target/i;
+
 async function selectProjectAndUploadFile(name = "generic-aist-report.json") {
-  fireEvent.click(screen.getAllByRole("combobox")[0]);
-  fireEvent.click(screen.getByRole("option", { name: "cloud_portal" }));
-  fireEvent.click(screen.getAllByRole("combobox")[1]);
-  fireEvent.click(screen.getByRole("option", { name: "Cloud app · backend" }));
+  pickOption(PROJECT_FIELD, "cloud_portal");
+  pickOption(DAST_FIELD, "Cloud app · backend");
   const input = document.querySelector('input[type="file"]') as HTMLInputElement;
   const file = reportFile(name);
   fireEvent.change(input, { target: { files: [file] } });
@@ -154,10 +165,8 @@ describe("ImportPipelineDialog", () => {
     });
     render(<ImportPipelineDialog open onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getAllByRole("combobox")[0]);
-    fireEvent.click(screen.getByRole("option", { name: "cloud_portal" }));
-    fireEvent.click(screen.getAllByRole("combobox")[1]);
-    fireEvent.click(screen.getByRole("option", { name: "External perimeter" }));
+    pickOption(PROJECT_FIELD, "cloud_portal");
+    pickOption(DAST_FIELD, "External perimeter");
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [reportFile()] } });
     await waitFor(() => expect(screen.getByText("generic-aist-report.json")).toBeInTheDocument());
@@ -212,10 +221,8 @@ describe("ImportPipelineDialog", () => {
     });
     render(<ImportPipelineDialog open onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getAllByRole("combobox")[0]);
-    fireEvent.click(screen.getByRole("option", { name: "cloud_portal" }));
-    fireEvent.click(screen.getAllByRole("combobox")[1]);
-    fireEvent.click(screen.getByRole("option", { name: "Cloud app · backend" }));
+    pickOption(PROJECT_FIELD, "cloud_portal");
+    pickOption(DAST_FIELD, "Cloud app · backend");
 
     const dropZone = screen.getByRole("button", { name: /drop a report file here/i });
     const file = reportFile("dropped-report.json");
@@ -245,10 +252,8 @@ describe("ImportPipelineDialog", () => {
   it("opens the file picker on click once a project and binding are selected", () => {
     render(<ImportPipelineDialog open onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getAllByRole("combobox")[0]);
-    fireEvent.click(screen.getByRole("option", { name: "cloud_portal" }));
-    fireEvent.click(screen.getAllByRole("combobox")[1]);
-    fireEvent.click(screen.getByRole("option", { name: "Cloud app · backend" }));
+    pickOption(PROJECT_FIELD, "cloud_portal");
+    pickOption(DAST_FIELD, "Cloud app · backend");
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     const clickSpy = vi.spyOn(input, "click");
@@ -273,11 +278,10 @@ describe("ImportPipelineDialog", () => {
     projectBindings = [];
     render(<ImportPipelineDialog open onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getAllByRole("combobox")[0]);
-    fireEvent.click(screen.getByRole("option", { name: "cloud_portal" }));
+    pickOption(PROJECT_FIELD, "cloud_portal");
 
     expect(screen.getByText(/no enabled DAST target binding/i)).toBeInTheDocument();
-    expect(screen.getAllByRole("combobox")[1]).toBeDisabled();
+    expect(screen.getByRole("button", { name: DAST_FIELD })).toBeDisabled();
     expect(screen.getByRole("button", { name: /drop a report file here/i })).toHaveAttribute("aria-disabled", "true");
   });
 

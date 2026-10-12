@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import DastRunPanels, { DastRunChips } from "./DastRunPanels";
@@ -136,11 +136,14 @@ describe("expanded panels", () => {
 
   it("labels an unnamed phase by its number and switches to the agent breakdown", () => {
     render(<DastRunPanels pipelineId="p1" />);
-    expect(screen.getByText("Phase 6 · depth: floor, explore, discovery")).toBeInTheDocument();
-    expect(screen.getByText("Phase 4")).toBeInTheDocument();
+    const table = within(screen.getByRole("table"));
+    expect(table.getByText("Phase 6 · depth: floor, explore, discovery")).toBeInTheDocument();
+    expect(table.getByText("Phase 4")).toBeInTheDocument();
+    // Same buckets, phone shape: a stacked list instead of a 420px-wide table.
+    expect(screen.getByTestId("token-breakdown-rows")).toHaveTextContent("Phase 4");
 
     fireEvent.click(screen.getByRole("tab", { name: "By agent" }));
-    expect(screen.getByText("dast-check-runner")).toBeInTheDocument();
+    expect(within(screen.getByRole("table")).getByText("dast-check-runner")).toBeInTheDocument();
     expect(screen.queryByText("Phase 4")).not.toBeInTheDocument();
   });
 

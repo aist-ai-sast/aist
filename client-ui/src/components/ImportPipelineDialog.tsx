@@ -199,6 +199,8 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
               onChange={handleProjectChange}
               options={projects.map((project) => ({ value: String(project.id), label: project.name }))}
               placeholder="Select the project this report applies to"
+              searchable
+              searchPlaceholder="Search projects…"
             />
             <SelectField
               label="DAST target"
@@ -208,6 +210,8 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
                 value: String(binding.id),
                 label: dastBindingLabel(binding),
               }))}
+              searchable
+              searchPlaceholder="Search DAST targets…"
               placeholder={bindingsLoading ? "Loading DAST targets…" : "Select the bound DAST target"}
               disabled={!projectId || bindingsLoading || enabledBindings.length === 0}
             />

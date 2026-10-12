@@ -341,6 +341,8 @@ export default function CalendarPage() {
                   onChange={(value) => setSelectedProjectId(value && value !== "all" ? Number(value) : undefined)}
                   options={projectOptions}
                   placeholder="All projects"
+                  searchable
+                  searchPlaceholder="Search projects…"
                 />
               </div>
             </div>

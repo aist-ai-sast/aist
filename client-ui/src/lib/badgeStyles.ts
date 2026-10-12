@@ -58,9 +58,29 @@ const PIPELINE_STATUS_LABELS: Record<string, string> = {
   FINISHED_WITH_WARNINGS: "Finished with warnings",
 };
 
+/**
+ * Phone-width badge text. The full label wraps a pipeline row onto three lines at 390 px,
+ * and what the reader needs there is the outcome, not the stage wording; the detail and
+ * every width from `md` up keep the full label.
+ */
+const PIPELINE_STATUS_SHORT_LABELS: Record<string, string> = {
+  UPLOADING_RESULTS: "Uploading",
+  FINDING_POSTPROCESSING: "Post-processing",
+  WAITING_DEDUPLICATION_TO_FINISH: "Deduplicating",
+  WAITING_CONFIRMATION_TO_PUSH_TO_AI: "Awaiting AI",
+  PUSH_TO_AI: "Sending to AI",
+  WAITING_RESULT_FROM_AI: "Awaiting AI",
+  FINISHED_WITH_WARNINGS: "Warnings",
+};
+
 export function pipelineStatusLabel(status: string) {
   const upper = status.toUpperCase();
   return PIPELINE_STATUS_LABELS[upper] ?? status;
+}
+
+export function pipelineStatusShortLabel(status: string) {
+  const upper = status.toUpperCase();
+  return PIPELINE_STATUS_SHORT_LABELS[upper] ?? pipelineStatusLabel(status);
 }
 
 export function pipelineStatusBadgeClass(status: string) {

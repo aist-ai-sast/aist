@@ -1,6 +1,8 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
+import BulkEditBar, { type BulkAction } from "../components/BulkEditBar";
 import FilterPanel from "../components/FilterPanel";
+import FilterToggleButton from "../components/FilterToggleButton";
 import FindingCard from "../components/FindingCard";
 import SegmentedSortControl from "../components/SegmentedSortControl";
 import type { Finding } from "../types";
@@ -14,30 +16,16 @@ import { useToast } from "../components/ToastProvider";
 import PaginationBar from "../components/PaginationBar";
 import { buildFindingsOrdering, FINDINGS_SORT_OPTIONS, type FindingsSortKey } from "../lib/findingsSort";
 import PageErrorState from "../components/PageErrorState";
-import SelectField from "../components/SelectField";
 import SkeletonBlock from "../components/SkeletonBlock";
-import TextInput from "../components/TextInput";
 import { ApiError, prewarmFileEgress, toUserMessage } from "../lib/api";
 import { type FindingCloseReason, useBulkFindingStatus } from "../lib/mutations";
 import { buildFindingsFilterSearch, toFindingsApiFilters } from "../lib/findingsFilterUrl";
+import { panelFitsBesideResults, useFilterPanelOpen } from "../lib/useFilterPanelOpen";
 import { useFindingsFilterState } from "../lib/useFindingsFilterState";
 import ActiveFiltersBar from "../components/ActiveFiltersBar";
 import PermissionGate from "../components/PermissionGate";
 
 const DetailPanel = lazy(() => import("../components/DetailPanel"));
-
-const BULK_ACTION_OPTIONS: { value: string; label: string }[] = [
-  { value: "close", label: "Close Findings" },
-  { value: "reopen", label: "Reopen Findings" },
-  { value: "risk_accept", label: "Risk Accept Findings" },
-];
-
-const BULK_CLOSE_REASON_OPTIONS: { value: string; label: string }[] = [
-  { value: "mitigated", label: "Mitigated" },
-  { value: "false_positive", label: "False Positive" },
-  { value: "out_of_scope", label: "Out of Scope" },
-  { value: "duplicate", label: "Duplicate" },
-];
 
 export default function FindingsPage() {
   const location = useLocation();
@@ -46,7 +34,7 @@ export default function FindingsPage() {
   const [findingOverrides, setFindingOverrides] = useState<Record<number, Partial<Finding>>>({});
   const [selectedFindingIds, setSelectedFindingIds] = useState<number[]>([]);
   const [bulkEditMode, setBulkEditMode] = useState<boolean>(false);
-  const [bulkAction, setBulkAction] = useState<"close" | "reopen" | "risk_accept">("close");
+  const [bulkAction, setBulkAction] = useState<BulkAction>("close");
   const [bulkCloseReason, setBulkCloseReason] = useState<FindingCloseReason>("mitigated");
   const [bulkReasonNote, setBulkReasonNote] = useState<string>("");
   const [bulkLockedFindingIds, setBulkLockedFindingIds] = useState<number[]>([]);
@@ -143,7 +131,13 @@ export default function FindingsPage() {
   const bulkRiskApprovalQuery = useRiskApprovalStatus(firstFindingId);
   const bulkRiskAcceptEnabled = bulkRiskApprovalQuery.data?.enabled ?? true;
 
-  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+  const { open: filterPanelOpen, toggle: toggleFilterPanel } = useFilterPanelOpen({
+    page: "findings",
+    hasFilters: filters.chips.length > 0,
+    // Filtering is what this page is for, so the panel stays open where it sits beside the
+    // results. On a phone it would push the findings off screen, so there it starts closed.
+    defaultOpen: panelFitsBesideResults,
+  });
   const [expandedIds, setExpandedIds] = useState<number[]>([]);
   // tagsQuery failing (e.g. a project_id the user can't access) only means the tag
   // filter's options can't populate — it must not block the findings list itself,
@@ -235,7 +229,6 @@ export default function FindingsPage() {
     bulkReasonNote.trim().length > 0 &&
     !bulkStatusMutation.isPending &&
     (bulkAction !== "risk_accept" || bulkRiskAcceptEnabled);
-  const bulkControlLabelClass = "mb-1 block text-xs uppercase tracking-[0.18em] text-slate-400";
   const toggleBulkFindingSelection = (findingId: number, checked: boolean) => {
     setSelectedFindingIds((current) => {
       if (checked) {
@@ -408,25 +401,21 @@ export default function FindingsPage() {
   }
 
   return (
-    <div className="grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <div className={["aist-scrollbar lg:sticky lg:top-24 self-start max-h-[calc(100vh-140px)] overflow-auto", filterPanelOpen ? "" : "hidden lg:block"].join(" ").trim()}>
-        <FilterPanel {...filters.panelProps} />
-      </div>
+    <div className={filterPanelOpen ? "grid min-h-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]" : ""}>
+      {filterPanelOpen ? (
+        <div className="aist-scrollbar mb-4 self-start lg:sticky lg:top-24 lg:mb-0 lg:max-h-[calc(100vh-140px)] lg:overflow-auto">
+          <FilterPanel {...filters.panelProps} />
+        </div>
+      ) : null}
 
       <div className="flex min-h-0 min-w-0 flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs uppercase tracking-[0.2em] text-slate-400">
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="aist-icon-button h-8 px-2 text-xs lg:hidden"
-              aria-label={filterPanelOpen ? "Hide filters" : "Show filters"}
-              onClick={() => setFilterPanelOpen((open) => !open)}
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                <path fill="currentColor" d="M10 18h4v-2h-4v2Zm-7-10v2h18V8H3Zm3 7h12v-2H6v2Z" />
-              </svg>
-              Filters
-            </button>
+            <FilterToggleButton
+              open={filterPanelOpen}
+              onToggle={toggleFilterPanel}
+              activeCount={filters.chips.length}
+            />
             <span className="flex items-center gap-1.5">
               Findings · Total {findingsQuery.data?.count ?? 0}
               {findingsQuery.isFetching && !findingsQuery.isLoading ? (
@@ -496,100 +485,26 @@ export default function FindingsPage() {
           onClearAll={filters.clearAll}
         />
         {bulkEditMode ? (
-          <div className="rounded-2xl border border-night-500 bg-night-700/95 p-4 shadow-panel">
-            <div className="mb-3 flex items-center justify-between gap-2 text-xs uppercase tracking-[0.18em] text-slate-400">
-              <span>Bulk Edit</span>
-              <span>Selected: {selectedFindingsCount}</span>
-            </div>
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="min-w-[180px] flex-1">
-                <label className={bulkControlLabelClass}>BULK ACTION</label>
-                <SelectField
-                  label="BULK ACTION"
-                  value={bulkAction}
-                  onChange={(value) => setBulkAction(value as "close" | "reopen" | "risk_accept")}
-                  options={BULK_ACTION_OPTIONS}
-                  hideLabel
-                />
-              </div>
-              {bulkAction === "close" ? (
-                <div className="min-w-[220px] flex-1">
-                  <label className={bulkControlLabelClass}>CLOSE AS</label>
-                  <SelectField
-                    label="CLOSE AS"
-                    value={bulkCloseReason}
-                    onChange={(value) => setBulkCloseReason(value as FindingCloseReason)}
-                    options={BULK_CLOSE_REASON_OPTIONS}
-                    hideLabel
-                  />
-                </div>
-              ) : null}
-              <div className="min-w-[260px] flex-[2]">
-                <label className={bulkControlLabelClass}>
-                  {bulkAction === "risk_accept" ? "JUSTIFICATION" : "REASON"}
-                </label>
-                <TextInput
-                  value={bulkReasonNote}
-                  onChange={(event) => setBulkReasonNote(event.target.value)}
-                  placeholder={bulkAction === "risk_accept" ? "Enter risk justification" : "Enter reason for audit log"}
-                />
-              </div>
-              {bulkAction === "risk_accept" ? (
-                <div className="w-full">
-                  {!bulkRiskAcceptEnabled ? (
-                    <div className="flex items-center gap-2 rounded-xl border border-danger-500/30 bg-danger-500/8 px-3 py-2 text-xs text-danger-300">
-                      <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 3 5 6v6c0 4.2 2.8 8.1 7 9 4.2-.9 7-4.8 7-9V6l-7-3Z" />
-                        <path d="M12 8v4M12 16h.01" />
-                      </svg>
-                      Full risk acceptance is not enabled for this product. Contact your product owner to enable it.
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/8 px-3 py-2 text-xs text-amber-300">
-                      <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 3 5 6v6c0 4.2 2.8 8.1 7 9 4.2-.9 7-4.8 7-9V6l-7-3Z" />
-                        <path d="m9.5 12 1.7 1.7 3.3-3.4" />
-                      </svg>
-                      Risk Accept is a compliance decision recorded under your name. Ensure the justification meets your policy requirements before applying.
-                    </div>
-                  )}
-                </div>
-              ) : null}
-              <button
-                type="button"
-                className="aist-icon-button h-10 text-xs font-semibold uppercase tracking-[0.14em] disabled:opacity-50"
-                disabled={selectableVisibleFindingIds.length === 0 || bulkStatusMutation.isPending}
-                onClick={() => toggleSelectAllVisible(!allVisibleSelected)}
-              >
-                {allVisibleSelected
-                  ? `Deselect Visible (${selectableVisibleFindingIds.length})`
-                  : `Select Visible (${selectableVisibleFindingIds.length})`}
-              </button>
-              <button
-                className="aist-icon-button h-10 text-xs font-semibold uppercase tracking-[0.14em] disabled:opacity-50"
-                disabled={selectedFindingsCount === 0 || bulkStatusMutation.isPending}
-                onClick={() => setSelectedFindingIds([])}
-              >
-                Clear
-              </button>
-              <button
-                className="aist-icon-button h-10 text-xs font-semibold uppercase tracking-[0.14em] disabled:opacity-50"
-                disabled={bulkStatusMutation.isPending}
-                onClick={toggleBulkEditMode}
-              >
-                Hide Bulk Edit
-              </button>
-              <button
-                className="h-10 rounded-xl bg-brand-500 px-4 text-xs font-semibold uppercase tracking-[0.14em] text-night-900 disabled:opacity-50"
-                disabled={!canRunBulkAction}
-                onClick={applyBulkStatus}
-              >
-                Apply to {selectedFindingsCount}
-              </button>
-            </div>
-          </div>
+          <BulkEditBar
+            action={bulkAction}
+            onActionChange={setBulkAction}
+            closeReason={bulkCloseReason}
+            onCloseReasonChange={setBulkCloseReason}
+            reasonNote={bulkReasonNote}
+            onReasonNoteChange={setBulkReasonNote}
+            riskAcceptEnabled={bulkRiskAcceptEnabled}
+            selectedCount={selectedFindingsCount}
+            visibleSelectableCount={selectableVisibleFindingIds.length}
+            allVisibleSelected={allVisibleSelected}
+            onToggleSelectVisible={() => toggleSelectAllVisible(!allVisibleSelected)}
+            onClearSelection={() => setSelectedFindingIds([])}
+            onExit={toggleBulkEditMode}
+            onApply={applyBulkStatus}
+            canApply={canRunBulkAction}
+            pending={bulkStatusMutation.isPending}
+          />
         ) : null}
-        <div className="flex min-h-[calc(100vh-280px)] flex-col">
+        <div className={["flex min-h-[calc(100vh-280px)] flex-col", bulkEditMode ? "pb-28 sm:pb-0" : ""].join(" ").trim()}>
           {findingsQuery.isLoading ? (
             <div className="space-y-4">
               <SkeletonBlock />

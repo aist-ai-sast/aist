@@ -102,13 +102,19 @@ export function DastRunChips({ run }: { run: DastRunSummary }) {
   );
 }
 
+/**
+ * One row, placed twice over by the grid. Below `sm` the label and the figure share the
+ * first line and the track takes the whole second one; side by side they would leave the
+ * track about 66 px inside the 286 px a phone gives this panel, which reads as decoration
+ * rather than as a measurement. From `sm` up it is the original three-column row.
+ */
 function CoverageBar({ label, value, of, note }: { label: string; value: number; of: number; note: string | null }) {
   const width = of > 0 ? Math.min((value / of) * 100, 100) : 0;
   const isPlan = label === "Planned";
   return (
-    <div className="grid grid-cols-[84px_1fr_auto] items-center gap-3">
-      <span className="text-[11px] text-slate-300">{label}</span>
-      <div className="h-[22px] overflow-hidden rounded-[5px] bg-night-500/45">
+    <div className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 sm:grid-cols-[84px_1fr_auto] sm:gap-y-0">
+      <span className="col-start-1 row-start-1 text-[11px] text-slate-300">{label}</span>
+      <div className="col-span-2 row-start-2 h-[22px] overflow-hidden rounded-[5px] bg-night-500/45 sm:col-span-1 sm:col-start-2 sm:row-start-1">
         <div
           className={[
             "h-full rounded-[5px]",
@@ -117,7 +123,7 @@ function CoverageBar({ label, value, of, note }: { label: string; value: number;
           style={{ width: `${width}%` }}
         />
       </div>
-      <span className="min-w-[112px] text-right text-xs text-slate-100">
+      <span className="col-start-2 row-start-1 text-right text-xs text-slate-100 sm:col-start-3 sm:min-w-[112px]">
         {formatCount(value)}
         {note ? <span className="ml-1 text-[11px] text-slate-400">{note}</span> : null}
       </span>
@@ -143,10 +149,55 @@ function SegmentedBar({ buckets, total, kind }: { buckets: DastTokenBucket[]; to
   );
 }
 
+/**
+ * Phone form of one table row: name on its own line, then the figures as a small grid.
+ * The table itself needs 420 px of width, which a phone cannot give it without a
+ * horizontal scroll nested inside the page scroll and inside a tap-to-collapse card.
+ */
+function BucketRows({ buckets, total, kind }: { buckets: DastTokenBucket[]; total: number | null; kind: "phase" | "agent" }) {
+  const showAgents = buckets.some((bucket) => bucket.agents !== null && bucket.agents !== undefined);
+  return (
+    <div className="mt-3 sm:hidden" data-testid="token-breakdown-rows">
+      {buckets.map((bucket, index) => (
+        <div key={bucket.key} className="border-t border-night-500/45 py-2 first:border-t-0">
+          <div className="flex items-center gap-2 text-xs text-slate-100">
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
+              style={{ background: CHART_ACCENTS[index % CHART_ACCENTS.length] }}
+              aria-hidden="true"
+            />
+            <span className="min-w-0 break-words">{bucketLabel(bucket, kind)}</span>
+          </div>
+          <dl className={["mt-1 grid gap-2 pl-[18px]", showAgents ? "grid-cols-4" : "grid-cols-3"].join(" ")}>
+            {showAgents ? (
+              <div>
+                <dt className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Agents</dt>
+                <dd className="m-0 text-[11px] tabular-nums text-slate-100">{formatCount(bucket.agents) ?? "—"}</dd>
+              </div>
+            ) : null}
+            <div>
+              <dt className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Calls</dt>
+              <dd className="m-0 text-[11px] tabular-nums text-slate-100">{formatCount(bucket.calls) ?? "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Tokens</dt>
+              <dd className="m-0 text-[11px] tabular-nums text-slate-100">{formatCompactTokens(bucket.total_tokens) ?? "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Share</dt>
+              <dd className="m-0 text-[11px] tabular-nums text-slate-400">{formatShare(bucketShare(bucket, total)) ?? "—"}</dd>
+            </div>
+          </dl>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function BucketTable({ buckets, total, kind }: { buckets: DastTokenBucket[]; total: number | null; kind: "phase" | "agent" }) {
   const showAgents = buckets.some((bucket) => bucket.agents !== null && bucket.agents !== undefined);
   return (
-    <div className="mt-3 overflow-x-auto">
+    <div className="mt-3 hidden overflow-x-auto sm:block">
       <table className="w-full min-w-[420px] border-collapse text-[11px]">
         <thead>
           <tr className="border-b border-night-500">
@@ -189,15 +240,16 @@ function BucketTable({ buckets, total, kind }: { buckets: DastTokenBucket[]; tot
 }
 
 /**
- * A report may legitimately carry thousands of names, and a scroll container caps the height
- * without capping the node count. Only this many are put in the DOM at once; the count that
- * matched is always stated, so a trimmed list reads as trimmed rather than as the whole set.
+ * A report may legitimately carry thousands of names, so only this many go into the DOM at
+ * a time and the rest arrive by the button below. The count that matched is always stated,
+ * so a trimmed list reads as trimmed rather than as the whole set.
  */
-const INVENTORY_RENDER_LIMIT = 250;
+const INVENTORY_PAGE_SIZE = 250;
 
 function EndpointInventory({ names, beyondPlan, unit }: { names: string[]; beyondPlan: Set<string>; unit: string }) {
   const [query, setQuery] = useState("");
   const [beyondOnly, setBeyondOnly] = useState(false);
+  const [shownCount, setShownCount] = useState(INVENTORY_PAGE_SIZE);
 
   const matching = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -206,8 +258,15 @@ function EndpointInventory({ names, beyondPlan, unit }: { names: string[]; beyon
     );
   }, [names, query, beyondOnly, beyondPlan]);
 
-  const visible = matching.slice(0, INVENTORY_RENDER_LIMIT);
+  const visible = matching.slice(0, shownCount);
   const hidden = matching.length - visible.length;
+
+  // A narrower filter starts its own list; keeping a grown count would otherwise dump
+  // hundreds of rows the moment the filter is cleared again.
+  const narrow = (apply: () => void) => {
+    apply();
+    setShownCount(INVENTORY_PAGE_SIZE);
+  };
 
   return (
     <Panel
@@ -218,7 +277,7 @@ function EndpointInventory({ names, beyondPlan, unit }: { names: string[]; beyon
         <input
           type="search"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => narrow(() => setQuery(event.target.value))}
           placeholder={`Filter ${unit.toLowerCase()}…`}
           aria-label={`Filter analysed ${unit.toLowerCase()}`}
           className="min-w-[160px] flex-1 rounded-lg border border-night-500 bg-night-800 px-3 py-1.5 text-xs text-slate-100 placeholder:text-slate-500"
@@ -227,7 +286,7 @@ function EndpointInventory({ names, beyondPlan, unit }: { names: string[]; beyon
           <button
             type="button"
             aria-pressed={beyondOnly}
-            onClick={() => setBeyondOnly((current) => !current)}
+            onClick={() => narrow(() => setBeyondOnly((current) => !current))}
             className={[
               "rounded-lg border px-3 py-1.5 text-[11px] transition",
               beyondOnly
@@ -239,13 +298,9 @@ function EndpointInventory({ names, beyondPlan, unit }: { names: string[]; beyon
           </button>
         ) : null}
       </div>
-      {hidden > 0 ? (
-        <p className="mb-2 text-[11px] text-slate-400">
-          Showing the first {visible.length} of {formatCount(matching.length)} matches — narrow the filter to
-          reach the rest.
-        </p>
-      ) : null}
-      <div className="aist-scrollbar flex max-h-44 flex-wrap content-start gap-1.5 overflow-y-auto pr-1">
+      {/* The height clamp is a desktop convenience: on a phone it becomes a scroll box
+          nested inside the page scroll, so there the list simply grows by the button. */}
+      <div className="aist-scrollbar flex flex-wrap content-start gap-1.5 sm:max-h-44 sm:overflow-y-auto sm:pr-1">
         {visible.length === 0 ? (
           <span className="py-1 text-[11px] text-slate-500">No {unit.toLowerCase()} matches that filter.</span>
         ) : (
@@ -267,6 +322,15 @@ function EndpointInventory({ names, beyondPlan, unit }: { names: string[]; beyon
           })
         )}
       </div>
+      {hidden > 0 ? (
+        <button
+          type="button"
+          onClick={() => setShownCount((current) => current + INVENTORY_PAGE_SIZE)}
+          className="mt-3 w-full rounded-lg border border-night-500 bg-night-800 px-3 py-1.5 text-[11px] text-slate-300 transition hover:border-brand-500/45 hover:text-slate-100"
+        >
+          Show {Math.min(hidden, INVENTORY_PAGE_SIZE)} more of {formatCount(matching.length)}
+        </button>
+      ) : null}
     </Panel>
   );
 }
@@ -405,6 +469,7 @@ export default function DastRunPanels({ pipelineId }: { pipelineId: string }) {
           {buckets.length > 0 ? (
             <>
               <SegmentedBar buckets={buckets} total={run.totalTokens} kind={breakdown} />
+              <BucketRows buckets={buckets} total={run.totalTokens} kind={breakdown} />
               <BucketTable buckets={buckets} total={run.totalTokens} kind={breakdown} />
             </>
           ) : null}

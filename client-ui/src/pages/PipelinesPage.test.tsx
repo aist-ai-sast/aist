@@ -66,6 +66,8 @@ describe("PipelinesPage — Import pipeline launch button", () => {
   beforeEach(() => {
     mockCanOperateProject = true;
     mockPipelineItems = [];
+    // The filter panel remembers the viewer's last choice; each test starts from the default.
+    window.localStorage.clear();
     vi.clearAllMocks();
   });
 
@@ -98,12 +100,24 @@ describe("PipelinesPage — Import pipeline launch button", () => {
 
     renderPage();
 
-    expect(screen.getByTestId("pipeline-status-option-ADMITTED")).toHaveTextContent("Admitted");
-    expect(screen.getByTestId("pipeline-status-option-EXECUTING")).toHaveTextContent("Executing");
     expect(screen.getByText("In progress: 2")).toBeInTheDocument();
 
     const cards = Array.from(document.querySelectorAll("article"));
-    expect(within(cards[0]).getByText("Admitted")).toHaveClass("text-sky-300");
-    expect(within(cards[1]).getByText("Executing")).toHaveClass("text-brand-300");
+    expect(within(cards[0]).getByTestId("pipeline-status-badge")).toHaveClass("text-sky-300");
+    expect(within(cards[1]).getByTestId("pipeline-status-badge")).toHaveClass("text-brand-300");
+  });
+
+  it("offers every lifecycle state once the filter panel is opened", () => {
+    mockPipelineItems = [pipeline("ADMITTED", "admitted-1")];
+
+    renderPage();
+
+    // The panel starts collapsed, so results come first on a phone.
+    expect(screen.queryByTestId("pipeline-filter-panel")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /filters/i }));
+
+    expect(screen.getByTestId("pipeline-status-option-ADMITTED")).toHaveTextContent("Admitted");
+    expect(screen.getByTestId("pipeline-status-option-EXECUTING")).toHaveTextContent("Executing");
   });
 });
