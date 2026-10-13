@@ -11,7 +11,11 @@ imported tests and findings, and any later AI responses.
 A run can begin from a direct user action, a saved launch configuration, a due
 schedule, or a verified SCM event. Each of these paths first creates a launch
 request. The request records what should run while AIST confirms that its stored
-authority, configuration, and execution target are still valid.
+authority, configuration, and execution target are still valid. A request freezes
+only non-secret inputs: what a run needs from the organization's SCM integration,
+including the credentialed source location, is resolved when the run starts
+rather than kept with the request, so a rotated credential reaches the next run
+without re-saving a launch configuration.
 
 A pipeline does not exist merely because a request is queued. Admission creates
 the pipeline only after readiness and capacity checks succeed. Until then, the

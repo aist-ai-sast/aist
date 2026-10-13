@@ -38,6 +38,13 @@ MSG_PROJECT_NOT_FOUND_TPL = "AISTProject with id={} not found"
 MSG_DOCKERFILE_NOT_FOUND = "Dockerfile does not exist"
 BUILD_DIR_WARNING = "AIST_PROJECTS_BUILD_DIR is not set"
 
+# Launch environment variables the platform computes itself from the project and its SCM
+# integration. REPO_URL embeds the integration credential (PAT / HTTP password), so neither
+# key may be accepted from a caller nor written to a persisted launch config or a frozen
+# launch request snapshot. They are injected for one run only by
+# SastPipelineArguments.runtime_env.
+SYSTEM_ENV_KEYS = frozenset({"REPO_URL", "PROJECT_NAME"})
+
 
 @dataclass
 class SastPipelineArguments:
@@ -229,10 +236,11 @@ class SastPipelineArguments:
             msg = "env must be a JSON object (dict)"
             raise TypeError(msg)
 
-        if project.repository:
-            env["REPO_URL"] = project.repository.clone_url
-        env["PROJECT_NAME"] = SastPipelineArguments.normalize_project_name(project)
-        normalized["env"] = env
+        # Only caller-owned variables are normalized (and therefore persisted) here.
+        # REPO_URL/PROJECT_NAME are system-computed and added at launch time by
+        # runtime_env; a caller-supplied value for them is dropped rather than rejected,
+        # so re-normalizing a snapshot written by an older release stays valid.
+        normalized["env"] = {key: value for key, value in env.items() if key not in SYSTEM_ENV_KEYS}
 
         # ---- AI triage type (optional per-launch override) ----
         ai_triage_type = normalized.get("ai_triage_type")
@@ -334,6 +342,22 @@ class SastPipelineArguments:
                 seen.add(lang)
                 out.append(lang)
         return out
+
+    @property
+    def runtime_env(self) -> dict:
+        """
+        Builder-container environment for one launch.
+
+        The system-computed values are resolved here, at launch time, and never persisted:
+        REPO_URL is read from the project's SCM integration on every run, so rotating that
+        credential applies to the next launch without rewriting any saved launch config or
+        frozen launch request snapshot.
+        """
+        env = dict(self.additional_environments)
+        if self.project.repository:
+            env["REPO_URL"] = self.project.repository.clone_url
+        env["PROJECT_NAME"] = self.normalize_project_name(self.project)
+        return env
 
     @property
     def project_name(self) -> str:

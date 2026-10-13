@@ -626,9 +626,9 @@ def _execute_sast_pipeline(pipeline_id, params, log_level, launch_config_id, log
 
     # Per-pipeline runtime config for agent-bridge analyzers. This goes
     # straight to the bridge runner via configure_project_run_analyses
-    # (NOT through additional_environments, which is the builder
-    # container's env — the bridge runs in its own container and reads
-    # this from a sidecar JSON file written by agent_bridge_runner).
+    # (NOT through runtime_env, which is the builder container's env —
+    # the bridge runs in its own container and reads this from a sidecar
+    # JSON file written by agent_bridge_runner).
     agent_runtime_env = build_agent_runtime_env(pipeline)
 
     # Bridge client constructed once from Django settings, single source
@@ -678,7 +678,7 @@ def _execute_sast_pipeline(pipeline_id, params, log_level, launch_config_id, log
                         "min_time_class": time_class_level or "",
                         "analyzers": analyzers,
                         "pipeline_id": pipeline_id,
-                        "additional_env": params.additional_environments,
+                        "additional_env": params.runtime_env,
                         "network": vpn_network,
                         "bridge_client": bridge_client,
                         "agent_bridge_runtime_env": agent_runtime_env,
