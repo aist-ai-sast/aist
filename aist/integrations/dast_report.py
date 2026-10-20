@@ -5,12 +5,21 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import cache
 from io import BytesIO
 from typing import Any
+
+from django.db import models as django_models
+from dojo.models import Finding
 
 from aist.parser_overrides import DAST_SCAN_TYPE
 
 DAST_RESULT_MAX_BYTES = 16 * 1024 * 1024
+# A provider string longer than the column that stores it fails inside the database, in the
+# middle of writing the findings, long after this boundary has accepted the report. The whole
+# report is lost that way, so an unstorable value is refused here with the field named.
+FINDING_LABEL_MAX_CHARS = 60
+REPORTED_FIELD_VIOLATIONS = 10
 
 # The metadata shape is declared once, as data, and drives both parsing and the persisted
 # form. Field names match the wire names so a single comprehension fills the value object.
@@ -245,6 +254,63 @@ def _decode_json_object(raw: bytes, *, maximum_bytes: int) -> dict[str, Any]:
         msg = "DAST report must be a JSON object."
         raise _error(msg)
     return payload
+
+
+@cache
+def _finding_text_limits() -> dict[str, int]:
+    """Column widths read from the Finding model itself, so a vendor change needs no edit here."""
+    return {
+        field.name: field.max_length
+        for field in Finding._meta.get_fields()
+        if isinstance(field, django_models.CharField) and field.max_length
+    }
+
+
+def _finding_label(finding: dict[str, Any]) -> str:
+    """Provider text quoted into an operator-facing message, so it may not forge lines in it."""
+    label = _optional_text(finding.get("unique_id_from_tool")) or _optional_text(finding.get("title"))
+    if not label:
+        return "unidentified"
+    printable = "".join(character if character.isprintable() else " " for character in label)
+    return printable[:FINDING_LABEL_MAX_CHARS]
+
+
+def _validate_finding_fields(findings: list[Any]) -> None:
+    """Refuse the report while it can still be refused cleanly, naming every unstorable field."""
+    limits = _finding_text_limits()
+    violations: list[str] = []
+    for position, finding in enumerate(findings, start=1):
+        if not isinstance(finding, dict):
+            msg = "DAST report findings must be objects."
+            raise _error(msg)
+        for field_name, value in finding.items():
+            if not isinstance(value, str):
+                continue
+            limit = limits.get(field_name)
+            if limit is not None and len(value) > limit:
+                violations.append(
+                    f"finding {position} ({_finding_label(finding)}): '{field_name}' is "
+                    f"{len(value)} characters, and at most {limit} are stored",
+                )
+            elif "\x00" in value:
+                # PostgreSQL stores no NUL in a text column of any width, so this aborts the
+                # import exactly like an over-long value, unbounded column or not.
+                violations.append(
+                    f"finding {position} ({_finding_label(finding)}): '{field_name}' contains a "
+                    "NUL character, which no column stores",
+                )
+    if not violations:
+        return
+    reported = violations[:REPORTED_FIELD_VIOLATIONS]
+    undisclosed = len(violations) - len(reported)
+    detail = "; ".join(reported)
+    if undisclosed:
+        detail = f"{detail}; and {undisclosed} more"
+    msg = (
+        f"This DAST report carries values the platform cannot store: {detail}. Shorten each field "
+        "in the report — explanatory text belongs in 'description' — and upload it again."
+    )
+    raise _error(msg)
 
 
 def _source_commits(
@@ -517,6 +583,7 @@ def validate_dast_report_bytes(
     if not isinstance(findings, list):
         msg = "DAST report findings must be an array."
         raise _error(msg)
+    _validate_finding_fields(findings)
     metadata = report.get("dast_run_metadata")
     if not isinstance(metadata, dict):
         msg = "DAST report metadata must be an object."

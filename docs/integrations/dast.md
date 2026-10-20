@@ -136,9 +136,12 @@ AIST imports that file through the same report validator used for an operator
 upload. The validator accepts only the DAST scan type, an array of findings, a
 non-empty provider run identity, the target named by the selected binding, and
 source revisions whose repository identities the binding allows. It also
-enforces the report-size limit. The registered importer validates individual
-findings. A target mismatch, an unadvertised repository identity, or an
-oversized report fails before findings are persisted.
+enforces the report-size limit, and refuses a finding value longer than the
+column that stores it — the refusal names every offending finding and field, so
+a provider learns in one upload what it has to shorten. The registered importer
+validates individual findings. A target mismatch, an unadvertised repository
+identity, an oversized report, or an unstorable finding value fails before
+findings are persisted.
 [Reported run metadata](#reported-run-metadata) covers how descriptive values
 are handled.
 

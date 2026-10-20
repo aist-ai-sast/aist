@@ -4,8 +4,10 @@ import json
 from dataclasses import FrozenInstanceError
 
 from django.test import SimpleTestCase
+from dojo.models import Finding
 
 from aist.integrations.dast_report import (
+    REPORTED_FIELD_VIOLATIONS,
     DastReportValidationError,
     ValidatedDastReport,
     validate_dast_report_bytes,
@@ -138,6 +140,116 @@ class DastReportValidationTests(SimpleTestCase):
 
         self.assertEqual(result.findings_count, 1)
         self.assertEqual(json.loads(result.canonical_json)["report_path"], "provider-report.json")
+
+
+COMPONENT_VERSION_LIMIT = Finding._meta.get_field("component_version").max_length
+TITLE_LIMIT = Finding._meta.get_field("title").max_length
+
+
+def _finding(**overrides) -> dict:
+    finding = {
+        "title": "Stale identity representation is restored on login",
+        "severity": "High",
+        "description": "A login replaces the stored representation wholesale.",
+        "unique_id_from_tool": "IDP-restore-1",
+    }
+    finding.update(overrides)
+    return finding
+
+
+class DastReportStorabilityTests(SimpleTestCase):
+
+    """
+    A value longer than its column used to surface as a database error halfway through
+    writing the findings: the operator saw a traceback, the pipeline was already running,
+    and none of the report was imported. The report is refused up front instead, with the
+    field named, so one upload tells the provider everything it has to shorten.
+    """
+
+    def test_an_over_long_value_is_refused_with_the_field_and_both_lengths(self):
+        annotation = "x" * (COMPONENT_VERSION_LIMIT + 18)
+
+        with self.assertRaises(DastReportValidationError) as refused:
+            _validate(_report(findings=[_finding(component_version=annotation)]))
+
+        message = str(refused.exception)
+        self.assertIn("component_version", message)
+        self.assertIn(f"{COMPONENT_VERSION_LIMIT + 18} characters", message)
+        self.assertIn(f"at most {COMPONENT_VERSION_LIMIT} are stored", message)
+        self.assertIn("IDP-restore-1", message)
+        self.assertIn("finding 1", message)
+
+    def test_a_value_that_exactly_fills_its_column_is_accepted(self):
+        report = _report(findings=[_finding(component_version="v" * COMPONENT_VERSION_LIMIT)])
+
+        self.assertEqual(_validate(report).findings_count, 1)
+
+    def test_values_that_are_not_column_bound_strings_are_not_length_checked(self):
+        # ``description`` is a TEXT column and ``tags`` is not a stored string at all, so
+        # neither may be measured against a column width.
+        report = _report(findings=[_finding(
+            description="d" * (TITLE_LIMIT * 4),
+            tags=["dast", "sso"],
+            cvssv3_score=7.5,
+        )])
+
+        self.assertEqual(_validate(report).findings_count, 1)
+
+    def test_every_offending_field_in_the_report_is_named_at_once(self):
+        report = _report(findings=[
+            _finding(component_version="c" * (COMPONENT_VERSION_LIMIT + 1)),
+            _finding(title="t" * (TITLE_LIMIT + 1), unique_id_from_tool="IDP-restore-2"),
+        ])
+
+        with self.assertRaises(DastReportValidationError) as refused:
+            _validate(report)
+
+        message = str(refused.exception)
+        self.assertIn("finding 1", message)
+        self.assertIn("component_version", message)
+        self.assertIn("finding 2", message)
+        self.assertIn("'title'", message)
+
+    def test_a_nul_character_is_refused_in_an_unbounded_column_too(self):
+        # PostgreSQL stores no NUL in a text column of any width, so a description carrying
+        # one aborts the import exactly like an over-long varchar.
+        report = _report(findings=[_finding(description="before\x00after")])
+
+        with self.assertRaises(DastReportValidationError) as refused:
+            _validate(report)
+
+        self.assertIn("'description' contains a NUL character", str(refused.exception))
+
+    def test_the_quoted_finding_label_cannot_forge_lines_in_the_message(self):
+        report = _report(findings=[_finding(
+            unique_id_from_tool="IDP\n  finding 9: forged",
+            component_version="c" * (COMPONENT_VERSION_LIMIT + 1),
+        )])
+
+        with self.assertRaises(DastReportValidationError) as refused:
+            _validate(report)
+
+        message = str(refused.exception)
+        self.assertNotIn("\n", message)
+        self.assertIn("IDP   finding 9: forged", message)
+
+    def test_a_report_that_violates_every_finding_reports_a_bounded_list(self):
+        offenders = REPORTED_FIELD_VIOLATIONS + 3
+        report = _report(findings=[
+            _finding(
+                unique_id_from_tool=f"IDP-restore-{position}",
+                component_version="c" * (COMPONENT_VERSION_LIMIT + 1),
+            )
+            for position in range(offenders)
+        ])
+
+        with self.assertRaises(DastReportValidationError) as refused:
+            _validate(report)
+
+        message = str(refused.exception)
+        self.assertIn(f"finding {REPORTED_FIELD_VIOLATIONS}", message)
+        self.assertNotIn(f"finding {REPORTED_FIELD_VIOLATIONS + 1}", message)
+        self.assertIn("and 3 more", message)
 
 
 class DastRunMetadataBestEffortTests(SimpleTestCase):
