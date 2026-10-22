@@ -4,7 +4,7 @@ import json
 from dataclasses import FrozenInstanceError
 
 from django.test import SimpleTestCase
-from dojo.models import Finding
+from dojo.models import Finding, Test
 
 from aist.integrations.dast_report import (
     REPORTED_FIELD_VIOLATIONS,
@@ -76,7 +76,7 @@ class DastReportValidationTests(SimpleTestCase):
                     "source_commits": {"unadvertised": SHA},
                 }},
                 {},
-                "does not advertise",
+                "'unadvertised', a repository the selected DAST target does not advertise",
             ),
         )
         for report_overrides, call_overrides, message in cases:
@@ -209,6 +209,17 @@ class DastReportStorabilityTests(SimpleTestCase):
         self.assertIn("component_version", message)
         self.assertIn("finding 2", message)
         self.assertIn("'title'", message)
+
+    def test_the_report_version_is_measured_against_the_test_column_that_stores_it(self):
+        # The envelope's version lands on the imported Test, not on a finding, and that column
+        # is narrower than most finding columns.
+        version_limit = Test._meta.get_field("version").max_length
+
+        with self.assertRaises(DastReportValidationError) as refused:
+            _validate(_report(version="v" * (version_limit + 1), findings=[_finding()]))
+
+        self.assertIn("the report's 'version'", str(refused.exception))
+        self.assertIn(f"at most {version_limit} are stored", str(refused.exception))
 
     def test_a_nul_character_is_refused_in_an_unbounded_column_too(self):
         # PostgreSQL stores no NUL in a text column of any width, so a description carrying

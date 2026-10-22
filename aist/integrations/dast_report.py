@@ -10,7 +10,7 @@ from io import BytesIO
 from typing import Any
 
 from django.db import models as django_models
-from dojo.models import Finding
+from dojo.models import Finding, Test
 
 from aist.parser_overrides import DAST_SCAN_TYPE
 
@@ -257,11 +257,11 @@ def _decode_json_object(raw: bytes, *, maximum_bytes: int) -> dict[str, Any]:
 
 
 @cache
-def _finding_text_limits() -> dict[str, int]:
-    """Column widths read from the Finding model itself, so a vendor change needs no edit here."""
+def _text_limits(model: type[django_models.Model]) -> dict[str, int]:
+    """Column widths read from the model itself, so a vendor change needs no edit here."""
     return {
         field.name: field.max_length
-        for field in Finding._meta.get_fields()
+        for field in model._meta.get_fields()
         if isinstance(field, django_models.CharField) and field.max_length
     }
 
@@ -275,30 +275,44 @@ def _finding_label(finding: dict[str, Any]) -> str:
     return printable[:FINDING_LABEL_MAX_CHARS]
 
 
-def _validate_finding_fields(findings: list[Any]) -> None:
-    """Refuse the report while it can still be refused cleanly, naming every unstorable field."""
-    limits = _finding_text_limits()
+def _unstorable(where: str, value: str, limit: int | None) -> str | None:
+    """Say why the platform cannot store this value, or None when it can."""
+    if limit is not None and len(value) > limit:
+        return f"{where} is {len(value)} characters, and at most {limit} are stored"
+    if "\x00" in value:
+        # PostgreSQL stores no NUL in a text column of any width, so this aborts the import
+        # exactly like an over-long value, unbounded column or not.
+        return f"{where} contains a NUL character, which no column stores"
+    return None
+
+
+def _validate_storable_values(report: dict[str, Any], findings: list[Any]) -> None:
+    """Refuse the report while it can still be refused cleanly, naming every unstorable value."""
     violations: list[str] = []
+    report_version = report.get("version")
+    if isinstance(report_version, str):
+        envelope_violation = _unstorable(
+            "the report's 'version'",
+            report_version,
+            _text_limits(Test).get("version"),
+        )
+        if envelope_violation:
+            violations.append(envelope_violation)
+    finding_limits = _text_limits(Finding)
     for position, finding in enumerate(findings, start=1):
         if not isinstance(finding, dict):
             msg = "DAST report findings must be objects."
             raise _error(msg)
-        for field_name, value in finding.items():
-            if not isinstance(value, str):
-                continue
-            limit = limits.get(field_name)
-            if limit is not None and len(value) > limit:
-                violations.append(
-                    f"finding {position} ({_finding_label(finding)}): '{field_name}' is "
-                    f"{len(value)} characters, and at most {limit} are stored",
-                )
-            elif "\x00" in value:
-                # PostgreSQL stores no NUL in a text column of any width, so this aborts the
-                # import exactly like an over-long value, unbounded column or not.
-                violations.append(
-                    f"finding {position} ({_finding_label(finding)}): '{field_name}' contains a "
-                    "NUL character, which no column stores",
-                )
+        violations.extend(
+            violation
+            for field_name, value in finding.items()
+            if isinstance(value, str)
+            and (violation := _unstorable(
+                f"finding {position} ({_finding_label(finding)}): '{field_name}'",
+                value,
+                finding_limits.get(field_name),
+            ))
+        )
     if not violations:
         return
     reported = violations[:REPORTED_FIELD_VIOLATIONS]
@@ -326,8 +340,8 @@ def _source_commits(
         if repository_key not in allowed_repository_keys:
             expected = ", ".join(f"'{key}'" for key in sorted(allowed_repository_keys))
             msg = (
-                f"This report reports a source revision for a repository the selected DAST target "
-                f"does not advertise. It advertises: {expected}."
+                f"This report reports a source revision for '{repository_key}', a repository the "
+                f"selected DAST target does not advertise. It advertises: {expected}."
             )
             raise _error(msg)
         normalized.append((repository_key, commit))
@@ -583,7 +597,7 @@ def validate_dast_report_bytes(
     if not isinstance(findings, list):
         msg = "DAST report findings must be an array."
         raise _error(msg)
-    _validate_finding_fields(findings)
+    _validate_storable_values(report, findings)
     metadata = report.get("dast_run_metadata")
     if not isinstance(metadata, dict):
         msg = "DAST report metadata must be an object."
