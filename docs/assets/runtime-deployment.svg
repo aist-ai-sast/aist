@@ -17,7 +17,7 @@
   <path d="M130 194H185" class="net"/><path d="M330 190H405" class="net"/>
 
   <rect x="190" y="275" width="165" height="65" class="box" fill="#eaf8f1"/><text x="213" y="302" class="name">PostgreSQL</text><text x="213" y="324" class="detail">durable state</text>
-  <rect x="415" y="275" width="145" height="65" class="box" fill="#fff8e8"/><text x="438" y="302" class="name">Valkey</text><text x="438" y="324" class="detail">Celery broker</text>
+  <rect x="415" y="275" width="162" height="65" class="box" fill="#fff8e8"/><text x="438" y="302" class="name">Valkey</text><text x="438" y="324" class="detail">broker · shared cache</text>
   <rect x="620" y="275" width="140" height="65" class="box" fill="#f4efff"/><text x="643" y="302" class="name">Celery Beat</text><text x="643" y="324" class="detail">recurring work</text>
   <rect x="820" y="275" width="145" height="65" class="box" fill="#f4efff"/><text x="843" y="302" class="name">Workers</text><text x="843" y="324" class="detail">operations</text>
   <path d="M470 225L320 275" class="net"/><path d="M530 225L485 275" class="net"/>

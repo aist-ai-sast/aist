@@ -614,6 +614,14 @@ export function useDisableDastIntegration(orgId: number) {
 }
 
 export type ImportPipelinePreview = {
+  sections?: {
+    repository: string | null;
+    findings_count: number;
+    project_id: number;
+    project_name: string;
+    actual_source_commit: string | null;
+    fallback_reason: string | null;
+  }[];
   findings_count: number;
   severity_breakdown: Record<string, number>;
   name: string | null;

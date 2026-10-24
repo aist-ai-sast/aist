@@ -35,6 +35,7 @@ def _validated_report(
         source_commits=source_commits,
         findings_count=0,
         canonical_json=b"{}",
+        sections=(),
     )
 
 

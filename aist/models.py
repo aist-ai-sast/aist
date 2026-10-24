@@ -1692,6 +1692,51 @@ class DastExecutionState(models.Model):
             raise ValidationError({"pipeline": "DAST execution state requires a DAST pipeline."})
 
 
+class DastQueueSnapshot(models.Model):
+
+    """
+    The last queue payload read for one pipeline's DAST run.
+
+    The queue itself belongs to the provider, and reaching it needs the Docker socket and the VPN
+    route that only a worker has. This is where a worker leaves what it read, so the page can be
+    served without any process that renders it talking to a gateway.
+
+    Keeping it durable rather than cached buys two things. A finished run's queue stays readable as
+    the record of what that run covered and what it did not, even once the gateway stops serving it.
+    And a demo install can be bootstrapped with a snapshot of its own: the page renders whatever
+    snapshot exists and never asks who wrote it.
+    """
+
+    SOURCE_GATEWAY = "gateway"
+    SOURCE_BOOTSTRAP = "bootstrap"
+
+    pipeline = models.OneToOneField(
+        AISTPipeline,
+        on_delete=models.CASCADE,
+        related_name="dast_queue_snapshot",
+    )
+    # The run this snapshot describes. A snapshot of a different run than the pipeline now names is
+    # stale by identity, not by age.
+    run_id = models.CharField(max_length=255, blank=True, default="")
+    descriptor = models.JSONField(default=dict, blank=True)
+    page = models.JSONField(default=dict, blank=True)
+    # The gateway's entity-tag for the page, replayed as If-None-Match so an unchanged queue costs
+    # a 304 rather than a page.
+    etag = models.CharField(max_length=128, blank=True, default="")
+    descriptor_digest = models.CharField(max_length=128, blank=True, default="")
+    # Why there is nothing to show, when that is the answer: an old run the gateway no longer
+    # serves is an expected state, not a failure to hide.
+    unavailable_code = models.CharField(max_length=64, blank=True, default="")
+    unavailable_detail = models.TextField(blank=True, default="")
+    source = models.CharField(max_length=32, default=SOURCE_GATEWAY)
+    fetched_at = models.DateTimeField(null=True, blank=True)
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"DastQueueSnapshot(pipeline={self.pipeline_id}, run={self.run_id})"
+
+
 # Column name -> attribute on the validated coverage / token-usage value objects. The two
 # names differ only where a column reads better than the wire counter it came from.
 _DAST_COVERAGE_COUNT_COLUMNS = ("discovered", "reachable", "analysed", "planned")
@@ -1889,6 +1934,16 @@ class DastRunMetadata(models.Model):
     def clean(self):
         if self.pipeline.execution_type not in {PipelineExecutionType.DAST, PipelineExecutionType.MANUAL_IMPORT}:
             raise ValidationError({"pipeline": "DAST run metadata requires a DAST or manual-import pipeline."})
+
+
+class DastTestBinding(models.Model):
+
+    """Persist the destination namespace of a DAST test independently of its launching pipeline."""
+
+    test = models.OneToOneField(Test, on_delete=models.CASCADE, related_name="dast_binding_scope")
+    binding = models.ForeignKey(DastProjectBinding, on_delete=models.SET_NULL, null=True)
+    project_version = models.ForeignKey(AISTProjectVersion, on_delete=models.SET_NULL, null=True)
+    repository = models.TextField(null=True)
 
 
 class AISTTestMeta(models.Model):

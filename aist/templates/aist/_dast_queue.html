@@ -1,0 +1,1020 @@
+{% comment %}
+The DAST run queue: read and steered entirely from the gateway's own descriptor.
+
+This block holds no DAST vocabulary. Statuses, wait reasons, phases, contracts, icons, the wording
+of every confirmation and the fields of every form arrive in the payload; an id the descriptor does
+not define is shown as it arrived, and a field type this build cannot render is shown read-only.
+Adding a status or an editable field on the DAST side changes nothing here.
+{% endcomment %}
+<div id="dast-queue" class="panel panel-default"
+     data-queue-url="{% url 'aist_api:pipeline_dast_queue' pipeline.id %}"
+     data-command-url="{% url 'aist_api:pipeline_dast_queue_command' pipeline.id %}"
+     data-outcome-url="{% url 'aist_api:pipeline_dast_queue_command_outcome' pipeline.id 'REQUEST_ID' %}">
+    <div class="panel-heading">
+        <strong>Run queue</strong>
+        <span id="dq-state" class="label label-default" style="margin-left:8px;">loading…</span>
+        <span class="pull-right" style="font-size:12px;">
+            <span id="dq-revision" class="text-muted"></span>
+            <span id="dq-fresh" class="text-muted" style="margin-left:10px;"></span>
+            <button type="button" class="btn btn-default btn-xs" id="dq-refresh" style="margin-left:10px;">
+                <i class="fa fa-refresh"></i> Refresh
+            </button>
+            <span id="dq-run-actions"></span>
+        </span>
+    </div>
+
+    <div id="dq-bands"></div>
+
+    <div class="panel-body" id="dq-claimed-body" style="padding-bottom:4px;">
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.07em;">
+            <i class="fa fa-play"></i> Holding a claim <span id="dq-claimed-note" style="text-transform:none;"></span>
+        </div>
+        <div id="dq-claimed" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="panel-body" style="border-top:1px solid #dddedf;">
+        <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.07em;">
+            <i class="fa fa-list"></i> Everything else this run owes
+        </div>
+        <div id="dq-counters" class="btn-group" style="margin-top:8px; flex-wrap:wrap;"></div>
+        <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <input type="search" id="dq-search" class="form-control input-sm"
+                   style="flex:0 1 320px; width:auto;"
+                   placeholder="Search work, id, target, skill…">
+            <span style="flex:0 1 260px; min-width:0;">
+                <select id="dq-phase" class="form-control input-sm"></select>
+            </span>
+            <label style="font-weight:normal; font-size:12px; margin:0;">
+                <input type="checkbox" id="dq-planned" checked> <span id="dq-planned-label">include planned</span>
+            </label>
+        </div>
+    </div>
+
+    <div style="overflow-x:auto; max-height:520px; overflow-y:auto;">
+        <table class="table table-condensed table-hover" style="margin-bottom:0; font-size:12.5px;">
+            <thead>
+                <tr>
+                    <th>State</th>
+                    <th>Work</th>
+                    <th>Target</th>
+                    <th>Updated</th>
+                    <th id="dq-actions-head" style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="dq-rows"></tbody>
+        </table>
+    </div>
+    <div class="panel-footer" style="font-size:12px;">
+        <span id="dq-pager" class="text-muted"></span>
+    </div>
+</div>
+
+<div class="modal fade" id="dq-modal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                <h4 class="modal-title" id="dq-modal-title"></h4>
+            </div>
+            <div class="modal-body" id="dq-modal-body"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="dq-modal-ok" disabled></button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="dq-detail" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                <h4 class="modal-title" id="dq-detail-title"></h4>
+            </div>
+            <div class="modal-body" id="dq-detail-body"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    "use strict";
+
+    var root = document.getElementById("dast-queue");
+    if (!root) { return; }
+    var QUEUE_URL = root.dataset.queueUrl;
+    var COMMAND_URL = root.dataset.commandUrl;
+    var OUTCOME_URL = root.dataset.outcomeUrl;
+
+    // Generic icon tokens the descriptor sends, resolved in the icon set this page already loads.
+    // A token this build does not carry falls back to a neutral mark rather than to nothing.
+    var ICONS = {
+        play: "fa-play", pause: "fa-pause", clock: "fa-clock-o", hourglass: "fa-hourglass-half",
+        upload: "fa-upload", check: "fa-check", x: "fa-times", ban: "fa-ban",
+        forward: "fa-angle-double-right", bulb: "fa-lightbulb-o", pencil: "fa-pencil",
+        note: "fa-sticky-note-o", refresh: "fa-refresh", search: "fa-search", alert: "fa-exclamation-triangle",
+        flag: "fa-flag", layers: "fa-clone"
+    };
+    var SEVERITY_CLASS = { bad: "text-danger", attention: "text-warning" };
+
+    var state = {
+        descriptor: null, page: null, fetchedAt: "", lastRead: 0, pending: null,
+        statuses: [], search: "", phase: "", includePlanned: true, deferred: false,
+        pollSeconds: 60, unavailable: null, reading: false, stale: false
+    };
+
+    function $(id) { return document.getElementById(id); }
+    function el(tag, cls, text) {
+        var node = document.createElement(tag);
+        if (cls) { node.className = cls; }
+        if (text !== undefined && text !== null) { node.textContent = String(text); }
+        return node;
+    }
+    function icon(token, extra) {
+        var i = document.createElement("i");
+        i.className = "fa " + (ICONS[token] || "fa-circle-o") + (extra ? " " + extra : "");
+        i.setAttribute("aria-hidden", "true");
+        return i;
+    }
+    function term(dimension, id) {
+        var dims = (state.descriptor && state.descriptor.vocabulary) || {};
+        var entries = dims[dimension] || [];
+        for (var i = 0; i < entries.length; i++) {
+            if (entries[i].id === id) { return entries[i]; }
+        }
+        return { id: id, label: id, help: "", icon: "", severity: "", group: "" };
+    }
+    function catalog(name) {
+        var entries = (state.descriptor && state.descriptor.action_catalog) || {};
+        return entries[name] || { title: name, verb: name, short_verb: name, icon: "", danger: false, effect: "" };
+    }
+    function capability(name) {
+        var held = (state.descriptor && state.descriptor.capabilities) || [];
+        return held.indexOf(name) !== -1;
+    }
+    function frozen() { return !state.page || state.page.mutations_frozen; }
+    function claimStatuses() {
+        return ((state.descriptor && state.descriptor.execution) || {}).claim_statuses || [];
+    }
+    function isClaimed(item) { return claimStatuses().indexOf(item.status) !== -1; }
+    function ago(value) {
+        if (!value) { return "—"; }
+        var when = Date.parse(value);
+        if (isNaN(when)) { return value; }
+        var minutes = Math.round((Date.now() - when) / 60000);
+        if (minutes < 1) { return "just now"; }
+        if (minutes < 60) { return minutes + "m ago"; }
+        if (minutes < 1440) { return Math.round(minutes / 60) + "h ago"; }
+        return Math.round(minutes / 1440) + "d ago";
+    }
+    function csrfToken() {
+        var input = document.querySelector("input[name=csrfmiddlewaretoken]");
+        if (input && input.value) { return input.value; }
+        var cookie = document.cookie.split("; ").find(function (entry) {
+            return entry.indexOf("csrftoken=") === 0;
+        });
+        return cookie ? cookie.slice("csrftoken=".length) : "";
+    }
+
+    // ---- reading ----------------------------------------------------------
+    function read(manual) {
+        if (!manual && (state.pending || document.querySelector(".modal.in"))) {
+            state.deferred = true;
+            renderFreshness();
+            return;
+        }
+        // The whole queue arrives in one snapshot, so a filter change costs nothing and never
+        // waits on a gateway. `force` asks a worker to read again now.
+        var query = manual ? "?force=true" : "";
+        fetch(QUEUE_URL + query, { credentials: "same-origin", cache: "no-store" })
+            .then(function (response) { return response.json(); })
+            .then(function (payload) {
+                state.deferred = false;
+                state.lastRead = Date.now();
+                state.reading = Boolean(payload.reading);
+                state.stale = Boolean(payload.stale);
+                if (!payload.available) {
+                    state.unavailable = payload.unavailable || null;
+                    state.page = state.reading ? null : state.page;
+                    if (!state.reading && !state.unavailable) {
+                        state.unavailable = { code: "UNAVAILABLE", detail: "" };
+                    }
+                    render();
+                    return;
+                }
+                state.unavailable = null;
+                state.descriptor = payload.descriptor || state.descriptor;
+                state.page = payload.page;
+                state.fetchedAt = payload.fetched_at;
+                var hints = (state.descriptor && state.descriptor.client_hints) || {};
+                state.pollSeconds = hints.poll_interval_seconds || 60;
+                render();
+                if (manual) { note("Re-read at revision " + state.page.revision + "."); }
+            })
+            .catch(function () {
+                state.unavailable = { code: "GATEWAY_UNREACHABLE", detail: "AIST could not read the queue." };
+                render();
+            });
+    }
+
+    function note(text) {
+        var band = $("dq-bands");
+        var row = el("div", "alert alert-info", text);
+        row.style.cssText = "margin:0; border-radius:0; padding:8px 14px;";
+        band.appendChild(row);
+        setTimeout(function () { row.remove(); }, 6000);
+    }
+
+    // ---- rendering --------------------------------------------------------
+    function render() {
+        renderHead();
+        renderBands();
+        if (!state.page) {
+            if (state.reading) {
+                $("dq-claimed").innerHTML = "";
+                $("dq-claimed").appendChild(el("div", "text-muted",
+                    "Reading this run's queue. It appears here as soon as the gateway answers."));
+                $("dq-rows").innerHTML = "";
+                $("dq-counters").innerHTML = "";
+                $("dq-pager").textContent = "";
+                return;
+            }
+            $("dq-claimed").innerHTML = "";
+            $("dq-rows").innerHTML = "";
+            $("dq-counters").innerHTML = "";
+            $("dq-pager").textContent = "";
+            return;
+        }
+        renderClaimed();
+        renderCounters();
+        renderPhases();
+        renderRows();
+        renderFreshness();
+    }
+
+    function renderHead() {
+        var pill = $("dq-state");
+        pill.innerHTML = "";
+        if (!state.page) {
+            pill.className = "label label-default";
+            pill.textContent = state.unavailable ? "unavailable" : "loading…";
+        } else {
+            var runTerm = term("run_state", state.page.run_state);
+            var queueTerm = term("status", state.page.state);
+            var label = runTerm.label || state.page.run_state || "";
+            // The run's own lifecycle leads; the queue's state is shown beside it, because a
+            // finished run with no pause still reports its queue as active.
+            pill.className = "label " + (runTerm.severity === "bad" ? "label-danger"
+                : runTerm.severity === "attention" ? "label-warning"
+                : runTerm.group === "settled" ? "label-default" : "label-success");
+            pill.appendChild(icon(runTerm.icon));
+            pill.appendChild(document.createTextNode(" " + label + " · queue " + (queueTerm.label || state.page.state)));
+            pill.title = (runTerm.help || "") + (queueTerm.help ? "\n\n" + queueTerm.help : "");
+            $("dq-revision").textContent = "revision " + state.page.revision;
+        }
+
+        var host = $("dq-run-actions");
+        host.innerHTML = "";
+        var actions = (state.descriptor && state.descriptor.run_actions) || [];
+        actions.forEach(function (action) {
+            var copy = catalog(action.name);
+            var button = el("button", "btn btn-default btn-xs");
+            button.style.marginLeft = "6px";
+            button.type = "button";
+            button.title = copy.effect || "";
+            button.appendChild(icon(copy.icon));
+            button.appendChild(document.createTextNode(" " + (copy.title || action.name)));
+            button.addEventListener("click", function () { openCommand(action, ""); });
+            host.appendChild(button);
+        });
+    }
+
+    function renderBands() {
+        var host = $("dq-bands");
+        host.innerHTML = "";
+        function band(kind, title, detail, actionNode) {
+            var row = el("div", "alert alert-" + kind);
+            row.style.cssText = "margin:0; border-radius:0; padding:8px 14px; font-size:13px;";
+            row.appendChild(el("strong", "", title));
+            if (detail) {
+                row.appendChild(document.createTextNode(" "));
+                row.appendChild(el("span", "text-muted", detail));
+            }
+            if (actionNode) {
+                actionNode.style.marginLeft = "10px";
+                row.appendChild(actionNode);
+            }
+            host.appendChild(row);
+        }
+
+        if (state.unavailable) {
+            band("info", "This run's queue is not available.",
+                 state.unavailable.detail || state.unavailable.code);
+            return;
+        }
+        if (!state.page) { return; }
+        if (!capability("queue:control")) {
+            band("info", "Read-only.",
+                 "This DAST integration holds " + ((state.descriptor.capabilities || []).join(", ") || "no queue capability") + ".");
+        }
+        if (state.page.dropped_rows) {
+            // The payload carried rows this build could not read. Showing fewer items than the run
+            // owes without saying so would be worse than saying so.
+            band("warning", state.page.dropped_rows + " row(s) could not be read.",
+                 "They are counted in the totals but not listed here. The queue has probably gained a "
+                 + "shape this page predates.");
+        }
+        if (state.page.mutations_frozen) {
+            band("info", term("run_state", state.page.run_state).label + ".",
+                 term("run_state", state.page.run_state).help);
+        }
+        (state.page.items || []).forEach(function (item) {
+            if (item.type !== "hold" || item.status !== "active") { return; }
+            var resume = findAction(item, "resume");
+            var button = null;
+            if (resume && capability("queue:control")) {
+                button = el("button", "btn btn-default btn-xs", catalog("resume").title || "resume");
+                button.type = "button";
+                button.addEventListener("click", function () { openCommand(resume, item.item_id); });
+            }
+            band("warning", term("status", item.status).label + " — " + (item.actor || "operator"),
+                 item.reason + " · " + ago(item.created_at), button);
+        });
+    }
+
+    function findAction(item, name) {
+        var actions = item.actions || [];
+        for (var i = 0; i < actions.length; i++) {
+            if (actions[i].name === name) { return actions[i]; }
+        }
+        return null;
+    }
+
+    function renderClaimed() {
+        var host = $("dq-claimed");
+        host.innerHTML = "";
+        var execution = state.descriptor.execution || {};
+        var claimed = (state.page.items || []).filter(isClaimed);
+        var parallel = claimed.filter(function (item) {
+            return (execution.parallel_contracts || []).indexOf(item.agent_contract) !== -1;
+        });
+        $("dq-claimed-note").textContent = claimed.length
+            ? "— " + (execution.serial_note || "")
+              + (parallel.length ? " " + parallel.length + " beside it: " + (execution.parallel_note || "") : "")
+            : "";
+        if (!claimed.length) {
+            host.appendChild(el("div", "text-muted", state.page.mutations_frozen
+                ? "The run is finished; nothing holds a claim."
+                : "No job holds a claim right now."));
+            return;
+        }
+        claimed.forEach(function (item) {
+            var row = el("div", "well well-sm");
+            row.style.cssText = "margin-bottom:6px; padding:8px 10px; display:flex; gap:12px; "
+                + "flex-wrap:wrap; align-items:center; cursor:pointer;";
+            var statusTerm = term("status", item.status);
+            var head = el("span", SEVERITY_CLASS[statusTerm.severity] || "");
+            head.style.minWidth = "120px";
+            head.appendChild(icon(statusTerm.icon));
+            head.appendChild(document.createTextNode(" " + (statusTerm.label || item.status)));
+            head.title = statusTerm.help || "";
+            row.appendChild(head);
+
+            var what = el("div");
+            what.style.cssText = "flex:1 1 320px; min-width:0;";
+            what.appendChild(el("div", "", item.queue_item || (item.objective || "").split("\n")[0]));
+            var contractTerm = term("contract", item.agent_contract);
+            what.appendChild(el("div", "text-muted", item.item_id + " · "
+                + (contractTerm.label || item.agent_contract || item.purpose)
+                + (item.skill ? " · " + item.skill : "")));
+            row.appendChild(what);
+            row.appendChild(el("span", "text-muted", "since " + ago(item.updated_at)));
+            row.appendChild(el("span", "text-muted", "attempt " + item.attempt));
+            if (item.disposition) {
+                var waitTerm = term("wait", item.disposition);
+                row.appendChild(el("span", "text-warning", (waitTerm.label || item.disposition)));
+            }
+            row.appendChild(actionButtons(item));
+            row.addEventListener("click", function (event) {
+                if (event.target.closest("button")) { return; }
+                openDetail(item);
+            });
+            host.appendChild(row);
+        });
+    }
+
+    function actionButtons(item) {
+        var host = el("span");
+        host.style.cssText = "display:inline-flex; gap:4px;";
+        (item.actions || []).forEach(function (action) {
+            if (action.name === "resume" && item.type === "hold") { return; }
+            var copy = catalog(action.name);
+            var button = el("button", "btn btn-xs " + (copy.danger ? "btn-danger" : "btn-default"));
+            button.type = "button";
+            button.title = copy.effect || "";
+            button.disabled = !capability("queue:control");
+            button.appendChild(icon(copy.icon));
+            button.appendChild(document.createTextNode(" " + (copy.short_verb || copy.title || action.name)));
+            button.addEventListener("click", function (event) {
+                event.stopPropagation();
+                openCommand(action, item.item_id);
+            });
+            host.appendChild(button);
+        });
+        return host;
+    }
+
+    function renderCounters() {
+        var host = $("dq-counters");
+        host.innerHTML = "";
+        var counts = (state.page.counts || {}).by_status || {};
+        var statuses = ((state.descriptor.vocabulary || {}).status) || [];
+
+        function chosen(id) {
+            return id ? state.statuses.indexOf(id) !== -1 : !state.statuses.length;
+        }
+
+        function selectable(id, help, count) {
+            // Several states answer one question -- "what is not finished?" is failed and delayed
+            // and pending at once -- so these are toggles, not a single choice.
+            var button = el("button", "btn btn-xs btn-default" + (chosen(id) ? " active" : ""));
+            button.type = "button";
+            button.title = help || "";
+            button.setAttribute("aria-pressed", chosen(id) ? "true" : "false");
+            if (count !== null) { button.appendChild(el("strong", "", count)); }
+            return button;
+        }
+
+        var all = selectable("", "Everything this run still owes, whatever its state.",
+                             (state.page.counts || {}).total || 0);
+        all.appendChild(document.createTextNode(" All"));
+        all.addEventListener("click", function () {
+            state.statuses = [];
+            renderCounters();
+            renderRows();
+        });
+        host.appendChild(all);
+
+        statuses.forEach(function (entry) {
+            if (!(entry.id in counts) || claimStatuses().indexOf(entry.id) !== -1) { return; }
+            var button = selectable(entry.id, entry.help, counts[entry.id]);
+            button.appendChild(document.createTextNode(" "));
+            button.appendChild(icon(entry.icon));
+            button.appendChild(document.createTextNode(" " + (entry.label || entry.id)));
+            button.addEventListener("click", function () {
+                // Click to add a state to what is shown, click again to drop it; with none left
+                // the queue is back to everything, which is also what All does.
+                var at = state.statuses.indexOf(entry.id);
+                if (at === -1) { state.statuses.push(entry.id); } else { state.statuses.splice(at, 1); }
+                renderCounters();
+                renderRows();
+            });
+            host.appendChild(button);
+        });
+        var planned = (state.page.counts || {}).planned || 0;
+        $("dq-planned-label").textContent = planned
+            ? "include " + planned + " " + (term("kind", "planned").label || "planned")
+            : "include planned";
+        $("dq-planned-label").title = term("kind", "planned").help || "";
+    }
+
+    function renderPhases() {
+        var select = $("dq-phase");
+        if (select.dataset.filled === "1") { return; }
+        var phases = ((state.descriptor.vocabulary || {}).phase) || [];
+        select.appendChild(new Option("All phases", ""));
+        phases.forEach(function (entry) {
+            select.appendChild(new Option((entry.label || entry.id) + " — " + (entry.help || ""), entry.id));
+        });
+        select.dataset.filled = "1";
+        // The page dresses its selects with bootstrap-select before this block has a vocabulary to
+        // fill in, so the widget has to be told the options arrived -- otherwise it keeps showing
+        // its empty placeholder over a list that is in fact there.
+        if (window.jQuery && window.jQuery.fn && window.jQuery.fn.selectpicker) {
+            var picker = window.jQuery(select);
+            picker.selectpicker("refresh");
+            picker.closest(".bootstrap-select").css("width", "100%");
+        }
+    }
+
+    function visibleRows() {
+        var needle = state.search.trim().toLowerCase();
+        return (state.page.items || []).filter(function (item) {
+            if (item.type === "hold" || isClaimed(item)) { return false; }
+            if (state.statuses.length && state.statuses.indexOf(item.status) === -1) { return false; }
+            if (item.type === "planned" && !state.includePlanned) { return false; }
+            if (state.phase && String(item.phase || "") !== state.phase) { return false; }
+            if (needle) {
+                var hay = [item.item_id, item.objective, item.skill, item.queue_item,
+                           (item.scope || []).join(" "), item.disposition_reason].join(" ").toLowerCase();
+                if (hay.indexOf(needle) === -1) { return false; }
+            }
+            return true;
+        });
+    }
+
+    function renderRows() {
+        var body = $("dq-rows");
+        body.innerHTML = "";
+        var rows = visibleRows();
+        var actionCells = [];
+        var offered = false;
+        if (!rows.length) {
+            var empty = el("tr");
+            var cell = el("td", "text-muted", "Nothing here.");
+            cell.colSpan = 5;
+            empty.appendChild(cell);
+            body.appendChild(empty);
+        }
+        rows.forEach(function (item) {
+            var tr = el("tr");
+            tr.style.cursor = "pointer";
+
+            var statusTerm = term("status", item.status);
+            var stateCell = el("td");
+            var line = el("div", SEVERITY_CLASS[statusTerm.severity] || "");
+            line.appendChild(icon(statusTerm.icon));
+            line.appendChild(document.createTextNode(" " + (statusTerm.label || item.status)));
+            line.title = statusTerm.help || "";
+            stateCell.appendChild(line);
+            if (item.wait_reason) {
+                var waitTerm = term("wait", item.wait_reason);
+                var waitLine = el("div", (SEVERITY_CLASS[waitTerm.severity] || "text-muted"),
+                    waitTerm.label || item.wait_reason);
+                waitLine.style.fontSize = "11px";
+                waitLine.title = waitTerm.help || "";
+                stateCell.appendChild(waitLine);
+            }
+            if (item.disposition_reason) {
+                var reason = el("div", "text-muted", item.disposition_reason);
+                reason.style.fontSize = "11px";
+                stateCell.appendChild(reason);
+            }
+            tr.appendChild(stateCell);
+
+            var workCell = el("td");
+            var title = el("div", "", item.queue_item || item.objective || "—");
+            title.style.cssText = "max-width:46ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;";
+            workCell.appendChild(title);
+            var tags = el("div", "text-muted");
+            tags.style.fontSize = "11px";
+            if (item.type !== "job") {
+                var kindTerm = term("kind", item.type);
+                var kindTag = el("span", "label label-default", kindTerm.label || item.type);
+                kindTag.title = kindTerm.help || "";
+                tags.appendChild(kindTag);
+                tags.appendChild(document.createTextNode(" "));
+            }
+            if (item.agent_contract) {
+                var contractTerm = term("contract", item.agent_contract);
+                var contractTag = el("span", "", contractTerm.label || item.agent_contract);
+                contractTag.title = contractTerm.help || "";
+                tags.appendChild(contractTag);
+                tags.appendChild(document.createTextNode(" · "));
+            }
+            if (item.skill) { tags.appendChild(document.createTextNode(item.skill + " · ")); }
+            tags.appendChild(document.createTextNode(item.item_id));
+            workCell.appendChild(tags);
+            tr.appendChild(workCell);
+
+            var targetCell = el("td", "text-muted");
+            targetCell.appendChild(el("div", "", (item.scope || [])[0] || "—"));
+            var phaseTerm = term("phase", item.phase);
+            var phaseLine = el("div", "", "phase " + (phaseTerm.label || item.phase || "—"));
+            phaseLine.style.fontSize = "11px";
+            phaseLine.title = phaseTerm.help || "";
+            targetCell.appendChild(phaseLine);
+            tr.appendChild(targetCell);
+
+            tr.appendChild(el("td", "text-muted", ago(item.updated_at)));
+
+            var actionCell = el("td");
+            actionCell.style.textAlign = "right";
+            actionCell.style.whiteSpace = "nowrap";
+            if ((item.actions || []).length) {
+                actionCell.appendChild(actionButtons(item));
+                offered = true;
+            }
+            actionCells.push(actionCell);
+            tr.appendChild(actionCell);
+
+            tr.addEventListener("click", function (event) {
+                if (event.target.closest("button")) { return; }
+                openDetail(item);
+            });
+            body.appendChild(tr);
+        });
+        $("dq-actions-head").style.display = offered ? "" : "none";
+        actionCells.forEach(function (cell) { cell.style.display = offered ? "" : "none"; });
+        $("dq-pager").textContent = "Showing " + rows.length + " of " + state.page.total
+            + " items in the run · " + (state.page.uncovered || 0) + " settled without coverage";
+    }
+
+    function renderFreshness() {
+        if (!state.lastRead) { return; }
+        var text = state.fetchedAt ? "queue read " + ago(state.fetchedAt) : "queue not read yet";
+        if (state.reading) { text = "reading the queue…"; }
+        if (frozen()) { text += " · finished, not re-read"; }
+        else if (state.stale && !state.reading) { text += " · a fresh read is on its way"; }
+        else if (document.hidden) { text += " · paused in the background"; }
+        else if (state.deferred) { text += " · an update is waiting until you finish"; }
+        $("dq-fresh").textContent = text;
+        $("dq-fresh").title = state.fetchedAt ? "Read from the gateway at " + state.fetchedAt : "";
+    }
+
+    // ---- detail -----------------------------------------------------------
+    function openDetail(item) {
+        // The heading says what the work is; the id belongs under it, where an operator who needs
+        // it can still read it off.
+        var heading = $("dq-detail-title");
+        heading.innerHTML = "";
+        heading.style.fontSize = "16px";
+        var headline = item.queue_item || (item.objective || "").split("\n")[0] || item.item_id;
+        heading.appendChild(document.createTextNode(headline));
+        var subtitle = el("div", "text-muted", item.item_id);
+        subtitle.style.cssText = "font-size:12px; font-weight:normal; margin-top:2px;";
+        heading.appendChild(subtitle);
+        var body = $("dq-detail-body");
+        body.innerHTML = "";
+
+        // What state the work is in leads, in the colour and the icon the row already used for it.
+        // Twelve equal lines of label-and-value read as a data dump and bury exactly this.
+        var statusTerm = term("status", item.status);
+        var lead = el("div");
+        lead.style.cssText = "display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;"
+            + " padding-bottom:12px; border-bottom:1px solid #e5e5e5; margin-bottom:14px;";
+        var stateLine = el("span", SEVERITY_CLASS[statusTerm.severity] || "");
+        stateLine.style.cssText = "font-size:15px; font-weight:600;";
+        stateLine.appendChild(icon(statusTerm.icon));
+        stateLine.appendChild(document.createTextNode(" " + (statusTerm.label || item.status)));
+        stateLine.title = statusTerm.help || "";
+        lead.appendChild(stateLine);
+        if (item.wait_reason) {
+            var waitTerm = term("wait", item.wait_reason);
+            var waiting = el("span", SEVERITY_CLASS[waitTerm.severity] || "text-muted",
+                             waitTerm.label || item.wait_reason);
+            waiting.style.fontSize = "13px";
+            waiting.title = waitTerm.help || "";
+            lead.appendChild(waiting);
+        }
+        var kindTerm = term("kind", item.type);
+        var kind = el("span", "label label-default", kindTerm.label || item.type);
+        kind.title = kindTerm.help || "";
+        lead.appendChild(kind);
+        if (item.disposition) {
+            lead.appendChild(el("span", "text-muted", item.disposition
+                + (item.disposition_reason ? " — " + item.disposition_reason : "")));
+        }
+        body.appendChild(lead);
+
+        // One fact per cell, label above value: the dialog is wide, and a 180px label column left
+        // every value stranded in the middle of it with the right half of the dialog empty.
+        var table = el("div");
+        table.style.cssText = "display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr));"
+            + " gap:12px 28px;";
+        function row(label, value, help, exact) {
+            if (value === "" || value === null || value === undefined) { return; }
+            if (Array.isArray(value)) {
+                if (!value.length) { return; }
+                value = value.join(", ");
+            }
+            var cell = el("div");
+            var name = el("div", "text-muted", label);
+            name.style.cssText = "font-size:11px; text-transform:uppercase; letter-spacing:.07em;";
+            if (help) { name.title = help; }
+            cell.appendChild(name);
+            var shown = el("div", "", value);
+            shown.style.cssText = "font-size:13.5px; line-height:1.45; overflow-wrap:anywhere;";
+            if (exact) { shown.title = exact; }
+            cell.appendChild(shown);
+            table.appendChild(cell);
+        }
+        row("Contract", term("contract", item.agent_contract).label || item.agent_contract,
+            term("contract", item.agent_contract).help);
+        // The contract already says this in the gateway's own words; repeating its machine
+        // spelling underneath reads as a stutter.
+        var contractLabel = term("contract", item.agent_contract).label || item.agent_contract || "";
+        if (String(item.purpose || "").toLowerCase() !== contractLabel.toLowerCase()) {
+            row("Purpose", item.purpose);
+        }
+        row("Origin", item.origin);
+        row("Phase", item.phase
+            ? (term("phase", item.phase).label || item.phase)
+              + (term("phase", item.phase).help ? " — " + term("phase", item.phase).help : "")
+            : "");
+        row("Queue", item.queue_name);
+        row("Subject", item.queue_item);
+        row("Target", item.scope);
+        row("Inputs", item.inputs);
+        row("Plan rows", item.plan_rows);
+        row("Results it owes", item.required_outputs);
+        row("Runs alone with", item.concurrency_key);
+        row("Parent job", item.parent_job_id);
+        row("Jobs waiting on it", item.dependent_jobs);
+        row("Attempt", item.attempt + (item.futile_attempts ? " · " + item.futile_attempts + " futile" : ""));
+        row("Sessions", item.session_count || "");
+        row("Operator note", item.operator_note);
+        row("Updated", ago(item.updated_at), "", item.updated_at);
+        body.appendChild(table);
+
+        function section(title) {
+            // The same quiet heading the block uses on the page, so a dialog opened from it does
+            // not introduce a second way of naming a section.
+            var head = el("div", "text-muted", title);
+            head.style.cssText = "font-size:11px; text-transform:uppercase; letter-spacing:.07em;"
+                + " margin:18px 0 6px;";
+            body.appendChild(head);
+        }
+
+        if (item.objective && item.objective.trim() !== headline.trim()) {
+            section("Objective");
+            // Prose, not code: wrapped, but in the page's own font.
+            var objective = el("div", "well well-sm", item.objective);
+            objective.style.cssText = "white-space:pre-wrap; max-height:220px; overflow:auto; "
+                + "padding:8px 10px; margin-bottom:10px;";
+            body.appendChild(objective);
+        }
+        (item.work_subjects || []).forEach(function (subject, index) {
+            if (index === 0) { section("Results this work owes or recorded"); }
+            var card = el("div", "well well-sm");
+            card.style.padding = "8px 10px";
+            var roleTerm = term("subject_role", subject.role);
+            var statusTerm = term("verdict_status", subject.status);
+            var head = el("div", "");
+            head.appendChild(icon(roleTerm.icon));
+            head.appendChild(document.createTextNode(" " + (roleTerm.label || subject.role) + ": " + subject.item));
+            head.title = roleTerm.help || "";
+            card.appendChild(head);
+            if (subject.status) {
+                var verdict = el("div", SEVERITY_CLASS[statusTerm.severity] || "");
+                verdict.appendChild(icon(statusTerm.icon));
+                verdict.appendChild(document.createTextNode(" " + (statusTerm.label || subject.status)));
+                verdict.title = statusTerm.help || "";
+                card.appendChild(verdict);
+            }
+            if (subject.conclusion) { card.appendChild(el("div", "text-muted", subject.conclusion)); }
+            if (subject.target) { card.appendChild(el("div", "text-muted", subject.target)); }
+            body.appendChild(card);
+        });
+
+        var history = (state.page.history || []).filter(function (receipt) {
+            return receipt.item_id === item.item_id;
+        });
+        if (history.length) {
+            section("Operator actions on this item");
+            var list = el("ul");
+            history.forEach(function (receipt) {
+                var entry = el("li", "", receipt.action + " · " + receipt.status + " — " + receipt.reason);
+                entry.appendChild(el("div", "text-muted", receipt.actor + " · " + ago(receipt.created_at)
+                    + " · rev " + receipt.before_revision + "→" + receipt.revision));
+                list.appendChild(entry);
+            });
+            body.appendChild(list);
+        }
+        window.jQuery("#dq-detail").modal("show");
+    }
+
+    // ---- commands ---------------------------------------------------------
+    function fieldLabel(name) {
+        var words = String(name || "").split("_").join(" ").trim();
+        return words ? words.charAt(0).toUpperCase() + words.slice(1) : name;
+    }
+
+    function openCommand(action, itemId) {
+        var copy = catalog(action.name);
+        var decidedAt = state.page.revision;
+        $("dq-modal-title").textContent = copy.verb || copy.title || action.name;
+        var body = $("dq-modal-body");
+        body.innerHTML = "";
+
+        if (itemId) {
+            var subject = el("p", "text-muted", itemId);
+            subject.style.cssText = "font-size:12px; margin-bottom:8px;";
+            body.appendChild(subject);
+        }
+        if (copy.effect) {
+            var effect = el("div", "alert " + (copy.danger ? "alert-danger" : "alert-info"), copy.effect);
+            effect.style.cssText = "font-size:12.5px; padding:8px 10px;";
+            body.appendChild(effect);
+        }
+
+        var controls = [];
+        (action.fields || []).forEach(function (field) {
+            var group = el("div", "form-group");
+            var label = el("label", "", fieldLabel(field.name));
+            label.style.fontSize = "12px";
+            if (field.required) {
+                var required = el("span", "text-muted", " · required");
+                required.style.fontWeight = "normal";
+                label.appendChild(required);
+            }
+            group.appendChild(label);
+            if (field.read_only || !field.renderable) {
+                var shown = el("div", "form-control-static text-muted",
+                    Array.isArray(field.value) ? field.value.join(", ") : String(field.value || "—"));
+                shown.style.fontSize = "12.5px";
+                group.appendChild(shown);
+                if (!field.renderable && !field.read_only) {
+                    group.appendChild(el("div", "help-block", "this field is newer than this page — shown read-only"));
+                }
+                if (field.help) { group.appendChild(el("div", "help-block", field.help)); }
+                body.appendChild(group);
+                return;
+            }
+            var input;
+            if (field.type === "enum") {
+                input = el("select", "form-control input-sm");
+                var options = (field.values && field.values.length)
+                    ? field.values
+                    : (((state.descriptor.enums || {})[field.values_from]) || []);
+                if (!field.required) { input.appendChild(new Option("", "")); }
+                options.forEach(function (option) {
+                    var node = new Option(option.title || option.id, option.id);
+                    if (option.id === field.value) { node.selected = true; }
+                    input.appendChild(node);
+                });
+            } else if (field.type === "bool") {
+                input = el("input", "");
+                input.type = "checkbox";
+                input.checked = Boolean(field.value);
+            } else if (field.type === "int") {
+                input = el("input", "form-control input-sm");
+                input.type = "number";
+                input.value = field.value || 0;
+            } else if ((field.max_length || 0) > 200) {
+                input = el("textarea", "form-control input-sm");
+                input.rows = field.name === "objective" ? 6 : 3;
+                input.value = field.value || "";
+                input.maxLength = field.max_length;
+            } else {
+                input = el("input", "form-control input-sm");
+                input.type = "text";
+                input.value = field.value || "";
+                if (field.max_length) { input.maxLength = field.max_length; }
+            }
+            // The page's own stylesheet pins every .form-control to 70% of its container with
+            // !important, which inside a dialog leaves a text box ending in mid-air. This is the
+            // one place that has to say otherwise, so it says it as loudly as the rule it answers.
+            if (field.type !== "bool") { input.style.setProperty("width", "100%", "important"); }
+            group.appendChild(input);
+            if (field.help) { group.appendChild(el("div", "help-block", field.help)); }
+            body.appendChild(group);
+            controls.push({ field: field, input: input });
+        });
+
+        var envelope = ((state.descriptor.mutation_envelope || {}).fields || [])
+            .map(function (field) { return field.name; }).join(", ");
+        var sent = el("div", "help-block",
+            "Sent to the gateway against queue revision " + decidedAt
+            + ", so a run that has moved on refuses it instead of applying it to a queue you "
+            + "never saw.");
+        sent.title = action.method + " " + action.href + " with " + envelope;
+        body.appendChild(sent);
+
+        var ok = $("dq-modal-ok");
+        ok.textContent = copy.title || action.name;
+        ok.className = "btn " + (copy.danger ? "btn-danger" : "btn-primary");
+        function validate() {
+            ok.disabled = controls.some(function (control) {
+                return control.field.required && !String(control.input.value || "").trim();
+            });
+        }
+        controls.forEach(function (control) {
+            control.input.addEventListener("input", validate);
+            control.input.addEventListener("change", validate);
+        });
+        validate();
+        ok.onclick = function () {
+            var values = {};
+            controls.forEach(function (control) {
+                values[control.field.name] = control.field.type === "bool"
+                    ? control.input.checked
+                    : control.input.value;
+            });
+            submit(action.name, itemId, values, decidedAt, ok);
+        };
+        window.jQuery("#dq-modal").modal("show");
+    }
+
+    function submit(action, itemId, values, decidedAt, button) {
+        button.disabled = true;
+        state.pending = action;
+        // One request id per decision: an identical retry returns the first receipt rather than
+        // applying twice, and it is also how this page collects the answer afterwards.
+        var requestId = "aist-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+        fetch(COMMAND_URL, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken() },
+            body: JSON.stringify({
+                action: action,
+                item_id: itemId,
+                values: values,
+                request_id: requestId,
+                expected_revision: decidedAt
+            })
+        })
+            .then(function (response) {
+                return response.json().then(function (payload) { return { ok: response.ok, payload: payload }; });
+            })
+            .then(function (answer) {
+                state.pending = null;
+                window.jQuery("#dq-modal").modal("hide");
+                if (!answer.ok) {
+                    // AIST turns a command down only when there is no run to address; a refusal by
+                    // the gateway itself arrives later, through the outcome below.
+                    var detail = (answer.payload && answer.payload.detail) || "";
+                    note("Not sent" + (detail ? ": " + detail : "."));
+                    return;
+                }
+                note("Sent. Waiting for the gateway's receipt…");
+                collectOutcome(requestId, 0);
+            })
+            .catch(function () {
+                state.pending = null;
+                button.disabled = false;
+                note("The command could not be sent.");
+            });
+    }
+
+    //: A command is sent by a worker, so its receipt arrives after the request that asked for it.
+    //: This collects it for about half a minute, which is far longer than the send itself takes.
+    var OUTCOME_ATTEMPTS = 20;
+    var OUTCOME_INTERVAL_MS = 1500;
+
+    function collectOutcome(requestId, attempt) {
+        fetch(OUTCOME_URL.replace("REQUEST_ID", encodeURIComponent(requestId)),
+              { credentials: "same-origin", cache: "no-store" })
+            .then(function (response) { return response.json(); })
+            .then(function (outcome) {
+                if (outcome.state !== "done") {
+                    if (attempt < OUTCOME_ATTEMPTS) {
+                        setTimeout(function () { collectOutcome(requestId, attempt + 1); }, OUTCOME_INTERVAL_MS);
+                    } else {
+                        note("Still waiting on the gateway. The queue will show the result once it answers.");
+                        read(true);
+                    }
+                    return;
+                }
+                if (outcome.accepted) {
+                    var receipt = outcome.receipt || {};
+                    note("Receipt: " + (receipt.status || "applied") + " · revision "
+                        + receipt.before_revision + "→" + receipt.revision + ".");
+                } else {
+                    var refusal = outcome.refusal || {};
+                    note("Refused: " + (refusal.code || "unknown")
+                        + (refusal.field ? " (" + refusal.field + ")" : "") + " — " + (refusal.message || ""));
+                }
+                read(true);
+            })
+            .catch(function () {
+                note("The command was sent; its result could not be read back.");
+            });
+    }
+
+    // ---- wiring -----------------------------------------------------------
+    $("dq-refresh").addEventListener("click", function () { read(true); });
+    var searchTimer = null;
+    $("dq-search").addEventListener("input", function (event) {
+        clearTimeout(searchTimer);
+        var value = event.target.value;
+        searchTimer = setTimeout(function () {
+            state.search = value;
+            if (state.page) { renderRows(); }
+        }, 150);
+    });
+    $("dq-phase").addEventListener("change", function (event) {
+        state.phase = event.target.value;
+        if (state.page) { renderRows(); }
+    });
+    $("dq-planned").addEventListener("change", function (event) {
+        state.includePlanned = event.target.checked;
+        renderRows();
+    });
+    window.jQuery("#dq-modal").on("hidden.bs.modal", function () {
+        if (state.deferred) { read(false); }
+    });
+    document.addEventListener("visibilitychange", function () {
+        if (!document.hidden && !frozen() && (Date.now() - state.lastRead) / 1000 >= state.pollSeconds) {
+            read(false);
+        }
+        renderFreshness();
+    });
+    setInterval(function () {
+        renderFreshness();
+        // A finished run is read once: its queue is a record, and nothing will move in it again.
+        if (document.hidden || frozen()) { return; }
+        if ((Date.now() - state.lastRead) / 1000 >= state.pollSeconds) { read(false); }
+    }, 1000);
+
+    read(false);
+})();
+</script>

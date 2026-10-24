@@ -7,8 +7,9 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
-from dojo.models import Finding, Product_Type_Member, Role
+from dojo.models import Finding, Product_Type_Member, Role, System_Settings
 
+from aist.integrations.dast_queue_contract import normalise_descriptor, normalise_page
 from aist.management.commands.bootstrap_demo_access import (
     DAST_DEMO_COVERAGE,
     DAST_DEMO_RUN_COUNT,
@@ -22,6 +23,7 @@ from aist.models import (
     AISTProjectLaunchConfig,
     AISTProjectVersion,
     DastProjectBinding,
+    DastQueueSnapshot,
     DastRunMetadata,
     LaunchSchedule,
     Organization,
@@ -31,6 +33,7 @@ from aist.models import (
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
+from aist.services.dast_queue import queue_is_addressable
 
 
 class BootstrapDemoAccessCommandTests(TestCase):
@@ -343,3 +346,89 @@ class BootstrapDemoAccessDastRunMetadataTests(BootstrapDemoAccessCommandTests):
         call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
 
         self.assertEqual(DastRunMetadata.objects.count(), before)
+
+
+class BootstrapDemoAccessPlatformSettingsTests(BootstrapDemoAccessCommandTests):
+
+    """What a bootstrapped install is set up to do with the findings it holds."""
+
+    def test_deduplication_is_on_and_keeps_no_duplicates(self):
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        settings_row = System_Settings.objects.first()
+        self.assertTrue(settings_row.enable_deduplication)
+        self.assertTrue(settings_row.delete_duplicates)
+        self.assertEqual(settings_row.max_dupes, 0)
+
+
+class BootstrapDemoAccessQueueSnapshotTests(BootstrapDemoAccessCommandTests):
+
+    """
+    The run-queue block on a machine with no gateway.
+
+    A development install cannot reach a DAST gateway, and the page never talks to one anyway: it
+    renders the snapshot a worker leaves behind. The bootstrap leaves one of its own, so the whole
+    surface is visible locally -- and it has to be shaped like a real payload, or the page would
+    render something no gateway would ever send.
+    """
+
+    def test_every_finished_demo_dast_run_has_a_queue_to_show(self):
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        pipelines = AISTPipeline.objects.filter(execution_type=PipelineExecutionType.DAST)
+        self.assertGreater(pipelines.count(), 0)
+        for pipeline in pipelines:
+            snapshot = DastQueueSnapshot.objects.filter(pipeline=pipeline).first()
+            self.assertIsNotNone(snapshot, pipeline.id)
+            self.assertEqual(snapshot.source, DastQueueSnapshot.SOURCE_BOOTSTRAP)
+            self.assertEqual(snapshot.run_id, pipeline.dast_execution_state.run_id)
+            self.assertTrue(queue_is_addressable(pipeline))
+
+    def test_the_demo_payload_is_the_shape_a_gateway_would_send(self):
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        snapshot = DastQueueSnapshot.objects.first()
+        # Read exactly as stored: the page is served this row and normalises nothing of its own, so
+        # a test that normalised it here would be checking a payload nobody is ever shown.
+        descriptor = snapshot.descriptor
+        page = snapshot.page
+        self.assertEqual(descriptor, normalise_descriptor(descriptor))
+        self.assertEqual(page, normalise_page(page))
+        self.assertEqual(page["dropped_rows"], 0)
+        self.assertTrue(page["mutations_frozen"])
+        self.assertEqual(page["run_state"], "succeeded")
+        self.assertEqual(
+            sum(page["counts"]["by_status"].values()),
+            len(page["items"]),
+        )
+        declared = {entry["id"] for entry in descriptor["vocabulary"]["status"]}
+        self.assertTrue({item["status"] for item in page["items"]} <= declared)
+
+    def test_a_finished_run_offers_only_the_pause_it_still_holds(self):
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        page = DastQueueSnapshot.objects.first().page
+        offered = [action["name"] for item in page["items"] for action in item["actions"]]
+        self.assertEqual(offered, ["resume"])
+
+    def test_the_one_control_a_finished_demo_run_offers_can_actually_be_filled_in(self):
+        # Whether a form field can be rendered is decided when the payload is stored. A demo
+        # written straight to the row carries no such verdict, and the page then shows its only
+        # control read-only -- the whole surface, demonstrably unusable.
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        page = DastQueueSnapshot.objects.first().page
+        fields = [field for item in page["items"]
+                  for action in item["actions"] for field in action["fields"]]
+        self.assertTrue(fields)
+        for field in fields:
+            self.assertTrue(field["renderable"], field["name"])
+            self.assertFalse(field["read_only"], field["name"])
+
+    def test_rerunning_the_command_leaves_one_snapshot_per_pipeline(self):
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        for pipeline in AISTPipeline.objects.filter(execution_type=PipelineExecutionType.DAST):
+            self.assertEqual(DastQueueSnapshot.objects.filter(pipeline=pipeline).count(), 1)

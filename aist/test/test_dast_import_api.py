@@ -19,11 +19,12 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Product, Product_Type, Product_Type_Member, Role, SLA_Configuration
+from dojo.models import Product, Product_Member, Product_Type, Product_Type_Member, Role, SLA_Configuration
 
 from aist.models import (
     AISTPipeline,
     AISTProject,
+    AISTProjectVersion,
     AISTStatus,
     DastProjectBinding,
     DastTarget,
@@ -31,6 +32,7 @@ from aist.models import (
     OrgIntegration,
     OrgIntegrationType,
     PipelineExecutionType,
+    ProjectAccessDenial,
     RepositoryInfo,
     ScmType,
 )
@@ -133,6 +135,95 @@ class PipelineImportAPITests(TestCase):
 
     def _import_url(self):
         return reverse("aist_api:aist_pipeline_import")
+
+    def _sectioned_payload(self):
+        self.binding.target.repository_keys = ["backend", "portal"]
+        self.binding.target.save(update_fields=["repository_keys"])
+        product = Product.objects.create(
+            name="Portal", description="Portal", prod_type=self.prod_type, sla_configuration=self.sla,
+        )
+        repository = RepositoryInfo.objects.create(type=ScmType.GITHUB, repo_owner="acme", repo_name="portal")
+        project = AISTProject.objects.create(product=product, repository=repository)
+        destination = DastProjectBinding.objects.create(
+            project=project, target=self.binding.target, source_repo_key="portal", enabled=True,
+        )
+        payload = _report_payload()
+        findings = payload.pop("findings")
+        payload["results"] = [
+            {"repository": "backend", "version": "backend-v1", "findings": findings},
+            {"repository": "portal", "version": "portal-v2", "findings": findings},
+        ]
+        payload["dast_run_metadata"]["source_commits"]["portal"] = "b" * 40
+        return destination, payload
+
+    def _post_report(self, url, payload):
+        return self.client.post(url, {
+            "file": _upload(payload), "project_id": self.project.pk,
+            "binding_id": self.binding.pk, "scan_type": DAST_SCAN_TYPE,
+        })
+
+    def test_preview_routes_all_sections_without_creating_versions(self):
+        destination, payload = self._sectioned_payload()
+        before = AISTProjectVersion.objects.count()
+        response = self._post_report(self._validate_url(), payload)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["findings_count"], 2)
+        self.assertEqual(response.data["severity_breakdown"], {"High": 2})
+        self.assertEqual(response.data["sections"][1], {
+            "repository": "portal", "findings_count": 1, "project_id": destination.project_id,
+            "project_name": "Portal", "actual_source_commit": "b" * 40, "fallback_reason": None,
+        })
+        self.assertEqual(AISTProjectVersion.objects.count(), before)
+        destination.enabled = False
+        destination.save(update_fields=["enabled"])
+        response = self._post_report(self._validate_url(), payload)
+        self.assertEqual(response.data["sections"][1]["project_id"], self.project.pk)
+        self.assertEqual(response.data["sections"][1]["actual_source_commit"], SHA)
+        self.assertEqual(response.data["sections"][1]["fallback_reason"], "no_enabled_binding")
+
+    def test_preview_and_confirm_do_not_expose_or_write_an_inaccessible_destination(self):
+        destination, payload = self._sectioned_payload()
+        ProjectAccessDenial.objects.create(project=destination.project, user=self.user)
+        for url in (self._validate_url(), self._import_url()):
+            with self.subTest(url=url):
+                response = self._post_report(url, payload)
+                self.assertEqual(response.status_code, 403, response.data)
+                self.assertNotIn("Portal", str(response.data))
+        self.assertFalse(AISTPipeline.objects.exists())
+
+    def test_readable_destination_can_be_previewed_but_requires_write_for_import(self):
+        destination, payload = self._sectioned_payload()
+        reader, _ = Role.objects.get_or_create(id=Roles.Reader, defaults={"name": "Reader"})
+        Product_Member.objects.create(product=destination.project.product, user=self.user, role=reader)
+        self.assertEqual(self._post_report(self._validate_url(), payload).status_code, 200)
+        response = self._post_report(self._import_url(), payload)
+        self.assertEqual(response.status_code, 403, response.data)
+        self.assertFalse(AISTPipeline.objects.exists())
+
+    @patch("aist.api.report_import.import_report.apply_async")
+    def test_repeated_sectioned_upload_returns_the_same_pipeline(self, dispatch):
+        _destination, payload = self._sectioned_payload()
+        first = self._post_report(self._import_url(), payload)
+        self.assertEqual(first.status_code, 202, first.data)
+        self.addCleanup(default_storage.delete, dispatch.call_args.kwargs["args"][1])
+        second = self._post_report(self._import_url(), payload)
+        self.assertEqual(second.status_code, 202, second.data)
+        self.assertEqual(first.data, second.data)
+        self.assertEqual(AISTPipeline.objects.count(), 1)
+        dispatch.assert_called_once()
+
+    @patch("aist.api.report_import.import_report.apply_async")
+    def test_upload_can_retry_a_terminal_attempt_that_imported_no_results(self, dispatch):
+        _destination, payload = self._sectioned_payload()
+        first = self._post_report(self._import_url(), payload)
+        self.assertEqual(first.status_code, 202, first.data)
+        self.addCleanup(default_storage.delete, dispatch.call_args.kwargs["args"][1])
+        AISTPipeline.objects.filter(pk=first.data["pipeline_id"]).update(status=AISTStatus.FINISHED_WITH_WARNINGS)
+        retried = self._post_report(self._import_url(), payload)
+        self.assertEqual(retried.status_code, 202, retried.data)
+        self.addCleanup(default_storage.delete, dispatch.call_args.kwargs["args"][1])
+        self.assertNotEqual(first.data["pipeline_id"], retried.data["pipeline_id"])
+        self.assertEqual(dispatch.call_count, 2)
 
     def test_routes_resolve(self):
         self.assertTrue(self._validate_url().endswith("/pipelines/import/validate/"))

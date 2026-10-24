@@ -5,7 +5,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from aist.models import PipelineExecutionType
+from aist.models import (
+    AISTPipeline,
+    AISTStatus,
+    DastExecutionState,
+    PipelineExecutionType,
+)
 from aist.pipeline_args import DastPipelineArguments, PipelineArguments
 from aist.tasks import pipeline as pipeline_tasks
 from aist.test.test_api import AISTApiBase
@@ -266,3 +271,70 @@ class DastExecutionRuntimeTests(AISTApiBase):
             finalize_report.assert_called_once()
             self.assertIs(finalize_report.call_args.kwargs["report"], validated_report)
             self.assertIs(finalize_report.call_args.kwargs["binding"], runtime.binding)
+
+
+class DastRunProgressTests(AISTApiBase):
+
+    """
+    What the platform knows about a run while it is still going.
+
+    The connector reports its recovery state as soon as the provider accepts the run. Until that
+    reaches durable state the platform has no run id, and everything addressed by one -- the stall
+    bound, the run's work queue -- has nothing to address for the whole length of the run.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.pipeline = AISTPipeline.objects.create(
+            id="dastprogress1",
+            project=self.project,
+            project_version=self.pv,
+            execution_type=PipelineExecutionType.DAST,
+            status=AISTStatus.EXECUTING,
+        )
+        self.state = DastExecutionState.objects.create(pipeline=self.pipeline)
+
+    def _recovery(self, *, run_id, log_cursor=0):
+        return SimpleNamespace(run_id=run_id, log_cursor=log_cursor, correlation_id=self.pipeline.id)
+
+    def test_the_run_identity_is_durable_as_soon_as_the_connector_reports_it(self):
+        pipeline_tasks._record_dast_progress(self.pipeline.id, self._recovery(run_id="run-123"))
+
+        self.state.refresh_from_db()
+        self.assertEqual(self.state.run_id, "run-123")
+        self.assertIsNotNone(self.state.last_progress_at)
+
+    def test_further_log_events_count_as_a_sign_of_life(self):
+        pipeline_tasks._record_dast_progress(self.pipeline.id, self._recovery(run_id="run-123"))
+        self.state.refresh_from_db()
+        first_seen = self.state.last_progress_at
+
+        pipeline_tasks._record_dast_progress(
+            self.pipeline.id, self._recovery(run_id="run-123", log_cursor=12),
+        )
+
+        self.state.refresh_from_db()
+        self.assertEqual(self.state.log_cursor, 12)
+        self.assertGreater(self.state.last_progress_at, first_seen)
+
+    def test_a_report_that_advances_nothing_leaves_the_sign_of_life_alone(self):
+        pipeline_tasks._record_dast_progress(
+            self.pipeline.id, self._recovery(run_id="run-123", log_cursor=12),
+        )
+        self.state.refresh_from_db()
+        first_seen = self.state.last_progress_at
+
+        pipeline_tasks._record_dast_progress(
+            self.pipeline.id, self._recovery(run_id="run-123", log_cursor=12),
+        )
+
+        self.state.refresh_from_db()
+        self.assertEqual(self.state.last_progress_at, first_seen)
+
+    def test_a_reported_run_is_addressable_before_it_finishes(self):
+        # This is what the queue block on the pipeline page waits for.
+        self.assertFalse(bool(self.state.run_id))
+        pipeline_tasks._record_dast_progress(self.pipeline.id, self._recovery(run_id="run-123"))
+
+        self.pipeline.refresh_from_db()
+        self.assertEqual(self.pipeline.dast_execution_state.run_id, "run-123")

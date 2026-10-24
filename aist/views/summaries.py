@@ -15,7 +15,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_GET
 from dojo.authorization.roles_permissions import Permissions
-from dojo.models import CWE, Finding
+from dojo.models import CWE
 
 from aist.api.common import API_SEVERITY_VALUES, compute_risk_score, empty_severity_counts
 from aist.api.findings import AISTFindingFilter
@@ -570,7 +570,8 @@ def pipeline_summary(request: HttpRequest) -> HttpResponse:
     counts: dict[str, int] = {}
     if pipeline_ids:
         counts_qs = (
-            Finding.objects.filter(test__aist_pipelines__id__in=pipeline_ids)
+            get_authorized_findings(Permissions.Finding_View, user=request.user)
+            .filter(test__aist_pipelines__id__in=pipeline_ids)
             .order_by()
             .values("test__aist_pipelines__id")
             .annotate(total=Count("id"))

@@ -255,6 +255,9 @@ class CalendarEventsRepository:
             "launch_config__project__product",
         )
         self.findings = queryset_for_action(resource=Finding, action=Action.FINDING_READ, user=user)
+        # Pipeline totals include every visible destination of a multi-project run,
+        # even when the calendar filters pipelines by their launch project.
+        self.pipeline_findings = self.findings
 
         if project_filter:
             self.projects = self.projects.filter(id__in=project_filter)
@@ -262,12 +265,11 @@ class CalendarEventsRepository:
             self.schedules = self.schedules.filter(launch_config__project_id__in=project_filter)
             self.findings = self.findings.filter(aist_project_versions__project_id__in=project_filter).distinct()
 
-    @staticmethod
-    def findings_by_pipeline_ids(pipeline_ids: list[str]) -> dict[str, int]:
+    def findings_by_pipeline_ids(self, pipeline_ids: list[str]) -> dict[str, int]:
         if not pipeline_ids:
             return {}
         counts_qs = (
-            Finding.objects.filter(test__aist_pipelines__id__in=pipeline_ids)
+            self.pipeline_findings.filter(test__aist_pipelines__id__in=pipeline_ids)
             .order_by()
             .values("test__aist_pipelines__id")
             .annotate(total=Count("id", distinct=True))
@@ -277,10 +279,9 @@ class CalendarEventsRepository:
             for row in counts_qs
         }
 
-    @staticmethod
-    def findings_count_for_pipeline(pipeline_id: str) -> int:
+    def findings_count_for_pipeline(self, pipeline_id: str) -> int:
         return (
-            Finding.objects.filter(test__aist_pipelines__id=pipeline_id)
+            self.pipeline_findings.filter(test__aist_pipelines__id=pipeline_id)
             .order_by()
             .values("id")
             .distinct()
@@ -302,7 +303,7 @@ class BaseCalendarService:
     def _list_pipeline_started(self) -> list[CalendarEventData]:
         rows = list(self.repo.pipelines.filter(created__gte=self.ctx.start, created__lt=self.ctx.end).order_by("created"))
         pipeline_ids = [item.id for item in rows]
-        findings_by_pipeline = CalendarEventsRepository.findings_by_pipeline_ids(pipeline_ids)
+        findings_by_pipeline = self.repo.findings_by_pipeline_ids(pipeline_ids)
         return [self.factory.pipeline_started(item, findings_by_pipeline.get(item.id, 0)) for item in rows]
 
     def _list_pipeline_scheduled(self) -> list[CalendarEventData]:
@@ -356,7 +357,7 @@ class BaseCalendarService:
         pipeline = self.repo.pipelines.filter(id=token).first()
         if not pipeline:
             return None
-        findings_count = CalendarEventsRepository.findings_count_for_pipeline(pipeline.id)
+        findings_count = self.repo.findings_count_for_pipeline(pipeline.id)
         return self.factory.pipeline_started(pipeline, findings_count)
 
     def _detail_pipeline_scheduled(self, token: str) -> CalendarEventData | None:

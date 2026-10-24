@@ -27,6 +27,7 @@ def _validated_report(*, target_id: str, source_commits: tuple[tuple[str, str], 
         source_commits=source_commits,
         findings_count=0,
         canonical_json=b"{}",
+        sections=(),
     )
 
 

@@ -10,6 +10,7 @@ from django.db import transaction
 from dojo.celery_dispatch import dojo_dispatch_task
 from dojo.finding import helper as finding_helper
 
+from aist.authz import Action
 from aist.dedupe.canonical import DAST_SCAN_TYPE
 from aist.integrations.dast_report import ValidatedDastReport
 from aist.internal_upload import ensure_engagement, import_scan_file_via_default_importer
@@ -17,13 +18,17 @@ from aist.launch_data import PipelineLaunchData
 from aist.models import (
     SOURCELESS_VERSION_TYPES,
     AISTPipeline,
+    AISTProject,
     AISTProjectVersion,
     AISTStatus,
     DastProjectBinding,
     DastRunMetadata,
+    DastTestBinding,
     PipelineExecutionType,
     VersionType,
 )
+from aist.services.dast_import_receipt import DastImportReceipt
+from aist.services.dast_report_routing import check_dast_route_permissions, resolve_dast_report_routes
 from aist.services.dast_result_versions import resolve_dast_result_version
 from aist.services.pipeline_lifecycle import transition_pipeline_status
 from aist.services.pipeline_results import (
@@ -37,22 +42,19 @@ _import_sast_pipeline_package()
 
 from pipeline.defect_dojo.repo_info import RepoParams  # type: ignore[import-not-found]  # noqa: E402
 
-_FINALIZATION_MARKER_VERSION = "1"
-_FINALIZATION_MARKER_FIELDS = {
-    "version",
-    "binding_id",
-    "run_id",
-    "correlation_id",
-    "report_sha256",
-    "project_version_id",
-    "test_id",
-    "finding_ids",
-}
-
 
 class DastFinalizationError(ValueError):
 
     """A validated DAST report cannot be finalized onto the selected pipeline."""
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizedDastSection:
+    repository: str | None
+    binding_id: int | None
+    project_version_id: int
+    test_id: int
+    finding_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +64,7 @@ class FinalizeDastResult:
     test_id: int
     finding_ids: tuple[int, ...]
     already_finalized: bool
+    sections: tuple[FinalizedDastSection, ...] = ()
 
 
 def _existing_result(
@@ -75,44 +78,55 @@ def _existing_result(
 ) -> FinalizeDastResult | None:
     if marker is None:
         return None
-    if not isinstance(marker, dict) or set(marker) != _FINALIZATION_MARKER_FIELDS:
-        msg = "Persisted DAST finalization marker is invalid."
-        raise DastFinalizationError(msg)
-    expected_identity = {
-        "version": _FINALIZATION_MARKER_VERSION,
-        "binding_id": binding_id,
-        "run_id": report.run_id,
-        "correlation_id": correlation_id,
-        "report_sha256": report_sha256,
-    }
-    if any(marker.get(key) != value for key, value in expected_identity.items()):
+    try:
+        receipt = DastImportReceipt.parse(marker)
+    except ValueError as exc:
+        raise DastFinalizationError(str(exc)) from exc
+    expected = DastImportReceipt(binding_id, report.run_id, correlation_id, report_sha256)
+    if receipt.as_dict() != expected.as_dict():
         msg = "Pipeline was already finalized with a different DAST report."
         raise DastFinalizationError(msg)
-    project_version_id = marker.get("project_version_id")
-    test_id = marker.get("test_id")
-    finding_ids = marker.get("finding_ids")
-    if (
-        isinstance(project_version_id, bool)
-        or not isinstance(project_version_id, int)
-        or isinstance(test_id, bool)
-        or not isinstance(test_id, int)
-        or not isinstance(finding_ids, list)
-        or any(isinstance(value, bool) or not isinstance(value, int) for value in finding_ids)
-    ):
-        msg = "Persisted DAST finalization references are invalid."
-        raise DastFinalizationError(msg)
-    if not AISTProjectVersion.objects.filter(pk=project_version_id, project_id=pipeline.project_id).exists():
+    if receipt.legacy_result is not None:
+        legacy = receipt.legacy_result
+        sections = (FinalizedDastSection(None, binding_id, legacy.project_version_id, legacy.test_id, legacy.finding_ids),)
+        project_version_id = legacy.project_version_id
+    else:
+        destinations = DastTestBinding.objects.filter(test__aist_pipelines=pipeline).select_related(
+            "test__engagement", "project_version__project",
+        ).prefetch_related("test__finding_set").order_by("test_id")
+        sections = tuple(FinalizedDastSection(
+            repository=destination.repository,
+            binding_id=destination.binding_id,
+            project_version_id=destination.project_version_id,
+            test_id=destination.test_id,
+            finding_ids=tuple(sorted(finding.pk for finding in destination.test.finding_set.all())),
+        ) for destination in destinations)
+        project_version_id = pipeline.project_version_id
+        if tuple(section.repository for section in sections) != tuple(section.repository for section in report.sections):
+            msg = "Persisted DAST finalization sections are missing or inconsistent."
+            raise DastFinalizationError(msg)
+    if not sections or not AISTProjectVersion.objects.filter(
+        pk=project_version_id, project_id=pipeline.project_id,
+    ).exists():
         msg = "Persisted DAST finalization project version is missing."
         raise DastFinalizationError(msg)
-    if not pipeline.tests.filter(pk=test_id).exists():
-        msg = "Persisted DAST finalization test is missing."
-        raise DastFinalizationError(msg)
+    for section in sections:
+        version = AISTProjectVersion.objects.filter(
+            pk=section.project_version_id,
+            project__product__prod_type_id=pipeline.project.product.prod_type_id,
+        ).select_related("project").first()
+        if version is None or not pipeline.tests.filter(
+            pk=section.test_id, engagement__product_id=version.project.product_id,
+        ).exists():
+            msg = "Persisted DAST finalization destination is missing."
+            raise DastFinalizationError(msg)
     return FinalizeDastResult(
         pipeline_id=pipeline.id,
         project_version_id=project_version_id,
-        test_id=test_id,
-        finding_ids=tuple(finding_ids),
+        test_id=sections[0].test_id,
+        finding_ids=tuple(finding_id for section in sections for finding_id in section.finding_ids),
         already_finalized=True,
+        sections=sections,
     )
 
 
@@ -162,8 +176,23 @@ def finalize_dast_report(
 
     report_sha256 = hashlib.sha256(report.canonical_json).hexdigest()
     with transaction.atomic():
-        version = resolve_dast_result_version(report, binding)
-        persisted_binding = DastProjectBinding.objects.select_for_update().get(pk=binding.pk)
+        # Lock the routing snapshot and then its projects in stable order. Do not lock the
+        # target first: binding-update triggers acquire their target lock after the binding.
+        locked_bindings = list(DastProjectBinding.objects.select_for_update(of=("self",)).filter(
+            target_id=binding.target_id,
+        ).order_by("pk"))
+        list(AISTProject.objects.select_for_update().filter(
+            pk__in=[item.project_id for item in locked_bindings],
+        ).order_by("pk"))
+        # Read project data after acquiring its lock, so a concurrent repository edit cannot
+        # leave the importer using a stale repository while version resolution sees the new one.
+        locked_bindings = list(DastProjectBinding.objects.filter(
+            pk__in=[item.pk for item in locked_bindings],
+        ).select_related("project__product", "project__repository", "target__integration__organization"))
+        persisted_binding = next((item for item in locked_bindings if item.pk == binding.pk), None)
+        if persisted_binding is None:
+            msg = "The DAST launch binding changed while its report was being finalized."
+            raise DastFinalizationError(msg)
         pipeline = (
             AISTPipeline.objects
             .select_for_update(of=("self",))
@@ -204,55 +233,31 @@ def finalize_dast_report(
         if pipeline.status == AISTStatus.ADMITTED:
             pipeline = transition_pipeline_status(pipeline.pk, AISTStatus.EXECUTING).pipeline
 
-        repository = pipeline.project.repository
-        branch_tag = None
-        if (
-            pipeline.trigger_project_version_id
-            and pipeline.trigger_project_version.version_type == VersionType.GIT_BRANCH
-        ):
-            branch_tag = pipeline.trigger_project_version.version
-        repo_params = RepoParams(
-            repo_url=repository.clone_url if repository else "",
-            branch_tag=branch_tag,
-            commit_hash=None if version.version_type in SOURCELESS_VERSION_TYPES else version.version,
-            scm_type=repository.type.lower() if repository else "generic",
-            local_path=None,
+        routes = resolve_dast_report_routes(report, persisted_binding, bindings=locked_bindings)
+        check_dast_route_permissions(
+            routes, launch_binding=persisted_binding, user=lead, action=Action.PROJECT_OPERATE,
         )
-        engagement_label = version.version[:12]
-        engagement = ensure_engagement(
-            pipeline.project.product,
-            f"{DAST_SCAN_TYPE} {engagement_label}",
-            repo_params,
-            status="In Progress",
-        )
-        test_obj, findings = import_scan_file_via_default_importer(
-            engagement=engagement,
-            scan_type=DAST_SCAN_TYPE,
-            report_file=report.open_report(),
-            test_title=f"DAST {report.target_id}",
-            repo_params=repo_params,
-            minimum_severity="Info",
-            lead=lead,
-        )
-        finding_ids = [finding.pk for finding in findings]
-        attach_findings_to_project_version(
-            project_version_id=version.pk,
-            finding_ids=finding_ids,
-            logger=logger,
-        )
-        pipeline.tests.add(test_obj)
+        version = resolve_dast_result_version(report, persisted_binding)
+        versions = {persisted_binding.pk: version}
+        sections = []
+        for route, envelope in zip(routes, report.open_sections(), strict=True):
+            destination = route.binding
+            if destination.pk not in versions:
+                versions[destination.pk] = resolve_dast_result_version(report, destination)
+            destination_version = versions[destination.pk]
+            sections.append(_import_section(
+                pipeline=pipeline, report=report, route=route, version=destination_version,
+                logger=logger, lead=lead, envelope=envelope,
+            ))
+        finding_ids = [finding_id for section in sections for finding_id in section.finding_ids]
         launch_data.merge({
-            "dast_finalization": {
-                "version": _FINALIZATION_MARKER_VERSION,
-                "binding_id": persisted_binding.pk,
-                "run_id": report.run_id,
-                "correlation_id": correlation_id,
-                "report_sha256": report_sha256,
-                "project_version_id": version.pk,
-                "test_id": test_obj.pk,
-                "finding_ids": finding_ids,
-            },
-            "imported_test_ids": [test_obj.pk],
+            "dast_finalization": DastImportReceipt(
+                binding_id=persisted_binding.pk,
+                run_id=report.run_id,
+                correlation_id=correlation_id,
+                report_sha256=report_sha256,
+            ).as_dict(),
+            "imported_test_ids": [section.test_id for section in sections],
         })
         launch_data.finding_postprocessing = False
         pipeline.project_version = version
@@ -289,7 +294,59 @@ def finalize_dast_report(
         return FinalizeDastResult(
             pipeline_id=pipeline.id,
             project_version_id=version.pk,
-            test_id=test_obj.pk,
+            test_id=sections[0].test_id,
             finding_ids=tuple(finding_ids),
             already_finalized=False,
+            sections=tuple(sections),
         )
+
+
+def _import_section(*, pipeline, report, route, version, logger, lead, envelope) -> FinalizedDastSection:
+    repository = route.binding.project.repository
+    branch_tag = None
+    if (
+        route.binding.project_id == pipeline.project_id
+        and pipeline.trigger_project_version_id
+        and pipeline.trigger_project_version.version_type == VersionType.GIT_BRANCH
+    ):
+        branch_tag = pipeline.trigger_project_version.version
+    repo_params = RepoParams(
+        repo_url=repository.clone_url if repository else "",
+        branch_tag=branch_tag,
+        commit_hash=None if version.version_type in SOURCELESS_VERSION_TYPES else version.version,
+        scm_type=repository.type.lower() if repository else "generic",
+        local_path=None,
+    )
+    engagement_label = version.version[:12]
+    engagement = ensure_engagement(
+        route.binding.project.product,
+        f"{DAST_SCAN_TYPE} {engagement_label}",
+        repo_params,
+        status="In Progress",
+    )
+    test_obj, findings = import_scan_file_via_default_importer(
+        engagement=engagement,
+        scan_type=DAST_SCAN_TYPE,
+        report_file=envelope,
+        test_title=f"DAST {report.target_id}",
+        repo_params=repo_params,
+        minimum_severity="Info",
+        lead=lead,
+    )
+    finding_ids = sorted(finding.pk for finding in findings)
+    attach_findings_to_project_version(
+        project_version_id=version.pk,
+        finding_ids=finding_ids,
+        logger=logger,
+    )
+    pipeline.tests.add(test_obj)
+    DastTestBinding.objects.create(
+        test=test_obj, binding=route.binding, project_version=version, repository=route.section.repository,
+    )
+    return FinalizedDastSection(
+        repository=route.section.repository,
+        binding_id=route.binding.pk,
+        project_version_id=version.pk,
+        test_id=test_obj.pk,
+        finding_ids=tuple(finding_ids),
+    )

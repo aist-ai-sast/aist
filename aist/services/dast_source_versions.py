@@ -34,7 +34,7 @@ def resolve_dast_source_version(
     with transaction.atomic():
         persisted_binding = (
             DastProjectBinding.objects
-            .select_for_update()
+            .select_for_update(of=("self",))
             .select_related("target__integration")
             .get(pk=binding.pk)
         )

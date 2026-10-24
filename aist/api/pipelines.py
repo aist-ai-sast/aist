@@ -15,6 +15,7 @@ from django.db import close_old_connections
 from django.db.models import Count
 from django.http import HttpResponse, HttpResponseBadRequest, StreamingHttpResponse
 from django_filters import rest_framework as django_filters
+from dojo.models import Test
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from openpyxl import Workbook
 from rest_framework import generics, serializers, status
@@ -845,9 +846,10 @@ def pipeline_status_stream_response(pipeline_id: str) -> StreamingHttpResponse:
     return resp
 
 
-def deduplication_progress_payload(pipeline: AISTPipeline) -> dict:
+def deduplication_progress_payload(pipeline: AISTPipeline, *, user) -> dict:
     tests = (
-        pipeline.tests
+        queryset_for_action(resource=Test, action=Action.TEST_READ, user=user)
+        .filter(aist_pipelines=pipeline)
         .select_related("engagement")
         .annotate(total_findings=Count("finding", distinct=True))
         .order_by("id")
@@ -1069,7 +1071,7 @@ class PipelineDeduplicationProgressAPI(AISTAPIView):
     )
     def get(self, request, pipeline_id: str):
         pipeline = self.resolve(id=pipeline_id)
-        return Response(deduplication_progress_payload(pipeline))
+        return Response(deduplication_progress_payload(pipeline, user=request.user))
 
 
 class PipelineEnrichProgressAPI(AISTAPIView):

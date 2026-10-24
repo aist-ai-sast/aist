@@ -135,6 +135,9 @@ _NON_SENSITIVE_KEYS: frozenset[str] = frozenset(
         "has_client_key",
         "can_create_write_token",
         "source_repo_key",
+        # An opaque scenario-defined resource name on a DAST queue row (which jobs may not overlap),
+        # not a credential. Masking it would corrupt the operator's view of why work is waiting.
+        "concurrency_key",
         "total_tokens",
         "input_tokens",
         "output_tokens",

@@ -125,6 +125,7 @@ def _report(metadata: ValidatedDastRunMetadata | None = None) -> ValidatedDastRe
         source_commits=(),
         findings_count=0,
         canonical_json=b"{}",
+        sections=(),
         run_metadata=metadata,
     )
 

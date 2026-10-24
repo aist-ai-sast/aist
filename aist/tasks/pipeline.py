@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 import time
 from dataclasses import dataclass, field
@@ -61,7 +62,7 @@ from aist.utils.pipeline import (
     finish_pipeline,
     set_pipeline_status,
 )
-from aist.utils.pipeline_imports import _import_sast_pipeline_package
+from aist.utils.pipeline_imports import _import_sast_pipeline_package, cleanup_pipeline_containers
 from aist.utils.vpn import vpn_sidecar_context
 
 # --------------------------------------------------------------------
@@ -223,6 +224,47 @@ def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
         )
 
 
+def _apply_dast_recovery(execution_state, recovery) -> list[str]:
+    """
+    Write what the connector reported onto this run's durable state.
+
+    The one owner of the three fields a recovery report carries. The connector reports the same
+    state while the run is going and when it ends, so both moments write through here and a run in
+    flight cannot come to mean something different from a finished one.
+
+    A run id or further log events are the only things that advance, so this is also the only place
+    that can tell the stall bound the run is still alive.
+    """
+    delivered_progress = (
+        (recovery.run_id or "") != (execution_state.run_id or "")
+        or recovery.log_cursor > execution_state.log_cursor
+    )
+    execution_state.run_id = recovery.run_id
+    execution_state.log_cursor = recovery.log_cursor
+    update_fields = ["run_id", "log_cursor", "updated"]
+    if delivered_progress:
+        execution_state.last_progress_at = timezone.now()
+        update_fields.append("last_progress_at")
+    return update_fields
+
+
+def _record_dast_progress(pipeline_id: str, recovery) -> None:
+    """
+    Record the connector's progress while its run is still going.
+
+    Without this the provider's run id reaches durable state only when the whole execution returns,
+    and everything that addresses a run by id -- the stall bound, the queue surface -- has nothing
+    to address for as long as the run lasts. The executor owns what happens if this fails.
+    """
+    with transaction.atomic():
+        execution_state = (
+            DastExecutionState.objects.select_for_update().filter(pipeline_id=pipeline_id).first()
+        )
+        if execution_state is None:
+            return
+        execution_state.save(update_fields=_apply_dast_recovery(execution_state, recovery))
+
+
 def _persist_dast_execution_result(pipeline_id: str, result) -> None:
     outcome_map = {
         DastConnectorOutcomeState.TERMINAL: DastExecutionOutcome.TERMINAL,
@@ -235,19 +277,9 @@ def _persist_dast_execution_result(pipeline_id: str, result) -> None:
         execution_state = DastExecutionState.objects.select_for_update().get(pipeline=pipeline)
         if result.recovery.correlation_id != pipeline.id:
             raise ValueError(_ERR_DAST_RUNTIME)
-        # A run id or further log events: the only place either advances, so the only place that
-        # can tell the stall bound the run is still alive.
-        delivered_progress = (
-            (result.recovery.run_id or "") != (execution_state.run_id or "")
-            or result.recovery.log_cursor > execution_state.log_cursor
-        )
-        execution_state.run_id = result.recovery.run_id
-        execution_state.log_cursor = result.recovery.log_cursor
+        update_fields = _apply_dast_recovery(execution_state, result.recovery)
         execution_state.outcome = outcome_map[result.outcome.state]
-        update_fields = ["run_id", "log_cursor", "outcome", "updated"]
-        if delivered_progress:
-            execution_state.last_progress_at = timezone.now()
-            update_fields.append("last_progress_at")
+        update_fields.append("outcome")
         execution_state.save(update_fields=update_fields)
         report_path = getattr(result, "report_path", None)
         if report_path is not None:
@@ -291,6 +323,7 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
                 vpn_container_name=vpn_container,
                 recovery=runtime.recovery,
                 stop_requested=runtime.stop_requested,
+                on_progress=functools.partial(_record_dast_progress, pipeline_id),
             )
             result = execute_pipeline(PipelineExecutionType.DAST, execution)
     finally:
@@ -550,6 +583,21 @@ class _WorkerExecutionRuntime:
         ).exclude(run_id="").exclude(run_id=None).exists()
         operation = ProviderOperation.RESUME if resuming else ProviderOperation.EXECUTE
         return _run_dast_execution(self.task, pipeline_id, operation=str(operation))
+
+
+@shared_task
+def stop_pipeline_execution(pipeline_id: str, *, async_user=None) -> None:
+    """
+    Signal a running execution's containers from the host that owns them.
+
+    Whoever handled the operator's request persists the cancellation, and that is the web process.
+    The containers belong to the worker: it is the only one with the Docker socket. Sweeping from
+    anywhere else fails quietly -- the sweep sees no containers, the connector never gets its
+    SIGTERM, and the provider run carries on while the platform reports a stop that was requested
+    and never delivered.
+    """
+    del async_user  # unused; accepted only for the DojoAsyncTask contract
+    cleanup_pipeline_containers(pipeline_id)
 
 
 # A provider run is terminal only after an explicit domain outcome. Transport recovery is

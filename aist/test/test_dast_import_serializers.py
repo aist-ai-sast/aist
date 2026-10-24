@@ -4,6 +4,7 @@ registered scan types, and upload size.
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
@@ -28,7 +29,12 @@ from aist.parser_overrides import DAST_SCAN_TYPE
 from aist.test import dast_fixtures
 
 
-def _upload(content: bytes = b"{}", name: str = "report.json") -> SimpleUploadedFile:
+def _upload(content: bytes | None = None, name: str = "report.json") -> SimpleUploadedFile:
+    if content is None:
+        content = json.dumps({
+            "type": DAST_SCAN_TYPE, "findings": [],
+            "dast_run_metadata": {"run_id": "run-1", "target": "cloud-app", "source_commits": {"backend": "a" * 40}},
+        }).encode()
     return SimpleUploadedFile(name, content, content_type="application/json")
 
 

@@ -1,5 +1,6 @@
 from aist.tasks.ai import push_request_to_ai, push_request_to_local_triage
 from aist.tasks.claude import analyze_project_after_import
+from aist.tasks.dast_queue import apply_dast_queue_command, refresh_dast_queue
 from aist.tasks.dedup import reconcile_deduplication, watch_deduplication
 from aist.tasks.egress import prewarm_egress, reap_egress
 from aist.tasks.enrich import (
@@ -10,7 +11,7 @@ from aist.tasks.enrich import (
 )
 from aist.tasks.launch_schedule import process_launch_schedules
 from aist.tasks.logs import flush_logs_once
-from aist.tasks.pipeline import run_pipeline_execution
+from aist.tasks.pipeline import run_pipeline_execution, stop_pipeline_execution
 from aist.tasks.pipeline_dispatcher import dispatch_queued_pipelines
 from aist.tasks.reconciliation import reconcile_pipeline_orphans_task, reconcile_recent_orphans_task
 from aist.tasks.validate import (
@@ -24,6 +25,7 @@ from aist.tasks.work_items import sync_all_work_item_providers, sync_work_item_p
 __all__ = [
     "after_upload_enrich_and_watch",
     "analyze_project_after_import",
+    "apply_dast_queue_command",
     "dispatch_queued_pipelines",
     "enrich_finding_batch",
     "enrich_finding_task",
@@ -37,8 +39,10 @@ __all__ = [
     "reconcile_pipeline_orphans_task",
     "reconcile_recent_orphans_task",
     "refresh_dast_capability_catalogs",
+    "refresh_dast_queue",
     "report_enrich_done",
     "run_pipeline_execution",
+    "stop_pipeline_execution",
     "sync_all_work_item_providers",
     "sync_dast_capabilities",
     "sync_work_item_provider",

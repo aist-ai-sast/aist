@@ -187,7 +187,7 @@ class DastStopBeforeProviderRunTests(_DastPipelineFixture):
         self.request = self._launch_request(self.pipeline)
 
     def test_stop_with_no_provider_run_and_no_worker_completes_locally(self):
-        with patch("aist.utils.pipeline.cleanup_pipeline_containers"):
+        with patch("aist.tasks.pipeline.stop_pipeline_execution.delay"):
             _request_dast_pipeline_stop(self.pipeline.id)
 
         self.pipeline.refresh_from_db()
@@ -196,3 +196,48 @@ class DastStopBeforeProviderRunTests(_DastPipelineFixture):
         self.assertEqual(state.outcome, DastExecutionOutcome.CANCELLED_BEFORE_START)
         self.assertEqual(self.request.state, PipelineLaunchRequestState.CANCELLED)
         self.assertIn(self.pipeline.status, {AISTStatus.FINISHED, AISTStatus.FINISHED_WITH_WARNINGS})
+
+
+class DastStopSignalDeliveryTests(_DastPipelineFixture):
+
+    """
+    Where a stop is actually sent from.
+
+    A stop is requested in the web process, which holds no Docker socket: the containers belong to
+    the worker. Sweeping them from the process that handled the request fails quietly -- the
+    connector keeps its claim, never sends the provider its cooperative stop, and the run carries on
+    while the platform shows a cancellation it never delivered.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.pipeline = AISTPipeline.objects.create(
+            id="stopsignal",
+            project=self.project,
+            project_version=self.pv,
+            execution_type=PipelineExecutionType.DAST,
+            status=AISTStatus.EXECUTING,
+            run_task_id="worker-task-1",
+        )
+        DastExecutionState.objects.create(pipeline=self.pipeline, run_id="provider-run-1")
+        self.request = self._launch_request(self.pipeline, state=PipelineLaunchRequestState.DISPATCHED)
+
+    def test_a_running_pipeline_hands_the_signal_to_the_worker(self):
+        with (
+            patch("aist.tasks.pipeline.stop_pipeline_execution.delay") as dispatched,
+            patch("aist.utils.pipeline.cleanup_pipeline_containers") as swept_here,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            _request_dast_pipeline_stop(self.pipeline.id)
+
+        dispatched.assert_called_once_with(self.pipeline.id)
+        swept_here.assert_not_called()
+        state = DastExecutionState.objects.get(pipeline=self.pipeline)
+        self.assertIsNotNone(state.cancel_requested_at)
+        self.assertEqual(state.outcome, DastExecutionOutcome.STOP_PENDING)
+
+    def test_the_worker_task_sweeps_the_execution_containers(self):
+        with patch("aist.tasks.pipeline.cleanup_pipeline_containers") as swept:
+            pipeline_tasks.stop_pipeline_execution(self.pipeline.id)
+
+        swept.assert_called_once_with(self.pipeline.id)

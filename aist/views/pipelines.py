@@ -24,6 +24,7 @@ from aist.launch_data import PipelineLaunchData
 from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus, PipelineExecutionType
 from aist.pipeline_args import PipelineArguments
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects
+from aist.services.dast_queue import queue_is_addressable
 from aist.utils.http import _fmt_duration, _qs_without
 from aist.utils.pipeline import (
     get_terminal_pipeline_statuses,
@@ -516,7 +517,17 @@ def pipeline_detail(request, pipeline_id: str):
         )
 
     add_breadcrumb(parent=pipeline, title="Pipeline Detail", top_level=False, request=request)
-    return render(request, "aist/pipeline_detail.html", {"pipeline": pipeline, **findings_context})
+    return render(
+        request,
+        "aist/pipeline_detail.html",
+        {
+            "pipeline": pipeline,
+            # Whether this pipeline names a DAST run at all. What the queue then shows -- including
+            # whether the run is over and may no longer be commanded -- is the gateway's answer.
+            "dast_queue_addressable": queue_is_addressable(pipeline),
+            **findings_context,
+        },
+    )
 
 
 @login_required

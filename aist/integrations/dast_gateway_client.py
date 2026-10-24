@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import string
 import tempfile
 import time
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar
+from urllib.parse import quote, urlencode, urlsplit
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -26,6 +28,7 @@ from aist.integrations.dast_endpoint_policy import (
     DastEndpointPolicy,
     DastEndpointPolicyError,
 )
+from aist.integrations.dast_queue_contract import GATEWAY_API_PREFIX
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -33,6 +36,10 @@ if TYPE_CHECKING:
     from aist.models import OrgIntegration
 
 logger = logging.getLogger(__name__)
+
+#: Run ids and item ids are minted by the engine from this alphabet. AIST composes read paths from
+#: them, so anything else is refused here rather than percent-escaped into a request.
+_PATH_SEGMENT_CHARACTERS = frozenset(string.ascii_letters + string.digits + "._:@+-")
 
 
 class DastGatewayClientError(RuntimeError):
@@ -86,6 +93,26 @@ class DastTargetCatalog:
     etag: str
     targets: tuple[DastTargetSnapshot, ...]
     not_modified: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DastQueueDocument:
+
+    """One queue read. ``not_modified`` means the caller's entity-tag still describes the answer."""
+
+    payload: dict[str, Any]
+    etag: str
+    not_modified: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DastQueueCommandResult:
+
+    """What one operator command produced: an accepted receipt, or a refusal to show as-is."""
+
+    accepted: bool
+    payload: dict[str, Any]
+    revision: str = ""
 
 
 class DastGatewayClient:
@@ -213,6 +240,115 @@ class DastGatewayClient:
         observe_provider_call(operation="catalog", duration_seconds=time.monotonic() - started)
         return result
 
+    def queue_descriptor(self, run_id: str, *, etag: str = "") -> DastQueueDocument:
+        """The run's description of its own queue: vocabulary, enums, action catalog and cadence."""
+        return self._queue_read(
+            operation="queue_descriptor",
+            path=f"{self._run_path(run_id)}/queue/descriptor",
+            etag=etag,
+        )
+
+    def queue_page(
+        self,
+        run_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        status: str = "",
+        include_planned: bool = False,
+        etag: str = "",
+    ) -> DastQueueDocument:
+        """One page of the queue, with its revision in the entity-tag."""
+        query = {"offset": str(max(offset, 0)), "limit": str(max(min(limit, 500), 1))}
+        if status:
+            query["status"] = status
+        if include_planned:
+            query["include_planned"] = "true"
+        return self._queue_read(
+            operation="queue_page",
+            path=f"{self._run_path(run_id)}/queue?{urlencode(query)}",
+            etag=etag,
+        )
+
+    def queue_item(self, run_id: str, item_id: str) -> DastQueueDocument:
+        """One item, which is also the only read that carries its own operator history."""
+        return self._queue_read(
+            operation="queue_item",
+            path=f"{self._run_path(run_id)}/queue/{quote(self._path_segment(item_id), safe='')}",
+            etag="",
+        )
+
+    def queue_command(
+        self, *, run_id: str, method: str, href: str, body: Mapping[str, Any],
+    ) -> DastQueueCommandResult:
+        """
+        Send one operator command to an address the gateway itself published.
+
+        ``href`` is relative and already validated by the queue contract module; it is joined here
+        onto the configured gateway URL and never taken from a browser. The composed URL is then
+        checked against the run's own subtree, so the one place that builds the request is also the
+        one that proves where it is going.
+        """
+        started = time.monotonic()
+        path = f"{GATEWAY_API_PREFIX}{href}"
+        expected_prefix = f"{GATEWAY_API_PREFIX}runs/{self._path_segment(run_id)}/"
+        sent_path = urlsplit(requests.Request(method.upper(), f"{self._config.gateway_url}{path}")
+                             .prepare().url).path
+        if not sent_path.startswith(expected_prefix) or "/.." in sent_path or "/." in sent_path:
+            raise _client_error(DastGatewayErrorCode.ENDPOINT_POLICY_REJECTED)
+        try:
+            answer = self._request_json(
+                method.upper(), path, json_body=dict(body), capture_refusal=True,
+            )
+        except DastGatewayClientError as exc:
+            observe_provider_call(
+                operation="queue_command", duration_seconds=time.monotonic() - started, error_code=exc.code,
+            )
+            raise
+        observe_provider_call(operation="queue_command", duration_seconds=time.monotonic() - started)
+        payload, headers = answer
+        # The gateway answers a refusal with a typed `code`; a receipt never carries one.
+        accepted = not isinstance(payload.get("code"), str) or not payload.get("code")
+        return DastQueueCommandResult(
+            accepted=accepted,
+            payload=payload,
+            revision=(headers.get("ETag") or "").strip('"'),
+        )
+
+    def _queue_read(self, *, operation: str, path: str, etag: str) -> DastQueueDocument:
+        started = time.monotonic()
+        headers = {"If-None-Match": f'"{etag}"'} if etag else None
+        try:
+            answer = self._get_json(path, headers=headers, allow_not_modified=True)
+        except DastGatewayClientError as exc:
+            observe_provider_call(
+                operation=operation, duration_seconds=time.monotonic() - started, error_code=exc.code,
+            )
+            raise
+        observe_provider_call(operation=operation, duration_seconds=time.monotonic() - started)
+        if answer is None:
+            return DastQueueDocument(payload={}, etag=etag, not_modified=True)
+        payload, headers = answer
+        return DastQueueDocument(payload=payload, etag=(headers.get("ETag") or "").strip('"'))
+
+    def _run_path(self, run_id: str) -> str:
+        return f"{GATEWAY_API_PREFIX}runs/{quote(self._path_segment(run_id), safe='')}"
+
+    @staticmethod
+    def _path_segment(value: str) -> str:
+        """A path segment AIST composes itself, so it is bounded to the shape the gateway mints."""
+        segment = (value or "").strip()
+        # `.` and `..` are spelled from the admitted alphabet but address a parent, so they are
+        # refused as whole segments rather than escaped into a path AIST did not mean to read.
+        if (
+            not segment
+            or len(segment) > 255
+            or segment in {".", ".."}
+            or not all(character in _PATH_SEGMENT_CHARACTERS for character in segment)
+        ):
+            raise _client_error(DastGatewayErrorCode.CONFIG_INVALID)
+        return segment
+
     def _get_json(
         self,
         path: str,
@@ -220,20 +356,47 @@ class DastGatewayClient:
         headers: Mapping[str, str] | None = None,
         allow_not_modified: bool = False,
     ) -> tuple[dict[str, Any], Mapping[str, str]] | None:
+        return self._request_json("GET", path, headers=headers, allow_not_modified=allow_not_modified)
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        json_body: Any = None,
+        allow_not_modified: bool = False,
+        capture_refusal: bool = False,
+    ) -> tuple[dict[str, Any], Mapping[str, str]] | None:
+        """
+        One transport for every gateway call: same TLS, redirect, size and content-type rules.
+
+        ``capture_refusal`` returns a typed 4xx body instead of raising, because a queue command's
+        refusal is an answer an operator has to read -- which field was wrong, what is allowed --
+        and not a transport failure.
+        """
         request_headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {self._token}",
+            **({"Content-Type": "application/json"} if json_body is not None else {}),
             **(headers or {}),
         }
+        url = f"{self._config.gateway_url}{path}"
+        arguments = {
+            "headers": request_headers,
+            "timeout": self.TIMEOUT,
+            "verify": self._verify,
+            "allow_redirects": False,
+            "stream": True,
+        }
         try:
-            response = self._session.get(
-                f"{self._config.gateway_url}{path}",
-                headers=request_headers,
-                timeout=self.TIMEOUT,
-                verify=self._verify,
-                allow_redirects=False,
-                stream=True,
-            )
+            # A read goes through `session.get` so the read path -- ping, catalog, every queue read
+            # -- keeps exactly the call it had before the queue surface was added. Only a mutation,
+            # which this client never used to send, needs the generic verb.
+            if method == "GET":
+                response = self._session.get(url, **arguments)
+            else:
+                response = self._session.request(method, url, json=json_body, **arguments)
         except requests.exceptions.SSLError as exc:
             # SSLError subclasses ConnectionError, so it has to be caught first or a certificate
             # problem reports as "unreachable" and sends the operator looking at the network.
@@ -250,10 +413,20 @@ class DastGatewayClient:
                 self._endpoint_policy.reject_redirect(response.status_code)
             except DastEndpointPolicyError as exc:
                 raise _client_error(DastGatewayErrorCode.REDIRECT_REJECTED) from exc
-            if response.status_code in {401, 403}:
+            if response.status_code in {401, 403} and not capture_refusal:
                 raise _client_error(DastGatewayErrorCode.TOKEN_REJECTED)
             if response.status_code != 200:
                 retryable = response.status_code in {429, 502, 503, 504}
+                # A refusal the operator must read is carried back with its body; a transport
+                # failure still raises, so a 502 never reads as "the gateway said no".
+                if capture_refusal and 400 <= response.status_code < 500 and response.status_code != 429:
+                    content_type = response.headers.get("Content-Type", "").partition(";")[0].strip().lower()
+                    if content_type != "application/json":
+                        raise _client_error(DastGatewayErrorCode.RESPONSE_CONTENT_TYPE_INVALID)
+                    refusal = self._read_bounded_json(response)
+                    if not isinstance(refusal, dict):
+                        raise _client_error(DastGatewayErrorCode.RESPONSE_SCHEMA_INVALID)
+                    return refusal, response.headers
                 raise _client_error(DastGatewayErrorCode.GATEWAY_HTTP_ERROR, retryable=retryable)
             content_type = response.headers.get("Content-Type", "").partition(";")[0].strip().lower()
             if content_type != "application/json":

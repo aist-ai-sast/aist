@@ -60,7 +60,7 @@ organization visible.
 | Close/reopen findings and approve risk acceptance | — | ✓ | ✓ | ✓ |
 | Create, update, or remove finding work-item links | — | ✓ | ✓ | ✓ |
 | Create project versions and import a report | — | — | ✓ | ✓ |
-| Start, stop, or delete pipelines; request or remove AI triage results | — | — | ✓ | ✓ |
+| Start, stop, or delete pipelines; request or remove AI triage results; steer a DAST run's work queue | — | — | ✓ | ✓ |
 | Manage project scripts, SCM links, integration overrides, launch configurations, schedules, actions, and queue entries | — | — | ✓ | ✓ |
 | Create/import a project in an existing organization | — | — | ✓ | ✓ |
 | View membership/integration management data; manage members, integrations, and work-item providers | — | — | ✓ | ✓ |

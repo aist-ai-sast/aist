@@ -24,6 +24,12 @@
 
     <hr/>
 
+    {# --- DAST run queue: present only for a DAST pipeline that names a run --- #}
+    {% if dast_queue_addressable %}
+        {% include "aist/_dast_queue.html" %}
+        <hr/>
+    {% endif %}
+
     {# --- Logs (collapsible) --- #}
     <div class="card-header d-flex align-items-center justify-content-between">
         <div class="d-flex align-items-center gap-2">

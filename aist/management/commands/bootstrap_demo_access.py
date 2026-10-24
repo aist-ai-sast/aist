@@ -17,11 +17,13 @@ from dojo.models import (
     Product_Type_Member,
     Role,
     SLA_Configuration,
+    System_Settings,
     Test,
     Test_Type,
 )
 
 from aist.integrations.dast_config import DastLaunchRequirement
+from aist.integrations.dast_queue_contract import normalise_descriptor, normalise_page
 from aist.integrations.dast_report import (
     DastCoverage,
     DastTokenBucket,
@@ -41,6 +43,7 @@ from aist.models import (
     DastIntegrationState,
     DastIntegrationValidationState,
     DastProjectBinding,
+    DastQueueSnapshot,
     DastRunMetadata,
     DastTarget,
     LaunchSchedule,
@@ -54,6 +57,7 @@ from aist.models import (
     PipelineLaunchRequestState,
     VersionType,
 )
+from aist.services.dast_queue_demo import demo_descriptor, demo_page
 
 
 @dataclass(frozen=True, slots=True)
@@ -563,6 +567,7 @@ class Command(BaseCommand):
         if not skip_admin:
             self._ensure_admin_username(user_model, password=password)
 
+        self._ensure_deduplication_settings()
         users_by_username = self._ensure_demo_users(user_model, password=password)
         organizations = self._ensure_organizations()
 
@@ -572,6 +577,60 @@ class Command(BaseCommand):
         self.stdout.write(f"Demo users password: {password}")
         self.stdout.write(f"Organizations: {', '.join(org.name for org in organizations)}")
         self.stdout.write(f"Demo projects: {', '.join(spec.product_name for spec in DEMO_PROJECTS)}")
+
+    def _ensure_dast_queue_snapshot(self, *, pipeline, binding, provider_run_id: str, finished_at) -> None:
+        """
+        Leave this finished demo run the queue snapshot a worker would have stored.
+
+        On a real installation a worker reads the queue from the provider's gateway; a development
+        machine has no gateway and no route it is allowed to take to one. The page renders whatever
+        snapshot exists and never asks who wrote it, so a demo install shows the whole surface --
+        what the run covered, what it dropped, the pause still on record -- without a line of
+        demo-only code anywhere near it.
+
+        It is stored the way a worker would store it, through the same contract normalisation.
+        That is what decides, among other things, which form fields this build can render: a demo
+        written straight to the row would hand the page a form it refuses to fill in.
+        """
+        digest = f"sha256:demo-{provider_run_id[:16]}"
+        target_host = f"https://{binding.target.provider_id}.demo.invalid"
+        stamp = finished_at.isoformat(timespec="seconds")
+        DastQueueSnapshot.objects.update_or_create(
+            pipeline=pipeline,
+            defaults={
+                "run_id": provider_run_id,
+                "descriptor": normalise_descriptor(
+                    demo_descriptor(digest=digest, target_host=target_host),
+                ),
+                "page": normalise_page(demo_page(
+                    run_id=provider_run_id, digest=digest, target_host=target_host, finished_at=stamp,
+                )),
+                "etag": "demo-42",
+                "descriptor_digest": digest,
+                "unavailable_code": "",
+                "unavailable_detail": "",
+                "source": DastQueueSnapshot.SOURCE_BOOTSTRAP,
+                "fetched_at": finished_at,
+            },
+        )
+
+    def _ensure_deduplication_settings(self) -> None:
+        """
+        Turn deduplication on and keep no duplicates.
+
+        A demo install exists to show what the platform does with real findings, and deduplication
+        is most of that: without it the same issue reported by two analyzers reads as two problems.
+        `max_dupes = 0` keeps none, so a bootstrapped install shows one finding per issue rather
+        than a pile that grows with every re-import.
+        """
+        settings_row = System_Settings.objects.first()
+        if settings_row is None:
+            settings_row = System_Settings.objects.create()
+        settings_row.enable_deduplication = True
+        settings_row.delete_duplicates = True
+        settings_row.max_dupes = 0
+        settings_row.save(update_fields=["enable_deduplication", "delete_duplicates", "max_dupes"])
+        self.stdout.write("Deduplication enabled; duplicates retained: 0")
 
     def _ensure_admin_username(self, user_model, *, password: str) -> None:
         admin = user_model.objects.filter(is_superuser=True).order_by("id").first()
@@ -1414,6 +1473,12 @@ class Command(BaseCommand):
                 provider_run_id=provider_run_id,
                 sequence=sequence,
                 started=started,
+                finished_at=finished_at,
+            )
+            self._ensure_dast_queue_snapshot(
+                pipeline=pipeline,
+                binding=binding,
+                provider_run_id=provider_run_id,
                 finished_at=finished_at,
             )
             PipelineLaunchRequest.objects.update_or_create(

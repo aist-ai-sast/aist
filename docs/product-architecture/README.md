@@ -56,12 +56,25 @@ Cancellation and recovery cross the same connector-to-gateway boundary. AIST
 owns the durable cancellation intent and pipeline outcome; DAST owns the actual
 termination of target-side work.
 
+An operator can also read, and with the gateway's permission steer, the work
+queue of a run that is already under way; the provider names its run as soon as
+it accepts one, so this does not wait for the run to end. It crosses the same
+HTTPS boundary, but alongside the connector rather than through it, and from a
+background worker rather than from the process that serves the page. The
+queue's vocabulary and available actions remain DAST's; see
+[the run's work queue](../integrations/dast.md#the-runs-work-queue).
+
 ## Manual results follow the same finding boundary
 
 A DAST result produced outside AIST — the diagram's manual upload path — can be
 imported against an enabled project binding without contacting the gateway. It
-passes the same report validator and finding importer as the autonomous file
-before creating the pipeline's tests and findings.
+passes the same report validator, destination resolution, and finding importer
+as the autonomous file before creating the pipeline's tests and findings.
+A report covering several repositories still belongs to one run: its pipeline
+retains the execution metadata while each section's findings reach their
+project through that project's version. See
+[reports covering several repositories](../integrations/dast.md#reports-covering-several-repositories)
+for routing, fallback, and destination permissions.
 
 ## Continue reading
 

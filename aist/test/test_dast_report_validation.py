@@ -12,7 +12,7 @@ from aist.integrations.dast_report import (
     ValidatedDastReport,
     validate_dast_report_bytes,
 )
-from aist.parser_overrides import DAST_SCAN_TYPE
+from aist.parser_overrides import DAST_SCAN_TYPE, DastReportParser
 
 SHA = "a" * 40
 
@@ -52,6 +52,61 @@ def _validate(report: dict | None = None, **overrides):
 
 class DastReportValidationTests(SimpleTestCase):
 
+    def test_flat_report_preserves_parser_metadata_when_opened_as_a_section(self):
+        payload = _report(
+            description="Authenticated application scan",
+            dynamic_tool=True,
+            static_tool=False,
+            soc=True,
+            findings=[{"title": "API", "severity": "High", "description": "API finding"}],
+        )
+        report = _validate(payload)
+        envelopes = list(report.open_sections())
+        self.assertEqual(len(envelopes), 1)
+        self.assertEqual(json.load(envelopes[0]), payload)
+        parsed = DastReportParser().get_tests(DAST_SCAN_TYPE, report.open_section(None))[0]
+        self.assertEqual(parsed.description, payload["description"])
+        self.assertTrue(parsed.dynamic_tool)
+        self.assertFalse(parsed.static_tool)
+        self.assertEqual([finding.title for finding in parsed.findings], ["API"])
+
+    def test_sections_are_validated_counted_and_opened_individually(self):
+        payload = _report()
+        del payload["findings"]
+        payload["results"] = [
+            {"repository": "backend", "version": "backend-v1", "findings": [{"title": "API"}]},
+            {"repository": "frontend", "version": "frontend-v2", "findings": [{"title": "UI"}]},
+        ]
+        report = _validate(payload)
+        self.assertEqual(report.findings_count, 2)
+        self.assertEqual([section.repository for section in report.sections], ["backend", "frontend"])
+        envelope = json.load(report.open_section("frontend"))
+        self.assertEqual(envelope, {
+            "name": "DAST", "type": DAST_SCAN_TYPE, "version": "frontend-v2", "findings": [{"title": "UI"}],
+        })
+        self.assertEqual(_validate().sections[0].repository, None)
+
+    def test_malformed_or_ambiguous_sections_are_rejected(self):
+        for sections in (None, [], {}, [42], [{"repository": " "}],
+                         [{"repository": "backend", "findings": {}}],
+                         [{"repository": "backend", "findings": []}] * 2):
+            with self.subTest(sections=sections):
+                payload = _report(results=sections)
+                del payload["findings"]
+                with self.assertRaises(DastReportValidationError):
+                    _validate(payload)
+        with self.assertRaises(DastReportValidationError):
+            _validate(_report(results=[{"repository": "backend", "findings": []}]))
+
+    def test_unstorable_finding_in_second_section_names_its_repository(self):
+        payload = _report(results=[
+            {"repository": "backend", "findings": []},
+            {"repository": "frontend", "findings": [{"title": "UI", "component_version": "x" * 1000}]},
+        ])
+        del payload["findings"]
+        with self.assertRaisesRegex(DastReportValidationError, "frontend.*finding 1.*component_version"):
+            _validate(payload)
+
     def test_valid_report_returns_frozen_boundary_object(self):
         result = _validate()
 
@@ -65,7 +120,7 @@ class DastReportValidationTests(SimpleTestCase):
     def test_only_import_and_tenant_binding_invariants_reject_a_report(self):
         cases = (
             ({"type": "Generic Findings Import"}, {}, "scan type"),
-            ({"findings": {}}, {}, "findings must be an array"),
+            ({"findings": {}}, {}, "findings does not match the report schema"),
             ({"dast_run_metadata": {"run_id": "", "target": "cloud-backend", "source_commits": {}}}, {}, "non-empty"),
             ({}, {"expected_run_id": "another-run"}, "provider run being finalized"),
             ({}, {"target_id": "another-target"}, "selected binding is for target"),

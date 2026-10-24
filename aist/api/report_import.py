@@ -6,10 +6,12 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from dojo.tools import factory
 from dojo.utils import is_scan_file_too_large
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -20,9 +22,11 @@ from aist.integrations.dast_report import (
     DastReportValidationError,
     validate_dast_report_bytes,
 )
-from aist.models import AISTProject, DastProjectBinding, PipelineExecutionType
+from aist.models import AISTPipeline, AISTProject, DastProjectBinding, PipelineExecutionType
 from aist.parser_overrides import DAST_SCAN_TYPE
+from aist.services.dast_report_routing import check_dast_route_permissions, resolve_dast_report_routes
 from aist.services.dast_run_metadata import reported_dast_run_preview
+from aist.services.pipeline_lifecycle import ACTIVE_PIPELINE_STATUSES
 from aist.tasks.report_import import import_report
 from aist.utils.pipeline import create_pipeline_object
 from aist.utils.report_import import (
@@ -96,6 +100,19 @@ class _DastBindingFieldMixin:
                 )
             if commit_hash:
                 raise serializers.ValidationError({"commit_hash": "DAST source commits come only from the report."})
+            try:
+                report = _validated_manual_dast_report(attrs["file"], binding)
+                routes = resolve_dast_report_routes(report, binding)
+                check_dast_route_permissions(
+                    routes, launch_binding=binding, user=self.context["request"].user, action=self.project_action,
+                )
+            except DastReportValidationError as exc:
+                raise serializers.ValidationError({"detail": str(exc)}) from exc
+            except PermissionError as exc:
+                raise PermissionDenied(str(exc)) from exc
+            attrs["dast_report"] = report
+            attrs["dast_routes"] = routes
+
         else:
             if binding is not None:
                 raise serializers.ValidationError({"binding_id": "Bindings are valid only for DAST reports."})
@@ -135,7 +152,17 @@ class PipelineImportValidateRequestSerializer(
         return value
 
 
+class DastSectionPreviewSerializer(serializers.Serializer):
+    repository = serializers.CharField(allow_null=True)
+    findings_count = serializers.IntegerField()
+    project_id = serializers.IntegerField()
+    project_name = serializers.CharField()
+    actual_source_commit = serializers.CharField(allow_null=True)
+    fallback_reason = serializers.CharField(allow_null=True)
+
+
 class PipelineImportPreviewSerializer(serializers.Serializer):
+    sections = DastSectionPreviewSerializer(many=True, required=False)
     findings_count = serializers.IntegerField()
     severity_breakdown = serializers.DictField(child=serializers.IntegerField())
     name = serializers.CharField(allow_null=True)
@@ -230,17 +257,17 @@ class PipelineImportValidateAPI(AISTAPIView):
         try:
             binding = serializer.validated_data.get("binding")
             if scan_type == DAST_SCAN_TYPE:
-                validated_report = _validated_manual_dast_report(uploaded_file, binding)
-                parser_input = validated_report.open_report()
+                validated_report = serializer.validated_data["dast_report"]
+                parser_inputs = validated_report.open_sections()
                 actual_source_commit = validated_report.source_commit_for(binding.source_repo_key)
             else:
-                parser_input = uploaded_file
-                parser_input.seek(0)
+                uploaded_file.seek(0)
+                parser_inputs = [uploaded_file]
                 actual_source_commit = None
             parser = factory.get_parser(scan_type)
-            tests = parser.get_tests(scan_type, parser_input)
+            tests = [test for parser_input in parser_inputs for test in parser.get_tests(scan_type, parser_input)]
             test = tests[0] if tests else None
-            findings = test.findings if test else []
+            findings = [finding for parsed_test in tests for finding in parsed_test.findings]
         except (DastReportValidationError, TypeError, ValueError) as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -250,6 +277,17 @@ class PipelineImportValidateAPI(AISTAPIView):
             "name": getattr(test, "name", None) if test else None,
             "version": getattr(test, "version", None) if test else None,
             "actual_source_commit": actual_source_commit,
+            "sections": [
+                {
+                    "repository": route.section.repository,
+                    "findings_count": route.section.findings_count,
+                    "project_id": route.binding.project_id,
+                    "project_name": route.binding.project.product.name,
+                    "actual_source_commit": route.source_commit,
+                    "fallback_reason": route.fallback_reason,
+                }
+                for route in serializer.validated_data.get("dast_routes", ())
+            ],
             # Derived after validation, from the already-validated report: it cannot fail, so it
             # stays out of the try clause guarding the parse.
             "dast_run": None if validated_report is None else reported_dast_run_preview(validated_report.run_metadata),
@@ -291,10 +329,7 @@ class PipelineImportAPI(AISTAPIView):
         binding = serializer.validated_data.get("binding")
         commit_hash = serializer.validated_data.get("commit_hash", "")
         if scan_type == DAST_SCAN_TYPE:
-            try:
-                validated_report = _validated_manual_dast_report(uploaded_file, binding)
-            except DastReportValidationError as exc:
-                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            validated_report = serializer.validated_data["dast_report"]
         else:
             try:
                 resolve_import_version(project, commit_hash)
@@ -304,6 +339,24 @@ class PipelineImportAPI(AISTAPIView):
 
         task_id = uuid4().hex
         with transaction.atomic():
+            if binding is not None:
+                # Concurrent uploads on one launch binding must agree on a single import pipeline.
+                self.authorized_queryset(resource=DastProjectBinding, action=Action.PROJECT_OPERATE).select_for_update(
+                    of=("self",),
+                ).get(pk=binding.pk)
+                existing = self.authorized_queryset(resource=AISTPipeline, action=Action.PROJECT_OPERATE).filter(
+                    dast_binding=binding,
+                    execution_type=PipelineExecutionType.MANUAL_IMPORT,
+                    launch_data__source="manual_import",
+                    launch_data__sha256=sha256,
+                ).filter(
+                    Q(status__in=ACTIVE_PIPELINE_STATUSES) | Q(launch_data__has_key="dast_finalization"),
+                ).order_by("pk").first()
+                if existing is not None:
+                    discard_uploaded_report(storage_name)
+                    return Response(PipelineImportResponseSerializer({
+                        "pipeline_id": existing.pk, "run_task_id": existing.run_task_id or "",
+                    }).data, status=status.HTTP_202_ACCEPTED)
             pipeline = create_pipeline_object(
                 project,
                 None,

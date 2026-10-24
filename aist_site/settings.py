@@ -6,6 +6,8 @@ from pathlib import Path
 
 from celery.schedules import crontab
 
+from aist.utils.cache import QUEUE_CACHE_ALIAS, shared_cache_location
+
 PRODUCT_BASE_DIR = Path(__file__).resolve().parent.parent
 VENDOR_BASE_DIR = PRODUCT_BASE_DIR / "vendor" / "defectdojo"
 
@@ -166,8 +168,18 @@ AIST_PIPELINE_IMPORT_THROTTLE_RATE = env("DD_AIST_PIPELINE_IMPORT_THROTTLE_RATE"
 # (toggling is_active is enough) and turn this installation into a traffic source aimed at that
 # host. Scheduling already debounces bursts; this bounds the sustained rate.
 AIST_DAST_GATEWAY_PROBE_THROTTLE_RATE = env("DD_AIST_DAST_GATEWAY_PROBE_THROTTLE_RATE", default="60/hour")  # noqa: F405
+# Reading a run's queue is served from a short-lived cache, but an operator's Refresh bypasses it and
+# every command reaches the gateway, so the queue surface carries its own bound. Sized for a page
+# that re-reads itself once a minute per open pipeline, with room for several operators at once.
+AIST_DAST_QUEUE_THROTTLE_RATE = env("DD_AIST_DAST_QUEUE_THROTTLE_RATE", default="240/hour")  # noqa: F405
+# Collecting a command's answer reaches no gateway at all -- it reads the cache the worker wrote --
+# and a page collects one answer about twenty times while the worker is out. Sharing the bound above
+# would let an operator's own polling spend the budget their next command needs.
+AIST_DAST_QUEUE_POLL_THROTTLE_RATE = env("DD_AIST_DAST_QUEUE_POLL_THROTTLE_RATE", default="1200/hour")  # noqa: F405
 REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {}).update({  # noqa: F405
     "aist_dast_gateway_probe": AIST_DAST_GATEWAY_PROBE_THROTTLE_RATE,
+    "aist_dast_queue": AIST_DAST_QUEUE_THROTTLE_RATE,
+    "aist_dast_queue_poll": AIST_DAST_QUEUE_POLL_THROTTLE_RATE,
     "aist_auth_login": AIST_AUTH_LOGIN_THROTTLE_RATE,
     "aist_auth_set_password": AIST_AUTH_SET_PASSWORD_THROTTLE_RATE,
     "aist_invite_email": AIST_INVITE_EMAIL_THROTTLE_RATE,
@@ -175,6 +187,30 @@ REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {}).update({  # noqa: F405
     "aist_change_password": AIST_CHANGE_PASSWORD_THROTTLE_RATE,
     "aist_pipeline_import": AIST_PIPELINE_IMPORT_THROTTLE_RATE,
 })
+
+# ------------------------------------------------------------------------------
+# CACHE
+# ------------------------------------------------------------------------------
+# A DAST queue command is sent by a Celery worker, while its receipt -- or the gateway's refusal,
+# naming the field that was wrong -- is collected by the web process that accepted the click. Per-
+# process memory writes that answer where nobody can read it, so the queue surface gets a cache of
+# its own on the Valkey this deployment already runs as the Celery broker. See `aist.utils.cache`
+# for why this is a second alias rather than the platform's default cache.
+AIST_CACHE_URL = env("DD_AIST_CACHE_URL", default="") or shared_cache_location(CELERY_BROKER_URL)  # noqa: F405
+
+_LOCAL_MEMORY_CACHE = {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+CACHES = {
+    # Django's own default, written out because declaring CACHES replaces it.
+    "default": _LOCAL_MEMORY_CACHE,
+    QUEUE_CACHE_ALIAS: {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": AIST_CACHE_URL,
+        "KEY_PREFIX": "aist",
+        # A cache read sits in front of an operator's request, so an unreachable Valkey has to fail
+        # quickly rather than hold the process for the length of a TCP timeout.
+        "OPTIONS": {"socket_connect_timeout": 2, "socket_timeout": 2, "retry_on_timeout": True},
+    } if AIST_CACHE_URL else dict(_LOCAL_MEMORY_CACHE, LOCATION="aist-dast-queue"),
+}
 
 GITHUB_APP = {
     "WEBHOOK_SECRET": env("WEBHOOK_SECRET", default=""),  # noqa: F405

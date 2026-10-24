@@ -37,11 +37,24 @@ The database, not the broker or worker process, determines the lasting state of
 a launch, pipeline, finding, or integration. This lets the application expose a
 consistent history when a task is retried or a worker restarts.
 
+Work handed to a worker is answered after the request that asked for it has
+ended, so Valkey also holds the short-lived values that have to cross a process
+boundary: what a worker produced for the request that dispatched it, and the
+windows that keep several replicas from asking for the same work at once. That
+store is deliberately separate from the per-process caches the application
+keeps for itself, and nothing authoritative is in it — an unreachable Valkey
+reads as empty, which costs a repeated call or an answer an operator has to
+look for elsewhere, never product state.
+
 ## Per-operation containers
 
 Celery workers have Docker-daemon access for SAST, connector, and VPN
 containers. The local AI bridge also has Docker-daemon access because it starts
-the isolated CLI container. The web process does not have that socket.
+the isolated CLI container. The web process does not have that socket. Work that
+needs it — starting an operation's containers, signalling them when an operator
+stops a run, or any call that must leave through an integration's VPN sidecar —
+is therefore dispatched to a worker instead of being performed in the request
+that asks for it.
 
 Workers reach the bridge through a shared Unix socket. SAST runs create a
 workspace plus builder and analyzer containers. A standalone provider run

@@ -34,7 +34,7 @@ def deduplication_progress_json(request, pipeline_id: str):
         id=pipeline_id,
     )
 
-    return JsonResponse(deduplication_progress_payload(pipeline))
+    return JsonResponse(deduplication_progress_payload(pipeline, user=request.user))
 
 
 @csrf_exempt

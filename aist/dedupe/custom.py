@@ -29,7 +29,7 @@ from aist.dedupe.canonical import (
     score_signatures,
 )
 from aist.logging_transport import install_pipeline_logging, uninstall_pipeline_file_logging
-from aist.models import AISTPipeline
+from aist.models import AISTPipeline, DastTestBinding
 from aist.parser_overrides import (
     BEARER_SCAN_TYPE,
     CLAUDE_DIFF_SECURITY_SCAN_TYPE,
@@ -118,7 +118,7 @@ def _dast_binding_by_finding_id(
     *,
     lock_pipelines: bool = False,
 ) -> dict[int, int | None]:
-    """Resolve the DAST namespace from the pipeline that owns each finding's Test."""
+    """Use the test destination; historical single-project tests inherit their pipeline binding."""
     finding_ids_by_test: dict[int, list[int]] = defaultdict(list)
     result: dict[int, int | None] = {}
     for finding in findings:
@@ -128,10 +128,14 @@ def _dast_binding_by_finding_id(
             continue
         finding_ids_by_test[test_id].append(finding.id)
 
+    scopes = DastTestBinding.objects.filter(test_id__in=finding_ids_by_test)
+    if lock_pipelines:
+        scopes = scopes.select_for_update()
+    explicit = dict(scopes.values_list("test_id", "binding_id"))
     binding_ids_by_test: dict[int, set[int]] = defaultdict(set)
     pipelines = (
         AISTPipeline.objects
-        .filter(tests__id__in=finding_ids_by_test, dast_binding_id__isnull=False)
+        .filter(tests__id__in=set(finding_ids_by_test) - explicit.keys(), dast_binding_id__isnull=False)
         .values_list("tests__id", "dast_binding_id")
     )
     if lock_pipelines:
@@ -141,7 +145,9 @@ def _dast_binding_by_finding_id(
 
     for test_id, finding_ids in finding_ids_by_test.items():
         binding_ids = binding_ids_by_test[test_id]
-        binding_id = next(iter(binding_ids)) if len(binding_ids) == 1 else None
+        binding_id = explicit[test_id] if test_id in explicit else (
+            next(iter(binding_ids)) if len(binding_ids) == 1 else None
+        )
         result.update(dict.fromkeys(finding_ids, binding_id))
     return result
 
@@ -905,6 +911,13 @@ def _apply_candidate_decision(
 # Scope resolution: expand target findings to include historical matches
 # ---------------------------------------------------------------------------
 
+def _dast_binding_scope_query(binding_id: int) -> Q:
+    return Q(test__dast_binding_scope__binding_id=binding_id) | Q(
+        test__dast_binding_scope__isnull=True,
+        test__aist_pipelines__dast_binding_id=binding_id,
+    )
+
+
 def resolve_dedupe_scope(target_findings: list[Finding]) -> list[Finding]:
     """Expand target findings with historical candidates required by AIST dedupe."""
     if not target_findings:
@@ -976,29 +989,26 @@ def resolve_dedupe_scope(target_findings: list[Finding]) -> list[Finding]:
         if None in dynamic_paths[binding_id]:
             endpoint_q |= Q(endpoints__path__isnull=True)
         include(
-            Q(test__aist_pipelines__dast_binding_id=binding_id)
+            _dast_binding_scope_query(binding_id)
             & Q(test__engagement__product_id=dynamic_product_ids[binding_id])
             & endpoint_q,
         )
     for binding_id, vulnerability_ids in dynamic_vulnerability_ids.items():
         if vulnerability_ids:
-            include(Q(
-                test__aist_pipelines__dast_binding_id=binding_id,
+            include(_dast_binding_scope_query(binding_id) & Q(
                 test__engagement__product_id=dynamic_product_ids[binding_id],
                 vulnerability_id__vulnerability_id__in=vulnerability_ids,
             ))
     for binding_id, component_cwes in dynamic_component_cwes.items():
         for component_name, cwe in component_cwes:
-            include(Q(
-                test__aist_pipelines__dast_binding_id=binding_id,
+            include(_dast_binding_scope_query(binding_id) & Q(
                 test__engagement__product_id=dynamic_product_ids[binding_id],
                 component_name__iexact=component_name,
                 cwe=cwe,
             ))
     for binding_id, service_cwes in dynamic_service_cwes.items():
         for service, cwe in service_cwes:
-            include(Q(
-                test__aist_pipelines__dast_binding_id=binding_id,
+            include(_dast_binding_scope_query(binding_id) & Q(
                 test__engagement__product_id=dynamic_product_ids[binding_id],
                 service__iexact=service,
                 cwe=cwe,

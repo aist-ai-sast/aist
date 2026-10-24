@@ -272,6 +272,33 @@ export default function ImportPipelineDialog({ open, onClose }: { open: boolean;
               </div>
             </div>
 
+            {preview.sections?.some((section) => section.repository !== null) ? (
+              <div className="rounded-xl border border-slate-700/60 bg-slate-900/40 p-3 text-xs">
+                <p className="mb-2 font-medium text-slate-200">Import destinations</p>
+                <ul className="space-y-3">
+                  {preview.sections.map((section) => (
+                    <li key={section.repository ?? "default"} className="space-y-1">
+                      <p className="text-slate-100">
+                        {section.repository ?? "Report"} → {section.project_name}
+                      </p>
+                      <p className="break-all text-slate-400">
+                        {formatCount(section.findings_count)} findings · {section.actual_source_commit ?? "Target version"}
+                      </p>
+                      {section.fallback_reason ? (
+                        <p className="text-amber-300">
+                          Kept in the selected project: {section.fallback_reason === "missing_source_commit"
+                            ? "no source commit was reported."
+                            : section.fallback_reason === "ambiguous_binding"
+                              ? "more than one enabled binding matches this repository."
+                              : "no enabled binding matches this repository."}
+                        </p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
             {preview.dast_run ? <ImportRunCoverage run={preview.dast_run} /> : null}
 
             <div className="flex flex-wrap gap-2">

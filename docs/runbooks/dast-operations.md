@@ -101,17 +101,20 @@ Use the pipeline **Stop** action or:
 POST pipelines/<pipeline_id>/stop/
 ```
 
-AIST persists cancellation intent before contacting DAST. Temporary provider
-unreachability can leave the pipeline waiting for reconciliation. Do not delete
-launch requests, leases, or pipeline rows to force completion; that removes the
-durable state needed for safe retry and recovery.
+AIST persists cancellation intent before contacting DAST. The signal that stops
+the run's own containers is dispatched to a worker, the only process that can
+reach them, so a stop needs a healthy worker as much as it needs a reachable
+provider. Temporary provider unreachability can leave the pipeline waiting for
+reconciliation. Do not delete launch requests, leases, or pipeline rows to force
+completion; that removes the durable state needed for safe retry and recovery.
 
 When a run appears stuck, check in order:
 
 1. the AIST pipeline and connector logs;
-2. DAST integration readiness and VPN health;
-3. the provider run identified by the AIST correlation value;
-4. whether reconciliation later records a terminal provider outcome.
+2. whether background workers are running and consuming tasks;
+3. DAST integration readiness and VPN health;
+4. the provider run identified by the AIST correlation value;
+5. whether reconciliation later records a terminal provider outcome.
 
 ### What ends a run
 
@@ -149,6 +152,49 @@ For a schedule that does not launch, inspect its persisted last-attempt time,
 error code, and safe error explanation before changing cron or readiness state.
 Do not repeatedly recreate the schedule: the stored due tick is the recovery
 anchor after an admission failure.
+
+## Watch and steer a run's work queue
+
+On the administrative pipeline page of a DAST run (superusers only), use the
+**Run queue** block. It lists the job holding a claim, the work waiting behind
+it, any operator hold, and the leads the run declined; filter by status or
+phase, search, and open a row for its full detail. The block is present for a
+DAST run from the start; the queue becomes addressable once the provider accepts
+the run, so a scan can be watched while it is still going. A finished run is
+read once and not polled again, so its block is a record of what the run did.
+
+Nothing in the web process reaches the gateway: a background worker reads the
+queue and sends every command. The block re-reads on the interval the gateway
+asks for and **Refresh** asks for a read at once, but either way it keeps
+showing the queue it has until a worker stores a newer one, and a command's
+receipt arrives shortly after the click rather than with it.
+
+Everything the block offers comes from the gateway, so check the DAST side
+first when a control is missing:
+
+| What you see | What to check |
+|---|---|
+| "This run's queue is not available" | Whether this integrator still holds `queue:read` for this run on the gateway, and whether the run still exists there. An old run whose target left the token's allowlist answers this way and is not an AIST fault |
+| Read-only, with the capabilities it holds named | Whether `queue:control` (and `run:annotate` for notes) is granted to this integrator on the DAST side. These are granted per integrator and none is granted by default |
+| Rows that could not be read, counted but not listed | Whether the DAST side now publishes a queue shape this AIST version predates. The totals stay correct, and the rows return once a build that knows the new shape is deployed; see [Promote a provider contract change](#promote-a-provider-contract-change) |
+| A refused command naming a field and its allowed values | The gateway's own refusal. Correct the field and send it again. A refusal on the queue revision means the run moved on — re-read and decide against the current queue |
+| A command that cannot be sent at all | Whether the row still advertises that action. An action the gateway no longer offers, or never granted, has no address and is not sent |
+| The block says the provider has not reported a run yet | Nothing yet. A queue is addressed by the provider's run identity, which reaches AIST once the provider accepts the run |
+| The block says it is reading the queue and never shows one | Whether a background worker is running and consuming tasks. With no worker nothing reads the gateway, and the block waits indefinitely |
+| A command is accepted but no receipt appears | Worker health first, then Valkey, then the gateway. A command is sent by a worker, so a receipt that never arrives is a delivery problem rather than a rejected command. A worker that answered but could not leave the answer where the page collects it logs the receipt or refusal at error level, and the queue itself shows what was applied |
+| **Refresh** leaves the queue's age unchanged | Whether Valkey is reachable. The stored queue lives in the database and keeps rendering, but the read a refresh asks for travels through the broker, so freshness stops while Valkey is down and resumes with it |
+
+Steering requires project-operate permission. Do not treat the block as a
+substitute for **Stop**: cancelling the pipeline is still the AIST-side action
+that records cancellation intent and drives recovery.
+
+How often this installation may read or command a run's queue is bounded by
+`DD_AIST_DAST_QUEUE_THROTTLE_RATE` (default `240/hour`), set on the Django
+service. Refreshing in a loop exhausts it; wait for the gateway's own cadence
+instead. Collecting a command's answer has its own bound,
+`DD_AIST_DAST_QUEUE_POLL_THROTTLE_RATE` (default `1200/hour`), because a page
+asks for one answer many times while the worker is out and must not spend what
+the next command needs.
 
 ## Import an external result
 
@@ -225,7 +271,7 @@ promotion.
 | Synchronization stalled | Whether a background worker is running and consuming tasks. A stalled attempt is presumed lost after 30 minutes; start **Synchronize** again once workers are healthy |
 | Binding stale | Capability revision, schema digest, target availability, and parameter snapshot |
 | Launch remains pending | Stored authority, readiness, capacity, and request expiry |
-| Cancellation remains pending | Provider reachability and reconciliation progress |
+| Cancellation remains pending | Worker health, provider reachability, and reconciliation progress. The signal that stops the run's containers is dispatched to a worker; with none running, the intent is recorded but never delivered |
 | A run ends as `TIMEOUT` | Whether the provider stopped delivering log output, and for how long, against `AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS`. AIST reads the provider's status once more before abandoning a run, so this outcome means the provider had no result to hand over |
 | A long scan is cut short | The two run bounds above, and whether the provider keeps emitting log output. Duration alone never ends a run |
 | Import rejected | Report scan type, non-empty run identity, expected target binding, allowed source identities, size, and the registered finding schema. Descriptive run metadata does not reject an import; values AIST cannot interpret appear as absent |

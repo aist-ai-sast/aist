@@ -180,6 +180,19 @@ def stop_pipeline(pipeline: AISTPipeline) -> None:
     finish_pipeline(pipeline.id)
 
 
+def _signal_execution_containers(pipeline_id: str) -> None:
+    """
+    Ask the worker to signal this pipeline's execution containers.
+
+    The Docker socket belongs to the worker alone, so the signal is dispatched rather than sent
+    from here: a stop requested in the web process and swept in the web process reaches nothing.
+    Imported inside the call because the task module imports this one.
+    """
+    from aist.tasks.pipeline import stop_pipeline_execution  # noqa: PLC0415 -- breaks an import cycle
+
+    stop_pipeline_execution.delay(pipeline_id)
+
+
 def _request_dast_pipeline_stop(pipeline_id: str) -> None:
     """Persist DAST cancellation before signalling its connector container."""
     finish_without_provider = False
@@ -216,9 +229,7 @@ def _request_dast_pipeline_stop(pipeline_id: str) -> None:
             execution_state.outcome = DastExecutionOutcome.CANCELLED_BEFORE_START
             execution_state.save(update_fields=["outcome", "updated"])
             finish_without_provider = True
-            transaction.on_commit(lambda: cleanup_pipeline_containers(pipeline_id))
-        else:
-            transaction.on_commit(lambda: cleanup_pipeline_containers(pipeline_id))
+        transaction.on_commit(lambda: _signal_execution_containers(pipeline_id))
         transaction.on_commit(
             lambda: audit_event(
                 "dast_cancel_requested",

@@ -91,6 +91,72 @@ describe("ImportPipelineDialog", () => {
     cleanup();
   });
 
+  it("previews both destinations and explains a fallback before import", async () => {
+    validateMutateAsync.mockResolvedValue({
+      findings_count: 72,
+      severity_breakdown: { High: 72 },
+      name: "DAST",
+      version: null,
+      actual_source_commit: "aaa",
+      sections: [
+        { repository: "nx", findings_count: 54, project_id: 1, project_name: "NX project",
+          actual_source_commit: "aaa", fallback_reason: null },
+        { repository: "cloud_portal", findings_count: 16, project_id: 2, project_name: "Portal project",
+          actual_source_commit: "bbb", fallback_reason: null },
+        { repository: "unknown", findings_count: 2, project_id: 1, project_name: "NX project",
+          actual_source_commit: "aaa", fallback_reason: "no_enabled_binding" },
+      ],
+    });
+    render(<ImportPipelineDialog open onClose={vi.fn()} />);
+    await selectProjectAndUploadFile();
+    expect(screen.getByText("nx → NX project")).toBeInTheDocument();
+    expect(screen.getByText("cloud_portal → Portal project")).toBeInTheDocument();
+    expect(screen.getByText("54 findings · aaa")).toBeInTheDocument();
+    expect(screen.getByText("16 findings · bbb")).toBeInTheDocument();
+    expect(screen.getByText(/no enabled binding matches this repository/)).toBeInTheDocument();
+    expect(importMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("shows the destination when the only section routes to another project", async () => {
+    validateMutateAsync.mockResolvedValue({
+      findings_count: 5,
+      severity_breakdown: { High: 5 },
+      name: "DAST",
+      version: null,
+      actual_source_commit: "aaa",
+      sections: [
+        { repository: "portal", findings_count: 5, project_id: 2, project_name: "other-project",
+          actual_source_commit: "bbb", fallback_reason: null },
+      ],
+    });
+    render(<ImportPipelineDialog open onClose={vi.fn()} />);
+    await selectProjectAndUploadFile();
+    expect(screen.getByText("portal → other-project")).toBeInTheDocument();
+    expect(screen.getByText("5 findings · bbb")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create pipeline/i })).not.toBeDisabled();
+    expect(importMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("explains fallback for a report containing only one section", async () => {
+    validateMutateAsync.mockResolvedValue({
+      findings_count: 5,
+      severity_breakdown: { High: 5 },
+      name: "DAST",
+      version: null,
+      actual_source_commit: "aaa",
+      sections: [
+        { repository: "portal", findings_count: 5, project_id: 1, project_name: "cloud_portal",
+          actual_source_commit: "aaa", fallback_reason: "missing_source_commit" },
+      ],
+    });
+    render(<ImportPipelineDialog open onClose={vi.fn()} />);
+    await selectProjectAndUploadFile();
+    expect(screen.getByText("portal → cloud_portal")).toBeInTheDocument();
+    expect(screen.getByText("5 findings · aaa")).toBeInTheDocument();
+    expect(screen.getByText(/no source commit was reported/)).toBeInTheDocument();
+    expect(importMutateAsync).not.toHaveBeenCalled();
+  });
+
   it("never reads the file itself — hands it straight to the backend validate endpoint", async () => {
     validateMutateAsync.mockResolvedValue({
       findings_count: 3,

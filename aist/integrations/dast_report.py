@@ -11,6 +11,8 @@ from typing import Any
 
 from django.db import models as django_models
 from dojo.models import Finding, Test
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 from aist.parser_overrides import DAST_SCAN_TYPE
 
@@ -53,6 +55,29 @@ _EXCLUDED_FINDING_CODES = {
     "CHECK_PROVENANCE_INVALID", "CURATED_REPORT_AMBIGUOUS", "CURATED_REPORT_INVALID",
     "CURATED_REPORT_MISSING", "INVALID_FIELD_VALUE", "MISSING_REQUIRED_FIELD", "UNDECLARED_FIELD",
 }
+
+
+_SECTION_PROPERTIES = {
+    "repository": {"type": "string", "pattern": r"\S", "not": {"pattern": "\x00"}},
+    "version": {"type": ["string", "null"]},
+    "findings": {"type": "array"},
+}
+_REPORT_CONTENT_VALIDATOR = Draft202012Validator({
+    "type": "object",
+    "properties": {
+        "findings": _SECTION_PROPERTIES["findings"],
+        "results": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": _SECTION_PROPERTIES,
+                "required": ["repository", "findings"],
+            },
+        },
+    },
+    "oneOf": [{"required": ["findings"]}, {"required": ["results"]}],
+})
 
 
 class DastReportValidationError(ValueError):
@@ -198,6 +223,13 @@ class ValidatedDastRunMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class DastReportSection:
+    repository: str | None
+    version: str | None
+    findings_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class ValidatedDastReport:
 
     """
@@ -212,6 +244,7 @@ class ValidatedDastReport:
     source_commits: tuple[tuple[str, Any], ...]
     findings_count: int
     canonical_json: bytes
+    sections: tuple[DastReportSection, ...]
     run_metadata: ValidatedDastRunMetadata | None = None
 
     def source_commit_for(self, repository_key: str) -> Any | None:
@@ -219,6 +252,25 @@ class ValidatedDastReport:
 
     def open_report(self) -> BytesIO:
         return BytesIO(self.canonical_json)
+
+    def open_sections(self):
+        """Yield parser envelopes in report order, decoding the canonical artifact only once."""
+        payload = json.loads(self.canonical_json)
+        if "results" not in payload:
+            yield self.open_report()
+            return
+        for section in payload["results"]:
+            envelope = {key: payload[key] for key in ("name", "type") if key in payload}
+            envelope.update({key: section[key] for key in ("version", "findings") if key in section})
+            yield BytesIO(json.dumps(envelope).encode("utf-8"))
+
+    def open_section(self, repository: str | None) -> BytesIO:
+        """Adapt a section to the existing single-test parser envelope."""
+        for section, envelope in zip(self.sections, self.open_sections(), strict=True):
+            if section.repository == repository:
+                return envelope
+        msg = f"Unknown DAST report section: {repository}."
+        raise KeyError(msg)
 
 
 def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -286,13 +338,13 @@ def _unstorable(where: str, value: str, limit: int | None) -> str | None:
     return None
 
 
-def _validate_storable_values(report: dict[str, Any], findings: list[Any]) -> None:
+def _validate_storable_values(report: dict[str, Any], findings: list[Any], *, prefix: str = "") -> None:
     """Refuse the report while it can still be refused cleanly, naming every unstorable value."""
     violations: list[str] = []
     report_version = report.get("version")
     if isinstance(report_version, str):
         envelope_violation = _unstorable(
-            "the report's 'version'",
+            f"{prefix}the report's 'version'",
             report_version,
             _text_limits(Test).get("version"),
         )
@@ -308,7 +360,7 @@ def _validate_storable_values(report: dict[str, Any], findings: list[Any]) -> No
             for field_name, value in finding.items()
             if isinstance(value, str)
             and (violation := _unstorable(
-                f"finding {position} ({_finding_label(finding)}): '{field_name}'",
+                f"{prefix}finding {position} ({_finding_label(finding)}): '{field_name}'",
                 value,
                 finding_limits.get(field_name),
             ))
@@ -580,6 +632,30 @@ def _run_metadata(
     )
 
 
+def _report_sections(report: dict[str, Any]) -> tuple[DastReportSection, ...]:
+    try:
+        _REPORT_CONTENT_VALIDATOR.validate(report)
+    except ValidationError as exc:
+        location = ".".join(str(part) for part in exc.absolute_path) or "content"
+        # Keep the message bounded: jsonschema's default message can include the entire input.
+        msg = f"DAST report {location} does not match the report schema ({exc.validator})."
+        raise _error(msg) from exc
+    envelopes = report.get("results", [report])
+    sections = []
+    repositories = set()
+    for envelope in envelopes:
+        repository = envelope.get("repository") if "results" in report else None
+        if repository in repositories:
+            msg = "DAST report repeats a section repository."
+            raise _error(msg)
+        repositories.add(repository)
+        prefix = f"section {repository!r}: " if len(envelopes) > 1 else ""
+        findings = envelope["findings"]
+        _validate_storable_values(envelope, findings, prefix=prefix)
+        sections.append(DastReportSection(repository, envelope.get("version"), len(findings)))
+    return tuple(sections)
+
+
 def validate_dast_report_bytes(
     raw: bytes,
     *,
@@ -593,11 +669,7 @@ def validate_dast_report_bytes(
     if report.get("type") != DAST_SCAN_TYPE:
         msg = "DAST report scan type is invalid."
         raise _error(msg)
-    findings = report.get("findings")
-    if not isinstance(findings, list):
-        msg = "DAST report findings must be an array."
-        raise _error(msg)
-    _validate_storable_values(report, findings)
+    sections = _report_sections(report)
     metadata = report.get("dast_run_metadata")
     if not isinstance(metadata, dict):
         msg = "DAST report metadata must be an object."
@@ -638,7 +710,8 @@ def validate_dast_report_bytes(
         run_id=run_id,
         target_id=target_id,
         source_commits=source_commits,
-        findings_count=len(findings),
+        findings_count=sum(section.findings_count for section in sections),
+        sections=sections,
         canonical_json=canonical_json,
         run_metadata=run_metadata,
     )

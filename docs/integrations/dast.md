@@ -11,6 +11,7 @@ DAST part of the SAST analyzer fan-out.
 | Organization access, project binding, launch admission, and pipeline history | Target policy, target-side execution, and provider progress |
 | Encrypted integration credential and synchronized capability snapshot | Gateway authentication and the provider contract |
 | Target-bound report validation, import, deduplication, finding review, and retention of what a report says about its run | Raw evidence, terminal result, report production, and the coverage and cost it reports |
+| Relaying one authorized operator decision into a running scan's work queue | The work queue itself: its vocabulary, which actions exist on each item, who may send them, and what each one does |
 
 The products do not share users, sessions, credentials, or a database. The DAST
 gateway is an external HTTPS boundary, optionally reached through the VPN
@@ -133,7 +134,8 @@ recovery state, outcome, and telemetry remain in the ephemeral execution
 workspace.
 
 AIST imports that file through the same report validator used for an operator
-upload. The validator accepts only the DAST scan type, an array of findings, a
+upload. The validator accepts only the DAST scan type, a flat findings array or per-repository
+result sections, a
 non-empty provider run identity, the target named by the selected binding, and
 source revisions whose repository identities the binding allows. It also
 enforces the report-size limit, and refuses a report or finding value the
@@ -145,6 +147,142 @@ identity, an oversized report, or an unstorable value fails before findings are
 persisted.
 [Reported run metadata](#reported-run-metadata) covers how descriptive values
 are handled.
+
+## The run's work queue
+
+While a DAST run exists, the work it still owes can be read — and, with the
+right gateway permission, steered — from the administrative AIST pipeline page
+(superusers only). It lists the job currently holding a claim, the jobs waiting
+behind it, the results the run has yet to record, any operator hold, and the
+leads the run declined to admit.
+
+A queue is addressed by the provider's own run identity, and AIST records that
+identity as soon as the connector reports the provider has accepted the run —
+not when the run ends. A scan can therefore be watched and steered while it is
+still going. A run that has started but has not been accepted yet has nothing to
+address, and the block says what it is waiting for rather than vanishing. A
+finished pipeline that never recorded a run identity gets no block at all.
+
+AIST holds no DAST vocabulary of its own here. The gateway publishes a
+descriptor for the run, and that descriptor carries the wording of every
+status, wait reason, phase, and agent contract, the generic icon that stands
+for each one, the catalog of actions and what each one does, the fields each
+action takes, and how often the gateway wants to be asked. Each queue row
+carries what may be done to that row. AIST renders what arrives: an identifier
+the descriptor does not define is shown as it arrived, and a form control this
+AIST version has no renderer for is shown read-only. A status, an action, or an
+editable field added on the DAST side therefore reaches the operator without an
+AIST release.
+
+The provider's contract for this surface is maintained with the DAST product
+rather than here, as `contracts/dast-integration.openapi.json` with a worked
+example per kind of target — a finished run among them — under
+`contracts/examples/queue/`. Addresses inside the payload are relative to the
+gateway's own `/integrations/v2/` prefix.
+
+### The page never reaches the gateway
+
+The route to a gateway runs through the integration's VPN sidecar and the
+container control that only a background worker has; the process that serves the
+page has neither. A read therefore renders the last queue a worker stored for
+this pipeline, and a command is handed to a worker to send. That stored queue
+belongs to the pipeline, so it stays readable as the record of a finished run
+even once the gateway no longer serves it.
+
+### What the gateway has to grant
+
+Queue access is granted per integrator on the DAST side, and nothing is granted
+by default:
+
+| Gateway capability | What it allows |
+|---|---|
+| `queue:read` | Reading the run's descriptor and its queue |
+| `queue:control` | Pausing, resuming, cancelling, delaying, editing, or admitting work |
+| `run:annotate` | Recording an operator note against a row |
+
+An integrator that holds none of them has no queue to show, and the block says
+so in one quiet line rather than reporting a fault. An integrator that holds
+only `queue:read` is served rows with no controls; the block states that it is
+read-only and names what the integration does hold. Granting these capabilities
+is a deployment step on the DAST side.
+
+### Two states, read separately
+
+A queue page carries two states that answer different questions. The queue's own
+state — active, pausing, or paused — is about operator holds. The run's
+lifecycle is separate, and a finished run whose queue nobody paused still
+reports that queue as active. The block therefore leads with the run's own
+lifecycle, and it is the page, not AIST, that says whether anything in that
+queue may still be changed.
+
+A finished run is read once and never polled again; its queue is a record of
+what the run did, not something that will move. Whether such a page still offers
+any control is the gateway's answer, and in practice the one it keeps offering
+is releasing an operator hold.
+
+### Cadence, freshness, and cost
+
+How often to ask is the gateway's decision. The descriptor carries the interval
+— one minute today — and the block re-reads on it. When the stored queue is
+older than that interval, a worker is asked for a fresh one and the block says a
+read is on its way while it keeps showing what it already has. **Refresh** asks
+for that read at once instead of waiting for the interval; it is still a worker
+that goes to the gateway.
+
+Upstream this costs one read per interval however many pipeline pages are open,
+because they all render the same stored queue and a stale one asks for at most
+one refresh in a short window. The worker asks conditionally, so a queue that
+has not moved costs no page at all. A read that fails leaves the previous queue
+in place with its own age on it rather than emptying the block over one bad
+call. A command is followed by a fresh read, so what the operator sees next
+reports what the command actually did.
+
+Collecting a command's answer costs the gateway nothing: it reads what the
+worker left behind. It is therefore bounded separately from the reads and
+commands that do leave the deployment, so a page waiting on one answer cannot
+spend the budget the next command needs.
+
+### What an operator may send
+
+An operator names an action and the row it applies to, and fills in the fields
+that action declared. Nothing else about the outbound request comes from the
+browser. The worker that sends it re-reads the row from the gateway, takes the
+method and the address from the affordance the gateway published for it, drops
+every field that action did not declare writable, and refuses a form field that
+asks for a credential — the queue has no business collecting one. An action a
+row does not advertise has no address, so an action this integrator was never
+granted stays unreachable.
+
+Each command carries the queue revision the operator decided against and an
+identifier for the decision itself. A run that has moved on refuses the command
+instead of applying it to a queue the operator never saw, and an identical retry
+returns the first receipt instead of applying twice.
+
+Because a worker is what reaches the gateway, the command is accepted before it
+is sent: AIST confirms it holds the decision, and the gateway's answer arrives
+afterwards under that same identifier, left where the process serving the page
+can collect it — see
+[runtime deployment](../architecture/runtime-deployment.md#state-and-queued-work).
+A refusal is shown as the gateway wrote it, including which field was at fault
+and what that field allows. An answer is collectable only by the operator who
+sent it, and only for a while — and not at all while that shared store is
+unreachable, although the command itself was still sent. After that the queue
+itself is the record.
+
+The endpoints behind the block require project read access to read a queue and
+project-operate permission to command one — the same authority as stopping a
+pipeline. See
+[access control and roles](../security/access-control-and-roles.md).
+
+### When part of a payload cannot be read
+
+The payload is bounded and shape-checked before anything renders it or acts on
+it, and a failure is made to cost as little as it can. One row this AIST version
+cannot read costs that row: it still counts in the run's totals, and the number of rows
+left out is shown, so the block never quietly lists fewer items than the run
+owes. One action AIST will not send costs that control rather than the row it
+sits on. Only a page envelope with no usable revision costs the whole page,
+because the revision is what a command is decided against.
 
 ## Manual result import
 
@@ -171,13 +309,59 @@ see [pipeline execution](../product/pipeline-execution.md).
 Confirmation creates an import pipeline and applies the same result validation
 and finding lifecycle used by an autonomous result.
 
-The selected project binding defines the run's deduplication namespace. Findings
-imported through different bindings are never compared for either automatic DAST
-deduplication or candidate ranking; repeated imports through the same binding are
-eligible. The binding stays on the pipeline rather than being copied into finding
-metadata. If a binding is deleted its saved pipeline link becomes empty; recreating
-the configuration creates a new binding and therefore a new namespace. See
-[canonical deduplication](../aist-canonical-dedupe.md).
+## Reports covering several repositories
+
+A deployed target may contain several repositories. Its report can carry a
+`results` array in place of the flat `findings` array. Each section names its
+`repository`, may describe its `version`, and carries its own `findings` array.
+Repository keys must be non-blank and unique across sections. A report cannot
+carry both forms at once. Source revisions remain in
+`dast_run_metadata.source_commits`; a section's descriptive version does not
+choose the Git revision to which findings attach.
+
+For example, the content of a report for two repositories has this shape,
+alongside its usual run metadata:
+
+```json
+{
+  "name": "DAST",
+  "type": "DAST Autonomous Scan",
+  "results": [
+    {"repository": "nx", "version": "nx@155f8d82", "findings": []},
+    {"repository": "cloud_portal", "version": "cloud_portal@5db4fd5d", "findings": []}
+  ]
+}
+```
+
+AIST resolves each section against enabled project bindings of the same target
+in the same organization. Exactly one matching source-repository key, together
+with a reported source commit, routes the section to that binding's project and
+commit version. A missing or disabled binding, an ambiguous match, or a missing
+source commit keeps the section in the launching project on that project's
+resolved version. Configuration gaps therefore do not discard findings. The
+existing flat format still imports entirely into the launching project.
+
+The import preview shows each repository, finding count, destination project,
+source commit, and any fallback reason. Preview requires read access to every
+destination; confirmation requires project-operate permission for every
+destination. An inaccessible destination rejects the request without revealing
+its identity. The worker checks authority for additional destination projects
+again before writing results, including for autonomous runs.
+
+All sections pass through the same importer in one transaction. An error in any
+section rolls back the whole import. One pipeline remains in the launching
+project, owns the run's duration and cost, and links all imported tests. Each
+project's findings attach to its own version. The destination binding is saved
+with each test, so its findings can be compared against that project's history
+regardless of which project launched the run. See
+[canonical deduplication](../aist-canonical-dedupe.md) for namespace and matching
+rules.
+
+Redelivery to a finalized pipeline returns its saved destinations without
+importing again or recalculating routes. Uploading the same file again through
+the same launch binding reuses the active or successfully imported pipeline.
+An attempt that ended before importing results can be retried. A changed report
+cannot replace a report already finalized on a pipeline.
 
 ## Reported run metadata
 

@@ -5,10 +5,14 @@ import logging
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.core.exceptions import ValidationError
+from django.test import TestCase, override_settings
 from django.utils import timezone
-from dojo.models import Finding, Product, Product_Type, SLA_Configuration, Test
+from dojo.authorization.roles_permissions import Roles
+from dojo.finding.deduplication import dedupe_batch_of_findings
+from dojo.models import Finding, Product, Product_Type, Product_Type_Member, Role, SLA_Configuration, Test
 
+from aist.dedupe.custom import _dast_binding_by_finding_id, resolve_dedupe_scope
 from aist.integrations.dast_report import validate_dast_report_bytes
 from aist.models import (
     AISTPipeline,
@@ -19,6 +23,7 @@ from aist.models import (
     DastProjectBinding,
     DastRunMetadata,
     DastTarget,
+    DastTestBinding,
     Organization,
     OrgIntegration,
     OrgIntegrationType,
@@ -31,6 +36,8 @@ from aist.models import (
 )
 from aist.parser_overrides import DAST_SCAN_TYPE
 from aist.services.dast_finalization import DastFinalizationError, finalize_dast_report
+from aist.services.dast_report_routing import resolve_dast_report_routes
+from aist.test import dast_fixtures
 
 ACTUAL_SHA = "a" * 40
 TRIGGER_BRANCH = "release/2026-07"
@@ -545,3 +552,231 @@ class DastFinalizationTests(TestCase):
         dispatched_ids = self.post_processing_dispatch.call_args[0][1]
         self.assertEqual(sorted(dispatched_ids), sorted(result.finding_ids))
         self.assertTrue(dispatch_kwargs["dedupe_option"])
+
+    def _sectioned_report(self):
+        self.binding.target.repository_keys = ["backend", "portal"]
+        self.binding.target.save(update_fields=["repository_keys"])
+        role, _ = Role.objects.get_or_create(id=Roles.Maintainer, defaults={"name": "Maintainer"})
+        Product_Type_Member.objects.create(product_type=self.organization.product_type, user=self.lead, role=role)
+        product = Product.objects.create(
+            name="Portal", description="Portal", prod_type=self.project.product.prod_type,
+            sla_configuration=self.project.product.sla_configuration,
+        )
+        repository = RepositoryInfo.objects.create(type=ScmType.GITHUB, repo_owner="acme", repo_name="portal")
+        project = AISTProject.objects.create(product=product, repository=repository)
+        destination = DastProjectBinding.objects.create(
+            project=project, target=self.binding.target, source_repo_key="portal", enabled=True,
+        )
+        payload = json.loads(_validated_report(correlation_id=self.remote.id).canonical_json)
+        findings = payload.pop("findings")
+        payload["results"] = [
+            {"repository": "backend", "version": "backend@a", "findings": findings},
+            {"repository": "portal", "version": "portal@b", "findings": findings},
+        ]
+        payload["dast_run_metadata"]["source_commits"]["portal"] = "b" * 40
+        report = validate_dast_report_bytes(
+            json.dumps(payload).encode(), target_id=self.binding.target.provider_id,
+            allowed_repository_keys=frozenset({"backend", "portal"}),
+        )
+        return destination, report
+
+    def test_sections_land_in_their_products_and_redelivery_is_atomic(self):
+        destination, report = self._sectioned_report()
+        with self.captureOnCommitCallbacks(execute=False):
+            first = finalize_dast_report(
+                pipeline_id=self.remote.id, report=report, binding=self.binding, logger=LOGGER, lead=self.lead,
+            )
+        self.assertEqual(len(first.sections), 2)
+        self.remote.refresh_from_db()
+        self.assertEqual(self.remote.project_id, self.project.pk)
+        self.assertEqual(self.remote.tests.count(), 2)
+        portal = first.sections[1]
+        version = AISTProjectVersion.objects.get(pk=portal.project_version_id)
+        self.assertEqual((version.project_id, version.version), (destination.project_id, "b" * 40))
+        self.assertEqual(set(version.findings.values_list("pk", flat=True)), set(portal.finding_ids))
+        self.assertEqual(Test.objects.get(pk=portal.test_id).engagement.product_id, destination.project.product_id)
+        destination.enabled = False
+        destination.save(update_fields=["enabled"])
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            second = finalize_dast_report(
+                pipeline_id=self.remote.id, report=report, binding=self.binding, logger=LOGGER, lead=self.lead,
+            )
+        self.assertTrue(second.already_finalized)
+        self.assertEqual(second.sections, first.sections)
+        self.assertEqual(callbacks, [])
+        self.assertEqual(self.remote.tests.count(), 2)
+
+    def test_disabled_destination_keeps_all_findings_on_launch_project(self):
+        destination, report = self._sectioned_report()
+        destination.enabled = False
+        destination.save(update_fields=["enabled"])
+        with self.captureOnCommitCallbacks(execute=False):
+            result = finalize_dast_report(
+                pipeline_id=self.remote.id, report=report, binding=self.binding, logger=LOGGER, lead=self.lead,
+            )
+        self.assertEqual(len(result.finding_ids), 2)
+        self.assertEqual({s.project_version_id for s in result.sections}, {result.project_version_id})
+        self.assertEqual({s.binding_id for s in result.sections}, {self.binding.pk})
+
+    def test_second_section_import_failure_rolls_back_first_section(self):
+        _destination, report = self._sectioned_report()
+        payload = json.loads(report.canonical_json)
+        payload["results"][1]["findings"][0].pop("description")
+        report = validate_dast_report_bytes(
+            json.dumps(payload).encode(), target_id=report.target_id,
+            allowed_repository_keys=frozenset({"backend", "portal"}),
+        )
+        before = (Test.objects.count(), Finding.objects.count())
+        with self.captureOnCommitCallbacks(execute=False) as callbacks, self.assertRaises(ValidationError):
+            finalize_dast_report(
+                pipeline_id=self.remote.id, report=report, binding=self.binding, logger=LOGGER, lead=self.lead,
+            )
+        self.assertEqual((Test.objects.count(), Finding.objects.count()), before)
+        self.assertEqual(callbacks, [])
+        self.remote.refresh_from_db()
+        self.assertNotIn("dast_finalization", self.remote.launch_data or {})
+
+    def test_missing_commit_and_ambiguous_binding_fall_back_without_losing_sections(self):
+        destination, report = self._sectioned_report()
+        payload = json.loads(report.canonical_json)
+        del payload["dast_run_metadata"]["source_commits"]["portal"]
+        no_commit = validate_dast_report_bytes(
+            json.dumps(payload).encode(), target_id=report.target_id,
+            allowed_repository_keys=frozenset({"backend", "portal"}),
+        )
+        route = resolve_dast_report_routes(no_commit, self.binding)[1]
+        self.assertEqual((route.binding.pk, route.fallback_reason), (self.binding.pk, "missing_source_commit"))
+        destination.source_repo_key = "backend"
+        destination.save(update_fields=["source_repo_key"])
+        route = resolve_dast_report_routes(report, self.binding)[0]
+        self.assertEqual((route.binding.pk, route.fallback_reason), (self.binding.pk, "ambiguous_binding"))
+
+    def test_routing_does_not_use_another_targets_binding(self):
+        destination, report = self._sectioned_report()
+        target = self.binding.target
+        target.pk = None
+        target.provider_id = "another-target"
+        target.save()
+        destination.target = target
+        destination.save(update_fields=["target"])
+        route = resolve_dast_report_routes(report, self.binding)[1]
+        self.assertEqual((route.binding.pk, route.fallback_reason), (self.binding.pk, "no_enabled_binding"))
+
+    def test_legacy_finalization_marker_still_short_circuits(self):
+        report = _validated_report(correlation_id=self.remote.id)
+        with self.captureOnCommitCallbacks(execute=False):
+            result = finalize_dast_report(
+                pipeline_id=self.remote.id, report=report, binding=self.binding, logger=LOGGER, lead=self.lead,
+            )
+        self.remote.refresh_from_db()
+        marker = self.remote.launch_data["dast_finalization"]
+        marker.update(
+            version="1", project_version_id=result.project_version_id,
+            test_id=result.test_id, finding_ids=list(result.finding_ids),
+        )
+        self.remote.save(update_fields=["launch_data"])
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            repeated = finalize_dast_report(
+                pipeline_id=self.remote.id, report=report, binding=self.binding, logger=LOGGER, lead=self.lead,
+            )
+        self.assertTrue(repeated.already_finalized)
+        self.assertEqual(repeated.finding_ids, result.finding_ids)
+        self.assertEqual(callbacks, [])
+
+    @override_settings(
+        FINDING_DEDUPE_METHOD="aist.dedupe.custom.custom_dedupe_finding",
+        FINDING_DEDUPE_BATCH_METHOD="aist.dedupe.custom.custom_dedupe_batch",
+    )
+    def test_routed_findings_share_namespace_with_destination_history(self):
+        destination, report = self._sectioned_report()
+        history = AISTPipeline.objects.create(
+            project=destination.project, dast_binding=destination,
+            execution_type=PipelineExecutionType.MANUAL_IMPORT, status=AISTStatus.ADMITTED,
+        )
+        with self.captureOnCommitCallbacks(execute=False):
+            old = finalize_dast_report(
+                pipeline_id=history.pk, report=report, binding=destination, logger=LOGGER, lead=self.lead,
+            )
+            current = finalize_dast_report(
+                pipeline_id=self.remote.pk, report=report, binding=self.binding, logger=LOGGER, lead=self.lead,
+            )
+        current_finding = Finding.objects.select_related("test__engagement", "test__test_type").get(
+            pk=current.sections[1].finding_ids[0],
+        )
+        old_id = old.sections[1].finding_ids[0]
+        # Historical tests have no explicit destination and inherit their launch binding.
+        DastTestBinding.objects.filter(test_id=old.sections[1].test_id).delete()
+        self.assertEqual(_dast_binding_by_finding_id([current_finding]), {current_finding.pk: destination.pk})
+        self.assertIn(old_id, {finding.pk for finding in resolve_dedupe_scope([current_finding])})
+        self.assertNotIn(current.sections[0].finding_ids[0], {
+            finding.pk for finding in resolve_dedupe_scope([current_finding])
+        })
+        dedupe_batch_of_findings([current_finding])
+        current_finding.refresh_from_db()
+        self.assertTrue(current_finding.duplicate)
+        self.assertEqual(current_finding.duplicate_finding_id, old_id)
+        DastTestBinding.objects.filter(test_id=current_finding.test_id).update(binding=None)
+        self.assertIsNone(_dast_binding_by_finding_id([current_finding])[current_finding.pk])
+
+    def test_cross_project_import_requires_destination_authority(self):
+        _destination, report = self._sectioned_report()
+        outsider = get_user_model().objects.create_user(username="no-destination-access")
+        before = Test.objects.count()
+        with self.assertRaises(PermissionError):
+            finalize_dast_report(
+                pipeline_id=self.remote.pk, report=report, binding=self.binding, logger=LOGGER, lead=outsider,
+            )
+        self.assertEqual(Test.objects.count(), before)
+
+    def test_invalid_completion_receipt_never_causes_a_second_import(self):
+        report = _validated_report(correlation_id=self.remote.id)
+        with self.captureOnCommitCallbacks(execute=False):
+            finalize_dast_report(
+                pipeline_id=self.remote.pk, report=report, binding=self.binding, logger=LOGGER, lead=self.lead,
+            )
+        self.remote.refresh_from_db()
+        receipt = self.remote.launch_data["dast_finalization"]
+        self.assertEqual(set(receipt), {"binding_id", "run_id", "correlation_id", "report_sha256"})
+        for invalid in ({**receipt, "binding_id": True}, {**receipt, "sections": []}, {"run_id": report.run_id}):
+            with self.subTest(receipt=invalid):
+                self.remote.launch_data["dast_finalization"] = invalid
+                self.remote.save(update_fields=["launch_data"])
+                with self.assertRaisesRegex(DastFinalizationError, "receipt is invalid"):
+                    finalize_dast_report(
+                        pipeline_id=self.remote.pk, report=report, binding=self.binding, logger=LOGGER, lead=self.lead,
+                    )
+                self.assertEqual(self.remote.tests.count(), 1)
+
+    def test_revoked_destination_access_before_finalization_leaves_no_partial_results(self):
+        destination, report = self._sectioned_report()
+        Product_Type_Member.objects.filter(user=self.lead).delete()
+        before = Test.objects.count()
+        with self.assertRaises(PermissionError):
+            finalize_dast_report(
+                pipeline_id=self.remote.pk, report=report, binding=self.binding, logger=LOGGER, lead=self.lead,
+            )
+        self.assertEqual(Test.objects.count(), before)
+        self.assertFalse(AISTProjectVersion.objects.filter(project_id=destination.project_id).exists())
+
+    def test_same_provider_and_repository_keys_in_another_tenant_never_receive_a_section(self):
+        destination, report = self._sectioned_report()
+        destination.enabled = False
+        destination.save(update_fields=["enabled"])
+        product_type = Product_Type.objects.create(name="Other tenant")
+        organization = Organization.objects.create(name="Other tenant", product_type=product_type)
+        integration, _state = dast_fixtures.create_dast_integration(organization=organization)
+        target = dast_fixtures.create_dast_target(
+            integration=integration,
+            wire=dast_fixtures.target_wire(provider_id=report.target_id, repository_keys=["portal"]),
+        )
+        product = Product.objects.create(
+            name="Other tenant portal", description="Portal", prod_type=product_type,
+            sla_configuration=self.project.product.sla_configuration,
+        )
+        project = AISTProject.objects.create(
+            product=product,
+            repository=RepositoryInfo.objects.create(type=ScmType.GITHUB, repo_owner="other", repo_name="portal"),
+        )
+        dast_fixtures.create_dast_binding(project=project, target=target)
+        route = resolve_dast_report_routes(report, self.binding)[1]
+        self.assertEqual((route.binding.pk, route.fallback_reason), (self.binding.pk, "no_enabled_binding"))

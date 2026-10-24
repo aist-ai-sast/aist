@@ -97,7 +97,10 @@ class DastCancellationTests(AISTApiBase):
         pipeline, request = self._pipeline_with_request()
 
         with (
-            patch("aist.utils.pipeline.cleanup_pipeline_containers") as cleanup,
+            # The sweep is dispatched, not run here: the Docker socket belongs to the worker, so a
+            # stop swept in the web process reaches no container and the provider run carries on.
+            patch("aist.tasks.pipeline.stop_pipeline_execution.delay") as dispatched,
+            patch("aist.utils.pipeline.cleanup_pipeline_containers") as swept_here,
             patch("aist.utils.pipeline._revoke_task") as revoke,
             self.captureOnCommitCallbacks(execute=True),
         ):
@@ -113,14 +116,15 @@ class DastCancellationTests(AISTApiBase):
         self.assertEqual(pipeline.status, AISTStatus.EXECUTING)
         self.assertEqual(pipeline.run_task_id, "dast-task-id")
         self.assertEqual(request.state, PipelineLaunchRequestState.DISPATCHED)
-        cleanup.assert_called_once_with(pipeline.id)
+        dispatched.assert_called_once_with(pipeline.id)
+        swept_here.assert_not_called()
         revoke.assert_not_called()
 
     def test_cancel_before_dispatch_never_waits_for_a_provider_run(self):
         pipeline, request = self._pipeline_with_request(state=PipelineLaunchRequestState.PUBLISHED)
 
         with (
-            patch("aist.utils.pipeline.cleanup_pipeline_containers") as cleanup,
+            patch("aist.tasks.pipeline.stop_pipeline_execution.delay") as dispatched,
             patch("aist.utils.pipeline._revoke_task") as revoke,
             patch("aist.utils.pipeline.finish_pipeline") as finish,
         ):
@@ -131,7 +135,7 @@ class DastCancellationTests(AISTApiBase):
         request.refresh_from_db()
         self.assertEqual(request.state, PipelineLaunchRequestState.CANCELLED)
         self.assertEqual(execution_state.outcome, DastExecutionOutcome.CANCELLED_BEFORE_START)
-        cleanup.assert_not_called()
+        dispatched.assert_not_called()
         revoke.assert_called_once_with("dast-task-id")
         finish.assert_called_once_with(pipeline.id, degraded=True)
 
@@ -145,7 +149,7 @@ class DastCancellationTests(AISTApiBase):
         execution_state.save(update_fields=["outcome", "updated"])
 
         with (
-            patch("aist.utils.pipeline.cleanup_pipeline_containers") as cleanup,
+            patch("aist.tasks.pipeline.stop_pipeline_execution.delay") as dispatched,
             patch("aist.utils.pipeline._revoke_task") as revoke,
         ):
             stop_pipeline(pipeline)
@@ -156,7 +160,7 @@ class DastCancellationTests(AISTApiBase):
         self.assertIsNone(execution_state.cancel_requested_at)
         self.assertEqual(execution_state.outcome, DastExecutionOutcome.TERMINAL)
         self.assertEqual(request.state, PipelineLaunchRequestState.DISPATCHED)
-        cleanup.assert_not_called()
+        dispatched.assert_not_called()
         revoke.assert_not_called()
 
     def test_confirmed_provider_stop_is_terminal_before_request_and_lease_release(self):
