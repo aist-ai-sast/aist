@@ -327,10 +327,13 @@ Adding a status or an editable field on the DAST side changes nothing here.
         }
         if (state.page.dropped_rows) {
             // The payload carried rows this build could not read. Showing fewer items than the run
-            // owes without saying so would be worse than saying so.
+            // owes without saying so would be worse than saying so, and naming them is what makes
+            // the next question -- why this row -- answerable without reading a worker log.
+            var lost = (state.page.dropped_ids || []).join(", ");
             band("warning", state.page.dropped_rows + " row(s) could not be read.",
-                 "They are counted in the totals but not listed here. The queue has probably gained a "
-                 + "shape this page predates.");
+                 (lost ? lost + " — counted" : "They are counted")
+                 + " in the totals but not listed here. The queue has probably gained a shape this "
+                 + "page predates.");
         }
         if (state.page.mutations_frozen) {
             band("info", term("run_state", state.page.run_state).label + ".",

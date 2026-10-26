@@ -276,13 +276,22 @@ pipeline. See
 
 ### When part of a payload cannot be read
 
-The payload is bounded and shape-checked before anything renders it or acts on
-it, and a failure is made to cost as little as it can. One row this AIST version
-cannot read costs that row: it still counts in the run's totals, and the number of rows
-left out is shown, so the block never quietly lists fewer items than the run
-owes. One action AIST will not send costs that control rather than the row it
-sits on. Only a page envelope with no usable revision costs the whole page,
-because the revision is what a command is decided against.
+AIST knows the envelope of a queue page — which fields a row has, and whether
+each one reads as text, a list, a count, or a nested record — because it lays
+the page out. It does not know what the gateway puts in those fields, so it
+states no format and no length a value has to match. What bounds the payload is
+the response itself: a worker refuses a queue page larger than 2 MiB before
+parsing any of it. Within that page every size is a matter of what the block
+can show rather than what the gateway is allowed to send, and a failure is made
+to cost the smallest thing it can.
+
+| What arrives | What it costs |
+|---|---|
+| A value longer, or a list fuller, than the block shows | The excess only; the row is listed, cut to fit. A field the gateway has no value for reads as absent |
+| One result or one action on a row that this build cannot read, or an action it will not send | That record only; the row keeps its other results and controls |
+| A row this build cannot read | That row. It still counts in the run's totals, and the block names the rows it is not listing |
+| More rows than one page holds | The rows past the limit; the run's own total still reports everything it owes |
+| A page envelope with no usable revision | The whole page, because the revision is what a command is decided against |
 
 ## Manual result import
 

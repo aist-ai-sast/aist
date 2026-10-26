@@ -161,10 +161,15 @@ class QueuePayloadEnvelopeTests(SimpleTestCase):
         page["items"][0]["actions"][0]["method"] = "PUT"
         self.assertEqual(self._offered(page), [])
 
-    def test_oversized_page_is_refused(self):
+    def test_a_page_longer_than_this_build_holds_is_cut_not_refused(self):
+        # The envelope still reports what the run owns, so a cut page says "more than is listed"
+        # while a refused one says nothing at all.
         item = _page()["items"][0]
-        with self.assertRaises(DastQueueContractError):
-            normalise_page(_page(items=[dict(item, item_id=f"item-{index}") for index in range(501)]))
+        page = normalise_page(_page(
+            items=[dict(item, item_id=f"item-{index}") for index in range(501)], total=501,
+        ))
+        self.assertEqual(len(page["items"]), 500)
+        self.assertEqual(page["total"], 501)
 
     def test_vocabulary_the_gateway_adds_later_still_renders(self):
         # A status, wait reason or icon this build has never heard of is data, not an error: the
@@ -260,6 +265,113 @@ class AdditiveChangeTests(SimpleTestCase):
         # read would offer controls that can only be refused, so this one is not negotiable.
         with self.assertRaises(DastQueueContractError):
             normalise_page(_page(revision="seven"))
+
+
+class ValueBoundTests(SimpleTestCase):
+
+    """
+    What a row carries is cut to fit, never grounds to lose the row.
+
+    AIST lays the page out, so it knows a row has `inputs` and that they read as a list. It does not
+    know what the gateway lists in them, and the build that assumed cost an operator a real row: a
+    job listed a value longer than the id length this contract had guessed, the whole job vanished
+    from a finished run's queue while still being counted in its totals, and the only record of
+    which row it had been was one line in a worker log.
+    """
+
+    def test_a_listed_value_longer_than_an_id_is_cut_rather_than_costing_the_row(self):
+        page = _page()
+        page["items"][0]["inputs"] = ["https://app.example/discovered?" + "q" * 4000]
+        normalised = normalise_page(page)
+        self.assertEqual(normalised["dropped_rows"], 0)
+        self.assertEqual(len(normalised["items"][0]["inputs"][0]), 2048)
+
+    def test_a_list_with_more_entries_than_expected_keeps_what_fits(self):
+        page = _page()
+        page["items"][0]["plan_rows"] = [f"row-{index}" for index in range(200)]
+        normalised = normalise_page(page)
+        self.assertEqual(normalised["dropped_rows"], 0)
+        self.assertEqual(len(normalised["items"][0]["plan_rows"]), 128)
+
+    def test_an_entry_that_is_not_a_value_is_left_out_and_the_row_stays(self):
+        page = _page()
+        page["items"][0]["scope"] = ["app.example", {"host": "api.example"}, "api.example"]
+        normalised = normalise_page(page)
+        self.assertEqual(normalised["dropped_rows"], 0)
+        self.assertEqual(normalised["items"][0]["scope"], ["app.example", "api.example"])
+
+    def test_null_reads_as_a_field_the_gateway_has_no_value_for(self):
+        page = _page()
+        page["items"][0].update({"objective": None, "attempt": None, "scope": None})
+        normalised = normalise_page(page)
+        item = normalised["items"][0]
+        self.assertEqual(normalised["dropped_rows"], 0)
+        self.assertEqual((item["objective"], item["attempt"], item["scope"]), ("", 0, []))
+
+    def test_more_results_than_expected_cost_the_extra_ones_only(self):
+        page = _page()
+        page["items"][0]["work_subjects"] = [
+            {"role": "outcome", "verdict_id": f"v{index}"} for index in range(80)
+        ]
+        normalised = normalise_page(page)
+        self.assertEqual(normalised["dropped_rows"], 0)
+        self.assertEqual(len(normalised["items"][0]["work_subjects"]), 64)
+
+    def test_one_unreadable_result_costs_that_result_only(self):
+        page = _page()
+        page["items"][0]["work_subjects"] = ["not a record", {"role": "outcome", "verdict_id": "v1"}]
+        normalised = normalise_page(page)
+        self.assertEqual(normalised["dropped_rows"], 0)
+        self.assertEqual(
+            [subject["verdict_id"] for subject in normalised["items"][0]["work_subjects"]], ["v1"],
+        )
+
+    def test_more_actions_than_expected_cost_the_extra_controls_only(self):
+        page = _page()
+        page["items"][0]["actions"] = [
+            _action(f"act-{index}", suffix=f"/act-{index}") for index in range(12)
+        ]
+        normalised = normalise_page(page)
+        self.assertEqual(normalised["dropped_rows"], 0)
+        self.assertEqual(len(normalised["items"][0]["actions"]), 8)
+
+    def test_an_address_off_the_gateway_is_the_one_thing_a_cut_never_reaches(self):
+        page = _page()
+        page["items"][0]["actions"] = [
+            {"name": "elsewhere", "method": "POST", "href": "../../other-run/queue", "fields": []},
+        ]
+        normalised = normalise_page(page)
+        self.assertEqual(normalised["dropped_rows"], 0)
+        self.assertEqual(normalised["items"][0]["actions"], [])
+
+    def test_a_row_with_no_name_is_refused_because_an_empty_name_addresses_the_run(self):
+        # A command carrying no item id is a command aimed at the run. A row kept without a name
+        # would offer its own controls and quietly send them against the whole run instead.
+        for missing in ({}, {"item_id": ""}, {"item_id": None}):
+            with self.subTest(missing=missing):
+                item = dict(_page()["items"][0])
+                item.pop("item_id")
+                item.update(missing)
+                normalised = normalise_page(_page(items=[item]))
+                self.assertEqual(normalised["items"], [])
+                self.assertEqual(normalised["dropped_rows"], 1)
+
+    def test_a_name_too_long_to_address_with_is_refused_rather_than_cut(self):
+        # Cutting it would produce a name that looks addressable and resolves to the wrong row.
+        page = _page()
+        page["items"][0]["item_id"] = "item-" + "x" * 300
+        self.assertEqual(normalise_page(page)["dropped_rows"], 1)
+
+    def test_the_page_names_the_row_it_could_not_read(self):
+        # Without the id an operator sees a tally and has no way to ask which row is missing.
+        page = _page(items=[
+            {"item_id": "agent-chasing-a-lead", "type": "job", "status": "completed",
+             "attempt": "several"},
+            _page()["items"][0],
+        ])
+        normalised = normalise_page(page)
+        self.assertEqual(normalised["dropped_rows"], 1)
+        self.assertEqual(normalised["dropped_ids"], ["agent-chasing-a-lead"])
 
 
 class SubmittedValueTests(SimpleTestCase):

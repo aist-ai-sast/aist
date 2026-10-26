@@ -312,6 +312,32 @@ class DastQueueAPITests(AISTApiBase):
         self.assertEqual(snapshot.page["revision"], 7)
         self.assertEqual(snapshot.source, DastQueueSnapshot.SOURCE_GATEWAY)
 
+    def test_a_job_listing_more_than_an_id_still_reaches_the_operator(self):
+        # The shape that cost a finished run one of its jobs: a value listed on a row was longer
+        # than the id length this contract had assumed, and the whole row was refused while its
+        # status kept being counted in the totals the page shows.
+        page = _page()
+        page["items"][0]["inputs"] = ["https://app.example/discovered?" + "q" * 4000]
+        with self._patch(FakeGateway(page=page)):
+            refresh_snapshot(self.pipeline)
+        stored = DastQueueSnapshot.objects.get(pipeline=self.pipeline).page
+        self.assertEqual(stored["dropped_rows"], 0)
+        self.assertEqual([item["item_id"] for item in stored["items"]], ["item-1"])
+
+    def test_a_row_this_build_cannot_read_is_named_for_the_page_that_shows_the_gap(self):
+        page = _page(items=[
+            {"item_id": "agent-chasing-a-lead", "type": "job", "status": "completed",
+             "attempt": "several"},
+            _page()["items"][0],
+        ])
+        with self._patch(FakeGateway(page=page)):
+            refresh_snapshot(self.pipeline)
+        stored = DastQueueSnapshot.objects.get(pipeline=self.pipeline).page
+        self.assertEqual(stored["dropped_rows"], 1)
+        self.assertEqual(stored["dropped_ids"], ["agent-chasing-a-lead"])
+        self.assertEqual(self.client.get(self.read_url).json()["page"]["dropped_ids"],
+                         ["agent-chasing-a-lead"])
+
     def test_an_unavailable_run_is_stored_as_the_answer_it_is(self):
         fake = FakeGateway(read_error="UNKNOWN_RUN")
         with self._patch(fake):

@@ -4,24 +4,36 @@ The envelope AIST accepts from the DAST gateway's queue surface.
 The queue is deliberately self-describing: the gateway sends the vocabulary, the per-item
 affordances and the form fields, and AIST renders them without knowing what a status, a wait reason
 or a skill means. That inversion moves the trust boundary rather than removing it -- the payload is
-tenant-supplied data driving a superuser-facing page, so it is bounded and shape-checked here, once,
-before anything renders it or acts on it.
+tenant-supplied data driving a superuser-facing page, so every address it carries is checked here,
+once, before anything renders it or acts on it.
 
 The shapes are declared as serializers because that is how everything else in ``aist`` states a
-payload contract: lengths and list sizes are bounds, not assertions sprinkled through the reader, and
-an unknown key is dropped rather than refused, which is what keeps an additive contract change on the
-gateway side from breaking this page.
+payload contract. What they are allowed to say about a value is deliberately narrow. AIST knows the
+envelope -- which fields a row has, and whether each one reads as text, a list, a count or a nested
+record -- because it lays the page out. It does not know the content, so it declares no format a
+value must match and no length it must respect: a bound here is a cut, applied so one value cannot
+crowd a row out of the page, never a claim about what the gateway may put there. The payload's real
+memory guard sits a layer out, where the gateway client refuses a response over 2 MiB before
+anything here parses a byte.
 
-Two refusals here are load-bearing rather than hygienic:
+The invariant that follows: only an address may refuse. A value longer than expected, a list with
+more entries than expected, a ``null`` where text was expected -- each costs that value and never
+the row it sits on, and an unknown key is dropped rather than refused. That is what keeps an
+additive contract change on the gateway side from breaking this page.
+
+Three refusals here are load-bearing rather than hygienic:
 
 - an address that is not relative to the gateway's own ``/integrations/v2/`` prefix, so a descriptor
   can never aim AIST's own outbound request at another host;
+- a row with no ``item_id``, because an empty one addresses the run rather than an item, and a row
+  kept without a name would offer controls that act on something other than the row they sit on;
 - a form field whose name reads like a credential, because the queue has no business asking AIST to
   collect one.
 
-What it deliberately does not refuse: an unknown vocabulary id, action name or icon token. Those are
-additive by contract -- the renderer shows the raw id, and a field type it cannot render it shows
-read-only -- and refusing them would reintroduce the coupling this surface exists to remove.
+What it deliberately does not refuse: an unknown vocabulary id, action name or icon token, and the
+size or shape of anything a row carries for display. Those are additive by contract -- the renderer
+shows the raw id, and a field type it cannot render it shows read-only -- and refusing them would
+reintroduce the coupling this surface exists to remove.
 """
 
 from __future__ import annotations
@@ -46,6 +58,9 @@ MAX_HISTORY_ROWS = 200
 MAX_WORK_SUBJECTS = 64
 MAX_TEXT = 64 * 1024
 MAX_ID = 256
+#: One entry of a listed value, cut to this. Not a memory guard -- the gateway client already
+#: refuses a response over 2 MiB -- just a stop on one entry crowding out the rest of a row.
+MAX_LIST_ENTRY = 2048
 
 #: Form controls this build knows how to render. A field of any other type is kept and shown
 #: read-only, so a type the gateway adds later degrades instead of disappearing.
@@ -123,11 +138,14 @@ class BoundedTextField(serializers.CharField):
     """
     Free text that is cut to its bound instead of refusing the payload it arrived in.
 
-    The bounds here exist so one page cannot exhaust a worker, not to police wording. An objective or
-    a verdict's conclusion that came out longer than expected is still worth showing: truncating it
-    costs the operator a few words, while refusing it would blank the whole queue because somebody
-    wrote a long sentence. Ids are the exception and stay strict -- a truncated id addresses the
-    wrong thing -- so they are declared with `max_length` as usual.
+    The bound exists so one value cannot crowd out a row, not to police wording. An objective or a
+    verdict's conclusion that came out longer than expected is still worth showing: cutting it costs
+    the operator a few words, while refusing it would blank the whole queue because somebody wrote a
+    long sentence. ``null`` reads as a missing key, because a gateway with no value for a field
+    means the same thing either way and losing a row over the difference tells the operator less.
+
+    Nothing AIST addresses is declared this way. An address is a strict field with its own
+    validator, so a cut here can never aim a request somewhere else.
     """
 
     def __init__(self, limit: int = MAX_TEXT, **kwargs: Any):
@@ -138,6 +156,11 @@ class BoundedTextField(serializers.CharField):
         kwargs.setdefault("trim_whitespace", False)
         super().__init__(**kwargs)
 
+    def validate_empty_values(self, data: Any) -> tuple[bool, Any]:
+        if data is None:
+            return True, ""
+        return super().validate_empty_values(data)
+
     def to_internal_value(self, data: Any) -> str:
         return super().to_internal_value(data)[: self.limit]
 
@@ -147,39 +170,98 @@ def _text(limit: int = MAX_TEXT, **kwargs: Any) -> serializers.CharField:
     return BoundedTextField(limit, **kwargs)
 
 
-def _ids(limit: int) -> serializers.ListField:
-    return serializers.ListField(
-        child=serializers.CharField(max_length=MAX_ID, allow_blank=True, trim_whitespace=False),
-        max_length=limit, required=False, default=list,
-    )
+class BoundedListField(serializers.ListField):
+
+    """
+    Values the gateway lists for a row, cut to their bounds instead of costing the row.
+
+    A row's scope, its inputs, the plan rows it covers, the results it owes: all of them are shown
+    in the detail dialog and searched over, and nothing is ever addressed through them. So AIST
+    declares no shape for what they hold. The list is cut to its length and each entry to its own,
+    and an entry that is not a scalar is left out rather than taken as grounds to lose the row -- a
+    gateway that starts listing records where it listed strings is making an additive change, which
+    is exactly what this surface exists to survive.
+    """
+
+    def __init__(self, limit: int, entry_limit: int = MAX_LIST_ENTRY, **kwargs: Any):
+        self.limit = limit
+        kwargs.setdefault("child", BoundedTextField(entry_limit))
+        kwargs.setdefault("required", False)
+        kwargs.setdefault("default", list)
+        super().__init__(**kwargs)
+
+    def validate_empty_values(self, data: Any) -> tuple[bool, Any]:
+        if data is None:
+            return True, []
+        return super().validate_empty_values(data)
+
+    def to_internal_value(self, data: Any) -> list[str]:
+        if isinstance(data, list):
+            data = [entry for entry in data if isinstance(entry, (str, int, float))
+                    and not isinstance(entry, bool)][: self.limit]
+        return super().to_internal_value(data)
+
+
+class BoundedCountField(serializers.IntegerField):
+
+    """
+    A number the gateway reports, with no range declared.
+
+    Absent, empty and ``null`` all read as zero. Nothing else is asserted: what counts as a sensible
+    attempt count or revision is the gateway's to decide, and a row withheld over a number that
+    looks wrong would tell the operator less than showing them the number does.
+    """
+
+    def __init__(self, **kwargs: Any):
+        kwargs.setdefault("required", False)
+        kwargs.setdefault("default", 0)
+        super().__init__(**kwargs)
+
+    def validate_empty_values(self, data: Any) -> tuple[bool, Any]:
+        if data is None:
+            return True, 0
+        return super().validate_empty_values(data)
+
+
+def _values(limit: int, entry_limit: int = MAX_LIST_ENTRY) -> serializers.ListField:
+    """Values the gateway lists for display: at most ``limit``, each cut to ``entry_limit``."""
+    return BoundedListField(limit, entry_limit)
 
 
 def _count(**kwargs: Any) -> serializers.IntegerField:
-    return serializers.IntegerField(min_value=0, required=False, default=0, **kwargs)
+    return BoundedCountField(**kwargs)
 
 
 def _each(
-    serializer_class: type[serializers.Serializer], rows: list[Any], label: str,
-) -> tuple[list[Any], int]:
+    serializer_class: type[serializers.Serializer],
+    rows: list[Any],
+    label: str,
+    identity: str = "",
+) -> tuple[list[Any], list[str]]:
     """
     Validate rows one at a time, keeping the ones this build can read.
 
     A page is a list of independent things. Refusing all of them because one carries a shape this
     build has never seen would turn an additive change on the gateway side into a blank screen,
-    which is the failure this whole surface exists to avoid. The count of what was left out travels
-    with the result, because showing 499 of 500 rows without saying so would be worse.
+    which is the failure this whole surface exists to avoid.
+
+    What was left out comes back by identity rather than as a tally, and the log names it too. A
+    bare count tells an operator that something is missing and leaves them to work out what; the id
+    is what makes the next question -- why this row -- answerable at all.
     """
-    kept, dropped = [], 0
+    kept, dropped = [], []
     for row in rows:
         serializer = serializer_class(data=row) if isinstance(row, dict) else None
         if serializer is not None and serializer.is_valid():
             kept.append(serializer.validated_data)
-        else:
-            dropped += 1
-            logger.warning(
-                "DAST queue: dropped one %s this build cannot read: %s",
-                label, "not an object" if serializer is None else str(serializer.errors)[:200],
-            )
+            continue
+        named = str(row.get(identity) or "")[:MAX_ID] if isinstance(row, dict) and identity else ""
+        dropped.append(named)
+        logger.warning(
+            "DAST queue: dropped one %s this build cannot read (%r): %s",
+            label, named or "unidentified",
+            "not an object" if serializer is None else str(serializer.errors)[:200],
+        )
     return kept, dropped
 
 
@@ -222,10 +304,9 @@ class AffordanceSerializer(serializers.Serializer):
     fields = ActionFieldSerializer(many=True, required=False, default=list)
 
     def validate_fields(self, value: list[Any]) -> list[Any]:
-        if len(value) > MAX_FIELDS_PER_ACTION:
-            msg = f"more than {MAX_FIELDS_PER_ACTION} fields"
-            raise serializers.ValidationError(msg)
-        return value
+        # Cut rather than refused: an action with an over-full form is still an action worth
+        # offering, and refusing it here would take the control off the row entirely.
+        return value[:MAX_FIELDS_PER_ACTION]
 
 
 class VocabularyEntrySerializer(serializers.Serializer):
@@ -260,8 +341,8 @@ class ClientHintsSerializer(serializers.Serializer):
 
 
 class ExecutionFactsSerializer(serializers.Serializer):
-    claim_statuses = _ids(32)
-    parallel_contracts = _ids(32)
+    claim_statuses = _values(32)
+    parallel_contracts = _values(32)
     serial_note = _text(4096)
     parallel_note = _text(4096)
     session_capacity = _count()
@@ -287,7 +368,7 @@ class QueueDescriptorSerializer(serializers.Serializer):
     contract_version = _text(32)
     descriptor_digest = _text(128)
     run_state = _text(MAX_ID)
-    capabilities = _ids(32)
+    capabilities = _values(32)
     client_hints = ClientHintsSerializer(required=False, default=dict)
     mutation_envelope = MutationEnvelopeSerializer(required=False, default=dict)
     execution = ExecutionFactsSerializer(required=False, default=dict)
@@ -331,7 +412,12 @@ class QueueItemSerializer(serializers.Serializer):
 
     """One queue row: a job, work the run owes, a pause, or a lead it would not admit."""
 
-    item_id = _text(MAX_ID)
+    # The one value on a row that AIST addresses through: it is re-read from the gateway to resolve
+    # a command, and an empty one means something else entirely -- a command aimed at the run
+    # rather than at any item. So this is the row's address and refuses rather than degrades. A row
+    # that cannot be named cannot be commanded or pointed at, and keeping it would offer the
+    # operator controls that quietly act on the whole run.
+    item_id = serializers.CharField(max_length=MAX_ID, trim_whitespace=False)
     type = _text(MAX_ID)
     status = _text(MAX_ID)
     wait_reason = _text(MAX_ID)
@@ -345,13 +431,13 @@ class QueueItemSerializer(serializers.Serializer):
     objective = _text()
     operator_note = _text()
     skill = _text(MAX_ID)
-    scope = _ids(128)
-    inputs = _ids(128)
-    plan_rows = _ids(128)
-    required_outputs = _ids(64)
+    scope = _values(128)
+    inputs = _values(128)
+    plan_rows = _values(128)
+    required_outputs = _values(64)
     concurrency_key = _text(MAX_ID)
     parent_job_id = _text(MAX_ID)
-    dependent_jobs = _ids(128)
+    dependent_jobs = _values(128)
     lead_depth = _count()
     deferred_from_run = _text(MAX_ID)
     disposition = _text(MAX_ID)
@@ -366,23 +452,20 @@ class QueueItemSerializer(serializers.Serializer):
     released_at = _text(64)
     actor = _text(256)
     reason = _text()
-    work_subjects = WorkSubjectSerializer(many=True, required=False, default=list)
-    # Validated one at a time below: an action this build will not send must cost that one control,
-    # not the row it sits on.
+    # Both are validated one at a time below. A result this build cannot read, or an action it will
+    # not send, must cost that one record -- not the row it sits on.
+    work_subjects = serializers.ListField(child=serializers.JSONField(), required=False, default=list)
     actions = serializers.ListField(child=serializers.JSONField(), required=False, default=list)
 
     def validate_actions(self, value: list[Any]) -> list[Any]:
-        if len(value) > MAX_ACTIONS_PER_ITEM:
-            msg = f"more than {MAX_ACTIONS_PER_ITEM} actions"
-            raise serializers.ValidationError(msg)
-        kept, _dropped = _each(AffordanceSerializer, value, "action")
+        kept, _dropped = _each(AffordanceSerializer, value[:MAX_ACTIONS_PER_ITEM], "action", "name")
         return kept
 
     def validate_work_subjects(self, value: list[Any]) -> list[Any]:
-        if len(value) > MAX_WORK_SUBJECTS:
-            msg = f"more than {MAX_WORK_SUBJECTS} work subjects"
-            raise serializers.ValidationError(msg)
-        return value
+        kept, _dropped = _each(
+            WorkSubjectSerializer, value[:MAX_WORK_SUBJECTS], "work subject", "verdict_id",
+        )
+        return kept
 
 
 class QueueReceiptSerializer(serializers.Serializer):
@@ -439,23 +522,16 @@ class QueuePageSerializer(serializers.Serializer):
     history = serializers.ListField(child=serializers.JSONField(), required=False, default=list)
     handoffs = serializers.ListField(child=serializers.JSONField(), required=False, default=list)
 
+    # All three are cut rather than refused. The envelope's own `total` already says the run owns
+    # more than is listed, and a queue that outgrew this build is still worth most of a page.
     def validate_items(self, value: list[Any]) -> list[Any]:
-        if len(value) > MAX_PAYLOAD_ITEMS:
-            msg = f"more than {MAX_PAYLOAD_ITEMS} items"
-            raise serializers.ValidationError(msg)
-        return value
+        return value[:MAX_PAYLOAD_ITEMS]
 
     def validate_history(self, value: list[Any]) -> list[Any]:
-        if len(value) > MAX_HISTORY_ROWS:
-            msg = f"more than {MAX_HISTORY_ROWS} history rows"
-            raise serializers.ValidationError(msg)
-        return value
+        return value[:MAX_HISTORY_ROWS]
 
     def validate_handoffs(self, value: list[Any]) -> list[Any]:
-        if len(value) > MAX_HISTORY_ROWS:
-            msg = f"more than {MAX_HISTORY_ROWS} handoffs"
-            raise serializers.ValidationError(msg)
-        return value
+        return value[:MAX_HISTORY_ROWS]
 
 
 class QueueRefusalSerializer(serializers.Serializer):
@@ -466,7 +542,7 @@ class QueueRefusalSerializer(serializers.Serializer):
     message = _text(4096)
     retryable = serializers.BooleanField(required=False, default=False)
     field = _text(MAX_ID)
-    allowed = _ids(MAX_ENUM_VALUES)
+    allowed = _values(MAX_ENUM_VALUES)
 
 
 def _validated(serializer_class: type[serializers.Serializer], payload: Any, code: str) -> dict[str, Any]:
@@ -487,16 +563,18 @@ def normalise_page(payload: Any) -> dict[str, Any]:
 
     The envelope carries the revision a command is decided against, so a page whose envelope is
     unreadable is refused. The rows are independent, so each is kept or dropped on its own and
-    ``dropped_rows`` reports how many this build could not read.
+    ``dropped_rows`` reports how many this build could not read, and ``dropped_ids`` names them so
+    the page can say which row it is not showing.
     """
     page = _validated(QueuePageSerializer, payload, "QUEUE_PAGE_INVALID")
-    items, dropped = _each(QueueItemSerializer, page["items"], "item")
-    history, _ = _each(QueueReceiptSerializer, page["history"], "receipt")
-    handoffs, _ = _each(HandoffSerializer, page["handoffs"], "handoff")
+    items, dropped = _each(QueueItemSerializer, page["items"], "item", "item_id")
+    history, _ = _each(QueueReceiptSerializer, page["history"], "receipt", "request_id")
+    handoffs, _ = _each(HandoffSerializer, page["handoffs"], "handoff", "handoff_id")
     page["items"] = items
     page["history"] = history
     page["handoffs"] = handoffs
-    page["dropped_rows"] = dropped
+    page["dropped_rows"] = len(dropped)
+    page["dropped_ids"] = [name for name in dropped if name]
     return page
 
 
@@ -571,8 +649,11 @@ def submitted_values(
                 choices=[entry["id"] for entry in options], allow_blank=not required, **optional,
             )
             continue
+        declared_length = field.get("max_length") or 0
         form[name] = serializers.CharField(
-            max_length=field.get("max_length") or MAX_TEXT,
+            # A length the gateway did not state, or stated as nonsense, is no length at all --
+            # a form that refuses every value it is given helps nobody.
+            max_length=declared_length if declared_length > 0 else MAX_TEXT,
             allow_blank=not required,
             trim_whitespace=False,
             **optional,
