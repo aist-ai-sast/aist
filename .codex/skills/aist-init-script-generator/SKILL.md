@@ -17,6 +17,38 @@ This skill adapts generic AIST initialization behavior to a real project.
 
 ---
 
+## How the script runs (runtime contract)
+
+Read this before designing anything — every rule below follows from it.
+
+* The script is a **bash** script. It is not executed but **sourced**
+  (`source ./project_config.sh`) by
+  `sast-combinator/sast-pipeline/Dockerfiles/builder/builder-entrypoint.sh`,
+  which runs under `set -e`. After the script returns, the same shell launches
+  every analyzer (`run_inside_builder.py`).
+* Therefore **any `exit` (including `exit 0`) and any unguarded failing command
+  ends the whole builder: no analyzer runs, and the pipeline silently loses all
+  results.** Only the git clone/checkout block from `default_script.py` may exit.
+* The builder image is `ubuntu:22.04` (root, system `python3` 3.10 that runs the
+  analyzer launcher). The OS will usually differ from the project's own build
+  image; that is expected — install the exact toolchain versions yourself.
+* The project's VPN integration (if configured) is active during the run, so
+  internal hosts the real build uses (e.g. `gitlab.nxvms.dev`,
+  `artifactory.us.nxteam.dev`) are reachable.
+* Available environment: `REPO_URL` (clone URL with the SCM integration
+  credential embedded), `PROJECT_NAME`, `PROJECT_VERSION`, `FORCE_REBUILD`,
+  `LOG_LEVEL`, plus any launch-config variables. Nothing else is guaranteed —
+  e.g. `DEPLOY_USER`/`DEPLOY_TOKEN` from the project's CI are normally absent.
+* Analyzers run in **separate containers** that mount the workspace. Only what
+  is inside `$DEV_DIR` (e.g. `node_modules`, a project `.venv`, build dirs) is
+  visible to them; tool caches outside it are not.
+* C/C++ builder-type analyzers (e.g. infer) run only when the script exports
+  `NON_COMPILE_PROJECT=0` and `COMPILE_COMMANDS_PATH` pointing at an existing
+  `compile_commands.json`; if that variable is set but the file is missing, the
+  entrypoint itself exits 1.
+
+---
+
 ## Inputs
 
 * `project_id` **(required)**
@@ -53,7 +85,14 @@ The generated script MUST preserve:
 
 These are **core AIST behaviors** and must not be removed, simplified, or replaced.
 
-The task is to **adapt**, not rewrite.
+Only those two parts are reused. Everything after the git checkout block is
+**replaced** by the project's real build flow: the generic package-manager
+blocks of `default_script.py` (Node 20, npm/pnpm/yarn/poetry/pip auto-detection)
+must not be carried over.
+
+3. **Nothing after the git checkout block may abort the run.** Every
+   project-specific step is guarded (`cmd || echo "[TAG][WARN] ..."`), and the
+   script never calls `exit` outside the git block (see the runtime contract).
 
 ---
 
@@ -84,6 +123,21 @@ At minimum inspect:
 
 Goal:
 Understand how the project is **actually built and prepared**.
+
+Choose the source of truth explicitly:
+
+* When several build paths exist (shipping Dockerfile, EKS/kaniko Dockerfile,
+  CI jobs, release scripts), take the one that builds **this branch** — check
+  CI rules (e.g. `cloud-*` branches use a different Dockerfile) and CI variables
+  that override Dockerfile args (e.g. `NODE_IMAGE`, `GO_VERSION`).
+* Record the **exact** toolchain and package-manager versions it uses (base
+  image tag, `.nvmrc`, `engines`, `packageManager`, `go.mod` / CI `GO_VERSION`,
+  `.python-version`, pinned `npm`/`pnpm`/`uv`), the exact install commands and
+  flags (`npm ci` vs `npm install`, lifecycle scripts enabled, `--frozen`, uv
+  groups), and the registry/index configuration the build uses (`.npmrc`,
+  `pip.conf`, `PIP_INDEX_URL`, private Go modules + how credentials are passed).
+* Note which steps only produce deploy artifacts (bundles, images) — those are
+  not needed for SAST.
 
 ---
 
@@ -137,18 +191,68 @@ Design a new setup flow that:
 * avoids unnecessary runtime startup
 * prepares project for SAST (not full deploy)
 
+Rules for the adapted flow:
+
+* **Same versions, same commands, same config.** Install the exact toolchain
+  versions found in Phase 1 (e.g. Node via `n <version>`, Python via
+  `uv venv --python <version>`, Go `<series>` latest patch from go.dev — matching
+  the `golang:<series>` image). Run the same install commands with the same
+  flags. Never invent steps the real build does not have, and never drop steps
+  it has (lifecycle scripts, patches, extra package dirs) unless they only build
+  deploy artifacts.
+* **Use the project's own registries.** Keep `.npmrc` / `pip.conf` / index URLs
+  as the build uses them; internal hosts are reachable via VPN. Do not swap in
+  public registries.
+* **Private dependencies:** use the variables the real build uses when they are
+  set; otherwise derive the credential from `REPO_URL` for the same SCM host and
+  pass it via `GIT_CONFIG_COUNT/KEY_0/VALUE_0` (`insteadOf`) env — never write it
+  to disk or print it.
+* **Do not touch the builder's system Python.** Python dependencies go into a
+  project venv inside `$DEV_DIR` (e.g. `$DEV_DIR/.venv`), created with the
+  project's Python version.
+* **Compiled languages:** actually compile (Go `go build`, C/C++ configure +
+  build). For C/C++ generate `compile_commands.json`
+  (`-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`) and export `NON_COMPILE_PROJECT=0` and
+  `COMPILE_COMMANDS_PATH` **only if the file exists**.
+* **Do not create scanned noise:** skip bundle/dist builds; if installed
+  dependency directories (`node_modules`, `bower_components`, `.venv`) are not
+  covered by the project profile's excluded paths, say so in the summary.
+
 ---
 
 ### Phase 5 — Generate final script
 
-Produce a **full Python script** that:
+Produce a **full bash script** that:
 
 * is project-specific
 * deterministic
 * CI-friendly
 * non-interactive
-* has clear logging
-* fails fast
+* has clear logging (`[TAG] ...`, failures as `[TAG][WARN] ...`)
+* never aborts after the git block — a failed step warns and the run continues,
+  so analyzers still scan the sources
+* documents in comments which file/line of the target repo each step mirrors
+
+---
+
+### Phase 6 — Verify (MANDATORY before persisting)
+
+A script that was never run is not done.
+
+1. Static: `bash -n` passes; no `exit` outside the git block; every
+   project-specific command is guarded.
+2. Dynamic: run the script exactly as the builder does — `set -e`, then
+   `source` it — inside the project's builder image
+   (`project-<product name>-builder:latest`) when it exists, otherwise
+   `ubuntu:22.04`, with `REPO_URL`, `PROJECT_NAME`, `PROJECT_VERSION` set,
+   a fresh empty directory mounted at `/workspace`, and the entrypoint
+   replaced by a marker instead of the analyzer launch. Check that it reaches
+   the end, and that the expected result exists (dependency dirs/venv, the
+   toolchain versions, a successful compile, `compile_commands.json`).
+3. If verification cannot reach an internal host because no VPN is available
+   in your environment, do **not** change the registry to work around it —
+   report the step as unverified instead.
+4. Clean up the workspace and containers you created.
 
 ---
 
@@ -198,11 +302,15 @@ What was adapted and why
 
 ### 5. Final script (FULL CODE)
 
-### 6. Persist to database
+### 6. Verification result
+
+What was run, what it produced (versions, deps, build), and anything unverified.
+
+### 7. Persist to database
 
 Save script via `docker compose exec` as described in Persistence section above.
 
-### 7. Summary
+### 8. Summary
 
 What was persisted: the script ID, and the version ID and branch name it is bound to.
 
@@ -216,6 +324,10 @@ What was persisted: the script ID, and the version ID and branch name it is boun
 * DO NOT rely only on logs
 * DO NOT treat AIST repo as target project
 * DO NOT over-engineer
+* DO NOT `exit` or leave a failing command unguarded after the git block
+* DO NOT replace the project's registries/indexes with public ones
+* DO NOT install into the builder's system Python
+* DO NOT persist a script that was not verified (Phase 6)
 
 ---
 
@@ -224,7 +336,10 @@ What was persisted: the script ID, and the version ID and branch name it is boun
 * Script tailored to target repo
 * AIST git/env logic preserved
 * Project-specific logic correctly adapted
-* Script prepares repo for SAST
+* Script prepares repo for SAST with the same toolchain versions, commands and
+  registries as the project's real build
+* Verified by an actual sourced run (Phase 6); no step after the git block can
+  abort the builder
 * Works in CI
 * `AISTProjectScript` record created or reused in the database for the given `project_id`
 * The `GIT_BRANCH` version `project_version_id` now has `script` set to that record; no other version changed
