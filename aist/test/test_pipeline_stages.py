@@ -385,7 +385,7 @@ class SendRequestToAITests(TestCase):
     def test_send_request_pushes_when_confirmed(self):
         with patch("aist.views.ai.send_request_to_ai_for_pipeline") as mock_delegate, \
              patch("aist.views.ai.get_authorized_aist_pipelines") as mock_authorized_qs, \
-             patch("aist.views.ai.user_has_permission_or_403") as mock_perm_check:
+             patch("aist.views.ai.require_product_permission") as mock_perm_check:
 
             rf = RequestFactory()
             body = b'{"pipeline_id":"pipeline-123","finding_ids":[1,2,3],"filters":{"analyzers":["X"]}}'

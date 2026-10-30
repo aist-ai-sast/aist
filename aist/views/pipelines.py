@@ -11,7 +11,6 @@ from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
-from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from dojo.utils import add_breadcrumb
@@ -23,7 +22,11 @@ from aist.forms import AISTPipelineRunForm, DastPipelineRunForm
 from aist.launch_data import PipelineLaunchData
 from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus, PipelineExecutionType
 from aist.pipeline_args import PipelineArguments
-from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects
+from aist.queries import (
+    get_authorized_aist_pipelines,
+    get_authorized_aist_projects,
+    require_product_permission,
+)
 from aist.services.dast_queue import queue_is_addressable
 from aist.utils.http import _fmt_duration, _qs_without
 from aist.utils.pipeline import (
@@ -270,7 +273,7 @@ def pipeline_set_status(request, pipeline_id: str):
             .select_for_update()
             .get(id=pipeline_id)
         )
-        user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
+        require_product_permission(pipeline.project.product, Permissions.Product_Edit, user=request.user)
         set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
     return redirect("aist:pipeline_detail", pipeline_id=pipeline_id)
 
@@ -403,10 +406,10 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                     "config": data.get("config") or {},
                 })
 
-            user_has_permission_or_403(
-                request.user,
+            require_product_permission(
                 project.product,
                 Permissions.Product_Edit,
+                user=request.user,
             )
             organization = project.organization
             if organization is None:
@@ -538,7 +541,7 @@ def stop_pipeline_view(request, pipeline_id: str):
         get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
         id=pipeline_id,
     )
-    user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
+    require_product_permission(pipeline.project.product, Permissions.Product_Edit, user=request.user)
     stop_pipeline(pipeline)
     return redirect("aist:pipeline_detail", pipeline_id=pipeline.id)
 
@@ -551,7 +554,7 @@ def delete_pipeline_view(request, pipeline_id: str):
         get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
         id=pipeline_id,
     )
-    user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
+    require_product_permission(pipeline.project.product, Permissions.Product_Edit, user=request.user)
     if request.method == "POST":
         pipeline.delete()
         return redirect("aist:pipeline_list")

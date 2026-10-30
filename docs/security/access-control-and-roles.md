@@ -108,6 +108,17 @@ map is:
 | `ORG_MANAGE` | `Product_Type_Manage_Members` | Maintainer | Members, integrations, work-item providers |
 | `OWNER_GRANT` | `Product_Type_Member_Add_Owner` | Owner | Organization Owner assignment |
 
+The "Minimum AIST role" column is enforced by AIST itself, in
+`aist/roles.py` (`MINIMUM_ROLE_FOR_PERMISSION`), not inherited from DefectDojo.
+DefectDojo 3.x releases role-based authorization to its paid plugin, where
+`get_roles_for_permission` returns no roles at all; a platform whose tenant
+isolation read that table at runtime would scope every non-superuser to nothing.
+The permission column remains the shared vocabulary that
+`aist/authz/policy.py` maps each action onto. A permission that reaches tenant
+scoping without a declared minimum role raises rather than resolving to an empty
+role set, so a missing row fails where it was introduced instead of silently
+denying every request.
+
 The role is only the permission source. The object still has to be returned by
 the corresponding organization-scoped queryset. Fine-grained membership code
 also checks `Product_Member_Add_Owner` when a per-project Owner grant is touched.

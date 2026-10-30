@@ -4,12 +4,14 @@ from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_POST
-from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 
 from aist.api import LaunchConfigSerializer, create_launch_config_for_project
 from aist.forms import AISTLaunchConfigForm
-from aist.queries import get_authorized_aist_projects
+from aist.queries import (
+    get_authorized_aist_projects,
+    require_product_permission,
+)
 
 
 @login_required
@@ -19,7 +21,7 @@ def project_launch_config_create_ui(request, project_id: int):
         get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
         pk=project_id,
     )
-    user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+    require_product_permission(project.product, Permissions.Product_Edit, user=request.user)
 
     # Fixed project mode (LaunchConfig form has no "project" field by design)
     form = AISTLaunchConfigForm(request.POST, project=project)

@@ -7,14 +7,18 @@ from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.text import slugify
 from django.views.decorators.http import require_GET, require_POST
-from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Test
 
 from aist.ai_filter import get_ai_filter_reference, validate_and_normalize_filter
 from aist.api.ai import delete_ai_response_for_pipeline, send_request_to_ai_for_pipeline
 from aist.models import AISTPipeline
-from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_products, get_authorized_findings
+from aist.queries import (
+    get_authorized_aist_pipelines,
+    get_authorized_aist_products,
+    get_authorized_findings,
+    require_product_permission,
+)
 
 
 def _severity_rank_case():
@@ -180,7 +184,7 @@ def send_request_to_ai(request, pipeline_id: str):
         ).get(id=pipeline_id)
     except AISTPipeline.DoesNotExist:
         return HttpResponseBadRequest("Unknown pipeline")
-    user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
+    require_product_permission(pipeline.project.product, Permissions.Product_Edit, user=request.user)
     return send_request_to_ai_for_pipeline(request, pipeline)
 
 
@@ -191,7 +195,7 @@ def delete_ai_response(request, pipeline_id: str, response_id: int):
         get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
         id=pipeline_id,
     )
-    user_has_permission_or_403(request.user, pipeline.project.product, Permissions.Product_Edit)
+    require_product_permission(pipeline.project.product, Permissions.Product_Edit, user=request.user)
     delete_ai_response_for_pipeline(pipeline, response_id)
     return redirect("aist:pipeline_detail", pipeline_id=pipeline.id)
 

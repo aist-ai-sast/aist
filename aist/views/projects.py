@@ -6,7 +6,6 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_POST
-from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from dojo.utils import add_breadcrumb
 
@@ -22,6 +21,7 @@ from aist.models import AISTLaunchConfigAction, AISTProject, AISTStatus
 from aist.queries import (
     get_authorized_aist_organizations,
     get_authorized_aist_projects,
+    require_product_permission,
 )
 from aist.views._common import ERR_PROJECT_NOT_FOUND
 
@@ -33,13 +33,13 @@ def project_version_create(request: HttpRequest, project_id: int) -> HttpRespons
         get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
         id=project_id,
     )
-    user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+    require_product_permission(project.product, Permissions.Product_Edit, user=request.user)
 
     if request.method == "GET":
-        form = AISTProjectVersionForm(initial={"project": project.id})
+        form = AISTProjectVersionForm(project=project)
         return render(request, "aist/_project_version_form.html", {"form": form, "project": project})
 
-    form = AISTProjectVersionForm(request.POST, request.FILES, initial={"project": project.id})
+    form = AISTProjectVersionForm(request.POST, request.FILES, project=project)
     if form.is_valid():
         obj = form.save()  # save() sets version = sha256 for FILE_HASH automatically
         return JsonResponse({
@@ -108,7 +108,7 @@ def aist_project_update_view(request: HttpRequest, project_id: int) -> HttpRespo
         get_authorized_aist_projects(Permissions.Product_Edit, user=request.user),
         id=project_id,
     )
-    user_has_permission_or_403(request.user, project.product, Permissions.Product_Edit)
+    require_product_permission(project.product, Permissions.Product_Edit, user=request.user)
 
     serializer = ProjectUpdateRequestSerializer(data=request.POST, context={"request": request})
     if not serializer.is_valid():

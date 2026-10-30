@@ -31,7 +31,6 @@ from django.db import IntegrityError, connection, transaction
 from django.db.models import Count
 from django.utils import timezone
 from django.utils.crypto import get_random_string
-from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions, Roles
 from dojo.models import Product_Member, Product_Type_Group, Product_Type_Member, Role, UserContactInfo
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -45,6 +44,10 @@ from aist.models import (
     OrgMembershipAction,
     OrgMembershipHistory,
     ProjectAccessDenial,
+)
+from aist.queries import (
+    require_organization_permission,
+    require_product_permission,
 )
 from aist.roles import role_rank
 
@@ -335,7 +338,7 @@ class OrganizationMembershipService:
         if existing is not None:
             # Removing an existing Owner grant requires the Add_Owner permission.
             if existing.role_id == Roles.Owner.value:
-                user_has_permission_or_403(self.actor, project.product, Permissions.Product_Member_Add_Owner)
+                require_product_permission(project.product, Permissions.Product_Member_Add_Owner, user=self.actor)
             existing.delete()
         # Always record an explicit denial for THIS project — the only way to
         # subtract access from a full member's org-wide role without
@@ -380,7 +383,7 @@ class OrganizationMembershipService:
         # require Add_Owner — a Maintainer must not silently demote a project Owner.
         touches_owner = role.id == Roles.Owner.value or (existing is not None and existing.role_id == Roles.Owner.value)
         if touches_owner:
-            user_has_permission_or_403(self.actor, project.product, Permissions.Product_Member_Add_Owner)
+            require_product_permission(project.product, Permissions.Product_Member_Add_Owner, user=self.actor)
         Product_Member.objects.update_or_create(
             user=user, product=project.product, defaults={"role": role},
         )
@@ -626,7 +629,9 @@ class OrganizationMembershipService:
             raise ValidationError(msg)
 
     def _require_owner_grant_permission(self) -> None:
-        user_has_permission_or_403(self.actor, self.product_type, Permissions.Product_Type_Member_Add_Owner)
+        require_organization_permission(
+            self.product_type, Permissions.Product_Type_Member_Add_Owner, user=self.actor,
+        )
 
     @staticmethod
     def _require_full_or_restricted(role_id: int | None, project_grants: list[dict] | None) -> None:

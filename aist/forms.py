@@ -27,9 +27,23 @@ class AISTProjectVersionForm(forms.ModelForm):
             "description": forms.Textarea(attrs={"rows": 2}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, project=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["version_type"].choices = OPERATOR_CREATABLE_VERSION_TYPES
+        # The project is whichever one the caller already authorized, never whichever
+        # one the payload names. A bound form ignores ``initial``, so a hidden field
+        # over every AISTProject accepted another organization's id and wrote the
+        # version (and its uploaded archive) there. ``disabled`` makes Django take the
+        # value from initial and ignore the submission; the queryset is the second
+        # lock, and defaults to nothing so a caller that forgets fails closed.
+        self.fields["project"].disabled = True
+        self.fields["project"].queryset = (
+            AISTProject.objects.filter(pk=project.pk)
+            if project is not None
+            else AISTProject.objects.none()
+        )
+        if project is not None:
+            self.initial["project"] = project.pk
 
     def clean(self):
         cleaned = super().clean()

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from django.db import transaction
-from dojo.authorization.authorization import user_has_permission_or_403
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import DojoMeta, Product
 
@@ -21,6 +20,7 @@ from aist.models import (
     ScmType,
     VersionType,
 )
+from aist.queries import require_product_permission
 
 if TYPE_CHECKING:
     from django.contrib.auth.base_user import AbstractBaseUser
@@ -132,7 +132,7 @@ def import_scm_project(req: ScmImportRequest) -> tuple[AISTProject, str]:
         defaults={"prod_type": product_type, "description": req.description or "Empty description. Admin, fix me"},
     )
     if not created_product:
-        user_has_permission_or_403(req.request_user, product, Permissions.Product_Edit)
+        require_product_permission(product, Permissions.Product_Edit, user=req.request_user)
         if product.prod_type_id != product_type.id:
             msg = "Product already exists under another product type. Move it first or choose another organization."
             raise ScmImportConflictError(msg)

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from crum import get_current_user
+from django.core.exceptions import PermissionDenied
 from django.db.models import Q, Subquery
-from dojo.authorization.authorization import get_roles_for_permission
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import (
     Engagement,
@@ -29,11 +29,21 @@ from aist.models import (
     ProjectAccessDenial,
     WorkItemProvider,
 )
-from aist.roles import role_rank
+from aist.roles import role_rank, roles_for_permission
 
 
 def _resolve_user(user):
-    return user or get_current_user()
+    """
+    Resolve the acting user, or None when there is nobody to authorize.
+
+    An unauthenticated caller has to resolve to None rather than be handed to a query:
+    every getter reads None as "sees nothing", while an ``AnonymousUser`` is truthy,
+    reaches the ORM and raises — turning a denial into a 500.
+    """
+    resolved = user or get_current_user()
+    if resolved is None or not getattr(resolved, "is_authenticated", False):
+        return None
+    return resolved
 
 
 def _token_organization_id(user) -> int | None:
@@ -78,7 +88,7 @@ def get_authorized_aist_products(permission, user=None):
             queryset = queryset.filter(prod_type__aist_organization__id=token_organization_id)
         return queryset
 
-    roles = get_roles_for_permission(permission)
+    roles = roles_for_permission(permission)
 
     # Access model: ORG MEMBERSHIP IS REQUIRED; per-project overrides adjust
     # ONE product at a time and never affect any other product.
@@ -205,6 +215,26 @@ def user_has_write_capability(user=None, *, organization: Organization | None = 
     return products.exists()
 
 
+def require_product_permission(product, permission, user=None) -> None:
+    """
+    Raise ``PermissionDenied`` unless the user may act on ``product``.
+
+    DefectDojo's own object-level check answers a weaker question than this platform
+    asks: it knows nothing about restricted organization scope, per-project denials,
+    the override cap, or a token's organization binding. Asking the scoped queryset
+    keeps one definition of access for both resolution and mutation.
+    """
+    if not get_authorized_aist_products(permission, user=user).filter(pk=product.pk).exists():
+        raise PermissionDenied
+
+
+def require_organization_permission(product_type, permission, user=None) -> None:
+    """Same check for an organization, identified by the product type it is bound to."""
+    authorized = get_authorized_aist_organizations(permission, user=user)
+    if not authorized.filter(product_type=product_type).exists():
+        raise PermissionDenied
+
+
 def get_authorized_findings(permission, user=None):
     user = _resolve_user(user)
     if user is None:
@@ -304,7 +334,7 @@ def get_authorized_aist_organizations(permission, user=None):
             queryset = queryset.filter(id=token_organization_id)
         return queryset
 
-    roles = get_roles_for_permission(permission)
+    roles = roles_for_permission(permission)
     authorized_product_type_roles = Product_Type_Member.objects.filter(
         user=user,
         role__in=roles,
