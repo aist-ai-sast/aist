@@ -10,6 +10,10 @@ import SelectField from "../components/SelectField";
 import TextInput from "../components/TextInput";
 import FilterClearButton from "../components/FilterClearButton";
 import PermissionGate from "../components/PermissionGate";
+import EditableTagRow from "../components/EditableTagRow";
+import { useUpdateProjectTags } from "../lib/mutations";
+import { useToast } from "../components/ToastProvider";
+import { toUserMessage } from "../lib/api";
 import PaginationBar from "../components/PaginationBar";
 import PageErrorState from "../components/PageErrorState";
 import { SEVERITY_ORDER, severityBarClass } from "../lib/badgeStyles";
@@ -129,6 +133,48 @@ function SkeletonCard() {
         <div className="h-7 w-24 rounded-xl bg-night-600" />
       </div>
     </div>
+  );
+}
+
+/**
+ * A card's tag row. The mutation belongs to the card, not to the page: one
+ * mutation per page would report its pending state and its failures against
+ * whichever card was edited last.
+ */
+/** The project's tag row. Its tags reach every finding of the project, which the copy states. */
+function ProjectTagRow({ summary, suggestions }: { summary: ProductSummary; suggestions: string[] }) {
+  const updateTags = useUpdateProjectTags();
+  const toast = useToast();
+  const findings = summary.findingsTotal;
+  const findingWord = findings === 1 ? "finding" : "findings";
+  return (
+    <EditableTagRow
+      tags={summary.tags}
+      suggestions={suggestions}
+      action="operate_project"
+      permissionOrganizationId={summary.organizationId ?? undefined}
+      pending={updateTags.isPending}
+      visibleCount={3}
+      ownerLabel={`project ${summary.name}`}
+      footnote={findings > 0 ? `Applies to all ${findings} ${findingWord} in this project.` : undefined}
+      removalFootnote={
+        findings > 0
+          ? (removed) =>
+              removed.length === 1
+                ? `Removing “${removed[0]}” also removes it from ${findings} ${findingWord}.`
+                : `Removing ${removed.length} tags also removes them from ${findings} ${findingWord}.`
+          : undefined
+      }
+      onChange={(tags) =>
+        updateTags.mutate(
+          { projectId: summary.projectId, tags },
+          {
+            onSuccess: () => toast.push("Project tags saved. Findings update in the background.", "success"),
+            onError: (error) => toast.push(toUserMessage(error), "error"),
+          },
+        )
+      }
+    />
   );
 }
 
@@ -272,9 +318,6 @@ export default function ProductsPage() {
                   })
                 : null;
               const relativeTime = formatRelativeTime(summary.lastPipeline?.updated);
-              const visibleTags = summary.tags.slice(0, 3);
-              const extraTagCount = summary.tags.length - visibleTags.length;
-
               return (
                 <article
                   key={summary.productId}
@@ -324,20 +367,14 @@ export default function ProductsPage() {
                     </div>
                   </div>
 
-                  {visibleTags.length > 0 ? (
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {visibleTags.map((tag) => (
-                        <span key={tag} className="rounded-full border border-night-500 bg-night-800 px-2 py-0.5 text-[11px] text-slate-400">
-                          {tag}
-                        </span>
-                      ))}
-                      {extraTagCount > 0 ? (
-                        <span className="rounded-full border border-night-500 bg-night-800 px-2 py-0.5 text-[11px] text-slate-500">
-                          +{extraTagCount}
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : null}
+                  <div
+                    className="mt-3"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    role="presentation"
+                  >
+                    <ProjectTagRow summary={summary} suggestions={tagOptions} />
+                  </div>
 
                   <div className="mt-3 flex items-center gap-2">
                     {pipelineMeta ? (

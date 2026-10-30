@@ -115,6 +115,12 @@ class AISTFindingListItemSerializer(dojo_serializers.FindingSerializer):
     # used by the client-ui DAST finding view. The base FindingSerializer's own
     # `endpoints` field returns bare PKs, which isn't useful for display.
     affected_endpoints = serializers.SerializerMethodField()
+    # The subset of ``tags`` inherited from the project. Vendor's serializer excludes it.
+    project_tags = serializers.SerializerMethodField()
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_project_tags(self, obj) -> list[str]:
+        return sorted(tag.name for tag in obj.inherited_tags.all())
 
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_regression(self, obj) -> bool:
@@ -437,7 +443,7 @@ class AISTFindingListAPI(AISTAPIView):
         queryset = (
             self.authorized_queryset()
             .select_related("test__engagement")
-            .prefetch_related("tags", "aist_project_versions", "aist_annotation", "endpoints")
+            .prefetch_related("tags", "inherited_tags", "aist_project_versions", "aist_annotation", "endpoints")
         )
         filterset = AISTFindingFilter(data=request.query_params, queryset=queryset, request=request)
         if not filterset.is_valid():

@@ -1,25 +1,42 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AIResponse, Finding } from "../types";
+import { EMPTY_TAG_FILTER } from "../lib/tagFilter";
 import FindingDetailTabs from "./FindingDetailTabs";
+import { installPopoverTestEnv } from "../lib/testPopoverEnv";
+
+const updateFindingTags = vi.fn();
 
 vi.mock("../lib/mutations", () => ({
   useAddFindingNote: () => ({ mutate: vi.fn(), isPending: false }),
+  useUpdateFindingTags: () => ({ mutate: updateFindingTags, isPending: false }),
 }));
 
 vi.mock("../lib/queries", () => ({
   useFinding: () => ({ data: null, isLoading: false }),
   useFindingNotes: () => ({ data: [], isLoading: false }),
   useFindingTimeline: () => ({ data: [], isLoading: false }),
+  useFindingTagsByProject: () => ({
+    data: { names: ["backend", "pci", "next-sprint"], counts: {} },
+    isLoading: false,
+  }),
 }));
 
-vi.mock("./PermissionGate", () => ({
-  default: ({ children }: { children: ReactNode }) => <>{children}</>,
+const permissions = {
+  canWrite: true,
+  canOperateProject: true,
+  canComment: true,
+  canEnable: true,
+  canManageAccess: true,
+  isLoading: false,
+};
+
+vi.mock("../lib/permissions", () => ({
+  usePermissions: () => permissions,
 }));
 
 vi.mock("./ToastProvider", () => ({
@@ -39,6 +56,15 @@ vi.mock("../lib/snippetCache", () => ({
     error: null,
   })),
 }));
+
+beforeAll(() => {
+  installPopoverTestEnv();
+});
+
+beforeEach(() => {
+  permissions.canWrite = true;
+  updateFindingTags.mockClear();
+});
 
 afterEach(() => {
   cleanup();
@@ -222,5 +248,86 @@ describe("FindingDetailTabs — DAST finding view", () => {
 
     expect(screen.queryByRole("button", { name: "Evidence" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Code" }));
+  });
+});
+
+describe("FindingDetailTabs — tags", () => {
+  it("lets a writer add a tag and sends the whole new list once", () => {
+    render(<FindingDetailTabs finding={buildFinding({ tags: ["pci"] })} permissionOrganizationId={7} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /add tag/i }));
+    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: /^backend/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(updateFindingTags).toHaveBeenCalledTimes(1);
+    expect(updateFindingTags.mock.calls[0][0]).toEqual({ id: 101, tags: ["pci", "backend"] });
+  });
+
+  it("keeps the filter menu on a chip and offers Remove tag inside it", () => {
+    const onTagFilterChange = vi.fn();
+    render(
+      <FindingDetailTabs
+        finding={buildFinding({ tags: ["pci"] })}
+        permissionOrganizationId={7}
+        tagFilter={EMPTY_TAG_FILTER}
+        onTagFilterChange={onTagFilterChange}
+      />,
+    );
+
+    // Radix DropdownMenu opens on pointerdown; keyboard opens on Enter.
+    const chip = screen.getByRole("button", { name: "Filter by tag pci" });
+    fireEvent.pointerDown(chip, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    if (!screen.queryByRole("menu")) fireEvent.keyDown(chip, { key: "Enter" });
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: /Include tag/ })).toBeInTheDocument();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Remove tag/ }));
+    expect(updateFindingTags).toHaveBeenCalledWith(
+      { id: 101, tags: [] },
+      expect.anything(),
+    );
+  });
+
+  it("locks a tag that comes from the project and keeps it out of the saved list", () => {
+    render(
+      <FindingDetailTabs
+        finding={buildFinding({ tags: ["pci", "ai"], projectTags: ["ai"] })}
+        permissionOrganizationId={7}
+      />,
+    );
+
+    expect(screen.getByTitle("From project — managed on the project card.")).toHaveTextContent("ai");
+
+    fireEvent.click(screen.getByRole("button", { name: /Remove tag pci/ }));
+    // Only the finding's own tags travel; the project's stays where it lives.
+    expect(updateFindingTags).toHaveBeenCalledWith({ id: 101, tags: [] }, expect.anything());
+  });
+
+  it("still filters by an inherited tag, but drops Remove from its menu", () => {
+    render(
+      <FindingDetailTabs
+        finding={buildFinding({ tags: ["ai"], projectTags: ["ai"] })}
+        permissionOrganizationId={7}
+        tagFilter={EMPTY_TAG_FILTER}
+        onTagFilterChange={vi.fn()}
+      />,
+    );
+
+    const chip = screen.getByRole("button", { name: "Filter by tag ai" });
+    fireEvent.pointerDown(chip, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    if (!screen.queryByRole("menu")) fireEvent.keyDown(chip, { key: "Enter" });
+    const menu = screen.getByRole("menu");
+
+    expect(within(menu).getByRole("menuitem", { name: /Include tag/ })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: /Remove tag/ })).not.toBeInTheDocument();
+  });
+
+  it("shows a reader the tags without any editing control", () => {
+    permissions.canWrite = false;
+    render(<FindingDetailTabs finding={buildFinding({ tags: ["pci"] })} permissionOrganizationId={7} />);
+
+    expect(screen.getByText("pci")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add tag/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove tag/ })).not.toBeInTheDocument();
   });
 });

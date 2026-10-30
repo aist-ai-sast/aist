@@ -26,12 +26,14 @@ type RouteMap = {
   finding_bulk_status_url: string;
   finding_export_url: string;
   finding_tags_url: string;
+  finding_tags_update_url: string;
   cwe_detail_url: string;
   test_detail_url: string;
   engagement_detail_url: string;
   projects_list_url: string;
   product_summary_url: string;
   project_meta_url: string;
+  project_tags_update_url: string;
   pipelines_list_url: string;
   pipelines_import_url: string;
   pipelines_import_validate_url: string;

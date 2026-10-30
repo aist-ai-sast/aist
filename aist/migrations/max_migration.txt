@@ -1,1 +1,1 @@
-0055_dastqueuesnapshot
+0056_enable_product_tag_inheritance

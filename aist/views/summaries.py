@@ -432,7 +432,7 @@ def _paginated_payload(request: HttpRequest, *, total: int, limit: int, offset: 
 def product_summary(request: HttpRequest) -> HttpResponse:
     projects = (
         get_authorized_aist_projects(Permissions.Product_View, user=request.user)
-        .select_related("product")
+        .select_related("product", "product__prod_type", "product__prod_type__aist_organization")
         .prefetch_related("product__tags")
         .order_by("product__name")
     )
@@ -480,6 +480,9 @@ def product_summary(request: HttpRequest) -> HttpResponse:
                 "project_id": project.id,
                 "product_id": project.product_id,
                 "product_name": project.product.name,
+                # The card gates its tag control on the role in THIS project's
+                # organization, so the row has to carry it.
+                "organization_id": project.organization_id,
                 "tags": list(project.product.tags.all().values_list("name", flat=True)),
                 "status": "active" if active_count else "inactive",
                 "findings_total": row.get("total", 0),

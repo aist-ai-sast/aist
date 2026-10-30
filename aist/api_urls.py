@@ -123,7 +123,7 @@ from aist.api.projects import (
     AISTProjectScriptListCreateAPI,
 )
 from aist.api.report_import import PipelineImportAPI, PipelineImportValidateAPI
-from aist.api.tags import AvailableFindingTagsAPI
+from aist.api.tags import AISTFindingTagsAPI, AISTProjectTagsAPI, AvailableFindingTagsAPI
 
 app_name = "aist_api"
 urlpatterns = [
@@ -326,6 +326,16 @@ urlpatterns = [
         name="project_github_link_repository",
     ),
     path("findings/tags/", AvailableFindingTagsAPI.as_view(), name="finding_tags"),
+    path(
+        "findings/<int:finding_id>/tags/",
+        AISTFindingTagsAPI.as_view(),
+        name="finding_tags_update",
+    ),
+    path(
+        "projects/<int:project_id>/tags/",
+        AISTProjectTagsAPI.as_view(),
+        name="project_tags_update",
+    ),
     path(
         "findings/<int:finding_id>/work-items/",
         FindingWorkItemListCreateAPI.as_view(),

@@ -50,6 +50,7 @@ type FindingApi = {
   description?: string | null;
   cwe?: number | null;
   tags?: string[];
+  project_tags?: string[];
   test?: number;
   risk_accepted?: boolean;
   under_review?: boolean;
@@ -86,6 +87,7 @@ type ProductSummaryApi = {
   project_id: number;
   product_id: number;
   product_name: string;
+  organization_id?: number | null;
   tags: string[];
   status: "active" | "inactive";
   findings_total: number;
@@ -317,6 +319,7 @@ function mapFindingApiToUi(item: FindingApi): Finding {
     description: item.description ?? undefined,
     cwe: item.cwe ?? null,
     tags: normalizeTags(item.tags),
+    projectTags: normalizeTags(item.project_tags),
     testId: item.test ?? null,
     lastStatusUpdate: item.last_status_update ?? undefined,
     isRegression: item.is_regression ?? false,
@@ -392,6 +395,7 @@ export function useProductSummaries() {
       return normalizeList(payload).map((item): ProductSummary => ({
         projectId: item.project_id,
         productId: item.product_id,
+        organizationId: item.organization_id ?? null,
         name: item.product_name,
         tags: item.tags ?? [],
         status: item.status,
@@ -739,18 +743,6 @@ export function usePipelineDastRun(pipelineId: string | null) {
   });
 }
 
-export function useFindingTags() {
-  return useQuery({
-    queryKey: ["finding-tags", "all"],
-    queryFn: async () => {
-      const payload = await fetchJson<{ tags: string[] }>(getRoute("finding_tags_url"));
-      const cleaned = (payload.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
-      return Array.from(new Set(cleaned));
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-}
-
 export type CweMeta = {
   title: string;
   description: string;
@@ -775,6 +767,7 @@ export type FindingTagOptions = {
   counts: Record<string, number>;
 };
 
+/** The tag vocabulary in scope. One hook, so every consumer of this cache key sees one shape. */
 export function useFindingTagsByProject(projectId?: number) {
   return useQuery({
     queryKey: ["finding-tags", projectId ?? "all"],

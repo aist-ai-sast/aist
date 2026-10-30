@@ -176,6 +176,13 @@ AIST_DAST_QUEUE_THROTTLE_RATE = env("DD_AIST_DAST_QUEUE_THROTTLE_RATE", default=
 # and a page collects one answer about twenty times while the worker is out. Sharing the bound above
 # would let an operator's own polling spend the budget their next command needs.
 AIST_DAST_QUEUE_POLL_THROTTLE_RATE = env("DD_AIST_DAST_QUEUE_POLL_THROTTLE_RATE", default="1200/hour")  # noqa: F405
+# A project tag write copies the tags onto every engagement, test and finding of that product, one
+# save each, so the bound is sized against the work it starts rather than the request. A Maintainer
+# editing a handful of cards stays far below it.
+AIST_PROJECT_TAGS_THROTTLE_RATE = env("DD_AIST_PROJECT_TAGS_THROTTLE_RATE", default="60/hour")  # noqa: F405
+# A finding tag write is one row, but each one invalidates the tag vocabulary cached for every user.
+# Sized for triage: a tag every few seconds for an hour fits, a script does not.
+AIST_FINDING_TAGS_THROTTLE_RATE = env("DD_AIST_FINDING_TAGS_THROTTLE_RATE", default="600/hour")  # noqa: F405
 REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {}).update({  # noqa: F405
     "aist_dast_gateway_probe": AIST_DAST_GATEWAY_PROBE_THROTTLE_RATE,
     "aist_dast_queue": AIST_DAST_QUEUE_THROTTLE_RATE,
@@ -186,6 +193,8 @@ REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {}).update({  # noqa: F405
     "aist_reset_password_email": AIST_RESET_PASSWORD_EMAIL_THROTTLE_RATE,
     "aist_change_password": AIST_CHANGE_PASSWORD_THROTTLE_RATE,
     "aist_pipeline_import": AIST_PIPELINE_IMPORT_THROTTLE_RATE,
+    "aist_project_tags": AIST_PROJECT_TAGS_THROTTLE_RATE,
+    "aist_finding_tags": AIST_FINDING_TAGS_THROTTLE_RATE,
 })
 
 # ------------------------------------------------------------------------------

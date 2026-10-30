@@ -68,6 +68,10 @@ def _build_routes() -> dict[str, Any]:
             reverse("aist_api:project_meta", kwargs={"project_id": 0}),
             "project_id",
         ),
+        "project_tags_update_url": _replace_int_placeholder(
+            reverse("aist_api:project_tags_update", kwargs={"project_id": 0}),
+            "project_id",
+        ),
         "pipelines_list_url": reverse("aist_api:pipelines"),
         "pipelines_import_url": reverse("aist_api:aist_pipeline_import"),
         "pipelines_import_validate_url": reverse("aist_api:aist_pipeline_import_validate"),
@@ -95,6 +99,10 @@ def _build_routes() -> dict[str, Any]:
         ),
         "ai_finding_responses_url": reverse("aist_api:ai_finding_responses"),
         "finding_tags_url": reverse("aist_api:finding_tags"),
+        "finding_tags_update_url": _replace_int_placeholder(
+            reverse("aist_api:finding_tags_update", kwargs={"finding_id": 0}),
+            "finding_id",
+        ),
         "cwe_detail_url": _replace_int_placeholder(
             reverse("aist_api:cwe_detail", kwargs={"cwe_id": 0}),
             "cwe_id",

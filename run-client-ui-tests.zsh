@@ -175,7 +175,7 @@ run_e2e_tests() {
 
     echo "==> Seeding demo access/business data"
     docker compose "${compose_args[@]}" run --rm --no-deps --entrypoint /bin/bash uwsgi -lc \
-      "cd /app && python3 manage.py bootstrap_demo_access --password '${DD_ADMIN_PASSWORD}'"
+      "cd /app && python3 manage.py bootstrap_demo_access --demo --password '${DD_ADMIN_PASSWORD}'"
 
     echo "==> Starting uwsgi/nginx"
     docker compose "${compose_args[@]}" up --no-deps -d uwsgi nginx

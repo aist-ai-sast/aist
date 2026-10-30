@@ -5,6 +5,7 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 from django.utils import timezone
 from dojo.models import Finding, Product_Type_Member, Role, System_Settings
@@ -48,7 +49,7 @@ class BootstrapDemoAccessCommandTests(TestCase):
             Role.objects.get_or_create(name=spec.role_name, defaults={"id": idx})
 
     def test_command_creates_demo_projects_findings_schedules_and_queue_history(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         self.assertFalse(Organization.objects.filter(name__in=ORG_NAMES, product_type__isnull=True).exists())
 
@@ -243,7 +244,7 @@ class BootstrapDemoAccessCommandTests(TestCase):
             "pipelines": AISTPipeline.objects.count(),
             "findings": Finding.objects.count(),
         }
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
         self.assertEqual(
             counts_before_rerun,
             {
@@ -254,6 +255,47 @@ class BootstrapDemoAccessCommandTests(TestCase):
             },
         )
 
+    def test_demo_projects_carry_tags_and_their_findings_inherit_them(self):
+        """
+        The demo is where this feature is shown, so it has to be visible there.
+
+        A project tag is only useful because it reaches the project's findings —
+        that is what makes it a finding filter. Both halves are asserted here:
+        the card has the tag, and the findings under it carry the same tag.
+        """
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
+
+        for spec in DEMO_PROJECTS:
+            with self.subTest(project=spec.slug):
+                self.assertTrue(spec.tags, "every demo project is expected to show tags")
+                project = AISTProject.objects.get(product__name=spec.product_name)
+                self.assertEqual(
+                    sorted(tag.name for tag in project.product.tags.all()),
+                    sorted(spec.tags),
+                )
+
+                findings = Finding.objects.filter(test__engagement__product=project.product)
+                self.assertTrue(findings.exists(), "a demo project without findings shows nothing")
+                for finding in findings:
+                    carried = {tag.name for tag in finding.tags.all()}
+                    self.assertTrue(
+                        set(spec.tags) <= carried,
+                        f"{finding.title} is missing project tags {set(spec.tags) - carried}",
+                    )
+
+    def test_a_demo_tag_shared_by_two_organizations_stays_separate_per_project(self):
+        """``tier-1`` is deliberately reused across organizations in the demo data."""
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
+
+        sharing = [spec for spec in DEMO_PROJECTS if "tier-1" in spec.tags]
+        self.assertGreater(len(sharing), 1, "the demo should show one tag name in several orgs")
+        organizations = {spec.organization_name for spec in sharing}
+        self.assertGreater(len(organizations), 1, "and in more than one organization")
+
+        for spec in sharing:
+            project = AISTProject.objects.get(product__name=spec.product_name)
+            self.assertIn("tier-1", [tag.name for tag in project.product.tags.all()])
+
     def test_each_demo_user_belongs_to_exactly_their_assigned_organization(self):
         """
         Each demo user must have membership in exactly one org — the one from DEMO_USERS spec.
@@ -261,7 +303,7 @@ class BootstrapDemoAccessCommandTests(TestCase):
         same role name (e.g. multiple Maintainers) to overwrite each other and end up assigned
         to all organizations instead of only their own.
         """
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         User = get_user_model()
         org_by_name = {org.name: org for org in Organization.objects.filter(name__in=ORG_NAMES)}
@@ -298,7 +340,7 @@ class BootstrapDemoAccessDastRunMetadataTests(BootstrapDemoAccessCommandTests):
     """
 
     def test_every_demo_dast_run_carries_coverage_and_spend(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         dast_pipelines = AISTPipeline.objects.filter(execution_type=PipelineExecutionType.DAST)
         self.assertGreater(dast_pipelines.count(), 0)
@@ -312,7 +354,7 @@ class BootstrapDemoAccessDastRunMetadataTests(BootstrapDemoAccessCommandTests):
                 self.assertTrue(row.token_accounting_consistent)
 
     def test_the_breakdowns_add_back_up_to_the_reported_total(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         counters = ("input_tokens", "output_tokens", "thinking_tokens", "cache_creation_tokens",
                     "cache_read_tokens", "calls")
@@ -327,7 +369,7 @@ class BootstrapDemoAccessDastRunMetadataTests(BootstrapDemoAccessCommandTests):
                         )
 
     def test_the_beyond_plan_chip_is_conditional_across_the_demo_runs(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         # One demo run stays inside its plan, so the amber chip must not be on every row.
         overshoots = {
@@ -340,10 +382,10 @@ class BootstrapDemoAccessDastRunMetadataTests(BootstrapDemoAccessCommandTests):
         self.assertEqual(len(DAST_DEMO_COVERAGE), DAST_DEMO_RUN_COUNT)
 
     def test_rerunning_the_command_leaves_one_metadata_row_per_run(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
         before = DastRunMetadata.objects.count()
 
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         self.assertEqual(DastRunMetadata.objects.count(), before)
 
@@ -353,12 +395,38 @@ class BootstrapDemoAccessPlatformSettingsTests(BootstrapDemoAccessCommandTests):
     """What a bootstrapped install is set up to do with the findings it holds."""
 
     def test_deduplication_is_on_and_keeps_no_duplicates(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         settings_row = System_Settings.objects.first()
         self.assertTrue(settings_row.enable_deduplication)
         self.assertTrue(settings_row.delete_duplicates)
         self.assertEqual(settings_row.max_dupes, 0)
+
+    def test_the_command_refuses_to_run_without_an_explicit_demo_confirmation(self):
+        """It writes global settings and known passwords, so it may not run by accident."""
+        with self.assertRaises(CommandError):
+            call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+
+        self.assertFalse(Organization.objects.filter(name__in=ORG_NAMES).exists())
+
+    def test_the_bootstrap_turns_project_tag_inheritance_on_itself(self):
+        """
+        A demo install must not rely on the migration's value still being set.
+
+        With the switch off the demo would show tags on the project cards and
+        nothing on the findings underneath, which is the one thing the feature
+        is for — so the bootstrap pins it the way it pins deduplication.
+        """
+        settings_row = System_Settings.objects.first()
+        if settings_row is None:
+            settings_row = System_Settings.objects.create()
+        settings_row.enable_product_tag_inheritance = False
+        settings_row.save(update_fields=["enable_product_tag_inheritance"])
+
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
+
+        settings_row.refresh_from_db()
+        self.assertTrue(settings_row.enable_product_tag_inheritance)
 
 
 class BootstrapDemoAccessQueueSnapshotTests(BootstrapDemoAccessCommandTests):
@@ -373,7 +441,7 @@ class BootstrapDemoAccessQueueSnapshotTests(BootstrapDemoAccessCommandTests):
     """
 
     def test_every_finished_demo_dast_run_has_a_queue_to_show(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         pipelines = AISTPipeline.objects.filter(execution_type=PipelineExecutionType.DAST)
         self.assertGreater(pipelines.count(), 0)
@@ -385,7 +453,7 @@ class BootstrapDemoAccessQueueSnapshotTests(BootstrapDemoAccessCommandTests):
             self.assertTrue(queue_is_addressable(pipeline))
 
     def test_the_demo_payload_is_the_shape_a_gateway_would_send(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         snapshot = DastQueueSnapshot.objects.first()
         # Read exactly as stored: the page is served this row and normalises nothing of its own, so
@@ -405,7 +473,7 @@ class BootstrapDemoAccessQueueSnapshotTests(BootstrapDemoAccessCommandTests):
         self.assertTrue({item["status"] for item in page["items"]} <= declared)
 
     def test_a_finished_run_offers_only_the_pause_it_still_holds(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         page = DastQueueSnapshot.objects.first().page
         offered = [action["name"] for item in page["items"] for action in item["actions"]]
@@ -415,7 +483,7 @@ class BootstrapDemoAccessQueueSnapshotTests(BootstrapDemoAccessCommandTests):
         # Whether a form field can be rendered is decided when the payload is stored. A demo
         # written straight to the row carries no such verdict, and the page then shows its only
         # control read-only -- the whole surface, demonstrably unusable.
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         page = DastQueueSnapshot.objects.first().page
         fields = [field for item in page["items"]
@@ -426,9 +494,9 @@ class BootstrapDemoAccessQueueSnapshotTests(BootstrapDemoAccessCommandTests):
             self.assertFalse(field["read_only"], field["name"])
 
     def test_rerunning_the_command_leaves_one_snapshot_per_pipeline(self):
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
-        call_command("bootstrap_demo_access", "--skip-admin", "--password", self.password)
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
 
         for pipeline in AISTPipeline.objects.filter(execution_type=PipelineExecutionType.DAST):
             self.assertEqual(DastQueueSnapshot.objects.filter(pipeline=pipeline).count(), 1)

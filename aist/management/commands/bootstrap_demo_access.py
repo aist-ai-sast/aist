@@ -75,6 +75,8 @@ class DemoProjectSpec:
     slug: str
     organization_name: str
     product_name: str
+    # Inherited by every finding of the project.
+    tags: tuple[str, ...]
     supported_languages: tuple[str, ...]
     compilable: bool
     project_age_days: int
@@ -212,6 +214,7 @@ DEMO_PROJECTS = [
         slug="payments-api",
         organization_name="Nova Payments",
         product_name="Demo AIST Payments API",
+        tags=("pci", "tier-1"),
         supported_languages=("python", "go"),
         compilable=True,
         project_age_days=45,
@@ -226,6 +229,7 @@ DEMO_PROJECTS = [
         slug="checkout-web",
         organization_name="Acme Platform",
         product_name="Demo AIST Checkout Web",
+        tags=("frontend", "tier-1"),
         supported_languages=("typescript",),
         compilable=False,
         project_age_days=38,
@@ -240,6 +244,7 @@ DEMO_PROJECTS = [
         slug="identity-service",
         organization_name="Acme Platform",
         product_name="Demo AIST Identity Service",
+        tags=("auth", "tier-1"),
         supported_languages=("java", "kotlin"),
         compilable=True,
         project_age_days=60,
@@ -254,6 +259,7 @@ DEMO_PROJECTS = [
         slug="ledger-worker",
         organization_name="Nova Payments",
         product_name="Demo AIST Ledger Worker",
+        tags=("backend", "pci"),
         supported_languages=("rust",),
         compilable=True,
         project_age_days=52,
@@ -268,6 +274,7 @@ DEMO_PROJECTS = [
         slug="analytics-core",
         organization_name="Helios Core",
         product_name="Demo AIST Analytics Core",
+        tags=("ai", "data-platform"),
         supported_languages=("python", "sql"),
         compilable=True,
         project_age_days=70,
@@ -556,9 +563,23 @@ class Command(BaseCommand):
             default=False,
             help="Do not modify superuser username/password.",
         )
+        parser.add_argument(
+            "--demo",
+            action="store_true",
+            default=False,
+            help="Required. Confirms this install may be filled with demo data.",
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
+        if not options["demo"]:
+            msg = (
+                "Refusing to run without --demo: this command creates users with a known "
+                "password, may reset the superuser password, and writes global system settings. "
+                "Pass --demo to confirm the target install is not a production one."
+            )
+            raise CommandError(msg)
+
         password = options["password"]
         skip_admin = options["skip_admin"]
 
@@ -568,6 +589,8 @@ class Command(BaseCommand):
             self._ensure_admin_username(user_model, password=password)
 
         self._ensure_deduplication_settings()
+        # Must precede the tagged products below: inheritance applies only while on.
+        self._ensure_tag_inheritance_settings()
         users_by_username = self._ensure_demo_users(user_model, password=password)
         organizations = self._ensure_organizations()
 
@@ -631,6 +654,16 @@ class Command(BaseCommand):
         settings_row.max_dupes = 0
         settings_row.save(update_fields=["enable_deduplication", "delete_duplicates", "max_dupes"])
         self.stdout.write("Deduplication enabled; duplicates retained: 0")
+
+    def _ensure_tag_inheritance_settings(self) -> None:
+        """Switch product tag inheritance on, so a project's tags reach its findings."""
+        settings_row = System_Settings.objects.first()
+        if settings_row is None:
+            settings_row = System_Settings.objects.create()
+        if not settings_row.enable_product_tag_inheritance:
+            settings_row.enable_product_tag_inheritance = True
+            settings_row.save(update_fields=["enable_product_tag_inheritance"])
+        self.stdout.write("Project tag inheritance enabled; project tags reach their findings")
 
     def _ensure_admin_username(self, user_model, *, password: str) -> None:
         admin = user_model.objects.filter(is_superuser=True).order_by("id").first()
@@ -889,6 +922,11 @@ class Command(BaseCommand):
                 product_updates.append("description")
             if product_updates:
                 product.save(update_fields=product_updates)
+
+            # Must precede the findings below, which inherit these on save.
+            desired_tags = sorted(spec.tags)
+            if sorted(tag.name for tag in product.tags.all()) != desired_tags:
+                product.tags.set(desired_tags)
 
             project, _ = AISTProject.objects.get_or_create(
                 product=product,

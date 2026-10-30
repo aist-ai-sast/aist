@@ -7,13 +7,15 @@ import DescriptionBlock from "./DescriptionBlock";
 import StepsToReproduce from "./StepsToReproduce";
 import { inferMarkdownStructure } from "../lib/dastNarrative";
 import { isDastFinding } from "../lib/findingStatus";
-import { useAddFindingNote } from "../lib/mutations";
-import { useFinding, useFindingNotes, useFindingTimeline } from "../lib/queries";
+import { useAddFindingNote, useUpdateFindingTags } from "../lib/mutations";
+import { useFinding, useFindingNotes, useFindingTagsByProject, useFindingTimeline } from "../lib/queries";
 import PermissionGate from "./PermissionGate";
 import { useToast } from "./ToastProvider";
 import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
 import { EMPTY_TAG_FILTER, onlyTag, tagFilterState, toggleTagState, type TagFilterValue } from "../lib/tagFilter";
 import FindingTagChip from "./FindingTagChip";
+import EditableTagRow from "./EditableTagRow";
+import { toUserMessage } from "../lib/api";
 import WorkItemsPanel from "./WorkItemsPanel";
 import AiFixPanel from "./AiFixPanel";
 
@@ -213,11 +215,20 @@ export default function FindingDetailTabs({
   const displayNotes = embedded ? noteItems.slice(0, 5) : noteItems;
   const detailQuery = useFinding(finding.id);
   const timelineQuery = useFindingTimeline(finding.id);
-  const resolvedTags =
-    finding.tags && finding.tags.length > 0
-      ? finding.tags
-      : detailQuery.data?.tags ?? [];
+  // Both lists must come from one payload, or a chip locks on stale information.
+  const tagSource = finding.tags && finding.tags.length > 0 ? finding : detailQuery.data;
+  const resolvedTags = tagSource?.tags ?? [];
+  const resolvedProjectTags = tagSource?.projectTags ?? [];
   const tagsLoading = !finding.tags?.length && detailQuery.isLoading;
+  const availableTagsQuery = useFindingTagsByProject();
+  const updateFindingTags = useUpdateFindingTags();
+
+  const saveTags = (tags: string[]) => {
+    updateFindingTags.mutate(
+      { id: finding.id, tags },
+      { onError: (error) => toast.push(toUserMessage(error), "error") },
+    );
+  };
 
   const isDast = isDastFinding(finding);
 
@@ -244,26 +255,37 @@ export default function FindingDetailTabs({
 
       {tab === "overview" ? (
         <div className="mt-4 space-y-4">
-          {resolvedTags.length ? (
+          {resolvedTags.length || permissionOrganizationId !== undefined ? (
             <div>
               <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Tags</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {resolvedTags.map((tag) => (
-                  onTagFilterChange ? (
-                    <FindingTagChip
-                      key={tag}
-                      tag={tag}
-                      state={tagFilterState(tagFilter, tag)}
-                      onInclude={() => onTagFilterChange(toggleTagState(tagFilter, tag, "include"))}
-                      onExclude={() => onTagFilterChange(toggleTagState(tagFilter, tag, "exclude"))}
-                      onOnly={() => onTagFilterChange(onlyTag(tagFilter, tag))}
-                    />
-                  ) : (
-                    <span key={tag} className="rounded-full border border-night-500 bg-night-900 px-3 py-1 text-xs text-slate-200">
-                      {tag}
-                    </span>
-                  )
-                ))}
+              <div className="mt-2">
+                <EditableTagRow
+                  tags={resolvedTags}
+                  inheritedTags={resolvedProjectTags}
+                  suggestions={availableTagsQuery.data?.names ?? []}
+                  action="write"
+                  permissionOrganizationId={permissionOrganizationId}
+                  pending={updateFindingTags.isPending}
+                  size="md"
+                  ownerLabel={`finding ${finding.id}`}
+                  onChange={saveTags}
+                  renderTag={
+                    onTagFilterChange
+                      ? (tag, controls) => (
+                          <FindingTagChip
+                            tag={tag}
+                            state={tagFilterState(tagFilter, tag)}
+                            onInclude={() => onTagFilterChange(toggleTagState(tagFilter, tag, "include"))}
+                            onExclude={() => onTagFilterChange(toggleTagState(tagFilter, tag, "exclude"))}
+                            onOnly={() => onTagFilterChange(onlyTag(tagFilter, tag))}
+                            onRemove={controls.onRemove}
+                            locked={controls.locked}
+                            lockedReason={controls.lockedReason}
+                          />
+                        )
+                      : undefined
+                  }
+                />
               </div>
             </div>
           ) : tagsLoading ? (

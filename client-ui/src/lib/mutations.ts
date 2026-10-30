@@ -727,3 +727,42 @@ export function useExportFinding() {
     },
   });
 }
+
+/**
+ * Replace a finding's tags. The response is authoritative: the server
+ * normalises every tag and keeps the platform's own `aist:` ones, so the cache
+ * is refreshed from it rather than from what was sent.
+ */
+export function useUpdateFindingTags() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, tags }: { id: number; tags: string[] }) =>
+      fetchJson<{ tags: string[]; project_tags: string[] }>(getRoute("finding_tags_update_url", { finding_id: id }), {
+        method: "PUT",
+        body: JSON.stringify({ tags }),
+      }),
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["findings"] }),
+        queryClient.invalidateQueries({ queryKey: ["finding"] }),
+        queryClient.invalidateQueries({ queryKey: ["finding-tags"] }),
+      ]),
+  });
+}
+
+/** Replace a project's tags — stored on its product, which is what the cards read. */
+export function useUpdateProjectTags() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ projectId, tags }: { projectId: number; tags: string[] }) =>
+      fetchJson<{ tags: string[]; project_tags: string[] }>(getRoute("project_tags_update_url", { project_id: projectId }), {
+        method: "PUT",
+        body: JSON.stringify({ tags }),
+      }),
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["product-summaries"] }),
+        queryClient.invalidateQueries({ queryKey: ["aist-projects"] }),
+      ]),
+  });
+}

@@ -1,5 +1,5 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { ACCENT_SELECTED_CLASS } from "../lib/uiClasses";
+import TagChip from "./TagChip";
 import type { TagFilterState } from "../lib/tagFilter";
 
 type FindingTagChipProps = {
@@ -8,6 +8,11 @@ type FindingTagChipProps = {
   onInclude: () => void;
   onExclude: () => void;
   onOnly: () => void;
+  /** Present only where the viewer may edit the finding's tags. */
+  onRemove?: () => void;
+  /** The tag is not the finding's own: it can be filtered on, not removed. */
+  locked?: boolean;
+  lockedReason?: string;
 };
 
 const MENU_ITEM_CLASS =
@@ -15,26 +20,35 @@ const MENU_ITEM_CLASS =
 
 /**
  * A finding's tag as shown in its detail view. Clicking opens a small menu that
- * feeds the page-level tag filter: include, exclude, or keep only this tag.
+ * feeds the page-level tag filter: include, exclude, or keep only this tag —
+ * and, for a viewer who may edit the finding, removes the tag.
+ *
+ * Removal lives in this menu rather than on a × of its own: the chip is already
+ * a menu trigger, and a button inside a button is not valid markup.
  */
-export default function FindingTagChip({ tag, state, onInclude, onExclude, onOnly }: FindingTagChipProps) {
+export default function FindingTagChip({
+  tag,
+  state,
+  onInclude,
+  onExclude,
+  onOnly,
+  onRemove,
+  locked,
+  lockedReason,
+}: FindingTagChipProps) {
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
-        <button
-          type="button"
+        <TagChip
+          as="button"
+          tag={tag}
+          size="md"
           aria-label={`Filter by tag ${tag}`}
-          className={[
-            "rounded-full border px-3 py-1 text-xs transition outline-none focus-visible:ring-2 focus-visible:ring-brand-600/60 data-[state=open]:ring-2 data-[state=open]:ring-brand-600/60",
-            state === "include"
-              ? ACCENT_SELECTED_CLASS
-              : state === "exclude"
-                ? "border-danger-500/50 bg-danger-500/10 text-danger-500 line-through"
-                : "border-night-500 bg-night-900 text-slate-200 hover:border-brand-600/40",
-          ].join(" ")}
-        >
-          {tag}
-        </button>
+          locked={locked}
+          title={locked ? lockedReason : undefined}
+          variant={state === "include" ? "include" : state === "exclude" ? "exclude" : "neutral"}
+          className={state === "none" ? "hover:border-brand-600/40" : ""}
+        />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
@@ -55,6 +69,15 @@ export default function FindingTagChip({ tag, state, onInclude, onExclude, onOnl
             <span aria-hidden="true" className="h-2 w-2 rounded-full bg-slate-400" />
             Only this tag
           </DropdownMenu.Item>
+          {onRemove ? (
+            <>
+              <DropdownMenu.Separator className="my-1 h-px bg-night-500" />
+              <DropdownMenu.Item className={MENU_ITEM_CLASS} onSelect={onRemove}>
+                <span aria-hidden="true" className="h-2 w-2 rounded-full border border-slate-400" />
+                Remove tag
+              </DropdownMenu.Item>
+            </>
+          ) : null}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

@@ -71,6 +71,11 @@ export type Finding = {
   description?: string;
   cwe?: number | null;
   tags?: string[];
+  /**
+   * The subset of `tags` that comes from the project. Those tags are managed
+   * on the project card, so the finding shows them without offering an edit.
+   */
+  projectTags?: string[];
   testId?: number | null;
   aiVerdict?: AIVerdict;
   snippetPreview?: string;
@@ -152,6 +157,8 @@ export type RiskScore = {
 export type ProductSummary = {
   projectId: number;
   productId: number;
+  /** Organization that owns the project; the tag control is gated per organization. */
+  organizationId: number | null;
   name: string;
   tags: string[];
   status: "active" | "inactive";
