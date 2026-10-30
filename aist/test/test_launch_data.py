@@ -38,6 +38,7 @@ class PipelineLaunchDataReadTest(SimpleTestCase):
             "project_version_descriptor": {"version": "v1"},
             "imported_test_ids": [10, 20],
             "analyzer_outcomes": [{"name": "agent-security"}],
+            "analyzer_versions": [{"analyzer": "semgrep", "tool_version": "semgrep 1.183.0"}],
             "analyzer_degraded_reasons": [{"code": "missing_result"}],
         })
         self.assertEqual(ld.log_level, "DEBUG")
@@ -47,6 +48,11 @@ class PipelineLaunchDataReadTest(SimpleTestCase):
         self.assertEqual(ld.project_version_descriptor, {"version": "v1"})
         self.assertEqual(ld.imported_test_ids, [10, 20])
         self.assertEqual(ld.analyzer_outcomes, [{"name": "agent-security"}])
+        # sast-combinator owns this shape; AIST stores it verbatim and never rebuilds it.
+        self.assertEqual(
+            ld.analyzer_versions,
+            [{"analyzer": "semgrep", "tool_version": "semgrep 1.183.0"}],
+        )
         self.assertTrue(ld.has_analyzer_degraded_reasons)
 
     def test_defaults_for_missing_fields(self):
@@ -62,6 +68,7 @@ class PipelineLaunchDataReadTest(SimpleTestCase):
         self.assertEqual(ld.project_version_descriptor, {})
         self.assertEqual(ld.imported_test_ids, [])
         self.assertEqual(ld.analyzer_outcomes, [])
+        self.assertEqual(ld.analyzer_versions, [])
         self.assertEqual(ld.analyzer_degraded_reasons, [])
         self.assertFalse(ld.has_analyzer_degraded_reasons)
 

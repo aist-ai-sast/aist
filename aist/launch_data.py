@@ -160,6 +160,11 @@ class PipelineLaunchData:
         return self._data.get("analyzer_outcomes") or []
 
     @property
+    def analyzer_versions(self) -> list[dict]:
+        """Which build of each analyzer produced this run, as sast-combinator recorded it."""
+        return self._data.get("analyzer_versions") or []
+
+    @property
     def analyzer_degraded_reasons(self) -> list[dict]:
         return self._data.get("analyzer_degraded_reasons") or []
 
