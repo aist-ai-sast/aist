@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task(name="aist.tasks.validate.validate_work_item_provider", bind=True)
-def validate_work_item_provider(self, provider_id: int, async_user=None) -> dict:
+def validate_work_item_provider(self, provider_id: int, async_user_id=None) -> dict:
     """
     Run WorkItemProvider credential validation inside a Celery worker.
 
@@ -56,7 +56,7 @@ def validate_work_item_provider(self, provider_id: int, async_user=None) -> dict
 
 
 @shared_task(name="aist.tasks.validate.validate_integration", bind=True)
-def validate_integration(self, integration_id: int, async_user=None) -> dict:
+def validate_integration(self, integration_id: int, async_user_id=None) -> dict:
     """
     Run integration credential validation inside a Celery worker.
 
@@ -89,9 +89,9 @@ def validate_dast_integration(
     self,
     integration_id: int,
     generation: int,
-    async_user=None,
+    async_user_id=None,
 ) -> dict:
-    del async_user
+    del async_user_id
     ticket = DastValidationTicket(
         integration_id=integration_id,
         generation=generation,
@@ -105,7 +105,7 @@ def refresh_dast_capability_catalogs(
     self,
     refresh_after_hours: int = 12,
     in_flight_grace_minutes: int = int(SYNC_IN_FLIGHT_GRACE.total_seconds() // 60),
-    async_user=None,
+    async_user_id=None,
 ) -> dict:
     """
     Keep every validated DAST catalog inside the freshness window launch readiness requires.
@@ -118,7 +118,7 @@ def refresh_dast_capability_catalogs(
     Each pass only reserves a generation and publishes; the sync task itself does the network
     work and an ETag makes an unchanged catalog cheap.
     """
-    del self, async_user
+    del self, async_user_id
     now = timezone.now()
     due = (
         DastIntegrationState.objects.filter(
@@ -154,9 +154,9 @@ def sync_dast_capabilities(
     self,
     integration_id: int,
     generation: int,
-    async_user=None,
+    async_user_id=None,
 ) -> dict:
-    del async_user
+    del async_user_id
     ticket = DastCapabilitySyncTicket(
         integration_id=integration_id,
         generation=generation,

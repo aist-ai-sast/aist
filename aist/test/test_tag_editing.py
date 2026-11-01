@@ -64,7 +64,9 @@ class TagTestCaseBase(TestCase):
         cache.clear()
         # A TransactionTestCase elsewhere in the suite flushes migration-seeded rows,
         # so the switch is asserted here rather than inherited from the database.
-        settings_row, _created = System_Settings.objects.get_or_create()
+        # .first() bypasses the read-through cache; the manager's get() returns a
+        # read-only snapshot that refuses to save.
+        settings_row = System_Settings.objects.first() or System_Settings.objects.create()
         if not settings_row.enable_product_tag_inheritance:
             settings_row.enable_product_tag_inheritance = True
             settings_row.save(update_fields=["enable_product_tag_inheritance"])
@@ -308,7 +310,7 @@ class TagInheritanceTestCase(TagTestCaseBase):
 
     def test_the_migration_is_what_turns_inheritance_on(self):
         """The migration's own function is driven: the live setting only reports DB state."""
-        settings_row = System_Settings.objects.get()
+        settings_row = System_Settings.objects.first()
         settings_row.enable_product_tag_inheritance = False
         settings_row.save(update_fields=["enable_product_tag_inheritance"])
 

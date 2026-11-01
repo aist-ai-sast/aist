@@ -62,8 +62,8 @@ def _claim_due_schedule(*, now: datetime, exclude_ids: set[int]) -> _DueSchedule
 
 
 @shared_task(name="aist.tasks.launch_schedule.process_launch_schedules")
-def process_launch_schedules(async_user=None):
-    del async_user
+def process_launch_schedules(async_user_id=None):
+    del async_user_id
     now = timezone.now()
     processed = 0
     attempted_ids: set[int] = set()

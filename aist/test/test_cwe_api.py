@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -10,6 +11,9 @@ from rest_framework.test import APIClient
 
 class CweDetailApiTests(TestCase):
     def setUp(self):
+        # The CWE cache is process-wide and outlives a test; another test may already
+        # have warmed the entry this class asserts is fetched.
+        cache.clear()
         self.client = APIClient()
         self.user = get_user_model().objects.create_user(
             username="cwe_test_user",

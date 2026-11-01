@@ -77,8 +77,8 @@ set -e
 
 cd /app
 export DD_APPEND_SLASH=False
+# DD_CELERY_BROKER_URL must stay set; the discrete DD_CELERY_BROKER_* fallback is unusable.
 unset DD_DATABASE_URL
-unset DD_CELERY_BROKER_URL
 
 wait_for_database_to_be_reachable
 

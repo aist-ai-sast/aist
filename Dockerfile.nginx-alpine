@@ -72,6 +72,10 @@ COPY --from=client-build /app/client-ui/dist/ ./client-ui/dist/
 COPY manage.py ./
 COPY aist/ ./aist/
 COPY aist_site/ ./aist_site/
+# The platform compiles its stylesheet from its own templates only, so a class used in an
+# AIST template would have no CSS. Rebuild it from our entry file, which adds our sources.
+RUN cd vendor/defectdojo/components && \
+  npx @tailwindcss/cli -i /app/aist/tailwind.css -o /app/aist/static/aist/css/aist-tailwind.css --minify
 COPY sast-combinator/sast-pipeline/ /app/sast-combinator/sast-pipeline/
 ENV AIST_PIPELINE_CODE_PATH=/app/sast-combinator/sast-pipeline
 # always collect static for debug toolbar as we can't make it dependant on env variables or build arguments without breaking docker layer caching

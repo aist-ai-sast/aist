@@ -1,0 +1,49 @@
+/*
+ * AIST's stylesheet: the platform's own Tailwind build, extended to our templates.
+ *
+ * The platform compiles its stylesheet from `dojo/templates` only, so a utility class
+ * written in an AIST template produces no CSS at all. Importing its entry file brings the
+ * brand tokens and component layer unchanged; the sources below add our pages, so both
+ * trees are served by one stylesheet and our pages use the platform's design tokens.
+ */
+@import "../vendor/defectdojo/components/tailwind.css";
+
+@source "./templates/**/*.html";
+@source "./static/aist/js/**/*.js";
+
+/*
+ * A checkbox that is both checked and disabled must still read as checked.
+ *
+ * The start-pipeline form shows a project's required languages this way. The platform's
+ * disabled style replaces the checked background with near-white, which hides the white
+ * tick drawn on top of it; keeping the checked colour and relying on the inherited opacity
+ * leaves the control dimmed but legible.
+ */
+input[type="checkbox"]:checked:disabled,
+input[type="radio"]:checked:disabled {
+  background-color: currentColor;
+}
+
+/*
+ * An <a> styled as a button keeps the variant's text colour.
+ *
+ * dojo.css colours every anchor outside any cascade layer, and an unlayered rule outranks
+ * the platform's layered .btn-* colours whatever their specificity. The platform never hits
+ * this because its own templates use <button>; AIST pages link to confirmation pages.
+ *
+ * revert-layer hands the decision back to whichever .btn-* rule the layers resolve to, so
+ * no variant's colour is restated here and none can go stale.
+ */
+a.btn { color: revert-layer; }
+
+/*
+ * An icon inside a button takes the button's own colour.
+ *
+ * dojo.css paints .fa-trash and .fa-minus-square red so a bare delete affordance reads as
+ * destructive. Inside a filled button that red lands on a red background and the glyph
+ * disappears, while the label beside it stays white.
+ */
+.btn > i,
+.btn > .fa-solid,
+.btn > .fa-regular,
+.btn > .fa-brands { color: inherit; }

@@ -25,6 +25,13 @@ available queryset by the caller's organization, project access, and requested
 permission, then resolves the identifier inside that scope. An object owned by
 another tenant is therefore not exposed as an accessible record.
 
+The same scope answers the embedded DefectDojo foundation when it authorizes a
+finding query of its own, so an embedded view and an AIST endpoint agree on what
+a user may reach. The membership records both rely on are held in tables the
+embedded foundation no longer manages: their rows stay where they are and no
+longer change shape with a foundation upgrade, while AIST's own membership
+service remains the only supported writer of organization and project roles.
+
 ## Full and restricted membership
 
 A full member receives the organization role across its projects. A project

@@ -186,6 +186,50 @@ class ActionsTests(TestCase):
         SlackAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
         self.assertTrue(mock_post.called)
 
+    @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
+    def test_a_branch_name_cannot_become_a_slack_mention(self, mock_post):
+        """Refnames allow < > !, so a contributor could otherwise page the whole workspace."""
+        AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_BRANCH,
+            version="<!channel>",
+        )
+        self.pipeline.project_version = AISTProjectVersion.objects.create(
+            project=self.project,
+            version_type=VersionType.GIT_HASH,
+            version="deadbeef",
+            resolved_from_branch=AISTProjectVersion.objects.get(version="<!channel>"),
+        )
+        self.pipeline.save(update_fields=["project_version", "updated"])
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.PUSH_TO_SLACK,
+            {"channels": ["#alerts"], "include_ai_csv": False},
+            {"slack_token": "xoxb-test"},
+        )
+
+        SlackAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+
+        message = mock_post.call_args.kwargs["message"]
+        self.assertNotIn("<!channel>", message)
+        self.assertIn("&lt;!channel&gt;", message)
+
+    @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
+    def test_an_operator_written_description_keeps_its_markup(self, mock_post):
+        """Config text is authored by an operator, so deliberate Slack markup must survive."""
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.PUSH_TO_SLACK,
+            {
+                "channels": ["#alerts"],
+                "include_ai_csv": False,
+                "description": "<https://runbook.example.test|Runbook>",
+            },
+            {"slack_token": "xoxb-test"},
+        )
+
+        SlackAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+
+        self.assertIn("<https://runbook.example.test|Runbook>", mock_post.call_args.kwargs["message"])
+
     @override_settings(SITE_URL="https://aist.itsec-europe.com")
     @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
     def test_slack_action_default_message_includes_project_commit_and_findings_url(self, mock_post):
@@ -214,10 +258,9 @@ class ActionsTests(TestCase):
         self.assertIn("Project: Test Product", message)
         self.assertIn("Branch: main", message)
         self.assertIn("Commit: abc123def", message)
-        self.assertIn(
-            f"https://aist.itsec-europe.com{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}",
-            message,
-        )
+        # Slack decodes &amp; back to & when it renders, so the link arrives intact.
+        expected = f"https://aist.itsec-europe.com{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}"
+        self.assertIn(expected.replace("&", "&amp;"), message)
 
     @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
     def test_slack_action_common_summary_contains_pipeline_stats(self, mock_post):

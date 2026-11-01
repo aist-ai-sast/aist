@@ -12,7 +12,8 @@ from django.db import connection, transaction
 from django.db.models import Q, prefetch_related_objects
 from dojo.finding import deduplication as dedupe_mod
 from dojo.finding.deduplication import set_duplicate
-from dojo.models import Endpoint, Finding, Vulnerability_Id
+from dojo.models import Endpoint, Finding
+from dojo.vulnerability.models import FindingVulnerabilityReference
 
 from aist.dedupe.canonical import (
     DAST_SCAN_TYPE,
@@ -334,7 +335,7 @@ def _lock_dynamic_identity_tables() -> None:
     tables = (
         Finding.endpoints.through._meta.db_table,
         Endpoint._meta.db_table,
-        Vulnerability_Id._meta.db_table,
+        FindingVulnerabilityReference._meta.db_table,
         AISTPipeline.tests.through._meta.db_table,
     )
     quoted = ", ".join(connection.ops.quote_name(table) for table in tables)
@@ -740,7 +741,7 @@ def _apply_duplicate_decision(
                 .select_for_update()
                 .filter(pk__in=(finding.id, root.id))
                 .select_related("test", "test__engagement", "test__test_type")
-                .prefetch_related("endpoints", "vulnerability_id_set")
+                .prefetch_related("endpoints", "vulnerability_references__vulnerability")
             }
             finding = locked.get(finding.id)
             root = locked.get(root.id)
@@ -818,7 +819,7 @@ def _apply_duplicate_decision(
                     .select_for_update()
                     .filter(pk__in=[row.id for row in scope])
                     .select_related("test", "test__engagement", "test__test_type")
-                    .prefetch_related("endpoints", "vulnerability_id_set")
+                    .prefetch_related("endpoints", "vulnerability_references__vulnerability")
                     .order_by("id"),
                 )
                 _dast_binding_by_finding_id(fresh_scope, lock_pipelines=True)
@@ -923,7 +924,7 @@ def resolve_dedupe_scope(target_findings: list[Finding]) -> list[Finding]:
     if not target_findings:
         return []
 
-    prefetch_related_objects(target_findings, "endpoints", "vulnerability_id_set")
+    prefetch_related_objects(target_findings, "endpoints", "vulnerability_references__vulnerability")
     target_by_id = {finding.id: finding for finding in target_findings}
     target_signatures = {finding.id: finding_signature(finding) for finding in target_findings}
     target_bindings = _dast_binding_by_finding_id(target_findings)
@@ -997,7 +998,7 @@ def resolve_dedupe_scope(target_findings: list[Finding]) -> list[Finding]:
         if vulnerability_ids:
             include(_dast_binding_scope_query(binding_id) & Q(
                 test__engagement__product_id=dynamic_product_ids[binding_id],
-                vulnerability_id__vulnerability_id__in=vulnerability_ids,
+                vulnerability_references__vulnerability__vulnerability_id__in=vulnerability_ids,
             ))
     for binding_id, component_cwes in dynamic_component_cwes.items():
         for component_name, cwe in component_cwes:
@@ -1021,7 +1022,7 @@ def resolve_dedupe_scope(target_findings: list[Finding]) -> list[Finding]:
         Finding.objects.filter(test__test_type__name__in=SUPPORTED_SCAN_TYPES)
         .filter(candidate_q)
         .select_related("test", "test__engagement", "test__test_type")
-        .prefetch_related("endpoints", "vulnerability_id_set")
+        .prefetch_related("endpoints", "vulnerability_references__vulnerability")
         .distinct()
         .order_by("id"),
     )

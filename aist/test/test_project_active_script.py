@@ -175,6 +175,9 @@ class ActiveScriptApiTests(_ProjectsFixture):
                 self.assertEqual(self.client.get(reverse("aist:aist_project_list")).status_code, 200)
             return len(ctx.captured_queries)
 
+        # Discarded: the first call also warms per-process caches (system settings,
+        # content types), which are not part of the per-project cost under test.
+        count_queries()
         baseline = count_queries()
         for i in range(3):
             extra = self._project(f"Extra Product {i}")

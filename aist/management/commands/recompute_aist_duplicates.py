@@ -115,7 +115,7 @@ class Command(BaseCommand):
             Finding.objects
             .filter(test__test_type__name__in=SUPPORTED_SCAN_TYPES)
             .select_related("test", "test__engagement", "test__test_type", "test__aist_meta")
-            .prefetch_related("endpoints", "vulnerability_id_set")
+            .prefetch_related("endpoints", "vulnerability_references__vulnerability")
             .order_by("id")
         )
         if pipeline_id:

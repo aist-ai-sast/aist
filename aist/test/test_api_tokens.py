@@ -471,6 +471,50 @@ class MultiOrgTokenTests(TokenTestBase):
         Product_Type_Member.objects.create(product_type=self.pt_a, user=self.user, role=self.role_owner)
         Product_Type_Member.objects.create(product_type=self.pt_b, user=self.user, role=self.role_reader)
 
+    def test_a_token_cannot_mint_a_token_for_another_organization(self):
+        """A leaked token stays confined to its own organization, even to create with."""
+        _t, raw = self._issue(
+            user=self.user, organization=self.org_a, name="ci", scope=ApiTokenScope.READ_WRITE,
+        )
+        client = self._bearer(raw)
+
+        response = client.post(
+            reverse("aist_api:me_token_list_create"),
+            {"name": "pivot", "scope": ApiTokenScope.READ_ONLY, "organization_id": self.org_b.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertFalse(
+            AISTApiToken.objects.filter(user=self.user, organization=self.org_b).exists(),
+        )
+
+    def test_a_token_can_still_mint_one_for_its_own_organization(self):
+        _t, raw = self._issue(
+            user=self.user, organization=self.org_a, name="ci", scope=ApiTokenScope.READ_WRITE,
+        )
+        client = self._bearer(raw)
+
+        response = client.post(
+            reverse("aist_api:me_token_list_create"),
+            {"name": "sibling", "scope": ApiTokenScope.READ_ONLY, "organization_id": self.org_a.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+
+    def test_a_session_may_still_reach_every_visible_organization(self):
+        """The narrowing is the token's, not the user's."""
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("aist_api:me_token_list_create"),
+            {"name": "from-session", "scope": ApiTokenScope.READ_ONLY, "organization_id": self.org_b.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+
     def test_single_token_manages_org_a_but_not_org_b(self):
         _t, raw = self._issue(
             user=self.user, organization=self.org_a, name="ci", scope=ApiTokenScope.READ_WRITE,

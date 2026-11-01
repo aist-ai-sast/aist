@@ -17,23 +17,23 @@
         {# LaunchConfig metadata fields (present only in AISTLaunchConfigForm) #}
         {% if form.name %}
             <div class="mb-3 row">
-                <label class="col-sm-3 col-form-label">{{ form.name.label }}</label>
+                <label class="col-sm-3 form-label">{{ form.name.label }}</label>
                 <div class="col-sm-9">
                     {{ form.name }}
                 </div>
             </div>
 
             <div class="mb-3 row">
-                <label class="col-sm-3 col-form-label">{{ form.description.label }}</label>
+                <label class="col-sm-3 form-label">{{ form.description.label }}</label>
                 <div class="col-sm-9">
                     {{ form.description }}
                 </div>
             </div>
 
             <div class="mb-3 row">
-                <label class="col-sm-3 col-form-label">{{ form.is_default.label }}</label>
+                <label class="col-sm-3 form-label">{{ form.is_default.label }}</label>
                 <div class="col-sm-9">
-                    <div class="form-check">
+                    <div class="flex items-center gap-2">
                         {{ form.is_default }}
                     </div>
                 </div>
@@ -46,11 +46,11 @@
         {% if form.project %}
             {# Project select #}
             <div class="mb-3 row">
-                <label class="col-sm-3 col-form-label">{{ form.project.label }}</label>
+                <label class="col-sm-3 form-label">{{ form.project.label }}</label>
                 <div class="col-sm-9">
                     {{ form.project }}
                     {% if form.project.help_text %}
-                        <small class="form-text text-muted small">{{ form.project.help_text }}</small>
+                        <small class="text-sm text-gray-500 text-muted small">{{ form.project.help_text }}</small>
                     {% endif %}
                 </div>
             </div>
@@ -58,7 +58,7 @@
 
         {# Project version + create button #}
         <div class="mb-3 row align-items-start">
-            <label class="col-sm-3 col-form-label">{{ form.project_version.label }}</label>
+            <label class="col-sm-3 form-label">{{ form.project_version.label }}</label>
             <div class="col-sm-9 d-flex gap-2">
                 <div class="flex-grow-1">
                     {{ form.project_version }}
@@ -74,12 +74,12 @@
         </div>
 
         <div class="mb-3 row">
-            <label class="col-sm-3 col-form-label">{{ form.ai_mode.label }}</label>
+            <label class="col-sm-3 form-label">{{ form.ai_mode.label }}</label>
             <div class="col-sm-9">
                 {% for radio in form.ai_mode %}
-                    <div class="form-check">
+                    <div class="flex items-center gap-2">
                         {{ radio.tag }}
-                        <label class="form-check-label"
+                        <label class="text-sm"
                                for="{{ radio.id_for_label }}">{{ radio.choice_label }}</label>
                     </div>
                 {% endfor %}
@@ -98,7 +98,7 @@
 
         <div class="mb-3 row aist-ai-filter-block"
              {% if form.ai_mode.value != "AUTO_DEFAULT" %}style="display:none;"{% endif %}>
-            <label class="col-sm-3 col-form-label">AI filter (JSON)</label>
+            <label class="col-sm-3 form-label">AI filter (JSON)</label>
             <div class="col-sm-9">
                 {{ form.ai_filter_json }}
                 {% if form.ai_filter_json.errors %}
@@ -109,7 +109,7 @@
                     </div>
                 {% endif %}
                 <div class="small mt-1" id="aist-ai-filter-validation"></div>
-                <p class="form-text text-muted small mt-1">
+                <p class="text-sm text-gray-500 text-muted small mt-1">
                     Used only when AI mode is AUTO_DEFAULT. Example:
                     <code>{"limit": 50, "severity": [{"comparison": "EQUALS", "value": "High"}]}</code>
                     <a class="ms-2" href="{% url "aist:ai_filter_help" %}" target="_blank" rel="noopener">
@@ -124,13 +124,13 @@
                             <div class="small text-muted mb-1">Comparisons</div>
                             <div class="d-flex flex-wrap gap-1 mb-2">
                                 {% for cmp in ai_filter_reference.comparisons %}
-                                    <span class="badge bg-secondary">{{ cmp }}</span>
+                                    <span class="badge bg-gray-500">{{ cmp }}</span>
                                 {% endfor %}
                             </div>
 
                             <div class="small text-muted mb-1">Fields</div>
                             <div class="table-responsive">
-                                <table class="table table-sm align-middle mb-0">
+                                <table class="table text-sm align-middle mb-0">
                                     <thead>
                                     <tr class="text-muted small">
                                         <th style="width: 22%">Field</th>
@@ -142,7 +142,7 @@
                                     <tbody>
                                     {% for f in ai_filter_reference.fields %}
                                         <tr>
-                                            <td class="font-monospace">{{ f.name }}</td>
+                                            <td class="font-mono">{{ f.name }}</td>
                                             <td>{{ f.type }}</td>
                                             <td class="small">
                                                 {% if f.allowed_comparisons %}
@@ -269,9 +269,9 @@
         </script>
 
         <div class="mb-3 row">
-            <label class="col-sm-3 col-form-label">{{ form.rebuild_images.label }}</label>
+            <label class="col-sm-3 form-label">{{ form.rebuild_images.label }}</label>
             <div class="col-sm-9">
-                <div class="form-check">
+                <div class="flex items-center gap-2">
                     {{ form.rebuild_images }}
                 </div>
             </div>
@@ -279,7 +279,7 @@
 
         {# Log level #}
         <div class="mb-3 row">
-            <label class="col-sm-3 col-form-label">{{ form.log_level.label }}</label>
+            <label class="col-sm-3 form-label">{{ form.log_level.label }}</label>
             <div class="col-sm-9">
                 {{ form.log_level }}
             </div>
@@ -287,19 +287,19 @@
 
         {# Languages as checkboxes #}
         <div class="mb-3 row">
-            <label class="col-sm-3 col-form-label">{{ form.languages.label }}</label>
+            <label class="col-sm-3 form-label">{{ form.languages.label }}</label>
             <div class="col-sm-9" id="languages-group">
                 <div class="row">
                     {% for checkbox in form.languages %}
                         <div class="col-sm-6 col-lg-4">
-                            <div class="form-check mb-2">
+                            <div class="flex items-center gap-2 mb-2">
                                 {{ checkbox.tag }}
-                                <label class="form-check-label">{{ checkbox.choice_label }}</label>
+                                <label class="text-sm">{{ checkbox.choice_label }}</label>
                             </div>
                         </div>
                     {% endfor %}
                 </div>
-                <small class="form-text text-muted small mt-1">
+                <small class="text-sm text-gray-500 text-muted small mt-1">
                     Project-required languages are preselected and disabled.
                 </small>
             </div>
@@ -307,14 +307,14 @@
 
         {# Analyzers as checkboxes #}
         <div class="mb-3 row">
-            <label class="col-sm-3 col-form-label">{{ form.analyzers.label }}</label>
+            <label class="col-sm-3 form-label">{{ form.analyzers.label }}</label>
             <div class="col-sm-9">
                 <div class="row">
                     {% for checkbox in form.analyzers %}
                         <div class="col-sm-6 col-lg-4">
-                            <div class="form-check mb-2">
+                            <div class="flex items-center gap-2 mb-2">
                                 {{ checkbox.tag }}
-                                <label class="form-check-label">{{ checkbox.choice_label }}</label>
+                                <label class="text-sm">{{ checkbox.choice_label }}</label>
                             </div>
                         </div>
                     {% endfor %}
@@ -324,14 +324,14 @@
 
         {# Time class #}
         <div class="mb-3 row">
-            <label class="col-sm-3 col-form-label">{{ form.time_class_level.label }}</label>
+            <label class="col-sm-3 form-label">{{ form.time_class_level.label }}</label>
             <div class="col-sm-9">
                 {{ form.time_class_level }}
             </div>
         </div>
 
         <div class="mb-3 row">
-            <label class="col-sm-3 col-form-label">Actions</label>
+            <label class="col-sm-3 form-label">Actions</label>
             <div class="col-sm-9">
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <button type="button" class="btn btn-outline-secondary" id="btn-open-create-action" disabled>

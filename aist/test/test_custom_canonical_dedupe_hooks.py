@@ -6,7 +6,8 @@ from django.conf import settings
 from django.test import override_settings
 from django.utils import timezone
 from dojo.finding.deduplication import dedupe_batch_of_findings, do_dedupe_finding_task_internal
-from dojo.models import Endpoint, Engagement, Finding, Test, Test_Type, Vulnerability_Id
+from dojo.finding.helper import save_vulnerability_ids
+from dojo.models import Endpoint, Engagement, Finding, Test, Test_Type
 
 from aist.dedupe.custom import AIST_DEDUPE_AUTO_TAG, AIST_DEDUPE_CANDIDATE_TAG
 from aist.logging_transport import get_pipeline_log_path
@@ -105,6 +106,11 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
             param=parameter,
             dynamic_finding=dynamic_finding,
         )
+
+    def _add_vulnerability_id(self, finding: Finding, vulnerability_id: str) -> None:
+        """Attach a CVE through the importer's own write seam, so the stored shape matches an import."""
+        save_vulnerability_ids(finding, [vulnerability_id])
+        finding.save(dedupe_option=False, issue_updater_option=False, push_to_jira=False)
 
     def _add_endpoint(self, finding: Finding, *, protocol: str, host: str, port: int, path: str = "") -> None:
         endpoint = Endpoint.objects.create(
@@ -559,7 +565,7 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
             host="mail.relay.aktt2.cloud.hdw.mx",
             port=3478,
         )
-        Vulnerability_Id.objects.create(finding=original, vulnerability_id="CVE-2026-43994")
+        self._add_vulnerability_id(original, "CVE-2026-43994")
         imported = self._create_finding(
             test=september_test,
             title="Internet-facing coturn OAuth decode stack overflow",
@@ -576,7 +582,7 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
             host="mail.relay-ecs.gui1.cloud.hdw.mx",
             port=3478,
         )
-        Vulnerability_Id.objects.create(finding=imported, vulnerability_id="CVE-2026-43994")
+        self._add_vulnerability_id(imported, "CVE-2026-43994")
 
         dedupe_batch_of_findings([imported])
         imported.refresh_from_db()
@@ -597,7 +603,7 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
             cwe=121,
             dynamic_finding=True,
         )
-        Vulnerability_Id.objects.create(finding=original, vulnerability_id="CVE-2026-43994")
+        self._add_vulnerability_id(original, "CVE-2026-43994")
         imported = self._create_finding(
             test=second_test,
             title="Known protocol vulnerability on another network service",
@@ -605,7 +611,7 @@ class CustomCanonicalDedupeHookTests(AISTApiBase):
             cwe=121,
             dynamic_finding=True,
         )
-        Vulnerability_Id.objects.create(finding=imported, vulnerability_id="CVE-2026-43994")
+        self._add_vulnerability_id(imported, "CVE-2026-43994")
 
         dedupe_batch_of_findings([imported])
         imported.refresh_from_db()

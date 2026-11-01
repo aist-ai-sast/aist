@@ -83,6 +83,11 @@ def is_terminal_pipeline_status(status: str) -> bool:
     return status in TERMINAL_PIPELINE_STATUSES
 
 
+def transition_allowed(current_status: str, new_status: str) -> bool:
+    """Whether the lifecycle permits this move; a caller offers the action only when it does."""
+    return new_status in PIPELINE_TRANSITIONS.get(current_status, frozenset())
+
+
 def transition_pipeline_status(
     pipeline_id: str,
     new_status: str,

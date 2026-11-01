@@ -8,17 +8,17 @@
             <h3 class="no-margin-top">{% trans "Launch Scheduling" %}</h3>
             <div class="alert" id="launch-dashboard-toast" style="display:none;"></div>
 
-            <ul class="nav nav-tabs">
-                <li class="active"><a data-toggle="tab" href="#tab-schedules">{% trans "Schedules" %}</a></li>
-                <li><a data-toggle="tab" href="#tab-queue">{% trans "Queue" %}</a></li>
-                <li><a data-toggle="tab" href="#tab-launch-configs">{% trans "Launch configs" %}</a></li>
-                <li><a data-toggle="tab" href="#tab-create">{% trans "Create / Update schedule" %}</a></li>
+                        <ul class="nav nav-tabs">
+                <li class="active"><a href="#tab-schedules" onclick="aistShowTab(event, 'tab-schedules')">{% trans "Schedules" %}</a></li>
+                <li><a href="#tab-queue" onclick="aistShowTab(event, 'tab-queue')">{% trans "Queue" %}</a></li>
+                <li><a href="#tab-launch-configs" onclick="aistShowTab(event, 'tab-launch-configs')">{% trans "Launch configs" %}</a></li>
+                <li><a href="#tab-create" onclick="aistShowTab(event, 'tab-create')">{% trans "Create / Update schedule" %}</a></li>
             </ul>
 
             <div class="tab-content" style="margin-top: 15px;">
 
                 <!-- SCHEDULES -->
-                <div id="tab-schedules" class="tab-pane fade in active">
+                <div id="tab-schedules" class="tab-pane in active">
 
                     <div class="panel panel-default">
                         <div class="panel-heading">
@@ -60,20 +60,20 @@
 
                                 <button type="button" class="btn btn-primary" style="margin-left: 10px;"
                                         id="btn-refresh-schedules">
-                                    {% trans "Refresh" %}
+                                    <i class="fa-solid fa-rotate" aria-hidden="true"></i> {% trans "Refresh" %}
                                 </button>
 
-                                <div class="pull-right">
-                                    <button type="button" class="btn btn-danger" id="btn-bulk-disable-org">
-                                        {% trans "Disable all for org" %}
+                                <div class="pull-right inline-flex items-center gap-2">
+                                    <button type="button" class="btn btn-danger whitespace-nowrap" id="btn-bulk-disable-org">
+                                        <i class="fa-solid fa-ban" aria-hidden="true"></i> {% trans "Disable all for org" %}
                                     </button>
-                                    <button type="button" class="btn btn-danger" id="btn-bulk-disable-project">
-                                        {% trans "Disable all for project" %}
+                                    <button type="button" class="btn btn-danger whitespace-nowrap" id="btn-bulk-disable-project">
+                                        <i class="fa-solid fa-ban" aria-hidden="true"></i> {% trans "Disable all for project" %}
                                     </button>
                                 </div>
                             </form>
 
-                            <table id="tbl-schedules" class="table table-striped table-bordered" style="width:100%">
+                            <table id="tbl-schedules" class="table table-striped" style="width:100%">
                                 <thead>
                                 <tr>
                                     <th>{% trans "Project" %}</th>
@@ -97,7 +97,7 @@
                 </div>
 
                 <!-- QUEUE -->
-                <div id="tab-queue" class="tab-pane fade">
+                <div id="tab-queue" class="tab-pane">
 
                     <div class="panel panel-default">
                         <div class="panel-heading">
@@ -116,7 +116,7 @@
                                         </div>
 
                                         <button type="button" class="btn btn-primary" id="btn-refresh-queue">
-                                            {% trans "Refresh" %}
+                                            <i class="fa-solid fa-rotate" aria-hidden="true"></i> {% trans "Refresh" %}
                                         </button>
                                     </div>
 
@@ -139,7 +139,7 @@
                                 </div>
                             </form>
 
-                            <table id="tbl-queue" class="table table-striped table-bordered" style="width:100%">
+                            <table id="tbl-queue" class="table table-striped" style="width:100%">
                                 <thead>
                                 <tr>
                                     <th>{% trans "Created" %}</th>
@@ -163,7 +163,7 @@
                 </div>
 
                 <!-- LAUNCH CONFIGS -->
-                <div id="tab-launch-configs" class="tab-pane fade">
+                <div id="tab-launch-configs" class="tab-pane">
 
                     <div class="panel panel-default">
                         <div class="panel-heading">
@@ -207,7 +207,7 @@
 
                                         <button type="button" class="btn btn-primary" style="margin-left: 10px;"
                                                 id="btn-refresh-launch-configs">
-                                            {% trans "Refresh" %}
+                                            <i class="fa-solid fa-rotate" aria-hidden="true"></i> {% trans "Refresh" %}
                                         </button>
                                     </div>
 
@@ -226,7 +226,7 @@
                                 </div>
                             </form>
 
-                            <table id="tbl-launch-configs" class="table table-striped table-bordered" style="width:100%">
+                            <table id="tbl-launch-configs" class="table table-striped" style="width:100%">
                                 <thead>
                                 <tr>
                                     <th></th>
@@ -247,7 +247,7 @@
                 </div>
 
                 <!-- CREATE / UPDATE -->
-                <div id="tab-create" class="tab-pane fade">
+                <div id="tab-create" class="tab-pane">
 
                     <div class="panel panel-default">
                         <div class="panel-heading">
@@ -258,14 +258,14 @@
                                 {% trans "This form uses the same backend API as external clients. UI does not implement scheduling logic." %}
                             </p>
 
-                            <form id="schedule-form" class="form-horizontal">
+                            <form id="schedule-form">
                                 {% csrf_token %}
                                 <div class="form-group">
                                     <label class="col-sm-2 control-label"
                                            for="form-project">{% trans "Project" %}</label>
                                     <div class="col-sm-6">
                                         <select id="form-project"
-                                                class="form-control selectpicker"
+                                                class="form-control"
                                                 data-live-search="true"
                                                 data-width="100%">
                                             <option value="">{% trans "Select project" %}</option>
@@ -283,7 +283,7 @@
                                            for="form-dast-binding">{% trans "DAST target binding" %}</label>
                                     <div class="col-sm-6">
                                         <select id="form-dast-binding"
-                                                class="form-control selectpicker"
+                                                class="form-control"
                                                 data-live-search="true"
                                                 data-width="100%"
                                                 disabled>
@@ -300,7 +300,7 @@
                                            for="form-launch-config">{% trans "Launch config" %}</label>
                                     <div class="col-sm-6">
                                         <select id="form-launch-config"
-                                                class="form-control selectpicker"
+                                                class="form-control"
                                                 data-live-search="true"
                                                 data-width="100%"
                                                 disabled>
@@ -389,12 +389,10 @@
             </div>
         </div>
     </div>
-    <div class="modal fade" id="modal-create-dast-preset" tabindex="-1" role="dialog" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
+    <dialog class="modal" id="modal-create-dast-preset" tabindex="-1">
                 <div class="modal-header">
-                    <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
                     <h4 class="modal-title">{% trans "Create saved DAST preset" %}</h4>
+                    <button type="button" class="close" onclick="this.closest('dialog').close()" aria-label="Close"><span aria-hidden="true">&times;</span></button>
                 </div>
                 <div class="modal-body">
                     <div class="alert alert-danger" id="dast-preset-error" style="display:none;"></div>
@@ -424,20 +422,16 @@
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-default" data-dismiss="modal">{% trans "Cancel" %}</button>
+                    <button type="button" class="btn btn-secondary" onclick="this.closest('dialog').close()">{% trans "Cancel" %}</button>
                     <button type="button" class="btn btn-primary" id="btn-save-dast-preset">{% trans "Save preset" %}</button>
                 </div>
-            </div>
-        </div>
-    </div>
-    <div class="modal fade" id="modal-edit-launch-config" tabindex="-1" role="dialog" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
+    </dialog>
+    <dialog class="modal" id="modal-edit-launch-config" tabindex="-1">
                 <div class="modal-header">
-                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <h4 class="modal-title">{% trans "Edit launch config (JSON)" %}</h4>
+                    <button type="button" class="close" onclick="this.closest('dialog').close()" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
                     </button>
-                    <h4 class="modal-title">{% trans "Edit launch config (JSON)" %}</h4>
                 </div>
                 <div class="modal-body">
                     <div class="alert alert-danger" id="lc-edit-error" style="display:none;"></div>
@@ -461,24 +455,20 @@
                               spellcheck="false"></textarea>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-default" data-dismiss="modal">
+                    <button type="button" class="btn btn-secondary" onclick="this.closest('dialog').close()">
                         {% trans "Cancel" %}
                     </button>
                     <button type="button" class="btn btn-primary" id="btn-save-launch-config-json">
                         {% trans "Save" %}
                     </button>
                 </div>
-            </div>
-        </div>
-    </div>
-    <div class="modal fade" id="modal-edit-launch-config-action" tabindex="-1" role="dialog" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
+    </dialog>
+    <dialog class="modal" id="modal-edit-launch-config-action" tabindex="-1">
                 <div class="modal-header">
-                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <h4 class="modal-title">{% trans "Edit launch config action (JSON)" %}</h4>
+                    <button type="button" class="close" onclick="this.closest('dialog').close()" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
                     </button>
-                    <h4 class="modal-title">{% trans "Edit launch config action (JSON)" %}</h4>
                 </div>
                 <div class="modal-body">
                     <div class="alert alert-danger" id="lc-action-edit-error" style="display:none;"></div>
@@ -491,16 +481,14 @@
                               spellcheck="false"></textarea>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-default" data-dismiss="modal">
+                    <button type="button" class="btn btn-secondary" onclick="this.closest('dialog').close()">
                         {% trans "Cancel" %}
                     </button>
                     <button type="button" class="btn btn-primary" id="btn-save-launch-config-action-json">
                         {% trans "Save" %}
                     </button>
                 </div>
-            </div>
-        </div>
-    </div>
+    </dialog>
     {# Global modals must NOT be nested inside other modals (Bootstrap 4 limitation) #}
     {% include "aist/_pipeline_run_modals.html" %}
 {% endblock %}
@@ -571,32 +559,34 @@
             width: 100%;
         }
 
-        #queue-filters .queue-filters__row {
+        /* Scoped to the class, not one form: the launch-configs filters reuse it and were
+           stacking because the id in the selector never matched them. */
+        .queue-filters__row {
             display: flex;
             align-items: center;
             gap: 12px;
             flex-wrap: wrap;
         }
 
-        #queue-filters .queue-filters__left,
-        #queue-filters .queue-filters__right,
-        #queue-filters .queue-filters__dt {
+        .queue-filters__left,
+        .queue-filters__right,
+        .queue-filters__dt {
             display: flex;
             align-items: center;
             gap: 12px;
             flex-wrap: wrap;
         }
 
-        #queue-filters .queue-filters__right {
+        .queue-filters__right {
             margin-left: auto;
         }
 
-        #queue-filters .queue-filters__dt {
+        .queue-filters__dt {
             margin-left: auto;
         }
 
-        #queue-filters .queue-filters__right .form-group,
-        #queue-filters .queue-filters__dt .form-group {
+        .queue-filters__right .form-group,
+        .queue-filters__dt .form-group {
             margin: 0;
         }
 
@@ -1177,6 +1167,9 @@
                 paging: true,
                 searching: true,
                 order: [[5, "asc"]],  // default: sort by Next tick (if backend provides it)
+                // Actions holds three controls; without a floor the auto layout gives the
+                // column less than they need and every row grows a second line.
+                columnDefs: [{targets: -1, orderable: false, width: "220px"}],
                 initComplete: function () {
                     moveDataTablesControls(this.api(), $("#schedules-filters"));
                 }
@@ -1220,10 +1213,14 @@
                                 nextTickDisplay = '<span class="text-danger">Invalid cron</span>';
                             }
 
-                            var actions = '';
-                            actions += '<button class="btn btn-xs btn-default act-toggle" data-id="' + s.id + '" data-enabled="' + (s.enabled ? "1" : "0") + '">' + (s.enabled ? 'Disable' : 'Enable') + '</button> ';
-                            actions += '<button class="btn btn-xs btn-info act-run-once" data-id="' + s.id + '">Run once</button>';
-                            actions += ' <button class="btn btn-xs btn-danger act-delete" data-id="' + s.id + '">Delete</button>';
+                            // One row of controls: a flex box keeps them on a line and aligned,
+                            // which bare spaces between inline-flex buttons do not.
+                            var actions = '<div class="flex flex-nowrap items-center gap-1">';
+                            var toggleIcon = s.enabled ? 'fa-ban' : 'fa-check';
+                            actions += '<button class="btn btn-xs btn-secondary whitespace-nowrap act-toggle" data-id="' + s.id + '" data-enabled="' + (s.enabled ? "1" : "0") + '"><i class="fa-solid ' + toggleIcon + '" aria-hidden="true"></i> ' + (s.enabled ? 'Disable' : 'Enable') + '</button>';
+                            actions += '<button class="btn btn-xs btn-info whitespace-nowrap act-run-once" data-id="' + s.id + '"><i class="fa-solid fa-play" aria-hidden="true"></i> Run once</button>';
+                            actions += '<button class="btn btn-xs btn-danger whitespace-nowrap act-delete" data-id="' + s.id + '"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete</button>';
+                            actions += '</div>';
 
                             schedulesTable.row.add([
                                 escapeHtml(projectName),
@@ -1485,7 +1482,7 @@
                             var pipelineLink = q.pipeline_id
                                 ? ('<a href="' + URL_PIPELINE_DETAIL_TPL.replace("{pipeline_id}", q.pipeline_id) + '">' + q.pipeline_id + "</a>")
                                 : "";
-                            var deleteBtn = '<button class="btn btn-xs btn-danger act-queue-delete" data-id="' + q.id + '">Delete</button>';
+                            var deleteBtn = '<button class="btn btn-xs btn-danger act-queue-delete" data-id="' + q.id + '"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete</button>';
                             queueTable.row.add([
                                 fmtDate(q.created),
                                 escapeHtml(q.project_name || (q.project_id ? String(q.project_id) : "")),
@@ -1544,14 +1541,14 @@
             // LAUNCH CONFIGS TABLE
             // ---------------------------
             var launchConfigsById = {};
-            var editLaunchConfigModal = $("#modal-edit-launch-config");
+            var editLaunchConfigModal = document.getElementById("modal-edit-launch-config");
             var editLaunchConfigJson = $("#lc-edit-json");
             var editLaunchConfigError = $("#lc-edit-error");
             var btnSaveLaunchConfigJson = $("#btn-save-launch-config-json");
             var editingLaunchConfigId = null;
             var editingLaunchProjectId = null;
             var editingLaunchConfigType = null;
-            var editLaunchActionModal = $("#modal-edit-launch-config-action");
+            var editLaunchActionModal = document.getElementById("modal-edit-launch-config-action");
             var editLaunchActionJson = $("#lc-action-edit-json");
             var editLaunchActionError = $("#lc-action-edit-error");
             var btnSaveLaunchActionJson = $("#btn-save-launch-config-action-json");
@@ -1620,25 +1617,25 @@
                 var paramsJson = escapeHtml(JSON.stringify(item.params || {}, null, 2));
                 var actions = item.actions || [];
                 var actionsHtml = "";
-                var addActionBtn = '<button class="btn btn-xs btn-success act-lc-action-add" ' +
+                var addActionBtn = '<button class="btn btn-xs btn-success whitespace-nowrap act-lc-action-add" ' +
                     'data-project-id="' + item.project + '" data-config-id="' + item.id + '">' +
                     'Add action</button>';
                 actionsHtml += '<div class="launch-actions-toolbar">' + addActionBtn + "</div>";
                 if (!actions.length) {
                     actionsHtml += '<div class="text-muted small">No actions</div>';
                 } else {
-                    actionsHtml += '<table class="table table-condensed table-bordered" style="margin-bottom:0;">';
+                    actionsHtml += '<table class="table table-condensed" style="margin-bottom:0;">';
                     actionsHtml += '<thead><tr><th>Trigger</th><th>Type</th><th>Config</th><th>Actions</th></tr></thead><tbody>';
                     actions.forEach(function (a) {
                         var cfg = escapeHtml(JSON.stringify(a.config || {}, null, 2));
                         var actionButtons =
-                            '<div class="btn-group btn-group-xs" role="group">' +
-                            '<button class="btn btn-default act-lc-action-edit" ' +
+                            '<div class="flex flex-nowrap items-center gap-1" role="group">' +
+                            '<button class="btn btn-secondary act-lc-action-edit" ' +
                             'data-project-id="' + item.project + '" data-config-id="' + item.id + '" data-action-id="' +
                             a.id + '">Edit</button>' +
                             '<button class="btn btn-danger act-lc-action-delete" ' +
                             'data-project-id="' + item.project + '" data-config-id="' + item.id + '" data-action-id="' +
-                            a.id + '">Delete</button>' +
+                            a.id + '"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete</button>' +
                             '</div>';
                         actionsHtml += "<tr>" +
                             "<td>" + escapeHtml(a.trigger_status || "") + "</td>" +
@@ -1700,7 +1697,7 @@
                         $("#lc-edit-dast-params-help").text(String(error));
                     });
                 }
-                editLaunchConfigModal.modal("show");
+                editLaunchConfigModal.showModal();
             }
 
             function toggleLcEditVersionField(binding) {
@@ -1742,7 +1739,7 @@
                 editingActionId = action.id;
                 editingActionConfigId = configId;
                 editingActionProjectId = projectId;
-                editLaunchActionModal.modal("show");
+                editLaunchActionModal.showModal();
             }
 
             var createActionModal = document.getElementById("modalCreateLaunchAction");
@@ -1797,26 +1794,12 @@
                 if (createActionLogLevel) createActionLogLevel.value = "INFO";
                 if (createActionType) showCreateActionFields(createActionType.value);
 
-                if (window.bootstrap && window.bootstrap.Modal) {
-                    window.bootstrap.Modal.getOrCreateInstance(createActionModal).show();
-                } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-                    window.jQuery(createActionModal).modal("show");
-                } else {
-                    createActionModal.classList.add("in");
-                    createActionModal.style.display = "block";
-                }
+                    createActionModal.showModal();
             }
 
             function closeCreateActionModal() {
                 if (!createActionModal) return;
-                if (window.bootstrap && window.bootstrap.Modal) {
-                    window.bootstrap.Modal.getInstance(createActionModal)?.hide();
-                } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-                    window.jQuery(createActionModal).modal("hide");
-                } else {
-                    createActionModal.classList.remove("in");
-                    createActionModal.style.display = "none";
-                }
+                    createActionModal.close();
             }
 
             function loadLaunchConfigs() {
@@ -1860,12 +1843,12 @@
                             var readinessReason = readinessIssues.map(function (issue) { return issue.detail || issue.code; }).join("; ");
                             var runDisabled = cfg.execution_type === "DAST" && (!cfg.readiness || !cfg.readiness.ready);
                             var manage = '' +
-                                '<div class="btn-group btn-group-xs" role="group">' +
-                                '<button class="btn btn-xs btn-primary act-lc-run" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '" title="' + escapeHtml(readinessReason || "Run now") + '"' + (runDisabled ? ' disabled' : '') + '>Run now</button>' +
-                                '<button class="btn btn-xs btn-info act-lc-schedule" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '">Schedule</button>' +
-                                '<button class="btn btn-xs btn-success act-lc-action-add" data-project-id="' + cfg.project + '" data-config-id="' + cfg.id + '">Add action</button>' +
-                                '<button class="btn btn-xs btn-default act-lc-edit" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '">Edit JSON</button>' +
-                                '<button class="btn btn-xs btn-danger act-lc-delete" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '">Delete</button>' +
+                                '<div class="flex flex-nowrap items-center gap-1" role="group">' +
+                                '<button class="btn btn-xs btn-primary whitespace-nowrap act-lc-run" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '" title="' + escapeHtml(readinessReason || "Run now") + '"' + (runDisabled ? ' disabled' : '') + '><i class="fa-solid fa-play" aria-hidden="true"></i> Run now</button>' +
+                                '<button class="btn btn-xs btn-info whitespace-nowrap act-lc-schedule" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '"><i class="fa-solid fa-clock" aria-hidden="true"></i> Schedule</button>' +
+                                '<button class="btn btn-xs btn-success whitespace-nowrap act-lc-action-add" data-project-id="' + cfg.project + '" data-config-id="' + cfg.id + '"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add action</button>' +
+                                '<button class="btn btn-xs btn-secondary whitespace-nowrap act-lc-edit" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '"><i class="fa-solid fa-pen" aria-hidden="true"></i> Edit JSON</button>' +
+                                '<button class="btn btn-xs btn-danger whitespace-nowrap act-lc-delete" data-project-id="' + cfg.project + '" data-id="' + cfg.id + '"><i class="fa-solid fa-trash" aria-hidden="true"></i> Delete</button>' +
                                 '</div>';
 
                             launchConfigsTable.row.add([
@@ -1983,7 +1966,7 @@
             $("#tbl-launch-configs tbody").on("click", "button.act-lc-schedule", function () {
                 var configId = String($(this).data("id"));
                 var projectId = String($(this).data("project-id"));
-                $('a[data-toggle="tab"][href="#tab-create"]').tab("show");
+                aistShowTab(null, 'tab-create');
                 $("#form-project").val(projectId);
                 refreshLaunchConfigSelectpicker($("#form-project"));
                 var selectedConfig = launchConfigsById[configId];
@@ -2007,7 +1990,7 @@
 
             $("#btn-create-dast-preset").on("click", function () {
                 $("#dast-preset-error").hide().text("");
-                $("#modal-create-dast-preset").modal("show");
+                document.getElementById("modal-create-dast-preset").showModal();
                 loadDastPresetInputs($("#dast-preset-project").val());
             });
 
@@ -2094,7 +2077,7 @@
                     return response.json().then(function (data) { return {ok: response.ok, data: data}; });
                 }).then(function (result) {
                     if (!result.ok) throw new Error(JSON.stringify(result.data));
-                    $("#modal-create-dast-preset").modal("hide");
+                    document.getElementById("modal-create-dast-preset").close();
                     loadLaunchConfigs();
                     showToast("DAST preset created.", "success");
                 }).catch(function (error) { $("#dast-preset-error").text(String(error)).show(); });
@@ -2213,7 +2196,7 @@
                     });
                     return r.json();
                 }).then(function () {
-                    editLaunchConfigModal.modal("hide");
+                    editLaunchConfigModal.close();
                     loadLaunchConfigs();
                     showToast("Launch config updated.", "success");
                 }).catch(function (err) {
@@ -2250,7 +2233,7 @@
                     });
                     return r.json();
                 }).then(function () {
-                    editLaunchActionModal.modal("hide");
+                    editLaunchActionModal.close();
                     loadLaunchConfigs();
                     showToast("Action updated.", "success");
                 }).catch(function (err) {
@@ -2416,21 +2399,12 @@
             }
 
             function switchToSchedulesTab() {
-                var schedulesTab = document.querySelector('a[data-toggle="tab"][href="#tab-schedules"]');
+                var schedulesTab = document.querySelector('a[href="#tab-schedules"]');
                 if (!schedulesTab) {
                     return;
                 }
 
-                if (window.bootstrap && window.bootstrap.Tab) {
-                    var tab = window.bootstrap.Tab.getOrCreateInstance(schedulesTab);
-                    tab.show();
-                } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.tab) {
-                    window.jQuery(schedulesTab).tab("show");
-                } else {
-                    schedulesTab.parentElement?.classList.add("active");
-                    document.getElementById("tab-schedules")?.classList.add("in", "active");
-                    document.getElementById("tab-create")?.classList.remove("in", "active");
-                }
+                aistShowTab(null, "tab-schedules");
             }
 
             $("#btn-save-schedule").on("click", function () {
@@ -2474,19 +2448,19 @@
                 });
             });
 
-            $('a[data-toggle="tab"][href="#tab-schedules"]').on("shown.bs.tab", function () {
+            document.getElementById("tab-schedules").addEventListener("aist:tab-shown", function () {
                 // Always adjust+draw when tab becomes visible: fixes DataTables rendering
                 // in hidden Bootstrap 3 tabs and flushes any deferred auto-refresh data.
                 schedulesTable.columns.adjust().draw();
                 _schedulesNeedsRedraw = false;
             });
 
-            $('a[data-toggle="tab"][href="#tab-queue"]').on("shown.bs.tab", function () {
+            document.getElementById("tab-queue").addEventListener("aist:tab-shown", function () {
                 queueTable.columns.adjust().draw();
                 _queueNeedsRedraw = false;
             });
 
-            $('a[data-toggle="tab"][href="#tab-create"]').on("shown.bs.tab", function () {
+            document.getElementById("tab-create").addEventListener("aist:tab-shown", function () {
                 ensureSelectPicker($("#form-project"));
                 ensureSelectPicker($("#form-dast-binding"));
                 ensureSelectPicker($("#form-launch-config"));
@@ -2514,7 +2488,7 @@
                 }
             });
 
-            $('a[data-toggle="tab"][href="#tab-launch-configs"]').on("shown.bs.tab", function () {
+            document.getElementById("tab-launch-configs").addEventListener("aist:tab-shown", function () {
                 loadLaunchConfigs();
             });
         })();

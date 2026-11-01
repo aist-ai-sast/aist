@@ -16,8 +16,8 @@ Adding a status or an editable field on the DAST side changes nothing here.
         <span class="pull-right" style="font-size:12px;">
             <span id="dq-revision" class="text-muted"></span>
             <span id="dq-fresh" class="text-muted" style="margin-left:10px;"></span>
-            <button type="button" class="btn btn-default btn-xs" id="dq-refresh" style="margin-left:10px;">
-                <i class="fa fa-refresh"></i> Refresh
+            <button type="button" class="btn btn-secondary btn-xs" id="dq-refresh" style="margin-left:10px;">
+                <i class="fa-solid fa-refresh"></i> Refresh
             </button>
             <span id="dq-run-actions"></span>
         </span>
@@ -27,22 +27,22 @@ Adding a status or an editable field on the DAST side changes nothing here.
 
     <div class="panel-body" id="dq-claimed-body" style="padding-bottom:4px;">
         <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.07em;">
-            <i class="fa fa-play"></i> Holding a claim <span id="dq-claimed-note" style="text-transform:none;"></span>
+            <i class="fa-solid fa-play"></i> Holding a claim <span id="dq-claimed-note" style="text-transform:none;"></span>
         </div>
         <div id="dq-claimed" style="margin-top:8px;"></div>
     </div>
 
     <div class="panel-body" style="border-top:1px solid #dddedf;">
         <div class="text-muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.07em;">
-            <i class="fa fa-list"></i> Everything else this run owes
+            <i class="fa-solid fa-list"></i> Everything else this run owes
         </div>
         <div id="dq-counters" class="btn-group" style="margin-top:8px; flex-wrap:wrap;"></div>
         <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-            <input type="search" id="dq-search" class="form-control input-sm"
+            <input type="search" id="dq-search" class="form-control"
                    style="flex:0 1 320px; width:auto;"
                    placeholder="Search work, id, target, skill…">
             <span style="flex:0 1 260px; min-width:0;">
-                <select id="dq-phase" class="form-control input-sm"></select>
+                <select id="dq-phase" class="form-control"></select>
             </span>
             <label style="font-weight:normal; font-size:12px; margin:0;">
                 <input type="checkbox" id="dq-planned" checked> <span id="dq-planned-label">include planned</span>
@@ -69,40 +69,32 @@ Adding a status or an editable field on the DAST side changes nothing here.
     </div>
 </div>
 
-<div class="modal fade" id="dq-modal" tabindex="-1" role="dialog">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
+<dialog class="modal" id="dq-modal" tabindex="-1">
             <div class="modal-header">
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                <h4 class="modal-title" id="dq-modal-title"></h4>
+                <button type="button" class="close" onclick="this.closest('dialog').close()" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>
-                <h4 class="modal-title" id="dq-modal-title"></h4>
             </div>
             <div class="modal-body" id="dq-modal-body"></div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-secondary" onclick="this.closest('dialog').close()">Close</button>
                 <button type="button" class="btn btn-primary" id="dq-modal-ok" disabled></button>
             </div>
-        </div>
-    </div>
-</div>
+</dialog>
 
-<div class="modal fade" id="dq-detail" tabindex="-1" role="dialog">
-    <div class="modal-dialog modal-lg" role="document">
-        <div class="modal-content">
+<dialog class="modal" id="dq-detail" tabindex="-1">
             <div class="modal-header">
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                <h4 class="modal-title" id="dq-detail-title"></h4>
+                <button type="button" class="close" onclick="this.closest('dialog').close()" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
                 </button>
-                <h4 class="modal-title" id="dq-detail-title"></h4>
             </div>
             <div class="modal-body" id="dq-detail-body"></div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-secondary" onclick="this.closest('dialog').close()">Close</button>
             </div>
-        </div>
-    </div>
-</div>
+</dialog>
 
 <script>
 (function () {
@@ -782,7 +774,7 @@ Adding a status or an editable field on the DAST side changes nothing here.
             });
             body.appendChild(list);
         }
-        window.jQuery("#dq-detail").modal("show");
+        document.getElementById("dq-detail").showModal();
     }
 
     // ---- commands ---------------------------------------------------------
@@ -904,7 +896,7 @@ Adding a status or an editable field on the DAST side changes nothing here.
             });
             submit(action.name, itemId, values, decidedAt, ok);
         };
-        window.jQuery("#dq-modal").modal("show");
+        document.getElementById("dq-modal").showModal();
     }
 
     function submit(action, itemId, values, decidedAt, button) {
@@ -930,7 +922,7 @@ Adding a status or an editable field on the DAST side changes nothing here.
             })
             .then(function (answer) {
                 state.pending = null;
-                window.jQuery("#dq-modal").modal("hide");
+                document.getElementById("dq-modal").close();
                 if (!answer.ok) {
                     // AIST turns a command down only when there is no run to address; a refusal by
                     // the gateway itself arrives later, through the outcome below.
@@ -1002,7 +994,7 @@ Adding a status or an editable field on the DAST side changes nothing here.
         state.includePlanned = event.target.checked;
         renderRows();
     });
-    window.jQuery("#dq-modal").on("hidden.bs.modal", function () {
+    document.getElementById("dq-modal").addEventListener("close", function () {
         if (state.deferred) { read(false); }
     });
     document.addEventListener("visibilitychange", function () {

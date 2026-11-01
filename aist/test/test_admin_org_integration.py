@@ -65,3 +65,27 @@ class OrgIntegrationAdminTests(TestCase):
         # the admin must render it masked or excluded entirely so that
         # screen-shares / browser history don't leak it.
         self.assertNotContains(resp, "sk-ant-oat01-admin-test-token-67890")
+
+
+class AdminSurfacePerimeterTests(TestCase):
+
+    """
+    The Django admin is mounted inside the guarded prefix.
+
+    ``AistAdminGuardMiddleware`` denies every non-superuser under ``/aist-admin/``. An admin
+    mounted anywhere else would be reachable by any staff user, so the mount point is the
+    control, not the admin's own ``is_staff`` check.
+    """
+
+    def test_the_admin_is_mounted_under_the_guarded_prefix(self):
+        self.assertTrue(
+            reverse("admin:aist_orgintegration_changelist").startswith("/aist-admin/"),
+        )
+
+    def test_a_non_superuser_is_denied(self):
+        user = get_user_model().objects.create_user(
+            username="perimeter", password="x", email="perimeter@example.com",  # noqa: S106
+        )
+        self.client.force_login(user)
+        response = self.client.get(reverse("admin:aist_orgintegration_changelist"))
+        self.assertEqual(response.status_code, 403)

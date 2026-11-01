@@ -5,7 +5,7 @@
         <div class="row g-4">
 
             <!-- Left panel: Start form -->
-            <div class="col-12 col-lg-8">
+            <div class="col-sm-12 col-lg-8">
                 <h3 class="mb-3">Run pipeline</h3>
                 <div class="card shadow-sm mb-5">
                     <div class="card-body pb-4">
@@ -30,19 +30,19 @@
             </div>
 
             <!-- Right column: launch history -->
-            <div class="col-12 col-lg-4">
+            <div class="col-sm-12 col-lg-4">
                 <div class="card shadow-sm sticky-lg-top" style="top: 76px;">
                     <div class="card-header d-flex align-items-center justify-content-between py-2 mb-2"
                          style="margin-bottom:.5rem!important">
-                        <span class="fw-semibold">Recent pipelines</span>
-                        <span class="badge bg-secondary">{{ history_page.paginator.count }}</span>
+                        <span class="font-semibold">Recent pipelines</span>
+                        <span class="badge bg-gray-500">{{ history_page.paginator.count }}</span>
                     </div>
 
                     <!-- Filter/search (GET) -->
                     <form method="get" class="mt-2 px-3 pb-0">
                         <div class="mb-2">
                             <label class="form-label small mb-1">Project</label>
-                            <select class="form-select form-select-sm" name="project" onchange="this.form.submit()">
+                            <select class="form-control form-control" name="project" onchange="this.form.submit()">
                                 <option value="">All projects</option>
                                 {% for p in history_projects %}
                                     <option value="{{ p.id }}"
@@ -54,11 +54,11 @@
                         </div>
                         <div class="mb-2">
                             <label class="form-label small mb-1">Search</label>
-                            <div class="input-group input-group-sm">
+                            <div class="input-group">
                                 <input type="text" class="form-control" name="q" value="{{ search_query }}"
                                        placeholder="ID or product name">
                                 <button class="btn btn-outline-secondary btn-sm" type="submit">Apply</button>
-                                <a class="btn btn-outline-light btn-sm border"
+                                <a class="btn btn-secondary btn-sm border"
                                    href="{% url 'aist:start_pipeline' %}">Reset</a>
                             </div>
                         </div>
@@ -72,13 +72,13 @@
                                    class="list-group-item list-group-item-action">
                                     <div class="d-flex justify-content-between">
                                         <div class="me-2">
-                                            <div class="fw-semibold text-truncate"
+                                            <div class="font-semibold text-truncate"
                                                  title="{{ run.project_name }}">{{ run.project_name }}</div>
                                             <div class="text-muted small">#{{ run.id }}
                                                 · {{ run.execution_type }} · {{ run.updated|date:"Y-m-d H:i" }}</div>
                                         </div>
                                         <div class="text-end">
-                                            <span class="badge bg-success">{{ run.status }}</span>
+                                            <span class="badge bg-green-600">{{ run.status }}</span>
                                             {% if run.duration %}
                                                 <div class="small mt-1">⏱ {{ run.duration }}</div>
                                             {% endif %}

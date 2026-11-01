@@ -11,6 +11,7 @@ class AistConfig(AppConfig):
             celery_signals,  # noqa: F401,
             checks,  # noqa: F401
         )
+        from .authz.vendor_filters import install_vendor_finding_filters  # noqa: PLC0415
         from .monkeypatch import install_deduplication_monkeypatch  # noqa: PLC0415
         from .parser_overrides import (  # noqa: PLC0415
             install_bearer_parser_override,
@@ -22,6 +23,7 @@ class AistConfig(AppConfig):
         )
 
         install_deduplication_monkeypatch()
+        install_vendor_finding_filters()
         install_snyk_code_parser_override()
         install_semgrep_parser_override()
         install_horusec_parser_override()

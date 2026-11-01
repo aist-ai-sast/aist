@@ -40,7 +40,7 @@ def on_enrich_chord_error(*args, pipeline_id: str, **kwargs) -> None:
 
 
 @shared_task(bind=True)
-def report_enrich_done(self, result: int, pipeline_id: str, async_user=None):
+def report_enrich_done(self, result: int, pipeline_id: str, async_user_id=None):
     redis = get_redis()
     key = f"aist:progress:{pipeline_id}:enrich"
     redis.hincrby(key, "done", 1)
@@ -52,7 +52,7 @@ def after_upload_enrich_and_watch(results: list[int],
                                   pipeline_id: str,
                                   test_ids: list[int],
                                   log_level,
-                                  async_user=None) -> None:
+                                  async_user_id=None) -> None:
     from aist.dedupe.evolution import run_evolution_dedup  # noqa: PLC0415
     from aist.tasks.ai import auto_push_to_ai_if_configured  # noqa: PLC0415
     from aist.tasks.regression import detect_regressions_for_pipeline  # noqa: PLC0415
@@ -151,7 +151,7 @@ def enrich_finding_task(
     finding_id: int,
     trim_path: str,
     project_version_descriptor: dict[str, Any],
-    async_user=None,
+    async_user_id=None,
 ) -> int:
     """Enrich a single finding by trimming its file path and attaching a source link."""
     try:
@@ -187,7 +187,7 @@ def enrich_finding_task(
 def annotate_line_hash_batch(
     finding_ids: list[int],
     source_root: str,
-    async_user=None,
+    async_user_id=None,
 ) -> int:
     """
     Compute a content fingerprint (SHA-256 of the vulnerable line) for each
@@ -242,7 +242,7 @@ def enrich_finding_batch(
     finding_ids: list[int],
     trim_path: str,
     project_version_descriptor: dict[str, Any],
-    async_user=None,
+    async_user_id=None,
 ) -> int:
     processed = 0
     for fid in finding_ids:

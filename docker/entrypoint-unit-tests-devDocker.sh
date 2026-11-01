@@ -28,8 +28,7 @@ fi
 # Unset the database URL so that we can force the DD_TEST_DATABASE_NAME (see django "DATABASES" configuration in settings.dist.py)
 unset DD_DATABASE_URL
 
-# Unset the celery broker URL so that we can force the other DD_CELERY_BROKER settings
-unset DD_CELERY_BROKER_URL
+# DD_CELERY_BROKER_URL must stay set; the discrete DD_CELERY_BROKER_* fallback is unusable.
 
 wait_for_database_to_be_reachable
 

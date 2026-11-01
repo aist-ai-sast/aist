@@ -50,9 +50,7 @@ _RAW_REQUEST_DATA = re.compile(
 _RAW_LOOKUP = re.compile(
     rf"get_object_or_404\(\s*(?:{'|'.join(_ORG_OWNED_MODELS)})\b",
 )
-# A chained lookup spanning several lines -- ``Model.objects`` newline
-# ``.select_for_update()`` newline ``.get(...)`` -- is the same raw lookup and used to
-# slip past a single-line pattern.
+# Matches a chained lookup spanning several lines, which is the same raw lookup.
 _RAW_TENANT_GET = re.compile(
     rf"\b(?:{'|'.join(_ORG_OWNED_MODELS)})\s*\.\s*objects"
     rf"(?:\s*\.\s*\w+\s*\([^()]*\))*\s*\.\s*get\s*\(",
@@ -66,8 +64,7 @@ _PERMISSION_IMPORT = re.compile(
 )
 _PUBLIC_AUTHZ = re.compile(r"\bauthz\s*=\s*PUBLIC\b")
 
-# Same per-occurrence shape as the tenant baseline below. Both constructs are narrowed by
-# a parent the view already resolved, so they are scoped despite the raw-looking call.
+# Both constructs are narrowed by a parent the view already resolved, so they are scoped.
 KNOWN_FORBIDDEN_CONSTRUCTS = {
     ("projects.py", "get_object_or_404(AISTProjectScript"),
     ("work_items.py", "get_object_or_404(WorkItemLink"),
@@ -75,11 +72,10 @@ KNOWN_FORBIDDEN_CONSTRUCTS = {
 
 # Deliberate PUBLIC endpoints or remaining direct tenant lookups. Raw Permissions are
 # checked separately and can never be allowlisted.
-# Per-occurrence baseline, keyed by (file, normalized construct). A whole-file entry used
-# to live here, and it hid every later violation in that file. Each construct below was
-# read and found safe: a re-lock of an object the view already resolved, a lookup already
-# narrowed by a resolved parent, the shared non-tenant script singleton, or a deliberately
-# public endpoint. Anything not listed fails, in every file.
+# Per-occurrence baseline, keyed by (file, normalized construct). Each entry is one
+# construct established as scoped: a re-lock of an object the view already resolved, a
+# lookup narrowed by a resolved parent, the shared non-tenant script singleton, or a
+# deliberately public endpoint. Anything not listed fails, in every file.
 KNOWN_TENANT_AUTHZ_CONSTRUCTS = {
     # Deliberately public / self-service endpoints.
     ("account.py", "authz=PUBLIC"),
@@ -179,7 +175,7 @@ class AuthzLintTests(SimpleTestCase):
         )
 
     def test_tenant_authz_allowlist_has_no_stale_entries(self):
-        """A stale entry is how a baseline starts hiding the next real violation."""
+        """A baseline entry must name a construct the code still contains."""
         stale = KNOWN_TENANT_AUTHZ_CONSTRUCTS - _tenant_authz_constructs()
         self.assertEqual(
             stale, set(),

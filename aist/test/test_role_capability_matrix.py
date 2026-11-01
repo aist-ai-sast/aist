@@ -1,17 +1,9 @@
 """
 Every role against every capability, end to end through the real scoped querysets.
 
-``aist/roles.py`` now decides which roles satisfy a permission, so the published
-table in ``docs/security/access-control-and-roles.md`` has to be demonstrated, not
-asserted against itself. These tests drive real memberships through
-``aist.queries`` and check what each role can actually reach — the same matrix for
-a direct organization membership, for a group-granted membership (a separate
-role-filtered branch that had no coverage), and for a restricted member's
-per-project grant.
-
-The expectation table below is the documentation, in executable form: reads are
-Reader-level, finding mutation and risk acceptance are Writer-level, project and
-organization management are Maintainer-level, and granting Owner is Owner-only.
+Real memberships are driven through ``aist.queries`` in three shapes: a direct
+organization membership, a group-granted one, and a restricted member's per-project
+grant. ``EXPECTED`` below is the published capability table in executable form.
 """
 from __future__ import annotations
 

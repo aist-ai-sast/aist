@@ -586,7 +586,7 @@ class _WorkerExecutionRuntime:
 
 
 @shared_task
-def stop_pipeline_execution(pipeline_id: str, *, async_user=None) -> None:
+def stop_pipeline_execution(pipeline_id: str, *, async_user_id=None) -> None:
     """
     Signal a running execution's containers from the host that owns them.
 
@@ -596,16 +596,16 @@ def stop_pipeline_execution(pipeline_id: str, *, async_user=None) -> None:
     SIGTERM, and the provider run carries on while the platform reports a stop that was requested
     and never delivered.
     """
-    del async_user  # unused; accepted only for the DojoAsyncTask contract
+    del async_user_id  # unused; accepted only for the DojoAsyncTask contract
     cleanup_pipeline_containers(pipeline_id)
 
 
 # A provider run is terminal only after an explicit domain outcome. Transport recovery is
 # therefore unbounded; last_progress_at remains telemetry and never becomes a stop decision.
 @shared_task(bind=True, max_retries=None)
-def run_pipeline_execution(self, pipeline_id: str, async_user=None) -> None:
+def run_pipeline_execution(self, pipeline_id: str, async_user_id=None) -> None:
     """Execute one persisted pipeline; the broker carries only ``pipeline_id``."""
-    del async_user
+    del async_user_id
     execution_type = AISTPipeline.objects.values_list("execution_type", flat=True).get(pk=pipeline_id)
     try:
         driver = execution_driver_registry.resolve(execution_type)

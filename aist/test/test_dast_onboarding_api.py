@@ -286,7 +286,6 @@ class DastOnboardingAPITests(AISTApiBase):
         with self.captureOnCommitCallbacks(execute=True):
             imported = self._import()
         self.assertEqual(imported.status_code, 201)
-        send_task.reset_mock()
 
         other_product_type = Product_Type.objects.create(name="Other onboarding PT")
         other_organization = Organization.objects.create(name="Other onboarding org", product_type=other_product_type)
@@ -299,6 +298,10 @@ class DastOnboardingAPITests(AISTApiBase):
             "aist_api:organization_dast_integration_import",
             kwargs={"org_id": other_organization.pk},
         )
+
+        # Reset here: creating the organization above dispatches the platform's own
+        # product_type_added notification, which is not the dispatch under test.
+        send_task.reset_mock()
 
         response = self.client.post(
             other_import_url,

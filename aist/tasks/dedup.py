@@ -243,7 +243,7 @@ def _process_duplicate_cleanup(
 
 
 @shared_task(bind=True)
-def watch_deduplication(self, pipeline_id: str, log_level, async_user=None) -> None:
+def watch_deduplication(self, pipeline_id: str, log_level, async_user_id=None) -> None:
     """
     Monitor deduplication progress and finalise the pipeline.
 
@@ -338,7 +338,7 @@ def _poll_dedup_until_done(pipeline, pipeline_id: str, test_ids: list[int], logg
 def reconcile_deduplication(
     batch_size: int = 200,
     max_runtime_s: int = 50,
-    async_user=None,
+    async_user_id=None,
     *,
     test_ids: list[int] | None = None,
     stale_only: bool = True,

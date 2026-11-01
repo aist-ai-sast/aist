@@ -1,16 +1,12 @@
 """
 Every registered resource, swept for cross-tenant leakage.
 
-A text baseline of "known safe raw lookups" goes stale the moment the code is
-reformatted or a model is renamed, and a stale entry is exactly how the next real
-violation gets hidden. This test asserts the property instead of its textual shadow:
-for each resource in ``RESOURCE_GETTERS``, a member of one organization must see its own
-row and none of another organization's, at every named ``Action``.
+For each resource in ``RESOURCE_GETTERS``, at every named ``Action``, a member of one
+organization sees its own row and none of another organization's.
 
-It is driven by the registry, so it cannot fall behind the code: a resource added to
-``RESOURCE_GETTERS`` without a fixture here fails
-``test_every_registered_resource_is_covered``, and a fixture that silently builds nothing
-fails the "owner sees its own" half of the sweep rather than passing vacuously.
+Driven by the registry: a resource added to ``RESOURCE_GETTERS`` without a fixture here
+fails ``test_every_registered_resource_is_covered``, and each pair also asserts "owner
+sees its own", so a fixture that builds nothing fails rather than passing vacuously.
 """
 from __future__ import annotations
 

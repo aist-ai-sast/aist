@@ -5,6 +5,8 @@ from django.db import DatabaseError, connection, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
 
+from aist.test.migration_state import historical_state
+
 CLONE_URL = "https://oauth2:{}@gitlab.example.com/group/repo.git".format(
     "xglpat-migration1234567890".removeprefix("x"),
 )
@@ -17,8 +19,9 @@ class StripPersistedScmCredentialsMigrationTests(TransactionTestCase):
     def setUp(self):
         super().setUp()
         executor = MigrationExecutor(connection)
-        executor.migrate(self.migrate_from)
-        old_apps = executor.loader.project_state(self.migrate_from).apps
+        pinned = historical_state(executor, self.migrate_from)
+        executor.migrate(pinned)
+        old_apps = executor.loader.project_state(pinned).apps
 
         ProductType = old_apps.get_model("dojo", "Product_Type")
         Product = old_apps.get_model("dojo", "Product")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import transaction
@@ -28,6 +29,7 @@ from aist.queries import (
     require_product_permission,
 )
 from aist.services.dast_queue import queue_is_addressable
+from aist.services.pipeline_lifecycle import PipelineTransitionError, transition_allowed
 from aist.utils.http import _fmt_duration, _qs_without
 from aist.utils.pipeline import (
     get_terminal_pipeline_statuses,
@@ -274,7 +276,10 @@ def pipeline_set_status(request, pipeline_id: str):
             .get(id=pipeline_id)
         )
         require_product_permission(pipeline.project.product, Permissions.Product_Edit, user=request.user)
-        set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
+        try:
+            set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
+        except PipelineTransitionError as exc:
+            messages.error(request, str(exc))
     return redirect("aist:pipeline_detail", pipeline_id=pipeline_id)
 
 
@@ -512,11 +517,20 @@ def pipeline_detail(request, pipeline_id: str):
         id=pipeline_id,
     )
     findings_context = _build_findings_context(request, pipeline)
+    # The lifecycle forbids leaving a terminal status, so the action is offered only where
+    # it can succeed.
+    can_return_to_push_to_ai = transition_allowed(
+        pipeline.status, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI,
+    )
     if request.headers.get("X-Partial") == "status":
         return render(
             request,
             "aist/_pipeline_status_container.html",
-            {"pipeline": pipeline, **findings_context},
+            {
+                "pipeline": pipeline,
+                "can_return_to_push_to_ai": can_return_to_push_to_ai,
+                **findings_context,
+            },
         )
 
     add_breadcrumb(parent=pipeline, title="Pipeline Detail", top_level=False, request=request)
@@ -528,6 +542,7 @@ def pipeline_detail(request, pipeline_id: str):
             # Whether this pipeline names a DAST run at all. What the queue then shows -- including
             # whether the run is over and may no longer be commanded -- is the gateway's answer.
             "dast_queue_addressable": queue_is_addressable(pipeline),
+            "can_return_to_push_to_ai": can_return_to_push_to_ai,
             **findings_context,
         },
     )

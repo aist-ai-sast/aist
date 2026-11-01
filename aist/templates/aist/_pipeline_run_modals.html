@@ -1,9 +1,7 @@
-<div class="modal fade" id="modalCreateVersion" tabindex="-1" aria-hidden="true">
-                            <div class="modal-dialog modal-lg modal-dialog-centered">
-                                <div class="modal-content">
+<dialog class="modal" id="modalCreateVersion" tabindex="-1">
                                     <div class="modal-header">
                                         <h5 class="modal-title">Create Project Version</h5>
-                                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                                        <button type="button" class="close" onclick="this.closest('dialog').close()" aria-label="Close">
                                             <span aria-hidden="true">&times;</span>
                                         </button>
                                     </div>
@@ -11,21 +9,17 @@
                                         <div class="text-muted">Select a project first…</div>
                                     </div>
                                     <div class="modal-footer">
-                                        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close
+                                        <button type="button" class="btn btn-secondary" onclick="this.closest('dialog').close()">Close
                                         </button>
                                         <button type="button" class="btn btn-primary" id="btn-submit-create-version">
                                             Create
                                         </button>
                                     </div>
-                                </div>
-                            </div>
-                        </div>
-<div class="modal fade" id="modalCreateLaunchAction" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-lg modal-dialog-centered">
-            <div class="modal-content">
+                        </dialog>
+<dialog class="modal" id="modalCreateLaunchAction" tabindex="-1">
                 <div class="modal-header">
                     <h5 class="modal-title">Add launch action</h5>
-                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <button type="button" class="close" onclick="this.closest('dialog').close()" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
                     </button>
                 </div>
@@ -68,9 +62,9 @@
                         </div>
                         <div class="aist-action-spacer" aria-hidden="true"></div>
                         <div class="aist-action-row">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="action-include-ai-csv">
-                                <label class="form-check-label" for="action-include-ai-csv">
+                            <div class="flex items-center gap-2">
+                                <input type="checkbox" id="action-include-ai-csv">
+                                <label class="text-sm" for="action-include-ai-csv">
                                     Send AI summary
                                 </label>
                             </div>
@@ -80,9 +74,9 @@
                         </div>
                         <div class="aist-action-spacer" aria-hidden="true"></div>
                         <div class="aist-action-row">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="action-include-common-summary">
-                                <label class="form-check-label" for="action-include-common-summary">
+                            <div class="flex items-center gap-2">
+                                <input type="checkbox" id="action-include-common-summary">
+                                <label class="text-sm" for="action-include-common-summary">
                                     Send common summary
                                 </label>
                             </div>
@@ -124,12 +118,10 @@
                 </div>
 
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-secondary" onclick="this.closest('dialog').close()">Cancel</button>
                     <button type="button" class="btn btn-primary" id="btn-save-launch-action">Save action</button>
                 </div>
-            </div>
-        </div>
-    </div>
+    </dialog>
 <style>
                             #ai-cmpr-badges .badge {
                                 margin: 2px 6px 2px 0;

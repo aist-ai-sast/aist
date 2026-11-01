@@ -10,10 +10,10 @@
 
     {% for field in form %}
         <div class="mb-3 row">
-            <label class="col-sm-3 col-form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            <label class="col-sm-3 form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
             <div class="col-sm-9">
                 {{ field }}
-                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% if field.help_text %}<div class="text-sm text-gray-500">{{ field.help_text }}</div>{% endif %}
                 {% if field.name == "dast_binding" %}<div id="dast-start-params-help"></div>{% endif %}
                 {% for error in field.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
             </div>

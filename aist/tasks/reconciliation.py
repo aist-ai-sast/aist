@@ -139,7 +139,7 @@ def _recover_one_stuck_enrich_pipeline(pipeline, make_enrich_chord) -> bool:
 
 
 @shared_task(name="aist.tasks.reconciliation.reconcile_pipeline_orphans")
-def reconcile_pipeline_orphans_task(pipeline_id: str, *, dry_run: bool = False, async_user=None) -> dict:
+def reconcile_pipeline_orphans_task(pipeline_id: str, *, dry_run: bool = False, async_user_id=None) -> dict:
     return reconcile_pipeline_orphans(pipeline_id=pipeline_id, dry_run=dry_run)
 
 
@@ -149,7 +149,7 @@ def reconcile_recent_orphans_task(
     hours: int = 24,
     batch_size: int = 200,
     dry_run: bool = False,
-    async_user=None,
+    async_user_id=None,
 ) -> dict:
     launch_request_stats = (
         {"dry_run": True}

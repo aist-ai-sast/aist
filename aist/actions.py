@@ -23,6 +23,17 @@ from aist.utils.urls import get_public_base_url
 logger = logging.getLogger("aist")
 
 
+def escape_slack_text(value: str) -> str:
+    """
+    Escape the three characters Slack treats as control characters in message text.
+
+    Slack decodes exactly these back when rendering; encoding anything further (quotes,
+    apostrophes) leaves literal entities in the message. Project and branch names reach the
+    message from the SCM, so without this a name like ``<!channel>`` becomes a real mention.
+    """
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 class BaseAction:
     action_type: str
 
@@ -199,17 +210,19 @@ class SlackAction(BaseAction):
     ) -> str:
         description = self.config.get("description")
         if not description:
+            # Only the generated text is escaped; an operator-authored description is
+            # trusted input and may carry deliberate Slack markup.
             if include_common_summary:
-                description = self._build_common_summary(
+                description = escape_slack_text(self._build_common_summary(
                     pipeline=pipeline,
                     new_status=new_status,
                     for_slack=True,
-                )
+                ))
             else:
-                description = self._build_simple_message(
+                description = escape_slack_text(self._build_simple_message(
                     pipeline=pipeline,
                     new_status=new_status,
-                )
+                ))
         return AISTSlackNotificationManager()._create_notification_message(
             "other",
             None,

@@ -2,10 +2,10 @@
 {% load i18n %}
 
 {% block breadcrumbs %}
-  <li class="breadcrumb-item">
+  <li>
     <a href="{% url 'aist:start_pipeline' %}">AIST Pipelines</a>
   </li>
-  <li class="breadcrumb-item active" aria-current="page">
+  <li class="active" aria-current="page">
     History
   </li>
 {% endblock %}
@@ -21,7 +21,7 @@
     </div>
     <div>
       <a href="{% url 'aist:start_pipeline' %}" class="btn btn-primary">
-        <i class="fa fa-play me-1" aria-hidden="true"></i>
+        <i class="fa-solid fa-play me-1" aria-hidden="true"></i>
         Start pipeline
       </a>
     </div>
@@ -33,7 +33,7 @@
         <div class="row g-3 align-items-end">
           <div class="col-sm-6 col-lg-3">
             <label class="form-label small mb-1">Project</label>
-            <select class="form-select form-select-sm" name="project">
+            <select class="form-control form-control" name="project">
               <option value="">All projects</option>
               {% for p in projects %}
                 <option value="{{ p.id }}"
@@ -55,7 +55,7 @@
 
           <div class="col-sm-6 col-lg-2">
             <label class="form-label small mb-1">Status</label>
-            <select class="form-select form-select-sm" name="status">
+            <select class="form-control form-control" name="status">
               <option value="ALL" {% if status == "ALL" %}selected{% endif %}>All statuses</option>
               <option value="FINISHED" {% if status == "FINISHED" %}selected{% endif %}>Finished only (incl warnings)</option>
             </select>
@@ -63,7 +63,7 @@
 
           <div class="col-sm-6 col-lg-2">
             <label class="form-label small mb-1">Per page</label>
-            <select class="form-select form-select-sm" name="page_size">
+            <select class="form-control form-control" name="page_size">
               {% for n in page_sizes %}
                 <option value="{{ n }}"
                         {% if page_obj.paginator.per_page == n %}selected{% endif %}>
@@ -89,8 +89,8 @@
 
   <div class="card shadow-sm">
     <div class="table-responsive">
-      <table class="table table-sm table-hover align-middle mb-0">
-        <thead class="table-light">
+      <table class="table text-sm table-hover align-middle mb-0">
+        <thead class="bg-gray-50">
           <tr>
             <th style="width: 16%;">Pipeline ID</th>
             <th style="width: 24%;">Project</th>
@@ -107,7 +107,7 @@
             <tr class="table-row-link {% if r.is_active %}table-warning{% endif %}"
                 data-href="{% url 'aist:pipeline_detail' pipeline_id=r.id %}"
                 style="cursor:pointer;">
-              <td class="text-monospace">
+              <td class="font-mono">
                 #{{ r.id }}
               </td>
               <td>
@@ -135,17 +135,17 @@
               </td>
               <td>
                 {% if r.status == "FINISHED" %}
-                  <span class="badge bg-success">FINISHED</span>
+                  <span class="badge bg-green-600">FINISHED</span>
                 {% elif r.status == "FINISHED_WITH_WARNINGS" %}
-                  <span class="badge bg-warning text-dark">FINISHED_WITH_WARNINGS</span>
+                  <span class="badge bg-amber-500 text-dark">FINISHED_WITH_WARNINGS</span>
                 {% else %}
-                  <span class="badge bg-secondary">{{ r.status }}</span>
+                  <span class="badge bg-gray-500">{{ r.status }}</span>
                 {% endif %}
               </td>
               <td>
                 <a class="btn btn-link text-danger btn-sm"
                    href="{% url 'aist:pipeline_delete' r.id %}">
-                  <i class="fa fa-trash" aria-hidden="true"></i>
+                  <i class="fa-solid fa-trash" aria-hidden="true"></i>
                 </a>
               </td>
             </tr>
@@ -168,30 +168,30 @@
       <nav>
         <ul class="pagination mb-0">
           {% if page_obj.has_previous %}
-            <li class="page-item">
-              <a class="page-link"
+            <li>
+              <a
                  href="?{{ qs }}&page={{ page_obj.previous_page_number }}">‹ Prev</a>
             </li>
           {% else %}
-            <li class="page-item disabled">
-              <span class="page-link">‹ Prev</span>
+            <li class="disabled">
+              <span>‹ Prev</span>
             </li>
           {% endif %}
 
-          <li class="page-item disabled">
-            <span class="page-link">
+          <li class="disabled">
+            <span>
               {{ page_obj.number }}
             </span>
           </li>
 
           {% if page_obj.has_next %}
-            <li class="page-item">
-              <a class="page-link"
+            <li>
+              <a
                  href="?{{ qs }}&page={{ page_obj.next_page_number }}">Next ›</a>
             </li>
           {% else %}
-            <li class="page-item disabled">
-              <span class="page-link">Next ›</span>
+            <li class="disabled">
+              <span>Next ›</span>
             </li>
           {% endif %}
         </ul>

@@ -1,17 +1,9 @@
 """
 The project a version is written to is the authorized one, never the submitted one.
 
-``project_version_create`` authorizes the project named in the URL, then built a bound
-``AISTProjectVersionForm``. A bound form ignores ``initial``, and the form's hidden
-``project`` field ranged over every ``AISTProject``, so the submitted id decided where the
-version — and its uploaded source archive — was written.
-
-Reach was narrow: the view sits under the ``/aist-admin/`` prefix that
-``AistAdminGuardMiddleware`` closes to every non-superuser, and the REST counterpart
-(``aist/api/project_versions.py``) already took the project from ``resolve()`` with a
-read-only serializer field. So this was a form that could be misused rather than an open
-door. The form is fixed anyway: it now pins the project by construction, so the next
-caller cannot reintroduce the hole.
+``AISTProjectVersionForm`` pins the project by construction, so a submitted id cannot
+redirect the write. The legacy view itself sits under the ``/aist-admin/`` prefix that
+``AistAdminGuardMiddleware`` closes to every non-superuser.
 """
 from __future__ import annotations
 
@@ -53,7 +45,7 @@ class ProjectVersionTenancyTests(TestCase):
         )
 
     def test_a_submitted_project_from_another_organization_is_ignored(self):
-        """The decisive case: the write must land on the authorized project, or not at all."""
+        """The write lands on the authorized project, or not at all."""
         form = AISTProjectVersionForm(
             {
                 "project": str(self.theirs.pk),
@@ -80,7 +72,7 @@ class ProjectVersionTenancyTests(TestCase):
         self.assertIn("project", form.errors)
 
     def test_the_legacy_view_is_out_of_reach_for_a_non_superuser(self):
-        """What actually contained this: the page lives under the superuser-only prefix."""
+        """The page lives under the superuser-only prefix."""
         self.client.force_login(self.user)
         response = self.client.post(
             reverse("aist:project_version_create", kwargs={"project_id": self.mine.pk}),
@@ -90,7 +82,7 @@ class ProjectVersionTenancyTests(TestCase):
         self.assertFalse(AISTProjectVersion.objects.exists())
 
     def test_even_a_superuser_writes_the_url_project_not_the_payload_one(self):
-        """The one caller that can reach the view must still not be able to redirect the write."""
+        """Even the only caller that can reach the view cannot redirect the write."""
         root = User.objects.create_superuser("root", "root@example.com", "pass")
         self.client.force_login(root)
         response = self.client.post(

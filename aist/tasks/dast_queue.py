@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task
-def refresh_dast_queue(pipeline_id: str, *, async_user=None) -> None:
+def refresh_dast_queue(pipeline_id: str, *, async_user_id=None) -> None:
     """Read one run's queue and store the snapshot a page renders from."""
-    del async_user  # unused; accepted only for the DojoAsyncTask contract
+    del async_user_id  # unused; accepted only for the DojoAsyncTask contract
     pipeline = (
         AISTPipeline.objects
         .select_related("dast_binding__target__integration", "dast_execution_state")
@@ -54,10 +54,10 @@ def apply_dast_queue_command(
     request_id: str,
     expected_revision: int,
     actor: str,
-    async_user=None,
+    async_user_id=None,
 ) -> None:
     """Send one operator command and leave its answer where the page that sent it will look."""
-    del async_user  # unused; accepted only for the DojoAsyncTask contract
+    del async_user_id  # unused; accepted only for the DojoAsyncTask contract
     pipeline = (
         AISTPipeline.objects
         .select_related("dast_binding__target__integration", "dast_execution_state")

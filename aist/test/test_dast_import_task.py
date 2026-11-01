@@ -149,7 +149,7 @@ class ImportReportTaskTests(TestCase):
             filename="generic-aist-report.json",
             sha256=self.report_sha256,
             binding_id=self.binding.id,
-            async_user=self.uploader,
+            async_user_id=self.uploader.id,
         )
 
         pipeline = AISTPipeline.objects.get(id=self.pipeline.id)

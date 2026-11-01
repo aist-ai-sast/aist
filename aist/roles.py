@@ -1,24 +1,16 @@
 """
 AIST's own role ladder: how roles rank, and which of them satisfy a permission.
 
-Both facts used to be inherited from DefectDojo at runtime
-(``get_roles_for_permission``). DefectDojo 3.x releases role-based authorization
-to its paid plugin and turns that function into a stub that answers "no roles",
-which would collapse every tenant-scoped queryset to empty. Tenant isolation is
-this platform's first rule, so the ladder is stated here instead of borrowed.
-
-``MINIMUM_ROLE_FOR_PERMISSION`` is the table documented in
-``docs/security/access-control-and-roles.md``: changing which role a capability
-needs is one edited row. ``aist.authz.policy.ACTION_PERMISSIONS`` maps each named
-``Action`` onto one of these permissions.
+``MINIMUM_ROLE_FOR_PERMISSION`` is the table published in
+``docs/security/access-control-and-roles.md``; one edited row changes a capability's
+tier everywhere. ``aist.authz.policy.ACTION_PERMISSIONS`` maps each named ``Action``
+onto one of these permissions.
 """
 from __future__ import annotations
 
 from dojo.authorization.roles_permissions import Permissions, Roles
 
-# Higher rank = more privileged. Used to pick the "best" role when a user reaches
-# an organization through several grant sources, and to expand a minimum role
-# into the set that satisfies it.
+# Higher rank = more privileged.
 ROLE_RANK: dict[int, int] = {
     Roles.Reader.value: 0,
     Roles.API_Importer.value: 1,
@@ -27,10 +19,7 @@ ROLE_RANK: dict[int, int] = {
     Roles.Owner.value: 4,
 }
 
-# The least privileged role that satisfies each permission AIST uses. Reads are
-# Reader-level, finding mutation and risk acceptance are Writer-level, project
-# and organization management are Maintainer-level, and granting Owner is
-# Owner-only.
+# The least privileged role that satisfies each permission AIST uses.
 MINIMUM_ROLE_FOR_PERMISSION: dict[int, int] = {
     Permissions.Product_View: Roles.Reader,
     Permissions.Finding_View: Roles.Reader,
@@ -57,13 +46,7 @@ def role_rank(role_id: int | None) -> int:
 
 
 def roles_for_permission(permission: int) -> frozenset[int]:
-    """
-    Role ids that satisfy ``permission``, as role ladder membership.
-
-    Raises for an undeclared permission rather than returning an empty set: every
-    caller reads an empty set as the valid answer "no role qualifies", so a typo
-    would silently deny all access instead of failing where it was introduced.
-    """
+    """Role ids that satisfy ``permission``. Raises for an undeclared one, never returns empty."""
     try:
         minimum = MINIMUM_ROLE_FOR_PERMISSION[permission]
         floor = ROLE_RANK[minimum.value]

@@ -1,0 +1,10 @@
+[
+  {
+    "model": "dojo.sla_configuration",
+    "pk": 1,
+    "fields": {
+      "name": "Default",
+      "description": "The Default SLA Configuration. Products not using an explicit SLA Configuration will use this one."
+    }
+  }
+]

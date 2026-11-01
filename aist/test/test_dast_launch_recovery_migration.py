@@ -2,6 +2,8 @@ from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
 
+from aist.test.migration_state import historical_state
+
 
 class DastLaunchRecoveryMigrationTests(TransactionTestCase):
     migrate_from = [("aist", "0042_dast_generic_execution")]
@@ -10,8 +12,9 @@ class DastLaunchRecoveryMigrationTests(TransactionTestCase):
     def setUp(self):
         super().setUp()
         executor = MigrationExecutor(connection)
-        executor.migrate(self.migrate_from)
-        old_apps = executor.loader.project_state(self.migrate_from).apps
+        pinned = historical_state(executor, self.migrate_from)
+        executor.migrate(pinned)
+        old_apps = executor.loader.project_state(pinned).apps
 
         ProductType = old_apps.get_model("dojo", "Product_Type")
         Product = old_apps.get_model("dojo", "Product")

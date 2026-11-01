@@ -41,6 +41,40 @@ Keep these values in the deployment secret store, not in the repository. Rotatin
 an encryption key requires a data migration or restore plan; replacing it without
 that plan can make stored credentials unreadable.
 
+## Keep the embedded platform defaults
+
+Two settings of the embedded DefectDojo foundation are set deliberately by the
+AIST Compose files, against the foundation's own defaults. A deployment that
+overrides them loses platform behavior AIST depends on:
+
+```dotenv
+DD_V3_FEATURE_LOCATIONS=False
+DD_DJANGO_ADMIN_ENABLED=True
+```
+
+`DD_V3_FEATURE_LOCATIONS` switches report import to the foundation's newer
+representation of a web location. AIST's DAST deduplication correlates findings
+through the endpoint records an import writes today, so enabling it leaves DAST
+findings uncorrelated. Moving deduplication onto the newer representation is an
+open design decision, not a configuration change an operator can make.
+
+Enabling it also turns on per-save validation across the foundation's core
+records — findings, products, engagements and product types are validated in
+full on every write. Imports that the platform accepts today can start failing
+on records whose stored values predate that validation, so the flag is not a
+setting to flip on a running deployment to try it out.
+
+`DD_DJANGO_ADMIN_ENABLED` keeps the Django administration site mounted under
+`/aist-admin/`. Superusers use it as the fallback surface for organization
+integrations, stored VPN credential indicators, and the membership audit log
+when the REST API or the client UI cannot be reached. That area stays
+superuser-only. The foundation ships this setting off, so an environment that
+drops the variable silently loses the fallback.
+
+Apply both to every service that runs application code — the web service, Celery
+Beat, the Celery workers, and the startup initializer — so a worker never
+imports under different rules than the request that queued it.
+
 ## Preserve database state
 
 Set an explicit host path for PostgreSQL data in the deployment environment:

@@ -29,6 +29,9 @@ role-based access control (RBAC) and resource attributes:
   reduce the permissions of its current owner.
 - Non-superuser DefectDojo global roles are rejected by a Django security check.
   They are not an alternative path around AIST organization membership.
+- The DefectDojo foundation embedded in the application resolves findings
+  through the same organization scope, so there is one definition of access
+  rather than a second one behind the embedded views.
 
 ## Principals and authorization modes
 
@@ -122,6 +125,19 @@ denying every request.
 The role is only the permission source. The object still has to be returned by
 the corresponding organization-scoped queryset. Fine-grained membership code
 also checks `Product_Member_Add_Owner` when a per-project Owner grant is touched.
+
+### Embedded foundation surfaces
+
+Parts of the embedded DefectDojo foundation — risk acceptance, report
+rendering, metrics — authorize their own finding queries instead of going
+through an AIST endpoint. AIST supplies the organization scope those queries
+use, so they return exactly the findings the AIST API would return for the same
+user, with project overrides, denials, and token organization already applied.
+
+A foundation read intent resolves to the Reader tier of the table above and an
+edit intent to the Writer tier. An intent with no equivalent on the AIST ladder,
+including deletion and staff-only operations, resolves to no access rather than
+borrowing a nearby tier.
 
 ## Object scope and project-level permissions
 
@@ -220,6 +236,8 @@ AND token read/write scope
   import time and supplies the tenant-scoped object resolver.
 - [`aist/queries.py`](../../aist/queries.py) computes effective organization,
   project, nested-object, group, superuser, and token scope.
+- [`aist/authz/vendor_filters.py`](../../aist/authz/vendor_filters.py) answers
+  the embedded foundation's own finding authorization with that same scope.
 - [`aist/members/service.py`](../../aist/members/service.py) owns membership,
   role assignment, project grants/denials, last-Owner safety, and membership
   removal.

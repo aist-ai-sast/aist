@@ -18,15 +18,12 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
-from rest_framework.authentication import (
-    BasicAuthentication,
-    SessionAuthentication,
-    TokenAuthentication,
-)
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
+from rest_framework.settings import api_settings
 
 from aist.api.schema import AISTApiTag
+from aist.authentication import ScopedTokenAuthentication
 from aist.authz import INTERNAL_SERVICE, PUBLIC, AISTAPIView
 from aist.models import AISTApiToken, ApiTokenScope, Organization
 from aist.queries import get_visible_aist_organizations, user_has_write_capability
@@ -39,6 +36,7 @@ def _tokens_for_request(request):
     if isinstance(request.auth, AISTApiToken):
         queryset = queryset.filter(organization=request.auth.organization)
     return queryset
+
 
 
 class AISTApiTokenSerializer(serializers.Serializer):
@@ -160,9 +158,13 @@ class AISTAdminApiTokenListAPI(AISTAPIView):
     """Superuser overview of which users hold tokens. Never exposes a secret."""
 
     authz = INTERNAL_SERVICE
-    # Exclude ScopedTokenAuthentication: this enumeration is reachable only via a
-    # UI session or the internal service token, never via any scoped PAT.
-    authentication_classes = [SessionAuthentication, BasicAuthentication, TokenAuthentication]
+    # The project default minus ScopedTokenAuthentication: reachable by UI session or the
+    # internal service token, never by a scoped PAT.
+    authentication_classes = [
+        cls
+        for cls in api_settings.DEFAULT_AUTHENTICATION_CLASSES
+        if cls is not ScopedTokenAuthentication
+    ]
 
     @extend_schema(
         tags=[AISTApiTag.TOKENS.value],

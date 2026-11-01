@@ -50,7 +50,7 @@ class GiteaProjectMetadata:
 
 
 @shared_task(name="aist.tasks.integrations.fetch_gitlab_projects", bind=True)
-def fetch_gitlab_projects(self, integration_id: int, async_user=None) -> dict:
+def fetch_gitlab_projects(self, integration_id: int, async_user_id=None) -> dict:
     """
     Fetch the list of GitLab projects accessible with the stored integration credentials.
 
@@ -98,7 +98,7 @@ def fetch_gitlab_projects(self, integration_id: int, async_user=None) -> dict:
 
 
 @shared_task(name="aist.tasks.integrations.fetch_gitlab_project_info", bind=True)
-def fetch_gitlab_project_info(self, integration_id: int, project_id: int, async_user=None) -> dict:
+def fetch_gitlab_project_info(self, integration_id: int, project_id: int, async_user_id=None) -> dict:
     """
     Fetch project metadata (namespace, languages, URLs) from GitLab for import.
 
@@ -159,7 +159,7 @@ def _gerrit_rest(integration, session):
 
 
 @shared_task(name="aist.tasks.integrations.fetch_gerrit_projects", bind=True)
-def fetch_gerrit_projects(self, integration_id: int, async_user=None) -> dict:
+def fetch_gerrit_projects(self, integration_id: int, async_user_id=None) -> dict:
     """
     Fetch the list of Gerrit projects accessible with the stored integration credentials.
 
@@ -194,7 +194,7 @@ def fetch_gerrit_projects(self, integration_id: int, async_user=None) -> dict:
 
 
 @shared_task(name="aist.tasks.integrations.fetch_gerrit_project_info", bind=True)
-def fetch_gerrit_project_info(self, integration_id: int, project_path: str, async_user=None) -> dict:
+def fetch_gerrit_project_info(self, integration_id: int, project_path: str, async_user_id=None) -> dict:
     """
     Fetch project metadata (description, default branch, URLs) from Gerrit for import.
 
@@ -243,7 +243,7 @@ def _gitea_headers(integration) -> dict:
 
 
 @shared_task(name="aist.tasks.integrations.fetch_gitea_projects", bind=True)
-def fetch_gitea_projects(self, integration_id: int, async_user=None) -> dict:
+def fetch_gitea_projects(self, integration_id: int, async_user_id=None) -> dict:
     """
     Fetch the repositories accessible to the authenticated Gitea account.
 
@@ -303,7 +303,7 @@ def fetch_gitea_projects(self, integration_id: int, async_user=None) -> dict:
 
 
 @shared_task(name="aist.tasks.integrations.fetch_gitea_project_info", bind=True)
-def fetch_gitea_project_info(self, integration_id: int, repo_full_name: str, async_user=None) -> dict:
+def fetch_gitea_project_info(self, integration_id: int, repo_full_name: str, async_user_id=None) -> dict:
     """
     Fetch project metadata (description, default branch, languages, URLs) from Gitea for import.
 

@@ -436,19 +436,25 @@ def _is_dast_finding(finding: Any) -> bool:
 
 
 def _finding_endpoints(finding: Any) -> tuple[WebLocation, ...]:
+    """The finding's endpoints as web locations; an endpoint that does not parse is skipped."""
+    stored = ()
+    # An unsaved finding has no endpoint relation to read; it simply has no locations.
+    with suppress(AttributeError, TypeError, ValueError):
+        stored = finding.endpoints.all()
     normalized = set()
-    urls = ()
-    with suppress(TypeError, ValueError):
-        urls = dojo_dedupe.get_endpoints_as_url(finding)
-    for url in urls:
-        if not url.scheme or not url.host:
-            continue
-        normalized.add(WebLocation(
-            scheme=url.scheme,
-            host=url.host,
-            port=url.port,
-            path=tuple(url.path),
-        ))
+    for endpoint in stored:
+        urls = ()
+        with suppress(TypeError, ValueError):
+            urls = dojo_dedupe.get_endpoints_as_url([endpoint])
+        for url in urls:
+            if not url.scheme or not url.host:
+                continue
+            normalized.add(WebLocation(
+                scheme=url.scheme,
+                host=url.host,
+                port=url.port,
+                path=tuple(url.path),
+            ))
     return tuple(sorted(normalized, key=lambda row: (row.scheme, row.host, row.port or 0, row.path)))
 
 

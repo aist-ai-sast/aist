@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block breadcrumbs %}
-    <li class="breadcrumb-item">
+    <li>
         <a href="{% url 'aist:start_pipeline' %}">AIST Pipelines</a>
     </li>
-    <li class="breadcrumb-item active" aria-current="page">
+    <li class="active" aria-current="page">
         Run
     </li>
 {% endblock %}
@@ -15,7 +15,7 @@
         {% csrf_token %}
         <button class="btn btn-warning btn-sm">Stop</button>
     </form>
-    <a class="btn btn-outline-danger btn-sm" href="{% url 'aist:pipeline_delete' pipeline.id %}">Delete...</a>
+    <a class="btn btn-danger btn-sm" href="{% url 'aist:pipeline_delete' pipeline.id %}">Delete...</a>
 
     <hr/>
 
@@ -42,18 +42,18 @@
                     class="btn btn-sm btn-outline-secondary d-flex align-items-center"
                     id="logsToggleBtn"
                     aria-controls="logsCollapse" aria-expanded="false">
-                <i class="fa fa-chevron-down me-1" id="logsChevron" aria-hidden="true"></i>
+                <i class="fa-solid fa-chevron-down me-1" id="logsChevron" aria-hidden="true"></i>
                 <span id="logsToggleText">Show</span>
             </button>
 
             <a class="btn btn-sm btn-outline-primary" target="_blank"
                href="{% url 'aist:pipeline_logs_full' pipeline.id %}">
-                <i class="fa fa-external-link me-1"></i> Full log
+                <i class="fa-solid fa-external-link me-1"></i> Full log
             </a>
 
-            <a class="btn btn-sm btn-outline-success"
+            <a class="btn btn-sm btn-success"
                href="{% url 'aist:pipeline_logs_download' pipeline.id %}">
-                <i class="fa fa-download me-1"></i> Download
+                <i class="fa-solid fa-download me-1"></i> Download
             </a>
         </div>
     </div>
@@ -62,7 +62,7 @@
         <div class="card-body p-0">
             <div class="d-flex gap-2 p-2 justify-content-end">
                 <button class="btn btn-sm btn-outline-secondary" id="copyFullLogBtn">
-                    <i class="fa fa-clipboard me-1"></i> Copy to clipboard
+                    <i class="fa-solid fa-clipboard me-1"></i> Copy to clipboard
                 </button>
             </div>
             <pre id="logbox"
@@ -172,11 +172,11 @@
 
                         try {
                             await navigator.clipboard.writeText(toCopy || '{}');
-                            this.innerHTML = '<i class="fa fa-check me-1"></i>Copied';
-                            setTimeout(() => this.innerHTML = '<i class="fa fa-clipboard me-1"></i>Copy', 1500);
+                            this.innerHTML = '<i class="fa-solid fa-check me-1"></i>Copied';
+                            setTimeout(() => this.innerHTML = '<i class="fa-solid fa-clipboard me-1"></i>Copy', 1500);
                         } catch {
-                            this.innerHTML = '<i class="fa fa-exclamation-triangle me-1"></i>Error';
-                            setTimeout(() => this.innerHTML = '<i class="fa fa-clipboard me-1"></i>Copy', 1500);
+                            this.innerHTML = '<i class="fa-solid fa-exclamation-triangle me-1"></i>Error';
+                            setTimeout(() => this.innerHTML = '<i class="fa-solid fa-clipboard me-1"></i>Copy', 1500);
                         }
                     });
                     btn.dataset.wired = '1';
@@ -219,8 +219,8 @@
                         visible = !visible;
                         view.style.display = visible ? 'block' : 'none';
                         this.innerHTML = visible
-                            ? '<i class="fa fa-chevron-down me-1"></i>Hide'
-                            : '<i class="fa fa-chevron-right me-1"></i>Show';
+                            ? '<i class="fa-solid fa-chevron-down me-1"></i>Hide'
+                            : '<i class="fa-solid fa-chevron-right me-1"></i>Show';
                     });
                     toggleBtn.dataset.wired = '1';
                 }
@@ -230,11 +230,11 @@
                             const raw = root.querySelector?.('#aist-json-raw');
                             const txt = raw ? (raw.textContent || '{}') : '{}';
                             await navigator.clipboard.writeText(JSON.stringify(JSON.parse(txt), null, 2));
-                            this.innerHTML = '<i class="fa fa-check me-1"></i>Copied';
-                            setTimeout(() => this.innerHTML = '<i class="fa fa-clipboard me-1"></i>Copy', 1500);
+                            this.innerHTML = '<i class="fa-solid fa-check me-1"></i>Copied';
+                            setTimeout(() => this.innerHTML = '<i class="fa-solid fa-clipboard me-1"></i>Copy', 1500);
                         } catch {
-                            this.innerHTML = '<i class="fa fa-exclamation-triangle me-1"></i>Error';
-                            setTimeout(() => this.innerHTML = '<i class="fa fa-clipboard me-1"></i>Copy', 1500);
+                            this.innerHTML = '<i class="fa-solid fa-exclamation-triangle me-1"></i>Error';
+                            setTimeout(() => this.innerHTML = '<i class="fa-solid fa-clipboard me-1"></i>Copy', 1500);
                         }
                     });
                     copyBtn.dataset.wired = '1';
@@ -277,14 +277,14 @@
                     const badge = `${t.processed || 0} / ${t.total_findings || 0}`;
                     return `
         <tr>
-          <td><span class="text-nowrap">${t.test_name || ("Test #" + t.test_id)}</span></td>
+          <td><span class="whitespace-nowrap">${t.test_name || ("Test #" + t.test_id)}</span></td>
           <td>
             <div class="progress" style="height:16px;">
               <div class="progress-bar ${t.completed ? 'bg-success' : ''}" role="progressbar"
                    style="width:${pct}%;" aria-valuemin="0" aria-valuemax="100">${pct}%</div>
             </div>
           </td>
-          <td class="text-end"><span class="badge bg-secondary">${badge}</span></td>
+          <td class="text-end"><span class="badge bg-gray-500">${badge}</span></td>
         </tr>`;
                 }).join("");
                 tbody.innerHTML = rows || `<tr><td colspan="3" class="text-muted">No tests attached.</td></tr>`;
@@ -810,7 +810,7 @@
 
             // Use event delegation on the outer container so the listener survives
             // innerHTML replacement in refreshStatusPartial().
-            container.addEventListener('shown.bs.collapse', function (ev) {
+            container.addEventListener('aist:collapse-shown', function (ev) {
                 hydrateAllJsonBlocks(ev.target);
             });
 

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task(name="aist.tasks.egress.prewarm_egress")
-def prewarm_egress(project_version_id: int, *, async_user=None) -> str | None:
+def prewarm_egress(project_version_id: int, *, async_user_id=None) -> str | None:
     """
     Ensure a warm egress tunnel exists for a project version's VPN, if any.
 
@@ -25,10 +25,10 @@ def prewarm_egress(project_version_id: int, *, async_user=None) -> str | None:
     the blob request degrades to a ``202 warming`` retry if the tunnel is not up
     yet.
 
-    ``async_user`` is injected by DefectDojo's ``DojoAsyncTask.apply_async`` into
+    ``async_user_id`` is injected by DefectDojo's ``DojoAsyncTask.apply_async`` into
     every task call and is accepted (unused) here to satisfy that contract.
     """
-    del async_user  # unused; accepted only for the DojoAsyncTask contract
+    del async_user_id  # unused; accepted only for the DojoAsyncTask contract
     from aist.integrations import egress  # noqa: PLC0415
     from aist.models import AISTProjectVersion  # noqa: PLC0415
 
@@ -55,9 +55,9 @@ def prewarm_egress(project_version_id: int, *, async_user=None) -> str | None:
 
 
 @shared_task(name="aist.tasks.egress.reap_egress")
-def reap_egress(*, async_user=None) -> int:
+def reap_egress(*, async_user_id=None) -> int:
     """Stop idle / over-cap warm-egress containers.  Returns count removed."""
-    del async_user  # unused; accepted only for the DojoAsyncTask contract
+    del async_user_id  # unused; accepted only for the DojoAsyncTask contract
     from aist.integrations import egress  # noqa: PLC0415
 
     return egress.reap_idle()

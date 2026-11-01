@@ -2,7 +2,7 @@
 {% load aist_extras %}
 
 {% block breadcrumbs %}
-    <li class="breadcrumb-item active" aria-current="page">
+    <li class="active" aria-current="page">
         AIST Projects
     </li>
 {% endblock %}
@@ -23,42 +23,42 @@
                 </div>
                 <div class="col-sm-6">
                     <div class="pull-right" style="max-width: 720px; width: 100%;">
-                        <div class="btn-group btn-group-sm" role="group" style="margin-right: 8px;">
+                        <div class="btn-group btn-group" role="group" style="margin-right: 8px;">
                             <button type="button"
-                                    class="btn btn-default"
+                                    class="btn btn-secondary"
                                     id="gitlab-import-open">
                                 <i class="fa-brands fa-gitlab" aria-hidden="true"></i>
                                 Import from GitLab
                             </button>
                             <button type="button"
-                                    class="btn btn-default"
+                                    class="btn btn-secondary"
                                     id="github-import-open">
                                 <i class="fa-brands fa-github" aria-hidden="true"></i>
                                 Import from GitHub
                             </button>
                             <button type="button"
-                                    class="btn btn-default"
+                                    class="btn btn-secondary"
                                     id="gerrit-import-open">
-                                <i class="fa fa-code-fork" aria-hidden="true"></i>
+                                <i class="fa-solid fa-code-fork" aria-hidden="true"></i>
                                 Import from Gerrit
                             </button>
                             <button type="button"
-                                    class="btn btn-default"
+                                    class="btn btn-secondary"
                                     id="gitea-import-open">
-                                <i class="fa fa-coffee" aria-hidden="true"></i>
+                                <i class="fa-solid fa-coffee" aria-hidden="true"></i>
                                 Import from Gitea
                             </button>
                             <button type="button"
-                                    class="btn btn-default"
+                                    class="btn btn-secondary"
                                     id="empty-project-open"
                                     {% if not organizations_for_create %}disabled title="No organizations available for project creation"{% endif %}>
-                                <i class="fa fa-plus" aria-hidden="true"></i>
+                                <i class="fa-solid fa-plus" aria-hidden="true"></i>
                                 Create empty project
                             </button>
                         </div>
-                        <div class="input-group input-group-sm" style="display: inline-flex; width: 320px; vertical-align: top;">
+                        <div class="input-group" style="display: inline-flex; width: 320px; vertical-align: top;">
                             <span class="input-group-addon">
-                                <i class="fa fa-search" aria-hidden="true"></i>
+                                <i class="fa-solid fa-search" aria-hidden="true"></i>
                             </span>
                             <input id="aist-projects-filter"
                                    type="text"
@@ -110,7 +110,7 @@
                         </td>
                         <td>
                             <a href="{% url 'aist:pipeline_list' %}?project={{ p.id }}"
-                               class="btn btn-xs btn-default">
+                               class="btn btn-xs btn-secondary">
                                 Pipelines
                             </a>
                         </td>
@@ -143,8 +143,8 @@
                         </td>
                         <td>
                             <button type="button"
-                                    class="btn btn-xs btn-default aist-project-edit-btn">
-                                <i class="fa fa-pencil"></i> Edit
+                                    class="btn btn-xs btn-secondary aist-project-edit-btn">
+                                <i class="fa-solid fa-pencil"></i> Edit
                             </button>
                         </td>
                     </tr>
@@ -191,7 +191,7 @@
                                 </td>
                                 <td>
                                     <a href="{% url 'aist:pipeline_list' %}?project={{ p.id }}"
-                                       class="btn btn-xs btn-default">
+                                       class="btn btn-xs btn-secondary">
                                         Pipelines
                                     </a>
                                 </td>
@@ -224,8 +224,8 @@
                                 </td>
                                 <td>
                                     <button type="button"
-                                            class="btn btn-xs btn-default aist-project-edit-btn">
-                                        <i class="fa fa-pencil"></i> Edit
+                                            class="btn btn-xs btn-secondary aist-project-edit-btn">
+                                        <i class="fa-solid fa-pencil"></i> Edit
                                     </button>
                                 </td>
                             </tr>
@@ -272,7 +272,7 @@
                                 </td>
                                 <td>
                                     <a href="{% url 'aist:pipeline_list' %}?project={{ p.id }}"
-                                       class="btn btn-xs btn-default">
+                                       class="btn btn-xs btn-secondary">
                                         Pipelines
                                     </a>
                                 </td>
@@ -305,8 +305,8 @@
                                 </td>
                                 <td>
                                     <button type="button"
-                                            class="btn btn-xs btn-default aist-project-edit-btn">
-                                        <i class="fa fa-pencil"></i> Edit
+                                            class="btn btn-xs btn-secondary aist-project-edit-btn">
+                                        <i class="fa-solid fa-pencil"></i> Edit
                                     </button>
                                 </td>
                             </tr>
@@ -326,18 +326,16 @@
     </div>
 
     {# Modal for importing projects from GitLab #}
-    <div class="modal fade" id="gitlabImportModal" tabindex="-1" role="dialog"
+    <dialog class="modal" id="gitlabImportModal" tabindex="-1"
          aria-labelledby="gitlabImportModalLabel">
-        <div class="modal-dialog modal-lg" role="document">
-            <div class="modal-content">
                 <form id="gitlab-import-form">
                     {% csrf_token %}
                     <div class="modal-header">
-                        <button type="button" class="close" data-dismiss="modal"
-                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                         <h4 class="modal-title" id="gitlabImportModalLabel">
                             Import projects from GitLab
                         </h4>
+                        <button type="button" class="close" onclick="this.closest('dialog').close()"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                     </div>
                     <div class="modal-body">
                         <div id="gitlab-import-error"
@@ -372,7 +370,7 @@
                             </p>
                             <div class="form-group">
                                 <input type="text"
-                                       class="form-control input-sm"
+                                       class="form-control"
                                        id="gitlab-projects-search"
                                        placeholder="Filter projects by name, path or description...">
                             </div>
@@ -398,8 +396,8 @@
                     </div>
                     <div class="modal-footer">
                         <button type="button"
-                                class="btn btn-default"
-                                data-dismiss="modal">
+                                class="btn btn-secondary"
+                                onclick="this.closest('dialog').close()">
                             Close
                         </button>
                         <button type="button"
@@ -411,7 +409,7 @@
                         <span id="gitlab-projects-loading"
                               class="text-muted"
                               style="display: none; margin-left: 8px;">
-                            <i class="fa fa-spinner fa-spin"></i> Loading projects...
+                            <i class="fa-solid fa-spinner fa-spin"></i> Loading projects...
                         </span>
                         <button type="button"
                                 class="btn btn-success"
@@ -420,30 +418,26 @@
                             Import selected
                         </button>
                     </div>
-                    <div class="form-check mt-3">
-                        <input type="checkbox" class="form-check-input" id="gitlab-auto-analyze">
-                        <label class="form-check-label" for="gitlab-auto-analyze">
+                    <div class="flex items-center gap-2 mt-3">
+                        <input type="checkbox" id="gitlab-auto-analyze">
+                        <label class="text-sm" for="gitlab-auto-analyze">
                             Auto-analyze project (generate init script &amp; exclusions via Claude)
                         </label>
                     </div>
                 </form>
-            </div>
-        </div>
-    </div>
+    </dialog>
 
     {# Modal for importing projects from Gerrit #}
-    <div class="modal fade" id="gerritImportModal" tabindex="-1" role="dialog"
+    <dialog class="modal" id="gerritImportModal" tabindex="-1"
          aria-labelledby="gerritImportModalLabel">
-        <div class="modal-dialog modal-lg" role="document">
-            <div class="modal-content">
                 <form id="gerrit-import-form">
                     {% csrf_token %}
                     <div class="modal-header">
-                        <button type="button" class="close" data-dismiss="modal"
-                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                         <h4 class="modal-title" id="gerritImportModalLabel">
                             Import projects from Gerrit
                         </h4>
+                        <button type="button" class="close" onclick="this.closest('dialog').close()"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                     </div>
                     <div class="modal-body">
                         <div id="gerrit-import-error"
@@ -478,7 +472,7 @@
                             </p>
                             <div class="form-group">
                                 <input type="text"
-                                       class="form-control input-sm"
+                                       class="form-control"
                                        id="gerrit-projects-search"
                                        placeholder="Filter projects by path or description...">
                             </div>
@@ -502,8 +496,8 @@
                     </div>
                     <div class="modal-footer">
                         <button type="button"
-                                class="btn btn-default"
-                                data-dismiss="modal">
+                                class="btn btn-secondary"
+                                onclick="this.closest('dialog').close()">
                             Close
                         </button>
                         <button type="button"
@@ -515,7 +509,7 @@
                         <span id="gerrit-projects-loading"
                               class="text-muted"
                               style="display: none; margin-left: 8px;">
-                            <i class="fa fa-spinner fa-spin"></i> Loading projects...
+                            <i class="fa-solid fa-spinner fa-spin"></i> Loading projects...
                         </span>
                         <button type="button"
                                 class="btn btn-success"
@@ -524,30 +518,26 @@
                             Import selected
                         </button>
                     </div>
-                    <div class="form-check mt-3">
-                        <input type="checkbox" class="form-check-input" id="gerrit-auto-analyze">
-                        <label class="form-check-label" for="gerrit-auto-analyze">
+                    <div class="flex items-center gap-2 mt-3">
+                        <input type="checkbox" id="gerrit-auto-analyze">
+                        <label class="text-sm" for="gerrit-auto-analyze">
                             Auto-analyze project (generate init script &amp; exclusions via Claude)
                         </label>
                     </div>
                 </form>
-            </div>
-        </div>
-    </div>
+    </dialog>
 
     {# Modal for importing projects from Gitea #}
-    <div class="modal fade" id="giteaImportModal" tabindex="-1" role="dialog"
+    <dialog class="modal" id="giteaImportModal" tabindex="-1"
          aria-labelledby="giteaImportModalLabel">
-        <div class="modal-dialog modal-lg" role="document">
-            <div class="modal-content">
                 <form id="gitea-import-form">
                     {% csrf_token %}
                     <div class="modal-header">
-                        <button type="button" class="close" data-dismiss="modal"
-                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                         <h4 class="modal-title" id="giteaImportModalLabel">
                             Import projects from Gitea
                         </h4>
+                        <button type="button" class="close" onclick="this.closest('dialog').close()"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                     </div>
                     <div class="modal-body">
                         <div id="gitea-import-error"
@@ -582,7 +572,7 @@
                             </p>
                             <div class="form-group">
                                 <input type="text"
-                                       class="form-control input-sm"
+                                       class="form-control"
                                        id="gitea-projects-search"
                                        placeholder="Filter repos by name or description...">
                             </div>
@@ -606,8 +596,8 @@
                     </div>
                     <div class="modal-footer">
                         <button type="button"
-                                class="btn btn-default"
-                                data-dismiss="modal">
+                                class="btn btn-secondary"
+                                onclick="this.closest('dialog').close()">
                             Close
                         </button>
                         <button type="button"
@@ -619,7 +609,7 @@
                         <span id="gitea-projects-loading"
                               class="text-muted"
                               style="display: none; margin-left: 8px;">
-                            <i class="fa fa-spinner fa-spin"></i> Loading projects...
+                            <i class="fa-solid fa-spinner fa-spin"></i> Loading projects...
                         </span>
                         <button type="button"
                                 class="btn btn-success"
@@ -628,30 +618,26 @@
                             Import selected
                         </button>
                     </div>
-                    <div class="form-check mt-3">
-                        <input type="checkbox" class="form-check-input" id="gitea-auto-analyze">
-                        <label class="form-check-label" for="gitea-auto-analyze">
+                    <div class="flex items-center gap-2 mt-3">
+                        <input type="checkbox" id="gitea-auto-analyze">
+                        <label class="text-sm" for="gitea-auto-analyze">
                             Auto-analyze project (generate init script &amp; exclusions via Claude)
                         </label>
                     </div>
                 </form>
-            </div>
-        </div>
-    </div>
+    </dialog>
 
     {# Modal for importing projects from GitHub #}
-    <div class="modal fade" id="githubImportModal" tabindex="-1" role="dialog"
+    <dialog class="modal" id="githubImportModal" tabindex="-1"
          aria-labelledby="githubImportModalLabel">
-        <div class="modal-dialog modal-lg" role="document">
-            <div class="modal-content">
                 <form id="github-import-form">
                     {% csrf_token %}
                     <div class="modal-header">
-                        <button type="button" class="close" data-dismiss="modal"
-                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                         <h4 class="modal-title" id="githubImportModalLabel">
                             Import projects from GitHub
                         </h4>
+                        <button type="button" class="close" onclick="this.closest('dialog').close()"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                     </div>
                     <div class="modal-body">
                         <div id="github-import-error" class="alert alert-danger" style="display:none;"></div>
@@ -685,34 +671,30 @@
                             </div>
                         </div>
                     </div>
-                    <div class="form-check mt-3 ml-3">
-                        <input type="checkbox" class="form-check-input" id="github-auto-analyze">
-                        <label class="form-check-label" for="github-auto-analyze">
+                    <div class="flex items-center gap-2 mt-3 ml-3">
+                        <input type="checkbox" id="github-auto-analyze">
+                        <label class="text-sm" for="github-auto-analyze">
                             Auto-analyze project (generate init script &amp; exclusions via Claude)
                         </label>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                        <button type="button" class="btn btn-secondary" onclick="this.closest('dialog').close()">Close</button>
                         <button type="button" class="btn btn-primary" id="github-connect-btn">Connect GitHub</button>
-                        <button type="button" class="btn btn-default" id="github-list-btn">List repositories</button>
+                        <button type="button" class="btn btn-secondary" id="github-list-btn">List repositories</button>
                         <button type="button" class="btn btn-success" id="github-import-btn" disabled>Import selected</button>
                     </div>
                 </form>
-            </div>
-        </div>
-    </div>
+    </dialog>
 
     {# Modal for creating empty AIST project #}
-    <div class="modal fade" id="emptyProjectModal" tabindex="-1" role="dialog"
+    <dialog class="modal" id="emptyProjectModal" tabindex="-1"
          aria-labelledby="emptyProjectModalLabel">
-        <div class="modal-dialog" role="document">
-            <div class="modal-content">
                 <form id="empty-project-form">
                     {% csrf_token %}
                     <div class="modal-header">
-                        <button type="button" class="close" data-dismiss="modal"
-                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                         <h4 class="modal-title" id="emptyProjectModalLabel">Create empty AIST project</h4>
+                        <button type="button" class="close" onclick="this.closest('dialog').close()"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                     </div>
                     <div class="modal-body">
                         <div id="empty-project-error" class="alert alert-danger" style="display:none;"></div>
@@ -732,27 +714,23 @@
                         {# Script content is automatically set to the default entrypoint on creation. #}
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-secondary" onclick="this.closest('dialog').close()">Cancel</button>
                         <button type="submit" class="btn btn-primary">Create project</button>
                     </div>
                 </form>
-            </div>
-        </div>
-    </div>
+    </dialog>
 
     {# Modal for editing a single project #}
-    <div class="modal fade" id="aistProjectModal" tabindex="-1" role="dialog"
+    <dialog class="modal" id="aistProjectModal" tabindex="-1"
          aria-labelledby="aistProjectModalLabel">
-        <div class="modal-dialog" role="document">
-            <div class="modal-content">
                 <form id="aist-project-edit-form">
                     {% csrf_token %}
                     <div class="modal-header">
-                        <button type="button" class="close" data-dismiss="modal"
-                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                         <h4 class="modal-title" id="aistProjectModalLabel">
                             Edit AIST Project
                         </h4>
+                        <button type="button" class="close" onclick="this.closest('dialog').close()"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
                     </div>
                     <div class="modal-body">
                         <div id="aist-project-edit-error"
@@ -862,7 +840,7 @@
                         <hr class="my-3"/>
                         <div class="d-flex align-items-center justify-content-between">
                             <div>
-                                <div class="fw-semibold">Claude auto-analysis</div>
+                                <div class="font-semibold">Claude auto-analysis</div>
                                 <div class="text-muted small">
                                     Re-run Claude against a fresh clone of the chosen branch to
                                     regenerate the entrypoint script and profile exclusions above.
@@ -883,7 +861,7 @@
                         <hr class="my-3"/>
                         <div class="d-flex align-items-center justify-content-between">
                             <div>
-                                <div class="fw-semibold">Launch presets</div>
+                                <div class="font-semibold">Launch presets</div>
                                 <div class="text-muted small">Create reusable pipeline launch configuration for this
                                     project.
                                 </div>
@@ -901,24 +879,20 @@
                             Delete
                         </button>
                         <button type="button"
-                                class="btn btn-default"
-                                data-dismiss="modal">Cancel
+                                class="btn btn-secondary"
+                                onclick="this.closest('dialog').close()">Cancel
                         </button>
                         <button type="submit" class="btn btn-primary">
                             Save changes
                         </button>
                     </div>
                 </form>
-            </div>
-        </div>
-    </div>
+    </dialog>
 
-    <div class="modal fade" id="modalCreateLaunchPreset" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-lg modal-dialog-scrollable">
-            <div class="modal-content">
+    <dialog class="modal" id="modalCreateLaunchPreset" tabindex="-1">
                 <div class="modal-header">
                     <h5 class="modal-title">Create launch preset</h5>
-                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <button type="button" class="close" onclick="this.closest('dialog').close()" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
                     </button>
 
@@ -935,9 +909,7 @@
                     </div>
 
                 </div>
-            </div>
-        </div>
-    </div>
+    </dialog>
 {# Global modals must NOT be nested inside other modals (Bootstrap 4 limitation) #}
 {% include "aist/_pipeline_run_modals.html" %}
     <script>
@@ -990,17 +962,7 @@
                         errEl.textContent = "";
                     }
 
-                    // Open modal in both Bootstrap 5 and Bootstrap 3/4 environments
-                    if (window.bootstrap && window.bootstrap.Modal) {
-                        var m = window.bootstrap.Modal.getOrCreateInstance(modalEl);
-                        m.show();
-                    } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-                        window.jQuery(modalEl).modal("show");
-                    } else {
-                        // Very last resort (shouldn't happen in DefectDojo)
-                        modalEl.classList.add("in");
-                        modalEl.style.display = "block";
-                    }
+                        modalEl.showModal();
 
                     setTimeout(function () {
                         if (window.__AIST_REFRESH_PIPELINE_SCOPE__) {
@@ -1432,10 +1394,6 @@
                     // Default to the version the next run uses — the one the Script cell shows.
                     var activeVersionId = row.getAttribute("data-project-active-version-id") || "";
                     if (activeVersionId) fieldScriptVersion.value = activeVersionId;
-                    // Sync Bootstrap Select widget with the updated native <select> options.
-                    if (window.jQuery && window.jQuery.fn.selectpicker) {
-                        window.jQuery(fieldScriptVersion).selectpicker("refresh");
-                    }
                 }
 
                 populateRegenerateVersions(row);
@@ -1443,12 +1401,7 @@
                 // Load the script for the currently-selected version (defaults to latest).
                 loadScriptForCurrentSelection(id);
 
-                if (window.jQuery && window.jQuery.fn.modal) {
-                    window.jQuery(modal).modal("show");
-                } else if (modal && modal.classList) {
-                    modal.classList.add("in");
-                    modal.style.display = "block";
-                }
+                    modal.showModal();
             }
 
             function applyRowUpdate(row, payload) {
@@ -1658,12 +1611,7 @@
 
                             applyRowUpdate(currentRow, result.data.project);
 
-                            if (window.jQuery && window.jQuery.fn.modal) {
-                                window.jQuery(modal).modal("hide");
-                            } else if (modal && modal.classList) {
-                                modal.classList.remove("in");
-                                modal.style.display = "none";
-                            }
+                                modal.close();
                             showGlobalAlert("Project has been updated.", "success");
                         }).catch(function () {
                             if (errorBox) {
@@ -1782,24 +1730,14 @@
                 gitlabOpenBtn.addEventListener("click", function () {
                     clearGitlabState();
 
-                    if (window.jQuery && window.jQuery.fn.modal) {
-                        window.jQuery(gitlabModal).modal("show");
-                    } else {
-                        gitlabModal.classList.add("in");
-                        gitlabModal.style.display = "block";
-                    }
+                        gitlabModal.showModal();
                 });
             }
 
             if (githubOpenBtn && githubModal) {
                 githubOpenBtn.addEventListener("click", function () {
                     clearGithubState();
-                    if (window.jQuery && window.jQuery.fn.modal) {
-                        window.jQuery(githubModal).modal("show");
-                    } else {
-                        githubModal.classList.add("in");
-                        githubModal.style.display = "block";
-                    }
+                        githubModal.showModal();
                 });
             }
 
@@ -2012,12 +1950,7 @@
                             }
                             return;
                         }
-                        if (window.jQuery && window.jQuery.fn.modal) {
-                            window.jQuery(githubModal).modal("hide");
-                        } else if (githubModal && githubModal.classList) {
-                            githubModal.classList.remove("in");
-                            githubModal.style.display = "none";
-                        }
+                            githubModal.close();
                         var successMsg = imported.length + " GitHub repositories imported.";
                         if (skipped.length || failed.length) {
                             successMsg += " " + skipped.length + " skipped, " + failed.length + " failed.";
@@ -2039,12 +1972,7 @@
                         emptyProjectErrorBox.textContent = "";
                         emptyProjectErrorBox.style.display = "none";
                     }
-                    if (window.jQuery && window.jQuery.fn.modal) {
-                        window.jQuery(emptyProjectModal).modal("show");
-                    } else {
-                        emptyProjectModal.classList.add("in");
-                        emptyProjectModal.style.display = "block";
-                    }
+                        emptyProjectModal.showModal();
                 });
             }
 
@@ -2082,12 +2010,7 @@
                             }
                             return;
                         }
-                        if (window.jQuery && window.jQuery.fn.modal) {
-                            window.jQuery(emptyProjectModal).modal("hide");
-                        } else if (emptyProjectModal && emptyProjectModal.classList) {
-                            emptyProjectModal.classList.remove("in");
-                            emptyProjectModal.style.display = "none";
-                        }
+                            emptyProjectModal.close();
                         showGlobalAlert("Empty project has been created.", "success");
                         window.location.reload();
                     }).catch(function () {
@@ -2108,12 +2031,7 @@
                 githubOrgSelect.value = orgId;
                 githubInstallationInput.value = installationId;
                 clearGithubState();
-                if (window.jQuery && window.jQuery.fn.modal) {
-                    window.jQuery(githubModal).modal("show");
-                } else {
-                    githubModal.classList.add("in");
-                    githubModal.style.display = "block";
-                }
+                    githubModal.showModal();
                 if (githubListBtn) {
                     githubListBtn.click();
                 }
@@ -2193,7 +2111,7 @@
                             rowsHtml +=
                                 '<tr>' +
                                 '<td><input type="checkbox" class="gitlab-project-checkbox" value="' + escapeHtml(p.id || "") + '"></td>' +
-                                '<td class="text-monospace">' + escapeHtml(p.id || "") + '</td>' +
+                                '<td class="font-mono">' + escapeHtml(p.id || "") + '</td>' +
                                 '<td>' + escapeHtml(p.path_with_namespace || p.name || "") + '</td>' +
                                 '<td>' + escapeHtml(p.language || "–") + '</td>' +
                                 '<td>' + escapeHtml(p.description || "") + '</td>' +
@@ -2310,12 +2228,7 @@
                         }
 
                         // Close modal and reload page to show new projects.
-                        if (window.jQuery && window.jQuery.fn.modal) {
-                            window.jQuery(gitlabModal).modal("hide");
-                        } else if (gitlabModal && gitlabModal.classList) {
-                            gitlabModal.classList.remove("in");
-                            gitlabModal.style.display = "none";
-                        }
+                            gitlabModal.close();
 
                         showGlobalAlert("Selected GitLab projects have been imported.", "success");
                         window.location.reload();
@@ -2393,12 +2306,7 @@
                 gerritOpenBtn.addEventListener("click", function () {
                     clearGerritState();
 
-                    if (window.jQuery && window.jQuery.fn.modal) {
-                        window.jQuery(gerritModal).modal("show");
-                    } else {
-                        gerritModal.classList.add("in");
-                        gerritModal.style.display = "block";
-                    }
+                        gerritModal.showModal();
                 });
             }
 
@@ -2469,7 +2377,7 @@
                             rowsHtml +=
                                 '<tr>' +
                                 '<td><input type="checkbox" class="gerrit-project-checkbox" value="' + escapeHtml(path) + '"></td>' +
-                                '<td class="text-monospace">' + escapeHtml(path) + '</td>' +
+                                '<td class="font-mono">' + escapeHtml(path) + '</td>' +
                                 '<td>' + escapeHtml(p.description || "") + '</td>' +
                                 '<td>' + escapeHtml(p.default_branch || "") + '</td>' +
                                 '</tr>';
@@ -2584,12 +2492,7 @@
                         }
 
                         // Close modal and reload page to show new projects.
-                        if (window.jQuery && window.jQuery.fn.modal) {
-                            window.jQuery(gerritModal).modal("hide");
-                        } else if (gerritModal && gerritModal.classList) {
-                            gerritModal.classList.remove("in");
-                            gerritModal.style.display = "none";
-                        }
+                            gerritModal.close();
 
                         showGlobalAlert("Selected Gerrit projects have been imported.", "success");
                         window.location.reload();
@@ -2667,12 +2570,7 @@
                 giteaOpenBtn.addEventListener("click", function () {
                     clearGiteaState();
 
-                    if (window.jQuery && window.jQuery.fn.modal) {
-                        window.jQuery(giteaModal).modal("show");
-                    } else {
-                        giteaModal.classList.add("in");
-                        giteaModal.style.display = "block";
-                    }
+                        giteaModal.showModal();
                 });
             }
 
@@ -2743,7 +2641,7 @@
                             rowsHtml +=
                                 '<tr>' +
                                 '<td><input type="checkbox" class="gitea-project-checkbox" value="' + escapeHtml(fullName) + '"></td>' +
-                                '<td class="text-monospace">' + escapeHtml(fullName) + '</td>' +
+                                '<td class="font-mono">' + escapeHtml(fullName) + '</td>' +
                                 '<td>' + escapeHtml(p.description || "") + '</td>' +
                                 '<td>' + escapeHtml(p.default_branch || "") + '</td>' +
                                 '</tr>';
@@ -2858,12 +2756,7 @@
                         }
 
                         // Close modal and reload page to show new projects.
-                        if (window.jQuery && window.jQuery.fn.modal) {
-                            window.jQuery(giteaModal).modal("hide");
-                        } else if (giteaModal && giteaModal.classList) {
-                            giteaModal.classList.remove("in");
-                            giteaModal.style.display = "none";
-                        }
+                            giteaModal.close();
 
                         showGlobalAlert("Selected Gitea projects have been imported.", "success");
                         window.location.reload();
@@ -2917,12 +2810,7 @@
                     }).then(function (resp) {
                         if (resp.status === 204) {
                             // Hide modal
-                            if (window.jQuery && window.jQuery.fn.modal) {
-                                window.jQuery(modal).modal("hide");
-                            } else if (modal && modal.classList) {
-                                modal.classList.remove("in");
-                                modal.style.display = "none";
-                            }
+                                modal.close();
 
                             // Remove row from table
                             if (currentRow && currentRow.parentNode) {
@@ -2968,9 +2856,6 @@
                 if (regenerateHint) {
                     regenerateHint.textContent = hint;
                     regenerateHint.style.display = hint ? "block" : "none";
-                }
-                if (window.jQuery && window.jQuery.fn.selectpicker) {
-                    window.jQuery(regenerateVersion).selectpicker("refresh");
                 }
             }
 

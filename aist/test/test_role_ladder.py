@@ -1,12 +1,9 @@
 """
-The role ladder AIST now owns (``aist/roles.py``).
+The role ladder in ``aist/roles.py``.
 
-Until this change, "which roles satisfy a permission" was read out of DefectDojo at
-runtime. DefectDojo 3.x releases role-based authorization to its paid plugin, where
-``get_roles_for_permission`` answers "no roles" — which would have silently emptied
-every tenant-scoped queryset. The table lives here now, so these tests pin two things:
-that it still answers exactly what the running deployment answers today, and that it
-matches the tiers published in ``docs/security/access-control-and-roles.md``.
+Pins two things: it answers exactly what the vendor answers while the vendor still
+resolves roles, and it matches the tiers published in
+``docs/security/access-control-and-roles.md``.
 """
 from __future__ import annotations
 

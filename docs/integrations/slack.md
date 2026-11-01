@@ -36,3 +36,18 @@ list performs no delivery.
 AIST attempts each configured channel independently. A failure in one channel
 does not prevent attempts to the others, but the action is recorded as failed
 when any requested delivery fails. See [pipeline actions](../product/pipeline-actions.md).
+
+## Message text
+
+When no description is configured, AIST composes the message from pipeline data
+such as the project, branch, and commit, some of which originates in the
+source repository rather than in AIST. That generated text is escaped for the
+characters Slack reads as markup before the message is posted, so a repository
+or branch name cannot become a channel mention or a disguised link in the
+delivered message. Slack decodes the escaped characters when it renders, so
+ordinary names and links still read normally.
+
+A description configured on the action is operator-authored text and is sent as
+written. Deliberate Slack markup there — a link to a runbook, for example —
+works as intended, so treat the description field as content that reaches the
+channel unchanged.

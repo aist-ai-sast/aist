@@ -142,17 +142,17 @@ class VpnResolutionTests(SimpleTestCase):
 
 class TaskContractTests(SimpleTestCase):
 
-    """DefectDojo's DojoAsyncTask injects `async_user` into every task call."""
+    """DefectDojo's DojoAsyncTask injects `async_user_id` into every task call."""
 
-    def test_prewarm_accepts_async_user(self):
+    def test_prewarm_accepts_async_user_id(self):
         with patch("aist.models.AISTProjectVersion") as pv_model:
             pv_model.objects.select_related.return_value.filter.return_value.first.return_value = None
             # Call the task body directly with the kwarg the wrapper injects.
-            self.assertIsNone(prewarm_egress.run(1, async_user="someone"))
+            self.assertIsNone(prewarm_egress.run(1, async_user_id=1))
 
-    def test_reap_accepts_async_user(self):
+    def test_reap_accepts_async_user_id(self):
         with patch("aist.integrations.egress.reap_idle", return_value=0):
-            self.assertEqual(reap_egress.run(async_user="someone"), 0)
+            self.assertEqual(reap_egress.run(async_user_id=1), 0)
 
 
 class RemoteBytesProxyTests(SimpleTestCase):

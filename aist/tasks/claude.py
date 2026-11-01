@@ -87,7 +87,7 @@ def _clone_project_via_vpn(
 
 
 @shared_task(bind=True)
-def analyze_project_after_import(self, project_id: int, project_version_id: int, async_user=None) -> None:
+def analyze_project_after_import(self, project_id: int, project_version_id: int, async_user_id=None) -> None:
     """
     Clone one branch of a project repository and run Claude analysis skills.
 

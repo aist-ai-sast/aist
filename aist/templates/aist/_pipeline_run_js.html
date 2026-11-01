@@ -245,10 +245,10 @@
                     }
                     html += '<div class="list-group-item d-flex align-items-center justify-content-between">';
                     html += '<div>';
-                    html += '<div class="fw-semibold">' + label + '</div>';
+                    html += '<div class="font-semibold">' + label + '</div>';
                     if (detail) html += '<div class="text-muted small">' + detail + '</div>';
                     html += '</div>';
-                    html += '<button type="button" class="btn btn-sm btn-outline-danger aist-remove-action" data-id="' + a.id + '">Remove</button>';
+                    html += '<button type="button" class="btn btn-sm btn-danger aist-remove-action" data-id="' + a.id + '">Remove</button>';
                     html += '</div>';
                 });
                 html += "</div>";
@@ -293,7 +293,7 @@
                         detail = detail ? (detail + " · Common summary") : "Common summary";
                     }
                     html += '<div class="list-group-item">';
-                    html += '<div class="fw-semibold">' + label + '</div>';
+                    html += '<div class="font-semibold">' + label + '</div>';
                     if (detail) html += '<div class="text-muted small">' + detail + '</div>';
                     html += '</div>';
                 });
@@ -332,14 +332,7 @@
             function showActionModal() {
                 if (actionType) showActionFields(actionType.value);
                 prefillActionDefaults();
-                if (window.bootstrap && window.bootstrap.Modal) {
-                    window.bootstrap.Modal.getOrCreateInstance(actionModal).show();
-                } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-                    window.jQuery(actionModal).modal("show");
-                } else {
-                    actionModal.classList.add("in");
-                    actionModal.style.display = "block";
-                }
+                    actionModal.showModal();
             }
 
             function openActionModal() {
@@ -365,26 +358,18 @@
 
             function closeActionModal() {
                 if (!actionModal) return;
-                if (window.bootstrap && window.bootstrap.Modal) {
-                    window.bootstrap.Modal.getInstance(actionModal)?.hide();
-                } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-                    window.jQuery(actionModal).modal("hide");
-                } else {
-                    actionModal.classList.remove("in");
-                    actionModal.style.display = "none";
-                }
+                    actionModal.close();
             }
 
             if (window.jQuery && actionModal) {
                 var $ = window.jQuery;
-                $(actionModal).off("hidden.bs.modal.aistActionRestore").on("hidden.bs.modal.aistActionRestore", function () {
+                actionModal.addEventListener("close", function () {
                     if (!actionParentModal) return;
                     document.body.classList.add("modal-open");
                     if (!$(".modal-backdrop").length) {
                         $("<div class='modal-backdrop fade show'></div>").appendTo(document.body);
                     }
                     try {
-                        $(actionParentModal).modal("handleUpdate");
                     } catch (e) {
                     }
                     restoreActionParentScroll();
@@ -849,26 +834,26 @@
 
             var bsModal = {
                 show: function () {
-                    if (window.jQuery && modalEl) window.jQuery(modalEl).modal("show");
+                    if (modalEl) modalEl.showModal();
                 },
                 hide: function () {
-                    if (window.jQuery && modalEl) window.jQuery(modalEl).modal("hide");
+                    if (modalEl) modalEl.close();
                 }
             };
 
             function isParentModalOpen() {
                 if (!window.jQuery || !parentModal) return false;
                 var $pm = window.jQuery(parentModal);
-                return $pm.hasClass("show") || $pm.hasClass("in");
+                return parentModal.open;
             }
             // --- Return parent modal + restore scroll after Create Version modal closes ---
             if (window.jQuery && modalEl && parentModal) {
                 var $ = window.jQuery;
 
                 // Важно: обработчик должен быть один (off/on)
-                $(modalEl).off("hidden.bs.modal.aistReturnParent").on("hidden.bs.modal.aistReturnParent", function () {
+                modalEl.addEventListener("close", function () {
                     // Показываем родителя обратно
-                    $(parentModal).one("shown.bs.modal.aistReturnParentShown", function () {
+                    (function (onShown) { parentModal.showModal(); onShown(); })(function () {
                         // Bootstrap иногда теряет modal-open при nested сценариях
                         document.body.classList.add("modal-open");
 
@@ -879,7 +864,6 @@
 
                         // пересчитать геометрию модалки (помогает вернуть скролл)
                         try {
-                            $(parentModal).modal("handleUpdate");
                         } catch (e) {
                         }
 
@@ -887,7 +871,7 @@
                         restoreParentScroll();
                     });
 
-                    $(parentModal).modal("show");
+                    parentModal.showModal();
                 });
             }
 
@@ -1007,7 +991,7 @@
                     return;
                 }
                 var url = createUrlTpl.replace("/0/", "/" + pid + "/");
-                createBody.innerHTML = '<div class="text-center text-muted py-3"><div class="spinner-border"></div> Loading…</div>';
+                createBody.innerHTML = '<div class="text-center text-muted py-3"><div class="fa-solid fa-spinner fa-spin"></div> Loading…</div>';
                 fetch(url, {credentials: "same-origin"})
                     .then(r => r.text())
                     .then(html => {
@@ -1065,7 +1049,7 @@
                     if (!btnSubmitCreate) return;
                     btnSubmitCreate.disabled = !!busy;
                     btnSubmitCreate.innerHTML = busy
-                        ? '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Saving...'
+                        ? '<span class="fa-solid fa-spinner fa-spin text-sm" role="status" aria-hidden="true"></span> Saving...'
                         : 'Create';
                 }
 
@@ -1188,10 +1172,10 @@
                     // If we're inside a parent modal (projects.html preset modal), do NOT stack modals in BS4.
                     if (window.jQuery && parentModal && isParentModalOpen()) {
                         // hide parent first
-                        window.jQuery(parentModal).one("hidden.bs.modal.aistSwitch", function () {
+                        parentModal.addEventListener("close", function () {
                             bsModal.show();
                         });
-                        window.jQuery(parentModal).modal("hide");
+                        parentModal.close();
                     } else {
                         // start.html / non-modal context
                         bsModal.show();

@@ -39,7 +39,7 @@
             <div class="col-md-2 mb-3 form-group">
               <label for="aist-filter-limit">Desired count</label>
               <input type="number" min="1" step="1" class="form-control" id="aist-filter-limit" value="10">
-              <small class="form-text text-muted">CRITICAL are preferred first, then HIGH, etc.</small>
+              <small class="text-sm text-gray-500 text-muted">CRITICAL are preferred first, then HIGH, etc.</small>
             </div>
 
             <!-- Analyzers multiselect -->
@@ -47,7 +47,7 @@
                   <label for="aist-filter-analyzers">Analyzers</label>
                   <div id="aist-filter-analyzers-boxes" class="border rounded p-2"
                        style="max-height: 240px; overflow:auto;">
-                      <!-- JS will inject: <div class="form-check"><input type="checkbox" ...><label>...</label></div> -->
+                      <!-- JS will inject: <div class="flex items-center gap-2"><input type="checkbox" ...><label>...</label></div> -->
                   </div>
 
                   <!-- быстрые действия -->
@@ -55,7 +55,7 @@
                       <button type="button" class="btn btn-link p-0 mr-2" id="aist-analyzers-select-all">Select all</button>
                       <button type="button" class="btn btn-link p-0" id="aist-analyzers-clear">Clear</button>
                   </div>
-                  <small class="form-text text-muted">Pick analyzers that produced findings for this Product.</small>
+                  <small class="text-sm text-gray-500 text-muted">Pick analyzers that produced findings for this Product.</small>
               </div>
 
             <!-- CWE filter -->
@@ -73,7 +73,7 @@
 
           <div class="d-flex align-items-center mt-1">
             <button id="aist-btn-preview" type="button" class="btn btn-primary mr-2">Refresh preview</button>
-            <div id="aist-preview-spinner" class="spinner-border spinner-border-sm text-secondary" role="status" style="display:none;">
+            <div id="aist-preview-spinner" class="fa-solid fa-spinner fa-spin text-sm text-secondary" role="status" style="display:none;">
               <span class="sr-only">Loading...</span>
             </div>
             <div id="aist-preview-status" class="ml-2 small text-muted"></div>
@@ -82,7 +82,7 @@
 
         <!-- Preview table -->
         <div class="table-responsive">
-          <table class="table table-sm table-striped table-hover" id="aist-preview-table">
+          <table class="table text-sm table-striped table-hover" id="aist-preview-table">
             <thead class="thead-light">
               <tr>
                 <th style="width:28px;">

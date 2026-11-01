@@ -211,9 +211,9 @@ def import_report(
     sha256: str,
     binding_id: int | None = None,
     log_level: str = "INFO",
-    async_user=None,
+    async_user_id=None,
 ) -> None:
-    del async_user  # unused; accepted only for the DojoAsyncTask contract
+    del async_user_id  # unused; accepted only for the DojoAsyncTask contract
     logger = install_pipeline_logging(pipeline_id, log_level)
     cleanup_upload = True
 

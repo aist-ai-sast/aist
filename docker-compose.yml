@@ -83,6 +83,14 @@ services:
       DD_SECRET_KEY: "${DD_SECRET_KEY:-hhZCp@D28z!n@NED*yB!ROMt+WzsY*iq}"
       DD_CREDENTIAL_AES_256_KEY: "${DD_CREDENTIAL_AES_256_KEY:-&91a*agLqesc*0DJ+2*bAbsUZfR*4nLw}"
       DD_DATABASE_READINESS_TIMEOUT: "${DD_DATABASE_READINESS_TIMEOUT:-30}"
+      # Off: imports populate Finding.endpoints, which AIST's DAST deduplication reads.
+      DD_V3_FEATURE_LOCATIONS: "${DD_V3_FEATURE_LOCATIONS:-False}"
+      # Superusers administer org integrations here; the vendor default turned it off in 3.x.
+      DD_DJANGO_ADMIN_ENABLED: "${DD_DJANGO_ADMIN_ENABLED:-True}"
+      # The platform asks established users to star it on GitHub; not our UI to spend.
+      DD_GITHUB_STAR_PROMPT_ENABLED: "${DD_GITHUB_STAR_PROMPT_ENABLED:-False}"
+      # Off: the platform otherwise fetches a promo banner from its own bucket on render.
+      DD_OS_MESSAGE_ENABLED: "${DD_OS_MESSAGE_ENABLED:-False}"
       CLAUDE_DIFF_MAX_FILES: "${CLAUDE_DIFF_MAX_FILES:-1500}"
       CLAUDE_DIFF_MAX_BYTES: "${CLAUDE_DIFF_MAX_BYTES:-6000000}"
       AGENT_FULL_MAX_FILES: "${AGENT_FULL_MAX_FILES:-16000}"
@@ -113,6 +121,14 @@ services:
       DD_CSRF_TRUSTED_ORIGINS: "${DD_CSRF_TRUSTED_ORIGINS:-[]}"
       DD_CREDENTIAL_AES_256_KEY: "${DD_CREDENTIAL_AES_256_KEY:-&91a*agLqesc*0DJ+2*bAbsUZfR*4nLw}"
       DD_DATABASE_READINESS_TIMEOUT: "${DD_DATABASE_READINESS_TIMEOUT:-30}"
+      # Off: imports populate Finding.endpoints, which AIST's DAST deduplication reads.
+      DD_V3_FEATURE_LOCATIONS: "${DD_V3_FEATURE_LOCATIONS:-False}"
+      # Superusers administer org integrations here; the vendor default turned it off in 3.x.
+      DD_DJANGO_ADMIN_ENABLED: "${DD_DJANGO_ADMIN_ENABLED:-True}"
+      # The platform asks established users to star it on GitHub; not our UI to spend.
+      DD_GITHUB_STAR_PROMPT_ENABLED: "${DD_GITHUB_STAR_PROMPT_ENABLED:-False}"
+      # Off: the platform otherwise fetches a promo banner from its own bucket on render.
+      DD_OS_MESSAGE_ENABLED: "${DD_OS_MESSAGE_ENABLED:-False}"
     volumes:
         - type: bind
           source: ./docker/extra_settings
@@ -157,6 +173,14 @@ services:
       DD_CSRF_TRUSTED_ORIGINS: "${DD_CSRF_TRUSTED_ORIGINS:-[]}"
       DD_CREDENTIAL_AES_256_KEY: "${DD_CREDENTIAL_AES_256_KEY:-&91a*agLqesc*0DJ+2*bAbsUZfR*4nLw}"
       DD_DATABASE_READINESS_TIMEOUT: "${DD_DATABASE_READINESS_TIMEOUT:-30}"
+      # Off: imports populate Finding.endpoints, which AIST's DAST deduplication reads.
+      DD_V3_FEATURE_LOCATIONS: "${DD_V3_FEATURE_LOCATIONS:-False}"
+      # Superusers administer org integrations here; the vendor default turned it off in 3.x.
+      DD_DJANGO_ADMIN_ENABLED: "${DD_DJANGO_ADMIN_ENABLED:-True}"
+      # The platform asks established users to star it on GitHub; not our UI to spend.
+      DD_GITHUB_STAR_PROMPT_ENABLED: "${DD_GITHUB_STAR_PROMPT_ENABLED:-False}"
+      # Off: the platform otherwise fetches a promo banner from its own bucket on render.
+      DD_OS_MESSAGE_ENABLED: "${DD_OS_MESSAGE_ENABLED:-False}"
       AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-10800}"
       AIST_LOCAL_TRIAGE_BRIDGE_SOCKET: /run/claude-bridge/bridge.sock
       CLAUDE_DIFF_MAX_FILES: "${CLAUDE_DIFF_MAX_FILES:-1500}"
@@ -206,6 +230,14 @@ services:
       DD_CSRF_TRUSTED_ORIGINS: "${DD_CSRF_TRUSTED_ORIGINS:-[]}"
       DD_CREDENTIAL_AES_256_KEY: "${DD_CREDENTIAL_AES_256_KEY:-&91a*agLqesc*0DJ+2*bAbsUZfR*4nLw}"
       DD_DATABASE_READINESS_TIMEOUT: "${DD_DATABASE_READINESS_TIMEOUT:-30}"
+      # Off: imports populate Finding.endpoints, which AIST's DAST deduplication reads.
+      DD_V3_FEATURE_LOCATIONS: "${DD_V3_FEATURE_LOCATIONS:-False}"
+      # Superusers administer org integrations here; the vendor default turned it off in 3.x.
+      DD_DJANGO_ADMIN_ENABLED: "${DD_DJANGO_ADMIN_ENABLED:-True}"
+      # The platform asks established users to star it on GitHub; not our UI to spend.
+      DD_GITHUB_STAR_PROMPT_ENABLED: "${DD_GITHUB_STAR_PROMPT_ENABLED:-False}"
+      # Off: the platform otherwise fetches a promo banner from its own bucket on render.
+      DD_OS_MESSAGE_ENABLED: "${DD_OS_MESSAGE_ENABLED:-False}"
     volumes:
         - type: bind
           source: ./docker/extra_settings

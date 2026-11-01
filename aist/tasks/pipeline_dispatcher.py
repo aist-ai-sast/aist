@@ -62,9 +62,9 @@ def _republish_outbox(*, batch_size: int) -> None:
 
 
 @shared_task(name="aist.tasks.pipeline_dispatcher.dispatch_queued_pipelines")
-def dispatch_queued_pipelines(async_user=None, batch_size=None):
+def dispatch_queued_pipelines(async_user_id=None, batch_size=None):
     """Publish durable generic launch requests without holding DB locks across broker I/O."""
-    del async_user
+    del async_user_id
     resolved_batch_size = _validated_batch_size(batch_size)
     _republish_outbox(batch_size=resolved_batch_size)
     claim_owner = f"pipeline-dispatcher:{uuid.uuid4()}"

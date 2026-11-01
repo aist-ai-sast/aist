@@ -61,7 +61,7 @@ def _gather_ai_push_payload(pipeline_id: str, log) -> tuple[bool, Any, str, str,
 
 
 @shared_task(bind=True)
-def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="INFO", async_user=None) -> None:
+def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="INFO", async_user_id=None) -> None:
     log = install_pipeline_logging(pipeline_id, log_level)
     webhook_url = getattr(
         settings,
@@ -188,7 +188,7 @@ def push_request_to_local_triage(
     pipeline_id: str,
     finding_ids: list[int],
     log_level: str = "INFO",
-    async_user=None,
+    async_user_id=None,
 ) -> None:
     """Send a triage request to the local Claude bridge via Unix domain socket."""
     log = install_pipeline_logging(pipeline_id, log_level)
@@ -365,7 +365,7 @@ def _prepare_auto_push(pipeline_id: str, logger) -> bool | None:
 
 
 @shared_task(name="aist.auto_push_to_ai_if_configured")
-def auto_push_to_ai_if_configured(pipeline_id: str, async_user=None):
+def auto_push_to_ai_if_configured(pipeline_id: str, async_user_id=None):
     logger = install_pipeline_logging(pipeline_id)
     degraded = _prepare_auto_push(pipeline_id, logger)
     if degraded is not None:

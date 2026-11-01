@@ -33,13 +33,7 @@ from aist.roles import role_rank, roles_for_permission
 
 
 def _resolve_user(user):
-    """
-    Resolve the acting user, or None when there is nobody to authorize.
-
-    An unauthenticated caller has to resolve to None rather than be handed to a query:
-    every getter reads None as "sees nothing", while an ``AnonymousUser`` is truthy,
-    reaches the ORM and raises — turning a denial into a 500.
-    """
+    """Resolve the acting user, or None when there is nobody to authorize."""
     resolved = user or get_current_user()
     if resolved is None or not getattr(resolved, "is_authenticated", False):
         return None
@@ -216,14 +210,7 @@ def user_has_write_capability(user=None, *, organization: Organization | None = 
 
 
 def require_product_permission(product, permission, user=None) -> None:
-    """
-    Raise ``PermissionDenied`` unless the user may act on ``product``.
-
-    DefectDojo's own object-level check answers a weaker question than this platform
-    asks: it knows nothing about restricted organization scope, per-project denials,
-    the override cap, or a token's organization binding. Asking the scoped queryset
-    keeps one definition of access for both resolution and mutation.
-    """
+    """Raise ``PermissionDenied`` unless the scoped queryset grants the user this product."""
     if not get_authorized_aist_products(permission, user=user).filter(pk=product.pk).exists():
         raise PermissionDenied
 

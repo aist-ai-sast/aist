@@ -137,7 +137,18 @@ AGENT_FULL_MAX_BYTES = int(env("AGENT_FULL_MAX_BYTES", default="8000000"))  # no
 AGENT_FULL_MAX_FILE_BYTES = int(env("AGENT_FULL_MAX_FILE_BYTES", default="200000"))  # noqa: F405
 AGENT_FULL_MAX_FINDINGS = int(env("AGENT_FULL_MAX_FINDINGS", default="50"))  # noqa: F405
 
+# AIST's templates win over the vendor's own, whichever directories it lists.
+_AIST_TEMPLATE_DIR = str(Path(__file__).resolve().parent.parent / "aist" / "templates")
+# Mutated in place: the vendor shares this list object with its filesystem loader.
+if _AIST_TEMPLATE_DIR not in TEMPLATES[0]["DIRS"]:  # noqa: F405
+    TEMPLATES[0]["DIRS"].insert(0, _AIST_TEMPLATE_DIR)  # noqa: F405
+
+# DefectDojo's membership tables are managed=False, so a plain flush leaves them behind.
+TEST_RUNNER = "aist.test_runner.AistDiscoverRunner"
+
 REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] += ("rest_framework.permissions.IsAuthenticated",)  # noqa: F405
+# Wraps the vendor handler to keep its status-code mapping and drop its `pro` upsell.
+REST_FRAMEWORK["EXCEPTION_HANDLER"] = "aist.api.exception_handler.aist_exception_handler"  # noqa: F405
 # AIST scoped personal access tokens. Added LAST so it only runs after the stock
 # Session/Basic/Token authenticators decline — the internal superuser service
 # token (stock DRF Token) is never shadowed. Read/write scope is enforced by

@@ -21,9 +21,9 @@ if [ "${#FILES[@]}" -gt 0 ]; then
     cp "${FILES[@]}" /app/vendor/defectdojo/dojo/settings/
 fi
 
-# Unset URLs so discrete DD_* settings are honored.
+# Unset the database URL so the discrete DD_DATABASE_* settings are honored.
+# DD_CELERY_BROKER_URL must stay set; the discrete DD_CELERY_BROKER_* fallback is unusable.
 unset DD_DATABASE_URL
-unset DD_CELERY_BROKER_URL
 
 wait_for_database_to_be_reachable
 
