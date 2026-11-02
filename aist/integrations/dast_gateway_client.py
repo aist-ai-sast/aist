@@ -31,7 +31,7 @@ from aist.integrations.dast_endpoint_policy import (
 from aist.integrations.dast_queue_contract import GATEWAY_API_PREFIX
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Generator, Mapping
 
     from aist.models import OrgIntegration
 
@@ -488,7 +488,7 @@ def scoped_dast_gateway_client(
     *,
     execution_id: str,
     resolver: AddressResolver | None = None,
-) -> Iterator[DastGatewayClient]:
+) -> Generator[DastGatewayClient]:
     """Own one integration-scoped VPN/session/CA lifetime for ping and catalog calls."""
     try:
         config = integration.get_dast_config()

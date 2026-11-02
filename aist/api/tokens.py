@@ -38,7 +38,6 @@ def _tokens_for_request(request):
     return queryset
 
 
-
 class AISTApiTokenSerializer(serializers.Serializer):
 
     """Read serializer — deliberately has NO field for the secret or public_id."""

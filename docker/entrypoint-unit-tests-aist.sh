@@ -22,7 +22,10 @@ if [ "${#FILES[@]}" -gt 0 ]; then
 fi
 
 # Unset the database URL so the discrete DD_DATABASE_* settings are honored.
-# DD_CELERY_BROKER_URL must stay set; the discrete DD_CELERY_BROKER_* fallback is unusable.
+# The broker needs no such care: the discrete DD_CELERY_BROKER_* parts assemble "memory://",
+# which is what the suite wants. They used to name a sqlite file, and assembling that one
+# lost a slash and so named it relative to the current directory -- hence the URL that was
+# forced here instead.
 unset DD_DATABASE_URL
 
 wait_for_database_to_be_reachable

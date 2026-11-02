@@ -14,7 +14,11 @@ on:
 jobs:
   playwright-e2e:
     name: Playwright e2e
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the hosted image moved to 26.04, which the pinned Playwright
+    # has no chromium build for ("Playwright does not support chromium on ubuntu26.04-x64").
+    # The browser is the one thing here that is tied to the host OS, so the host is pinned
+    # alongside the version in package.json and moves when that does.
+    runs-on: ubuntu-24.04
     env:
       COMPOSE_FILES: -f docker-compose.yml -f docker-compose.integration.yml
       DJANGO_VERSION: debian
@@ -70,7 +74,7 @@ jobs:
         working-directory: .
 
       - name: Seed demo business data
-        run: docker compose $COMPOSE_FILES run --rm --no-deps --entrypoint /bin/bash uwsgi -lc "cd /app && python3 manage.py bootstrap_demo_access --password '${DD_ADMIN_PASSWORD}'"
+        run: docker compose $COMPOSE_FILES run --rm --no-deps --entrypoint /bin/bash uwsgi -lc "cd /app && python3 manage.py bootstrap_demo_access --demo --password '${DD_ADMIN_PASSWORD}'"
         working-directory: .
 
       - name: Start app

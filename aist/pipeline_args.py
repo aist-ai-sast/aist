@@ -14,7 +14,7 @@ from django.db import transaction
 from django.utils import timezone
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
 from aist.ai_filter import validate_and_normalize_filter
 from aist.integrations.dast_config import DastBindingParameters
@@ -368,7 +368,7 @@ class SastPipelineArguments:
         return self.project_version.get("version", "default")
 
     @contextmanager
-    def script_path_context(self) -> Iterator[str]:
+    def script_path_context(self) -> Generator[str]:
         """
         Write the version's script to a temp file and yield its path.
         The temp file is removed when the context exits.

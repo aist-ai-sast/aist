@@ -35,6 +35,26 @@ jobs:
     with:
       platform: ${{ matrix.platform}}
 
+  test-triage-bridge:
+    name: Triage bridge
+    runs-on: ubuntu-latest
+    # The bridge ships in its own container and is not picked up by any other job here, which
+    # is how its suite drifted six failures behind the module it tests without anything
+    # saying so. One architecture is enough: these are pure-python tests over a FastAPI app.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run bridge unit tests
+        working-directory: tools/aist-triage-bridge
+        run: >-
+          docker run --rm
+          -v "$PWD:/bridge:ro" -w /bridge
+          python:3.12-slim
+          sh -c "pip install --no-cache-dir -q -r requirements.txt && python -m unittest test_main -v"
+
   test-dast-connector:
     name: DAST connector (${{ matrix.platform }})
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
@@ -66,9 +86,17 @@ jobs:
       # test_project_builder.py (4) and test_dockerfile_versions.py (1). Repairing them is
       # tracked in docs/plans/2026-08-13-dast-runtime-launch-chain.md; until then they are named
       # here rather than silently absent from the image, so the debt stays visible.
+      # Several tests assert over the Dockerfiles tree -- version pins, codeql's shared CLI
+      # version, the go analyzer against the builder's entrypoint -- and some read it while
+      # pytest is still collecting, where a missing directory ends the whole run rather than
+      # failing one test. The tree is mounted from the checkout instead of baked into the
+      # image: these assert about what is in the repository, so reading the repository is
+      # what they should do, and no image changes to let them.
       - name: Run pipeline unit tests
+        working-directory: sast-combinator/sast-pipeline
         run: >-
           docker run --rm
+          -v "$PWD/Dockerfiles:/app/Dockerfiles:ro"
           aist-dast-connector-tests:${{ github.sha }}
           tests/pipeline_tests/
           --ignore=tests/pipeline_tests/test_default_imported_project_no_built_script.py

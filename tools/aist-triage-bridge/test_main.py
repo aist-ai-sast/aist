@@ -15,6 +15,7 @@ import signal
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -25,6 +26,17 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import main
 from main import AnalyzeRequest
+
+# The bridge gives each run its own CLAUDE_CONFIG_DIR, named "<project_id>-<run suffix>", so
+# that two invocations for one project cannot share session jsonl files or stomp each other's
+# cleanup. A test that has to lay a session jsonl down where the bridge will look for it has
+# to know that name, so the suffix is pinned here. uuid4 is used nowhere else in the module.
+RUN_ID = "0123abcd"
+PINNED_RUN_UUID = uuid.UUID(RUN_ID + "0" * 24)
+
+
+def pinned_run_id():
+    return patch("main.uuid.uuid4", return_value=PINNED_RUN_UUID)
 
 
 class ProcessJsonlChunkTests(unittest.TestCase):
@@ -242,6 +254,51 @@ class FormatToolUseDetailTests(unittest.TestCase):
         result = main._format_tool_use_detail("FuturisticNewTool", {"foo": "x" * 5000})
         self.assertLessEqual(len(result), main._LOG_TRUNC_SHORT)
         self.assertIn("foo", result)
+
+
+class LifespanShutdownTests(unittest.IsolatedAsyncioTestCase):
+
+    """
+    What happens to analyses still running when the application goes down.
+
+    The bridge keeps a strong reference to every scheduled triage so the loop cannot
+    collect it mid-flight, which also means nothing cancels them on the way out except
+    the lifespan. If the application exits through an error -- a failing start-up in a
+    later lifespan, a crash in the server itself -- those tasks are left running against
+    an event loop that is about to close.
+    """
+
+    async def asyncSetUp(self):
+        self._saved = set(main._running_tasks)
+        main._running_tasks.clear()
+
+    async def asyncTearDown(self):
+        main._running_tasks.clear()
+        main._running_tasks.update(self._saved)
+
+    async def _never_finishes(self):
+        await asyncio.Future()
+
+    async def test_a_clean_shutdown_cancels_what_is_still_running(self):
+        task = asyncio.ensure_future(self._never_finishes())
+        main._running_tasks.add(task)
+
+        async with main.lifespan(None):
+            self.assertFalse(task.done())
+
+        self.assertTrue(task.cancelled())
+
+    async def test_an_error_on_the_way_out_still_cancels_what_is_running(self):
+        """Without the finally, the task outlives the loop it was scheduled on."""
+        task = asyncio.ensure_future(self._never_finishes())
+        main._running_tasks.add(task)
+
+        with self.assertRaises(RuntimeError):
+            async with main.lifespan(None):
+                msg = "the application failed while running"
+                raise RuntimeError(msg)
+
+        self.assertTrue(task.cancelled())
 
 
 class FinallyCleanupTests(unittest.IsolatedAsyncioTestCase):
@@ -748,11 +805,17 @@ class AnalyzeSyncEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["detail"], "claude crashed")
 
     async def test_400_when_required_args_missing(self):
+        """``source_path`` carries no pattern, so the endpoint is where an empty one stops."""
         with self.assertRaises(HTTPException) as ctx:
             await main.analyze_sync(
-                AnalyzeRequest(skill_name="", project_id="p", source_path=""),
+                AnalyzeRequest(skill_name="aist-finding-triage", project_id="p", source_path=""),
             )
         self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_an_empty_skill_name_never_reaches_the_endpoint(self):
+        """Its pattern makes that a 422 at the model boundary rather than the view's 400."""
+        with self.assertRaises(ValidationError):
+            AnalyzeRequest(skill_name="", project_id="p", source_path="/tmp/proj")  # noqa: S108
 
 
 class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
@@ -809,7 +872,7 @@ class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
         # stdout stayed buffered. _tail_jsonl reads from offset 0 on first
         # discovery, so this whole content gets picked up immediately.
         jsonl_path = (
-            runs_dir / project_id / "projects" / "any" / f"{session_id}.jsonl"
+            runs_dir / f"{project_id}-{RUN_ID}" / "projects" / "any" / f"{session_id}.jsonl"
         )
         jsonl_path.parent.mkdir(parents=True)
         jsonl_path.write_text(
@@ -841,7 +904,8 @@ class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
             source_path="/tmp/proj",  # noqa: S108 — test-only path
         )
 
-        with patch.object(main, "_CLAUDE_RUNS_DIR", runs_dir), \
+        with pinned_run_id(), \
+             patch.object(main, "_CLAUDE_RUNS_DIR", runs_dir), \
              patch.object(main, "AIST_LOG_DIR", str(log_dir)), \
              patch.object(main, "_JSONL_POLL_INTERVAL", 0.1), \
              patch.object(main, "_JSONL_FIND_MAX_WAIT", 1), \
@@ -889,7 +953,7 @@ class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
         # Real claude layout:
         #   <runs>/<pid>/projects/<derived>/<sid>.jsonl                parent
         #   <runs>/<pid>/projects/<derived>/<sid>/subagents/agent-*.jsonl
-        project_dir = runs_dir / project_id / "projects" / "any"
+        project_dir = runs_dir / f"{project_id}-{RUN_ID}" / "projects" / "any"
         project_dir.mkdir(parents=True)
         parent_jsonl = project_dir / f"{session_id}.jsonl"
         parent_jsonl.write_text(
@@ -931,7 +995,8 @@ class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
             source_path="/tmp/proj",  # noqa: S108 — test-only path
         )
 
-        with patch.object(main, "_CLAUDE_RUNS_DIR", runs_dir), \
+        with pinned_run_id(), \
+             patch.object(main, "_CLAUDE_RUNS_DIR", runs_dir), \
              patch.object(main, "AIST_LOG_DIR", str(log_dir)), \
              patch.object(main, "_JSONL_POLL_INTERVAL", 0.1), \
              patch.object(main, "_JSONL_FIND_MAX_WAIT", 1), \
@@ -975,7 +1040,7 @@ class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
         project_id = "pipe-partial"
         session_id = "sess-partial"
 
-        project_dir = runs_dir / project_id / "projects" / "any"
+        project_dir = runs_dir / f"{project_id}-{RUN_ID}" / "projects" / "any"
         project_dir.mkdir(parents=True)
         parent_jsonl = project_dir / f"{session_id}.jsonl"
 
@@ -1018,7 +1083,8 @@ class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
         prev_timeout = main.TRIAGE_TIMEOUT
         main.TRIAGE_TIMEOUT = 3
         try:
-            with patch.object(main, "_CLAUDE_RUNS_DIR", runs_dir), \
+            with pinned_run_id(), \
+                 patch.object(main, "_CLAUDE_RUNS_DIR", runs_dir), \
                  patch.object(main, "AIST_LOG_DIR", str(log_dir)), \
                  patch.object(main, "_JSONL_POLL_INTERVAL", 0.1), \
                  patch.object(main, "_JSONL_FIND_MAX_WAIT", 1), \
@@ -1059,7 +1125,7 @@ class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
         project_id = "pipe-late-agent"
         session_id = "sess-late"
 
-        project_dir = runs_dir / project_id / "projects" / "any"
+        project_dir = runs_dir / f"{project_id}-{RUN_ID}" / "projects" / "any"
         project_dir.mkdir(parents=True)
         parent_jsonl = project_dir / f"{session_id}.jsonl"
         parent_jsonl.write_text("", encoding="utf-8")  # empty parent
@@ -1100,7 +1166,8 @@ class ExecuteClaudeSkillReturnTests(unittest.IsolatedAsyncioTestCase):
         prev_timeout = main.TRIAGE_TIMEOUT
         main.TRIAGE_TIMEOUT = 3
         try:
-            with patch.object(main, "_CLAUDE_RUNS_DIR", runs_dir), \
+            with pinned_run_id(), \
+                 patch.object(main, "_CLAUDE_RUNS_DIR", runs_dir), \
                  patch.object(main, "AIST_LOG_DIR", str(log_dir)), \
                  patch.object(main, "_JSONL_POLL_INTERVAL", 0.1), \
                  patch.object(main, "_JSONL_FIND_MAX_WAIT", 1), \
@@ -1331,7 +1398,7 @@ class RedactingFilterTests(unittest.TestCase):
 
     def test_filter_redacts_known_secret(self):
         f = main._RedactingFilter(["sk-ant-oat01-super-secret"])
-        rec = self._make_record("auth fail: oat_super_secret invalid")
+        rec = self._make_record("auth fail: sk-ant-oat01-super-secret invalid")
         self.assertTrue(f.filter(rec))
         rendered = rec.getMessage()
         self.assertNotIn("sk-ant-oat01-super-secret", rendered)

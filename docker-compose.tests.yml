@@ -19,15 +19,31 @@ services:
       DD_DATABASE_ENGINE: ${DD_DATABASE_ENGINE:-django.db.backends.postgresql}
       DD_DATABASE_HOST: ${DD_DATABASE_HOST:-postgres}
       DD_DATABASE_PORT: ${DD_DATABASE_PORT:-5432}
-      # The suite needs no broker. This wins over the DD_CELERY_BROKER_* parts below.
-      DD_CELERY_BROKER_URL: 'memory://'
-      DD_CELERY_BROKER_SCHEME: 'sqla+sqlite'
+      # In-memory broker, as the vendor's own unit-test override does. The sqla+sqlite
+      # transport goes through kombu's SQLAlchemy models, and under PYTHONWARNINGS=error
+      # SQLAlchemy 2.1's deprecation of the `noload` loader they use fails the first task
+      # dispatch in any test. The entrypoint unsets DD_CELERY_BROKER_URL, and
+      # settings.dist.py then assembles the URL from the parts below -- double_slashes
+      # turns these into exactly "memory://".
+      DD_CELERY_BROKER_URL: ''
+      DD_CELERY_BROKER_SCHEME: 'memory'
       DD_CELERY_BROKER_USER: ''
       DD_CELERY_BROKER_PASSWORD: ''
       DD_CELERY_BROKER_HOST: ''
       DD_CELERY_BROKER_PORT: "-1"
-      DD_CELERY_BROKER_PATH: '/tmp/dojo.celerydb.sqlite'
+      DD_CELERY_BROKER_PATH: ''
       DD_CELERY_BROKER_PARAMS: ''
+      # No valkey in unit tests -> the default django cache is LocMemCache.
+      DD_CACHE_URL: ''
+      # Product grading is debounced through a cache marker with a wall-clock window. Under
+      # the test runner the dispatched grade task may never run, so the marker outlives its
+      # test and silently skips grading for the next one -- which is what the vendor's
+      # assertNumQueries baselines count. 0 queues a task per change; the debounce's own
+      # tests turn the window on explicitly.
+      DD_PRODUCT_GRADE_DEBOUNCE_SECONDS: '0'
+      # The in-process settings cache stays on, and pinned, so those same counts do not move
+      # when the default does.
+      DD_SETTINGS_CACHE_L1_TTL: '30'
       DD_JIRA_EXTRA_ISSUE_TYPES: 'Vulnerability' # Shouldn't trigger a migration error
   celerybeat: !reset
   celeryworker: !reset

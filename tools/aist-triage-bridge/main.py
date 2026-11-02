@@ -1490,11 +1490,16 @@ async def lifespan(_app: FastAPI):
             "callback_url will be rejected with HTTP 503 until the env is "
             "configured. /analyze-sync is unaffected.",
         )
-    yield
-    for task in list(_running_tasks):
-        task.cancel()
-    if _running_tasks:
-        await asyncio.gather(*_running_tasks, return_exceptions=True)
+    # In-flight analyses are cancelled however the application exits, including through
+    # an error raised inside the lifespan: without that, a failing start-up leaves the
+    # tasks running against an event loop that is about to close.
+    try:
+        yield
+    finally:
+        for task in list(_running_tasks):
+            task.cancel()
+        if _running_tasks:
+            await asyncio.gather(*_running_tasks, return_exceptions=True)
 
 
 app = FastAPI(title="aist-triage-bridge", lifespan=lifespan)

@@ -58,21 +58,29 @@ jobs:
         run: docker compose $COMPOSE_FILES up --no-deps -d postgres webhook.endpoint
 
       # no celery or initializer needed for unit tests
+      # The cap covers migrations and the run itself. The vendor upgrade took the suite from
+      # 3685 tests to 8473, which puts the run at ~17 minutes plus ~2 for migrations, and the
+      # runners vary by a third between the fastest and the slowest -- so 20 both passed and
+      # timed out on the same commit. 40 is twice the run on the slowest runner seen: a cap
+      # this far out still ends a hang, and nothing is gained by having it bite a slow day.
       - name: DD tests
         if: matrix.suite == 'dd'
-        timeout-minutes: 20
+        timeout-minutes: 40
         run: docker compose $COMPOSE_FILES up --no-deps --exit-code-from uwsgi uwsgi
         env:
           DJANGO_VERSION: ${{ matrix.os }}
 
+      # Same budget, same reason: this run finished ten seconds inside the old cap on the
+      # slowest runner of the same commit.
       - name: AIST tests
         if: matrix.suite == 'aist'
-        timeout-minutes: 20
+        timeout-minutes: 40
         run: docker compose $COMPOSE_FILES run --rm --no-deps --entrypoint /entrypoint-unit-tests-aist.sh uwsgi
         env:
           DJANGO_VERSION: ${{ matrix.os }}
 
-      # DD_CELERY_BROKER_URL must stay set; the discrete DD_CELERY_BROKER_* fallback is unusable.
+      # Only the database URL is unset here: the discrete DD_CELERY_BROKER_* parts assemble
+      # "memory://", which is the broker this suite wants.
       - name: DAST mock end-to-end acceptance
         if: matrix.suite == 'aist' && matrix.os == 'debian'
         timeout-minutes: 5
