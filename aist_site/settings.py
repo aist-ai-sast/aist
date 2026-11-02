@@ -194,6 +194,13 @@ AIST_PROJECT_TAGS_THROTTLE_RATE = env("DD_AIST_PROJECT_TAGS_THROTTLE_RATE", defa
 # A finding tag write is one row, but each one invalidates the tag vocabulary cached for every user.
 # Sized for triage: a tag every few seconds for an hour fits, a script does not.
 AIST_FINDING_TAGS_THROTTLE_RATE = env("DD_AIST_FINDING_TAGS_THROTTLE_RATE", default="600/hour")  # noqa: F405
+# Listing an organization's SCM projects holds a web worker on the Celery result for up to
+# 350 seconds and reaches that organization's own GitLab/Gerrit/Gitea host through the VPN
+# sidecar. The import modal lists as soon as an organization is chosen, so a held key or a
+# loop in a script turns that into sustained outbound traffic and occupied workers. Keyed by
+# organization, because that is what the cost falls on; sized for an operator working through
+# several organizations' repositories in one sitting.
+AIST_SCM_PROJECT_LISTING_THROTTLE_RATE = env("DD_AIST_SCM_PROJECT_LISTING_THROTTLE_RATE", default="60/hour")  # noqa: F405
 REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {}).update({  # noqa: F405
     "aist_dast_gateway_probe": AIST_DAST_GATEWAY_PROBE_THROTTLE_RATE,
     "aist_dast_queue": AIST_DAST_QUEUE_THROTTLE_RATE,
@@ -206,6 +213,7 @@ REST_FRAMEWORK.setdefault("DEFAULT_THROTTLE_RATES", {}).update({  # noqa: F405
     "aist_pipeline_import": AIST_PIPELINE_IMPORT_THROTTLE_RATE,
     "aist_project_tags": AIST_PROJECT_TAGS_THROTTLE_RATE,
     "aist_finding_tags": AIST_FINDING_TAGS_THROTTLE_RATE,
+    "aist_scm_project_listing": AIST_SCM_PROJECT_LISTING_THROTTLE_RATE,
 })
 
 # ------------------------------------------------------------------------------

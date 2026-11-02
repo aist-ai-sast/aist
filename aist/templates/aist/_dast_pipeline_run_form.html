@@ -47,9 +47,9 @@
             if (!selProject || !selBinding || !selVersion) return;
 
             // Capture the full server-rendered option list once; filtering rebuilds each
-            // select from this snapshot instead of hiding options in place, since
-            // bootstrap-select does not reliably reflect in-place option/attribute changes
-            // (see the same destroy-and-rebuild approach in _pipeline_run_js.html).
+            // select from this snapshot instead of hiding options in place, since the select
+            // widget does not reliably reflect in-place option/attribute changes
+            // (see the same rebuild approach in _pipeline_run_js.html).
             function snapshotOptions(select) {
                 return Array.prototype.map.call(select.querySelectorAll("option"), function (opt) {
                     return {
@@ -64,26 +64,10 @@
             var allBindingOptions = snapshotOptions(selBinding);
             var allVersionOptions = snapshotOptions(selVersion);
 
-            function hasSelectpicker() {
-                return !!(window.jQuery && window.jQuery.fn && window.jQuery.fn.selectpicker);
-            }
-
-            function isSelectpickerApplied(el) {
-                if (!hasSelectpicker()) return false;
-                var $ = window.jQuery;
-                return !!($(el).data("selectpicker")) || $(el).parent().hasClass("bootstrap-select");
-            }
-
             function rebuildSelect(select, options, projectId, selectedValue) {
-                var usingPlugin = isSelectpickerApplied(select);
-                var $ = window.jQuery;
                 var filtered = options.filter(function (opt) {
                     return !opt.value || !projectId || opt.projectId === String(projectId);
                 });
-
-                if (usingPlugin) {
-                    try { $(select).selectpicker("destroy"); } catch (e) { /* not yet initialized */ }
-                }
 
                 select.innerHTML = "";
                 filtered.forEach(function (opt) {
@@ -100,10 +84,7 @@
                     select.value = "";
                 }
 
-                if (usingPlugin) {
-                    $(select).selectpicker();
-                    $(select).selectpicker("render").selectpicker("refresh");
-                }
+                aistEnhanceSelect(select);
             }
 
             function selectedBindingMeta() {
@@ -124,9 +105,7 @@
                 } else {
                     selVersion.disabled = selVersion.options.length <= 1;
                 }
-                if (hasSelectpicker() && isSelectpickerApplied(selVersion)) {
-                    window.jQuery(selVersion).selectpicker("refresh");
-                }
+                aistEnhanceSelect(selVersion);
             }
 
             function onBindingChange() {
@@ -142,12 +121,8 @@
                 onBindingChange();
             }
 
-            selProject.addEventListener("change", onProjectChange);
-            selBinding.addEventListener("change", onBindingChange);
-            if (hasSelectpicker()) {
-                window.jQuery(selProject).on("changed.bs.select", onProjectChange);
-                window.jQuery(selBinding).on("changed.bs.select", onBindingChange);
-            }
+            aistOnSelectChange(selProject, onProjectChange);
+            aistOnSelectChange(selBinding, onBindingChange);
 
             onProjectChange();
         }

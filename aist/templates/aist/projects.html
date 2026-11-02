@@ -17,13 +17,25 @@
 
     <div class="panel panel-default">
         <div class="panel-heading">
-            <div class="row">
-                <div class="col-sm-6">
-                    <strong>Projects by organization</strong>
+            {% comment %}
+                Title and filter share the top line; the import buttons get a line of their
+                own, because five labelled buttons do not fit beside them and came out as a
+                ragged block of two, two and one.
+            {% endcomment %}
+            <div class="d-flex align-items-center justify-content-between gap-2">
+                <strong>Projects by organization</strong>
+                <div class="input-group" style="display: inline-flex; width: 320px;">
+                    <span class="input-group-addon">
+                        <i class="fa-solid fa-search" aria-hidden="true"></i>
+                    </span>
+                    <input id="aist-projects-filter"
+                           type="text"
+                           class="form-control"
+                           placeholder="Filter by product name or project id...">
                 </div>
-                <div class="col-sm-6">
-                    <div class="pull-right" style="max-width: 720px; width: 100%;">
-                        <div class="btn-group btn-group" role="group" style="margin-right: 8px;">
+            </div>
+            <div class="mt-2">
+                        <div class="btn-group" role="group">
                             <button type="button"
                                     class="btn btn-secondary"
                                     id="gitlab-import-open">
@@ -56,17 +68,6 @@
                                 Create empty project
                             </button>
                         </div>
-                        <div class="input-group" style="display: inline-flex; width: 320px; vertical-align: top;">
-                            <span class="input-group-addon">
-                                <i class="fa-solid fa-search" aria-hidden="true"></i>
-                            </span>
-                            <input id="aist-projects-filter"
-                                   type="text"
-                                   class="form-control"
-                                   placeholder="Filter by product name or project id...">
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
 
@@ -326,7 +327,7 @@
     </div>
 
     {# Modal for importing projects from GitLab #}
-    <dialog class="modal" id="gitlabImportModal" tabindex="-1"
+    <dialog class="modal modal-lg" id="gitlabImportModal" tabindex="-1"
          aria-labelledby="gitlabImportModalLabel">
                 <form id="gitlab-import-form">
                     {% csrf_token %}
@@ -393,6 +394,12 @@
                                 </table>
                             </div>
                         </div>
+                    <div class="flex items-center gap-2 mt-3">
+                        <input type="checkbox" id="gitlab-auto-analyze">
+                        <label class="text-sm" for="gitlab-auto-analyze">
+                            Auto-analyze project (generate init script &amp; exclusions via Claude)
+                        </label>
+                    </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button"
@@ -418,17 +425,11 @@
                             Import selected
                         </button>
                     </div>
-                    <div class="flex items-center gap-2 mt-3">
-                        <input type="checkbox" id="gitlab-auto-analyze">
-                        <label class="text-sm" for="gitlab-auto-analyze">
-                            Auto-analyze project (generate init script &amp; exclusions via Claude)
-                        </label>
-                    </div>
                 </form>
     </dialog>
 
     {# Modal for importing projects from Gerrit #}
-    <dialog class="modal" id="gerritImportModal" tabindex="-1"
+    <dialog class="modal modal-lg" id="gerritImportModal" tabindex="-1"
          aria-labelledby="gerritImportModalLabel">
                 <form id="gerrit-import-form">
                     {% csrf_token %}
@@ -493,6 +494,12 @@
                                 </table>
                             </div>
                         </div>
+                    <div class="flex items-center gap-2 mt-3">
+                        <input type="checkbox" id="gerrit-auto-analyze">
+                        <label class="text-sm" for="gerrit-auto-analyze">
+                            Auto-analyze project (generate init script &amp; exclusions via Claude)
+                        </label>
+                    </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button"
@@ -518,17 +525,11 @@
                             Import selected
                         </button>
                     </div>
-                    <div class="flex items-center gap-2 mt-3">
-                        <input type="checkbox" id="gerrit-auto-analyze">
-                        <label class="text-sm" for="gerrit-auto-analyze">
-                            Auto-analyze project (generate init script &amp; exclusions via Claude)
-                        </label>
-                    </div>
                 </form>
     </dialog>
 
     {# Modal for importing projects from Gitea #}
-    <dialog class="modal" id="giteaImportModal" tabindex="-1"
+    <dialog class="modal modal-lg" id="giteaImportModal" tabindex="-1"
          aria-labelledby="giteaImportModalLabel">
                 <form id="gitea-import-form">
                     {% csrf_token %}
@@ -593,6 +594,12 @@
                                 </table>
                             </div>
                         </div>
+                    <div class="flex items-center gap-2 mt-3">
+                        <input type="checkbox" id="gitea-auto-analyze">
+                        <label class="text-sm" for="gitea-auto-analyze">
+                            Auto-analyze project (generate init script &amp; exclusions via Claude)
+                        </label>
+                    </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button"
@@ -618,17 +625,11 @@
                             Import selected
                         </button>
                     </div>
-                    <div class="flex items-center gap-2 mt-3">
-                        <input type="checkbox" id="gitea-auto-analyze">
-                        <label class="text-sm" for="gitea-auto-analyze">
-                            Auto-analyze project (generate init script &amp; exclusions via Claude)
-                        </label>
-                    </div>
                 </form>
     </dialog>
 
     {# Modal for importing projects from GitHub #}
-    <dialog class="modal" id="githubImportModal" tabindex="-1"
+    <dialog class="modal modal-lg" id="githubImportModal" tabindex="-1"
          aria-labelledby="githubImportModalLabel">
                 <form id="github-import-form">
                     {% csrf_token %}
@@ -889,7 +890,7 @@
                 </form>
     </dialog>
 
-    <dialog class="modal" id="modalCreateLaunchPreset" tabindex="-1">
+    <dialog class="modal modal-lg" id="modalCreateLaunchPreset" tabindex="-1">
                 <div class="modal-header">
                     <h5 class="modal-title">Create launch preset</h5>
                     <button type="button" class="close" onclick="this.closest('dialog').close()" aria-label="Close">
@@ -1206,7 +1207,7 @@
             }
 
             if (fieldScriptVersion) {
-                fieldScriptVersion.addEventListener("change", function () {
+                aistOnSelectChange(fieldScriptVersion, function () {
                     var projectId = fieldId ? (fieldId.value || "") : "";
                     if (!projectId) return;
                     // Warn before overwriting unsaved edits.
@@ -1226,6 +1227,8 @@
             var gitlabForm = document.getElementById("gitlab-import-form");
             var gitlabErrorBox = document.getElementById("gitlab-import-error");
             var gitlabListBtn = document.getElementById("gitlab-list-btn");
+            //: Which organization the project list on screen was fetched for.
+            var gitlabListedOrg = "";
             var loadingIndicator = document.getElementById("gitlab-projects-loading");
             var gitlabImportBtn = document.getElementById("gitlab-import-btn");
             var gitlabProjectsContainer = document.getElementById("gitlab-projects-container");
@@ -1459,6 +1462,9 @@
             }
 
             function clearGitlabState() {
+                // Clearing the rows clears what they belonged to; nothing may be imported
+                // against an organization whose list is no longer on screen.
+                gitlabListedOrg = "";
                 if (gitlabErrorBox) {
                     gitlabErrorBox.style.display = "none";
                     gitlabErrorBox.textContent = "";
@@ -2046,12 +2052,18 @@
                 }
             }
             if (gitlabOrgSelect) {
-                gitlabOrgSelect.addEventListener("change", function () {
+                aistOnSelectChange(gitlabOrgSelect, function () {
                     updateGitlabListBtnState();
                     clearGitlabState();
                     if (gitlabIntegrationInfo) {
                         gitlabIntegrationInfo.style.display = "none";
                         gitlabIntegrationInfo.textContent = "";
+                    }
+                    // Picking the organization is the whole question this form asks; answering it
+                    // with an empty panel and a second button to press reads as a dead dialog.
+                    // The listing below says either what can be imported or why nothing can.
+                    if ((gitlabOrgSelect.value || "").trim() && gitlabListBtn && !gitlabListBtn.disabled) {
+                        gitlabListBtn.click();
                     }
                 });
             }
@@ -2060,6 +2072,13 @@
             // Load projects list from GitLab
             if (gitlabListBtn && gitlabForm && gitlabProjectsTbody) {
                 gitlabListBtn.addEventListener("click", function () {
+
+                    // The organization this listing is for. Selecting another one starts a new
+                    // listing without stopping this one, and the two answers can arrive out of
+                    // order: an answer for an organization that is no longer selected must not
+                    // be shown, and must never become the list that Import then sends.
+                    var requestedOrg = gitlabOrgSelect ? (gitlabOrgSelect.value || "") : "";
+                    gitlabListedOrg = "";
 
                     gitlabListBtn.disabled = true;
                     if (loadingIndicator) {
@@ -2087,6 +2106,9 @@
                             return {ok: resp.ok, data: data};
                         });
                     }).then(function (result) {
+                        if (gitlabOrgSelect && (gitlabOrgSelect.value || "") !== requestedOrg) {
+                            return;
+                        }
                         if (!result.ok || !result.data.ok) {
                             var msg = (result.data && result.data.error) ||
                                 "Failed to load projects from GitLab.";
@@ -2096,6 +2118,7 @@
                             }
                             return;
                         }
+                        gitlabListedOrg = requestedOrg;
 
                         var projects = result.data.projects || [];
                         if (!projects.length) {
@@ -2171,7 +2194,9 @@
                         return;
                     }
 
-                    var org = gitlabOrgSelect ? (gitlabOrgSelect.value || "") : "";
+                    // The list on screen belongs to the organization it was fetched for, which is
+                    // not necessarily the one selected now.
+                    var org = gitlabListedOrg || "";
 
                     if (!org) {
                         if (gitlabErrorBox) {
@@ -2258,6 +2283,8 @@
             var gerritForm = document.getElementById("gerrit-import-form");
             var gerritErrorBox = document.getElementById("gerrit-import-error");
             var gerritListBtn = document.getElementById("gerrit-list-btn");
+            //: Which organization the project list on screen was fetched for.
+            var gerritListedOrg = "";
             var gerritLoadingIndicator = document.getElementById("gerrit-projects-loading");
             var gerritImportBtn = document.getElementById("gerrit-import-btn");
             var gerritProjectsContainer = document.getElementById("gerrit-projects-container");
@@ -2270,6 +2297,9 @@
             var gerritImportUrl = "{% url 'aist_api:import_project_from_gerrit' %}";
 
             function clearGerritState() {
+                // Clearing the rows clears what they belonged to; nothing may be imported
+                // against an organization whose list is no longer on screen.
+                gerritListedOrg = "";
                 if (gerritErrorBox) {
                     gerritErrorBox.style.display = "none";
                     gerritErrorBox.textContent = "";
@@ -2311,12 +2341,18 @@
             }
 
             if (gerritOrgSelect) {
-                gerritOrgSelect.addEventListener("change", function () {
+                aistOnSelectChange(gerritOrgSelect, function () {
                     updateGerritListBtnState();
                     clearGerritState();
                     if (gerritIntegrationInfo) {
                         gerritIntegrationInfo.style.display = "none";
                         gerritIntegrationInfo.textContent = "";
+                    }
+                    // Picking the organization is the whole question this form asks; answering it
+                    // with an empty panel and a second button to press reads as a dead dialog.
+                    // The listing below says either what can be imported or why nothing can.
+                    if ((gerritOrgSelect.value || "").trim() && gerritListBtn && !gerritListBtn.disabled) {
+                        gerritListBtn.click();
                     }
                 });
             }
@@ -2325,6 +2361,13 @@
             // Load projects list from Gerrit
             if (gerritListBtn && gerritForm && gerritProjectsTbody) {
                 gerritListBtn.addEventListener("click", function () {
+
+                    // The organization this listing is for. Selecting another one starts a new
+                    // listing without stopping this one, and the two answers can arrive out of
+                    // order: an answer for an organization that is no longer selected must not
+                    // be shown, and must never become the list that Import then sends.
+                    var requestedOrg = gerritOrgSelect ? (gerritOrgSelect.value || "") : "";
+                    gerritListedOrg = "";
 
                     gerritListBtn.disabled = true;
                     if (gerritLoadingIndicator) {
@@ -2352,6 +2395,9 @@
                             return {ok: resp.ok, data: data};
                         });
                     }).then(function (result) {
+                        if (gerritOrgSelect && (gerritOrgSelect.value || "") !== requestedOrg) {
+                            return;
+                        }
                         if (!result.ok || !result.data.ok) {
                             var msg = (result.data && result.data.error) ||
                                 "Failed to load projects from Gerrit.";
@@ -2361,6 +2407,7 @@
                             }
                             return;
                         }
+                        gerritListedOrg = requestedOrg;
 
                         var projects = result.data.projects || [];
                         if (!projects.length) {
@@ -2435,7 +2482,9 @@
                         return;
                     }
 
-                    var org = gerritOrgSelect ? (gerritOrgSelect.value || "") : "";
+                    // The list on screen belongs to the organization it was fetched for, which is
+                    // not necessarily the one selected now.
+                    var org = gerritListedOrg || "";
 
                     if (!org) {
                         if (gerritErrorBox) {
@@ -2522,6 +2571,8 @@
             var giteaForm = document.getElementById("gitea-import-form");
             var giteaErrorBox = document.getElementById("gitea-import-error");
             var giteaListBtn = document.getElementById("gitea-list-btn");
+            //: Which organization the project list on screen was fetched for.
+            var giteaListedOrg = "";
             var giteaLoadingIndicator = document.getElementById("gitea-projects-loading");
             var giteaImportBtn = document.getElementById("gitea-import-btn");
             var giteaProjectsContainer = document.getElementById("gitea-projects-container");
@@ -2534,6 +2585,9 @@
             var giteaImportUrl = "{% url 'aist_api:import_project_from_gitea' %}";
 
             function clearGiteaState() {
+                // Clearing the rows clears what they belonged to; nothing may be imported
+                // against an organization whose list is no longer on screen.
+                giteaListedOrg = "";
                 if (giteaErrorBox) {
                     giteaErrorBox.style.display = "none";
                     giteaErrorBox.textContent = "";
@@ -2575,12 +2629,18 @@
             }
 
             if (giteaOrgSelect) {
-                giteaOrgSelect.addEventListener("change", function () {
+                aistOnSelectChange(giteaOrgSelect, function () {
                     updateGiteaListBtnState();
                     clearGiteaState();
                     if (giteaIntegrationInfo) {
                         giteaIntegrationInfo.style.display = "none";
                         giteaIntegrationInfo.textContent = "";
+                    }
+                    // Picking the organization is the whole question this form asks; answering it
+                    // with an empty panel and a second button to press reads as a dead dialog.
+                    // The listing below says either what can be imported or why nothing can.
+                    if ((giteaOrgSelect.value || "").trim() && giteaListBtn && !giteaListBtn.disabled) {
+                        giteaListBtn.click();
                     }
                 });
             }
@@ -2589,6 +2649,13 @@
             // Load projects list from Gitea
             if (giteaListBtn && giteaForm && giteaProjectsTbody) {
                 giteaListBtn.addEventListener("click", function () {
+
+                    // The organization this listing is for. Selecting another one starts a new
+                    // listing without stopping this one, and the two answers can arrive out of
+                    // order: an answer for an organization that is no longer selected must not
+                    // be shown, and must never become the list that Import then sends.
+                    var requestedOrg = giteaOrgSelect ? (giteaOrgSelect.value || "") : "";
+                    giteaListedOrg = "";
 
                     giteaListBtn.disabled = true;
                     if (giteaLoadingIndicator) {
@@ -2616,6 +2683,9 @@
                             return {ok: resp.ok, data: data};
                         });
                     }).then(function (result) {
+                        if (giteaOrgSelect && (giteaOrgSelect.value || "") !== requestedOrg) {
+                            return;
+                        }
                         if (!result.ok || !result.data.ok) {
                             var msg = (result.data && result.data.error) ||
                                 "Failed to load projects from Gitea.";
@@ -2625,6 +2695,7 @@
                             }
                             return;
                         }
+                        giteaListedOrg = requestedOrg;
 
                         var projects = result.data.projects || [];
                         if (!projects.length) {
@@ -2699,7 +2770,9 @@
                         return;
                     }
 
-                    var org = giteaOrgSelect ? (giteaOrgSelect.value || "") : "";
+                    // The list on screen belongs to the organization it was fetched for, which is
+                    // not necessarily the one selected now.
+                    var org = giteaListedOrg || "";
 
                     if (!org) {
                         if (giteaErrorBox) {
@@ -2934,4 +3007,6 @@
         })();
     </script>
     {% include "aist/_pipeline_run_js.html" %}
+{# The 2.x base template dressed every select on every page; ours asks for its own. #}
+<script>aistDressSelectsOnReady();</script>
 {% endblock %}

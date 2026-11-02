@@ -47,3 +47,140 @@ a.btn { color: revert-layer; }
 .btn > .fa-solid,
 .btn > .fa-regular,
 .btn > .fa-brands { color: inherit; }
+
+/*
+ * The dressed select carries the platform's own control geometry.
+ *
+ * Chosen is the widget the platform still ships, but its stylesheet is sized for the
+ * Bootstrap 3 bundle that 3.x dropped: a 34px box with a 4px radius next to the platform's
+ * 40px controls. Restating .form-control's tokens here keeps a dressed select on the same
+ * line as the inputs and buttons it sits with, without hard-coding any measurement.
+ */
+.chosen-container {
+  @apply text-sm;
+}
+
+.chosen-container-single .chosen-single {
+  @apply rounded-md border border-border shadow-xs bg-white px-3 py-2 text-slate-900;
+  height: auto;
+  min-height: 2.5rem;
+  line-height: 1.25rem;
+  background-image: none;
+}
+
+.chosen-container-active.chosen-with-drop .chosen-single {
+  @apply rounded-md border-dd-interactive-700;
+}
+
+.chosen-container .chosen-drop {
+  @apply rounded-md border-border shadow-lg;
+}
+
+/*
+ * The one cadence indicator: a quiet bar under Refresh, no second clock.
+ *
+ * It fills from empty to full across the gateway's poll interval, so the wait for the next
+ * read is readable without a number of its own. It stays empty when nothing is coming --
+ * a finished run is read once, and a background tab is not read at all.
+ */
+.btn.refresh {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn.refresh > .tick {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  height: 2px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+/*
+ * A button keeps its label on one line.
+ *
+ * The platform's .btn is a flex box that wraps its text, and a flex child shrinks below its
+ * own content: in any flex row -- a .btn-group, a .d-flex toolbar, a modal footer -- the
+ * label breaks into stacked lines and the button comes out two or three times taller than
+ * the controls beside it. Bootstrap's .btn carried nowrap for exactly this reason, and the
+ * bundle that carried it is what 3.x dropped.
+ */
+.btn {
+  white-space: nowrap;
+}
+
+/*
+ * A row whose buttons no longer shrink moves what does not fit onto the next line.
+ *
+ * Without this the space a button stops giving up is taken from whatever shares the row:
+ * on the project form the label beside "Regenerate init script" was squeezed to 65px and
+ * came out one word per line. Wrapping only changes a row that does not fit, which is the
+ * case that was broken; .d-flex is the legacy alias our own pages use, and the platform's
+ * own templates have all but left it.
+ *
+ * .btn-group is deliberately not in here. Its buttons are joined, with the rounding carried
+ * by the first and last of them, and the platform restores a per-button radius and a gap
+ * only where it allows wrapping -- under 640px. Wrapping at full width would leave square
+ * corners mid-row; the toolbar that did not fit was given a line of its own instead.
+ */
+.d-flex {
+  flex-wrap: wrap;
+}
+
+/*
+ * A tall modal scrolls its body, not its frame.
+ *
+ * Bootstrap's .modal-dialog/.modal-content wrappers were what kept a modal's title and its
+ * action buttons on screen while the form between them scrolled. Those wrappers went with
+ * the bundle, and a <dialog> taller than the viewport now scrolls as one block: the footer,
+ * where Save and Close live, sits below the clip and reads as missing controls.
+ *
+ * Only an open dialog is laid out: a closed one must keep the display:none the browser gives
+ * it, or every modal on the page shows at once.
+ */
+dialog.modal[open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Most of these modals wrap their sections in a <form>, and the platform's own wrap theirs
+   in a .modal-content; either has to pass the column through
+   -- otherwise the frame stops scrolling and nothing inside takes over, and the content below
+   the fold cannot be reached at all. */
+dialog.modal[open] > form,
+dialog.modal[open] > .modal-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+dialog.modal[open] .modal-header,
+dialog.modal[open] .modal-footer {
+  flex: none;
+}
+
+dialog.modal[open] .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/*
+ * A modal that was wide stays wide, and its actions stay inside it.
+ *
+ * The platform sizes every <dialog class="modal"> to max-w-lg, which is the narrow one; the
+ * .modal-lg wrapper that made a form-carrying modal wide went with the Bootstrap bundle. And
+ * .modal-footer is a flex row that does not wrap, so action buttons -- which no longer shrink
+ * now that a label stays on one line -- run past the edge and get clipped.
+ */
+dialog.modal.modal-lg {
+  max-width: 56rem;
+}
+
+.modal-footer {
+  flex-wrap: wrap;
+}

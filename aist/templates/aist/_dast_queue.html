@@ -16,7 +16,9 @@ Adding a status or an editable field on the DAST side changes nothing here.
         <span class="pull-right" style="font-size:12px;">
             <span id="dq-revision" class="text-muted"></span>
             <span id="dq-fresh" class="text-muted" style="margin-left:10px;"></span>
-            <button type="button" class="btn btn-secondary btn-xs" id="dq-refresh" style="margin-left:10px;">
+            <button type="button" class="btn btn-secondary btn-xs refresh" id="dq-refresh" style="margin-left:10px;"
+                    title="Re-reads now. The block also re-reads itself on the gateway's cadence.">
+                <span class="tick" id="dq-tick"></span>
                 <i class="fa-solid fa-refresh"></i> Refresh
             </button>
             <span id="dq-run-actions"></span>
@@ -83,7 +85,7 @@ Adding a status or an editable field on the DAST side changes nothing here.
             </div>
 </dialog>
 
-<dialog class="modal" id="dq-detail" tabindex="-1">
+<dialog class="modal modal-lg" id="dq-detail" tabindex="-1">
             <div class="modal-header">
                 <h4 class="modal-title" id="dq-detail-title"></h4>
                 <button type="button" class="close" onclick="this.closest('dialog').close()" aria-label="Close">
@@ -109,18 +111,35 @@ Adding a status or an editable field on the DAST side changes nothing here.
     // Generic icon tokens the descriptor sends, resolved in the icon set this page already loads.
     // A token this build does not carry falls back to a neutral mark rather than to nothing.
     var ICONS = {
-        play: "fa-play", pause: "fa-pause", clock: "fa-clock-o", hourglass: "fa-hourglass-half",
+        play: "fa-play", pause: "fa-pause", clock: "fa-clock", hourglass: "fa-hourglass-half",
         upload: "fa-upload", check: "fa-check", x: "fa-times", ban: "fa-ban",
-        forward: "fa-angle-double-right", bulb: "fa-lightbulb-o", pencil: "fa-pencil",
-        note: "fa-sticky-note-o", refresh: "fa-refresh", search: "fa-search", alert: "fa-exclamation-triangle",
+        forward: "fa-angle-double-right", bulb: "fa-lightbulb", pencil: "fa-pencil",
+        note: "fa-note-sticky", refresh: "fa-refresh", search: "fa-search", alert: "fa-exclamation-triangle",
         flag: "fa-flag", layers: "fa-clone"
     };
     var SEVERITY_CLASS = { bad: "text-danger", attention: "text-warning" };
 
+    //: How many asks may go unanswered before the page stops promising a read is on its way.
+    //: One is ordinary -- a worker takes a moment; a run of them is a queue nobody is reading.
+    var UNANSWERED_BEFORE_SAYING_SO = 2;
+
+    //: A read of the gateway is handed to a worker and lands about ten seconds later, while the
+    //: answer this page just got is the snapshot from before it. Looking again shortly is what
+    //: turns that ask into something the operator sees; waiting for the next tick leaves them in
+    //: front of a stale queue for a whole interval, which reads as "only Refresh works".
+    var FOLLOW_UP_MS = 4000;
+    var FOLLOW_UP_ATTEMPTS = 4;
+    var followUpTimer = null;
+    var followUpsLeft = 0;
+
     var state = {
         descriptor: null, page: null, fetchedAt: "", lastRead: 0, pending: null,
         statuses: [], search: "", phase: "", includePlanned: true, deferred: false,
-        pollSeconds: 60, unavailable: null, reading: false, stale: false
+        pollSeconds: 60, unavailable: null, reading: false, stale: false,
+        //: Consecutive reads that asked for a fresh gateway read and got the same one back.
+        //: A worker that cannot reach the gateway leaves the snapshot untouched, which a page
+        //: cannot tell apart from a quiet queue unless it counts.
+        unanswered: 0
     };
 
     function $(id) { return document.getElementById(id); }
@@ -132,7 +151,7 @@ Adding a status or an editable field on the DAST side changes nothing here.
     }
     function icon(token, extra) {
         var i = document.createElement("i");
-        i.className = "fa " + (ICONS[token] || "fa-circle-o") + (extra ? " " + extra : "");
+        i.className = "fa " + (ICONS[token] || "fa-circle") + (extra ? " " + extra : "");
         i.setAttribute("aria-hidden", "true");
         return i;
     }
@@ -177,10 +196,20 @@ Adding a status or an editable field on the DAST side changes nothing here.
     }
 
     // ---- reading ----------------------------------------------------------
-    function read(manual) {
-        if (!manual && (state.pending || document.querySelector(".modal.in"))) {
+    /**
+     * Read the queue. ``followingUp`` marks a look back for an ask already made, which spends
+     * the follow-up budget rather than granting a fresh one.
+     */
+    function read(manual, followingUp) {
+        if (!manual && (state.pending || document.querySelector("dialog.modal[open]"))) {
             state.deferred = true;
             renderFreshness();
+            // Postponed, not abandoned: the queue this was going to collect is still unread,
+            // and only one of the two dialogs resumes a deferred read when it closes.
+            if (followingUp) {
+                followUpsLeft -= 1;
+                scheduleFollowUp();
+            }
             return;
         }
         // The whole queue arrives in one snapshot, so a filter change costs nothing and never
@@ -200,21 +229,91 @@ Adding a status or an editable field on the DAST side changes nothing here.
                         state.unavailable = { code: "UNAVAILABLE", detail: "" };
                     }
                     render();
+                    // A pipeline opened for the first time has no snapshot at all and a worker
+                    // is fetching one. That is the longest wait of any, and the one most easily
+                    // mistaken for a dead page, so it is looked back at like any other.
+                    followUpsLeft = followingUp ? followUpsLeft - 1 : FOLLOW_UP_ATTEMPTS;
+                    scheduleFollowUp();
                     return;
                 }
                 state.unavailable = null;
+                if (!(payload.stale && payload.fetched_at && payload.fetched_at === state.fetchedAt)) {
+                    state.unanswered = 0;
+                } else if (!followingUp) {
+                    // Only a poll-interval ask counts. A follow-up looks again seconds after the
+                    // ask, long before a worker's read lands, so counting those would report a
+                    // queue nobody is reading on every healthy cycle.
+                    state.unanswered += 1;
+                }
+                var previous = state.page;
                 state.descriptor = payload.descriptor || state.descriptor;
                 state.page = payload.page;
                 state.fetchedAt = payload.fetched_at;
                 var hints = (state.descriptor && state.descriptor.client_hints) || {};
                 state.pollSeconds = hints.poll_interval_seconds || 60;
                 render();
-                if (manual) { note("Re-read at revision " + state.page.revision + "."); }
+                var moved = whatMoved(previous, state.page);
+                if (manual) {
+                    note(moved
+                        ? "Re-read: now at revision " + state.page.revision + " — " + moved + "."
+                        : "Re-read: no change, still revision " + state.page.revision + ".");
+                } else if (moved) {
+                    // A read the operator did not ask for says so, and only when it brought
+                    // something: a silent refresh is indistinguishable from one that never ran.
+                    note("Updated automatically: " + moved + ".");
+                }
+                followUpsLeft = followingUp ? followUpsLeft - 1 : FOLLOW_UP_ATTEMPTS;
+                scheduleFollowUp();
             })
             .catch(function () {
                 state.unavailable = { code: "GATEWAY_UNREACHABLE", detail: "AIST could not read the queue." };
                 render();
             });
+    }
+
+    /**
+     * What moved between two readings of the queue, in words, or "" when nothing did.
+     *
+     * The revision alone only says that something changed. An operator watching a run wants
+     * to know what, so the items are compared by the status each one carried, and the status
+     * is named the way the descriptor names it.
+     */
+    function whatMoved(before, after) {
+        if (!before || !after) { return ""; }
+        var was = {};
+        (before.items || []).forEach(function (item) { was[item.item_id] = item.status; });
+        var moved = [];
+        var arrived = 0;
+        (after.items || []).forEach(function (item) {
+            if (!(item.item_id in was)) { arrived += 1; }
+            else if (was[item.item_id] !== item.status) { moved.push(item); }
+        });
+        var parts = [];
+        if (moved.length === 1) {
+            parts.push(moved[0].item_id + " is now " + term("status", moved[0].status).label);
+        } else if (moved.length) {
+            parts.push(moved.length + " items changed status");
+        }
+        if (arrived) { parts.push(arrived + (arrived === 1 ? " new item" : " new items")); }
+        if (!parts.length && before.revision !== after.revision) {
+            parts.push("revision " + after.revision);
+        }
+        return parts.join(", ");
+    }
+
+    /**
+     * Look again soon when the answer just given was known to be out of date.
+     *
+     * Bounded on purpose: a gateway that is not answering must not turn one poll into a stream
+     * of them, and a background tab is not read at all.
+     */
+    function scheduleFollowUp() {
+        window.clearTimeout(followUpTimer);
+        followUpTimer = null;
+        if ((!state.stale && !state.reading) || frozen() || document.hidden || followUpsLeft <= 0) {
+            return;
+        }
+        followUpTimer = window.setTimeout(function () { read(false, true); }, FOLLOW_UP_MS);
     }
 
     function note(text) {
@@ -490,14 +589,9 @@ Adding a status or an editable field on the DAST side changes nothing here.
             select.appendChild(new Option((entry.label || entry.id) + " — " + (entry.help || ""), entry.id));
         });
         select.dataset.filled = "1";
-        // The page dresses its selects with bootstrap-select before this block has a vocabulary to
-        // fill in, so the widget has to be told the options arrived -- otherwise it keeps showing
-        // its empty placeholder over a list that is in fact there.
-        if (window.jQuery && window.jQuery.fn && window.jQuery.fn.selectpicker) {
-            var picker = window.jQuery(select);
-            picker.selectpicker("refresh");
-            picker.closest(".bootstrap-select").css("width", "100%");
-        }
+        // The vocabulary arrives after the page is dressed, so the widget is told the options
+        // landed -- otherwise it keeps showing an empty list over one that is in fact there.
+        aistEnhanceSelect(select);
     }
 
     function visibleRows() {
@@ -618,11 +712,26 @@ Adding a status or an editable field on the DAST side changes nothing here.
         var text = state.fetchedAt ? "queue read " + ago(state.fetchedAt) : "queue not read yet";
         if (state.reading) { text = "reading the queue…"; }
         if (frozen()) { text += " · finished, not re-read"; }
+        else if (state.unanswered >= UNANSWERED_BEFORE_SAYING_SO) {
+            // Saying "on its way" for the tenth time running is how an unread queue passes for
+            // a quiet one. Past a couple of asks the page says what it actually knows.
+            text += " · asked " + state.unanswered + " times, the gateway has not been re-read";
+        }
         else if (state.stale && !state.reading) { text += " · a fresh read is on its way"; }
         else if (document.hidden) { text += " · paused in the background"; }
         else if (state.deferred) { text += " · an update is waiting until you finish"; }
         $("dq-fresh").textContent = text;
         $("dq-fresh").title = state.fetchedAt ? "Read from the gateway at " + state.fetchedAt : "";
+
+        // The wait for the next read is shown as a bar filling under Refresh, so only one
+        // number ticks. An empty bar means nothing is coming: the run is a closed record, or
+        // this tab is in the background and the block is not reading while it is.
+        var tick = $("dq-tick");
+        if (tick) {
+            var waited = (Date.now() - state.lastRead) / 1000;
+            var due = frozen() || document.hidden ? 0 : Math.min(waited / state.pollSeconds, 1);
+            tick.style.width = (due * 100).toFixed(1) + "%";
+        }
     }
 
     // ---- detail -----------------------------------------------------------
@@ -986,7 +1095,7 @@ Adding a status or an editable field on the DAST side changes nothing here.
             if (state.page) { renderRows(); }
         }, 150);
     });
-    $("dq-phase").addEventListener("change", function (event) {
+    aistOnSelectChange($("dq-phase"), function (event) {
         state.phase = event.target.value;
         if (state.page) { renderRows(); }
     });

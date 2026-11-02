@@ -63,16 +63,6 @@
             return s;
         }
 
-        function hasSelectpicker() {
-            return !!(window.jQuery && window.jQuery.fn && window.jQuery.fn.selectpicker);
-        }
-
-        function isSelectpickerApplied(el) {
-            if (!hasSelectpicker() || !el) return false;
-            var $ = window.jQuery;
-            return !!($(el).data("selectpicker")) || ($(el).parent().hasClass("bootstrap-select"));
-        }
-
         /* main */
         function main() {
             var scopeRoot =
@@ -381,7 +371,7 @@
             }
 
             if (actionType) {
-                actionType.addEventListener("change", function () {
+                aistOnSelectChange(actionType, function () {
                     showActionFields(actionType.value);
                     prefillActionDefaults();
                 });
@@ -512,18 +502,7 @@
             function getSelectValue(el) {
                 if (!el) return "";
 
-                var v = "";
-
-                if (isSelectpickerApplied(el) && window.jQuery) {
-                    try {
-                        v = window.jQuery(el).selectpicker('val') || "";
-                    } catch (e) {
-                    }
-                }
-
-                if (!v) {
-                    v = el.value || "";
-                }
+                var v = el.value || "";
 
                 if ((!v || v === "") && el.tagName === "SELECT" && typeof el.selectedIndex === "number") {
                     if (el.selectedIndex > 0) {
@@ -591,79 +570,20 @@
                 }
 
                 var list = normalizeVersions(versionsRaw);
-                var usingPlugin = isSelectpickerApplied(selVersion);
-                var $ = window.jQuery;
 
-                if (usingPlugin) {
-                    try {
-                        $(selVersion).selectpicker("destroy");
-                    } catch (e) {
-                    }
-
-                    while (selVersion.options.length) selVersion.remove(0);
-                    selVersion.setAttribute("title", DEFAULT_EMPTY_LABEL);
-                    selVersion.add(new Option(DEFAULT_EMPTY_LABEL, ""));
-                    for (var i = 0; i < list.length; i++) {
-                        selVersion.add(new Option(prettifyLabel(list[i].label, projectId), list[i].id));
-                    }
-
-                    var disabled = (list.length === 0);
-                    selVersion.disabled = disabled;
-
-                    $(selVersion).selectpicker();
-                    $(selVersion)
-                        .prop("disabled", disabled)
-                        .selectpicker("render")
-                        .selectpicker("refresh")
-                        .selectpicker("val", "");
-
-                    var $wrap = $(selVersion).closest(".bootstrap-select");
-                    if ($wrap.length) {
-                        $wrap.toggleClass("disabled", disabled);
-                        var $btn = $wrap.find("button");
-                        if ($btn.length) {
-                            $btn.prop("disabled", disabled).blur();
-                        }
-                    }
-                } else {
-                    selVersion.innerHTML = "";
-                    selVersion.add(new Option(DEFAULT_EMPTY_LABEL, ""));
-                    for (var k = 0; k < list.length; k++) {
-                        selVersion.add(new Option(prettifyLabel(list[k].label, projectId), list[k].id));
-                    }
-                    selVersion.disabled = (list.length === 0);
-                    setTimeout(function () {
-                        try {
-                            selVersion.blur();
-                        } catch (e) {
-                        }
-                    }, 0);
+                selVersion.innerHTML = "";
+                selVersion.setAttribute("title", DEFAULT_EMPTY_LABEL);
+                selVersion.add(new Option(DEFAULT_EMPTY_LABEL, ""));
+                for (var i = 0; i < list.length; i++) {
+                    selVersion.add(new Option(prettifyLabel(list[i].label, projectId), list[i].id));
                 }
+                selVersion.disabled = (list.length === 0);
 
                 var fs = selVersion.closest ? selVersion.closest("fieldset") : null;
                 if (fs && fs.hasAttribute("disabled")) fs.removeAttribute("disabled");
 
-                if (list.length > 0) {
-                    var firstId = String(list[0].id);
-                    if (isSelectpickerApplied(selVersion)) {
-                        try {
-                            window.jQuery(selVersion).selectpicker('val', firstId).selectpicker('render').selectpicker('refresh');
-                        } catch (e) {
-                        }
-                    } else {
-                        selVersion.value = firstId;
-                    }
-                } else {
-
-                    if (isSelectpickerApplied(selVersion)) {
-                        try {
-                            window.jQuery(selVersion).selectpicker('val', '').selectpicker('render').selectpicker('refresh');
-                        } catch (e) {
-                        }
-                    } else {
-                        selVersion.value = '';
-                    }
-                }
+                selVersion.value = list.length > 0 ? String(list[0].id) : "";
+                aistEnhanceSelect(selVersion);
 
                 validateVersionRequired();
             }
@@ -768,22 +688,10 @@
 
 
             if (selProject) {
-                selProject.addEventListener("change", onProjectChanged);
-                if (hasSelectpicker()) {
-                    try {
-                        window.jQuery(selProject).off("changed.bs.select.aist").on("changed.bs.select.aist", onProjectChanged);
-                    } catch (e) {
-                    }
-                }
+                aistOnSelectChange(selProject, onProjectChanged);
             }
             if (selTime) {
-                selTime.addEventListener("change", collectAndRefreshAnalyzers);
-                if (hasSelectpicker()) {
-                    try {
-                        window.jQuery(selTime).off("changed.bs.select.aist").on("changed.bs.select.aist", collectAndRefreshAnalyzers);
-                    } catch (e) {
-                    }
-                }
+                aistOnSelectChange(selTime, collectAndRefreshAnalyzers);
             }
             var boxes = languageCheckboxes();
             for (var q = 0; q < boxes.length; q++) boxes[q].addEventListener("change", collectAndRefreshAnalyzers);
@@ -891,16 +799,8 @@
                 var meta = root.querySelector('textarea[name="metadata"]');
 
                 if (typeSel) {
-                    typeSel.classList.add('selectpicker');
-                    typeSel.setAttribute('data-container', 'body');
-                    typeSel.setAttribute('data-live-search', 'false');
                     typeSel.style.width = '100%';
-                    if (hasSelectpicker()) {
-                        try {
-                            window.jQuery(typeSel).selectpicker('render');
-                        } catch (e) {
-                        }
-                    }
+                    aistEnhanceSelect(typeSel);
                 }
                 if (inpText) inpText.classList.add('form-control');
                 if (inpFile) inpFile.classList.add('form-control');
@@ -978,7 +878,7 @@
                 }
 
                 if (typeSel) {
-                    typeSel.addEventListener('change', applyVisibility);
+                    aistOnSelectChange(typeSel, applyVisibility);
                     applyVisibility();
                 }
             }
@@ -1112,14 +1012,8 @@
                                         }
 
                                         if (newId) {
-                                            if (isSelectpickerApplied(selVersion) && window.jQuery) {
-                                                try {
-                                                    window.jQuery(selVersion).selectpicker('val', newId).selectpicker('render').selectpicker('refresh');
-                                                } catch (e) {
-                                                }
-                                            } else {
-                                                selVersion.value = newId;
-                                            }
+                                            selVersion.value = newId;
+                                            aistEnhanceSelect(selVersion);
                                         }
 
                                         try {
@@ -1152,13 +1046,7 @@
             }
 
             if (selVersion) {
-                selVersion.addEventListener('change', validateVersionRequired);
-                if (hasSelectpicker()) {
-                    try {
-                        window.jQuery(selVersion).off('changed.bs.select.aist-ver').on('changed.bs.select.aist-ver', validateVersionRequired);
-                    } catch (e) {
-                    }
-                }
+                aistOnSelectChange(selVersion, validateVersionRequired);
             }
 
             validateVersionRequired();
@@ -1169,12 +1057,15 @@
 
                     loadCreateForm();
 
-                    // If we're inside a parent modal (projects.html preset modal), do NOT stack modals in BS4.
+                    // Inside a parent modal the two are shown one at a time: the parent steps
+                    // aside and this one takes its place.
                     if (window.jQuery && parentModal && isParentModalOpen()) {
-                        // hide parent first
+                        // One shot. A listener left behind fires the next time the parent closes
+                        // for its own reasons -- the operator pressing its X -- and reopens this
+                        // modal unasked, which is what it did after the first round trip.
                         parentModal.addEventListener("close", function () {
                             bsModal.show();
-                        });
+                        }, {once: true});
                         parentModal.close();
                     } else {
                         // start.html / non-modal context
@@ -1188,7 +1079,7 @@
             }
 
             if (selProject) {
-                selProject.addEventListener("change", function () {
+                aistOnSelectChange(selProject, function () {
                     updateCreateButtonState();
                     validateVersionRequired();
                 });

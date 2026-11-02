@@ -120,4 +120,6 @@
 
     {% include "aist/_pipeline_run_js.html" %}
 
+{# The 2.x base template dressed every select on every page; ours asks for its own. #}
+<script>aistDressSelectsOnReady();</script>
 {% endblock %}

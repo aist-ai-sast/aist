@@ -10,12 +10,23 @@ from dojo.authorization.roles_permissions import Permissions
 from aist.models import OrgIntegration
 from aist.queries import get_authorized_aist_organizations
 from aist.tasks.integrations import fetch_gerrit_projects, fetch_gitea_projects, fetch_gitlab_projects
+from aist.views.throttling import (
+    SCM_PROJECT_LISTING_SCOPE,
+    TOO_MANY_LISTINGS,
+    OrganizationScopedRateThrottle,
+    throttled,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @login_required
 @require_POST
+@throttled(
+    SCM_PROJECT_LISTING_SCOPE,
+    throttle_class=OrganizationScopedRateThrottle,
+    message=TOO_MANY_LISTINGS,
+)
 def gitlab_projects_list(request: HttpRequest) -> JsonResponse:
     """
     Return a lightweight list of projects from a GitLab instance.
@@ -53,6 +64,11 @@ def gitlab_projects_list(request: HttpRequest) -> JsonResponse:
 
 @login_required
 @require_POST
+@throttled(
+    SCM_PROJECT_LISTING_SCOPE,
+    throttle_class=OrganizationScopedRateThrottle,
+    message=TOO_MANY_LISTINGS,
+)
 def gerrit_projects_list(request: HttpRequest) -> JsonResponse:
     """
     Return a lightweight list of projects from a Gerrit instance.
@@ -90,6 +106,11 @@ def gerrit_projects_list(request: HttpRequest) -> JsonResponse:
 
 @login_required
 @require_POST
+@throttled(
+    SCM_PROJECT_LISTING_SCOPE,
+    throttle_class=OrganizationScopedRateThrottle,
+    message=TOO_MANY_LISTINGS,
+)
 def gitea_projects_list(request: HttpRequest) -> JsonResponse:
     """
     Return a lightweight list of repositories from a Gitea instance.

@@ -750,10 +750,9 @@
                         if (!newContainer || !container) return;
 
                         // Snapshot currently-open collapse IDs before replacing the DOM.
-                        // Bootstrap stores collapse state as a CSS class + aria attribute on
-                        // the live elements; innerHTML replacement wipes that state.
+                        // An open panel is ".collapse.in"; innerHTML replacement wipes that class.
                         const openIds = new Set(
-                            [...container.querySelectorAll('.collapse.show')]
+                            [...container.querySelectorAll('.collapse.in')]
                                 .map(el => el.id)
                                 .filter(Boolean)
                         );
@@ -764,10 +763,9 @@
                         openIds.forEach(id => {
                             const el = container.querySelector('#' + CSS.escape(id));
                             if (!el) return;
-                            el.classList.add('show');
+                            el.classList.add('in');
                             const btn = container.querySelector(
-                                '[data-bs-target="#' + CSS.escape(id) + '"],' +
-                                '[data-target="#' + CSS.escape(id) + '"]'
+                                '[aria-controls="' + CSS.escape(id) + '"]'
                             );
                             if (btn) {
                                 btn.setAttribute('aria-expanded', 'true');
@@ -821,23 +819,12 @@
 
             if (logsToggleBtn && logsCollapse) {
                 logsToggleBtn.addEventListener("click", () => {
-                    const isShown = logsCollapse.classList.contains("show");
-                    if (isShown) {
-                        logsCollapse.classList.remove("show");
-                        logsToggleBtn.setAttribute("aria-expanded", "false");
-                        if (logsToggleText) logsToggleText.textContent = "Show";
-                        if (logsChevron) {
-                            logsChevron.classList.remove("fa-chevron-up");
-                            logsChevron.classList.add("fa-chevron-down");
-                        }
-                    } else {
-                        logsCollapse.classList.add("show");
-                        logsToggleBtn.setAttribute("aria-expanded", "true");
-                        if (logsToggleText) logsToggleText.textContent = "Hide";
-                        if (logsChevron) {
-                            logsChevron.classList.remove("fa-chevron-down");
-                            logsChevron.classList.add("fa-chevron-up");
-                        }
+                    aistToggleCollapse(logsToggleBtn, "logsCollapse");
+                    const shown = logsCollapse.classList.contains("in");
+                    if (logsToggleText) logsToggleText.textContent = shown ? "Hide" : "Show";
+                    if (logsChevron) {
+                        logsChevron.classList.toggle("fa-chevron-up", shown);
+                        logsChevron.classList.toggle("fa-chevron-down", !shown);
                     }
                 });
             }
@@ -857,4 +844,6 @@
     </script>
 
 
+{# The 2.x base template dressed every select on every page; ours asks for its own. #}
+<script>aistDressSelectsOnReady();</script>
 {% endblock %}

@@ -12,7 +12,7 @@
         {% include "aist/_confirm_push_to_ai.html" %}
     {% elif pipeline.status == "ADMITTED" %}
         <div class="alert alert-info" role="status">
-            <i class="fa-solid fa-clock-o"></i>
+            <i class="fa-solid fa-clock"></i>
             <strong>Admitted.</strong> Waiting for execution capacity.
         </div>
     {% elif pipeline.status == "EXECUTING" %}

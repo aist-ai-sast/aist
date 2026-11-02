@@ -36,6 +36,9 @@
 
         <script src="{% static "chosen-js/chosen.jquery.min.js" %}"></script>
 
+        {# Loaded with the widgets it drives: a page's own inline script may call into it while the body is still parsing. #}
+        <script src="{% static "aist/js/platform-components.js" %}?v={% static_v "aist/js/platform-components.js" %}"></script>
+
         <!-- Calendar -->
         <script src="{% static "moment/min/moment.min.js" %}"></script>
         <script src="{% static "fullcalendar/dist/fullcalendar.min.js" %}"></script>
@@ -1083,7 +1086,6 @@
                 </div>
             </div>
         {% endif %}
-        <script src="{% static "aist/js/platform-components.js" %}"></script>
         {% block extra_javascript %}
         {% endblock %}
         {% block postscript %}
