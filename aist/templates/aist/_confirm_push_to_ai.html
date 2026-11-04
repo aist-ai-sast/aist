@@ -1,6 +1,5 @@
 {# aist/_confirm_push_to_ai.html #}
-{% with ai_mode=pipeline.launch_data.ai.mode %}
-  {% if ai_mode == "AUTO_DEFAULT" %}
+{% if ai_auto_triage %}
     <section id="aist-push-to-ai"
              class="card"
              data-pipeline-id="{{ pipeline.id }}"
@@ -107,5 +106,4 @@
         <button id="aist-btn-send" type="button" class="btn btn-success">Send selected to AI</button>
       </div>
     </section>
-  {% endif %}
-{% endwith %}
+{% endif %}

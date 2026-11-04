@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 from dojo.models import Engagement, Finding, Test, Test_Type
 
-from aist.celery_signals import _update_action_run
+from aist.celery_signals import record_action_run
 from aist.logging_transport import get_pipeline_log_path, install_pipeline_logging, uninstall_pipeline_file_logging
 from aist.models import AISTPipeline, AISTStatus, Organization, OrgIntegration, OrgIntegrationType
 from aist.test.test_api import AISTApiBase
@@ -247,7 +247,7 @@ class ActionRunMaskingTests(AISTApiBase):
             status=AISTStatus.EXECUTING,
         )
 
-        _update_action_run(
+        record_action_run(
             pipeline.id,
             key="k1",
             action_type="WRITE_LOG",

@@ -23,7 +23,6 @@ from aist.models import (
     PipelineLaunchRequest,
     PullRequest,
 )
-from aist.pipeline_args import PipelineArguments
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -171,10 +170,7 @@ class SastPipelineLaunchAdapter:
         if resource_limit < 1:
             raise ExecutionPlanError(_ERR_CAPACITY)
 
-        params = PipelineArguments.normalize_params(
-            project=request.project,
-            raw_params=request.get_snapshots().params_snapshot(),
-        )
+        params = request.get_snapshots().params_snapshot()
         project_version_id = (params.get("project_version") or {}).get("id")
         try:
             project_version = AISTProjectVersion.objects.get(

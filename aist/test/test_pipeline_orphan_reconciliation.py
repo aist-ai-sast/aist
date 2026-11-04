@@ -1,80 +1,42 @@
 from __future__ import annotations
 
+import logging
 import tempfile
 from datetime import timedelta
 from io import StringIO
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core.management import call_command
 from django.utils import timezone
-from dojo.models import DojoMeta, Engagement, Finding, Test, Test_Type
+from dojo.models import DojoMeta
 
 from aist.execution.dispatching import LaunchAcceptance
-from aist.models import AISTPipeline, AISTStatus, PipelineLaunchRequest, PipelineLaunchRequestState
-from aist.tasks.pipeline import postprocess_findings, run_pipeline_execution
+from aist.internal_upload import ImportResult
+from aist.link_builder import SOURCEFILE_LINK_META_NAME, LinkBuilder
+from aist.models import (
+    AISTPipeline,
+    AISTStatus,
+    PipelineExecutionType,
+    PipelineLaunchRequest,
+    PipelineLaunchRequestState,
+)
+from aist.services.pipeline_results import schedule_pipeline_postprocessing
+from aist.tasks.pipeline import run_pipeline_execution
 from aist.tasks.reconciliation import (
     _recover_stuck_dedup_pipelines,
     _recover_stuck_enrich_pipelines,
     reconcile_recent_orphans_task,
 )
-from aist.test.pipeline_execution_helpers import run_persisted_sast_pipeline
+from aist.test.pipeline_execution_helpers import SastWorkerTestMixin, make_test_with_finding
 from aist.test.test_api import AISTApiBase
 from aist.utils.pipeline import finish_pipeline
 from aist.utils.reconciliation import reconcile_pipeline_orphans, safe_attach_findings_to_version
 
-
-class _DummyLogger:
-    def info(self, *args, **kwargs):
-        return None
-
-    def exception(self, *args, **kwargs):
-        return None
+_LOGGER = logging.getLogger(__name__)
 
 
-class PipelineOrphanReconciliationTests(AISTApiBase):
-    def setUp(self):
-        super().setUp()
-        acceptance = patch(
-            "aist.tasks.pipeline.accept_published_launch",
-            return_value=LaunchAcceptance.ACCEPTED,
-        )
-        acceptance.start()
-        self.addCleanup(acceptance.stop)
-        self._runtime_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self._runtime_dir.cleanup)
-        settings_override = self.settings(
-            AIST_PROJECTS_BUILD_DIR=f"{self._runtime_dir.name}/build",
-            AIST_OUTPUT_PATH=f"{self._runtime_dir.name}/output",
-        )
-        settings_override.enable()
-        self.addCleanup(settings_override.disable)
-
-    def _make_test_with_finding(self, *, file_path: str = "src/app.py"):
-        engagement = Engagement.objects.create(
-            name="Reconcile Engage",
-            target_start=timezone.now(),
-            target_end=timezone.now(),
-            product=self.product,
-        )
-        test_type = Test_Type.objects.create(name="Semgrep Reconcile")
-        dd_test = Test.objects.create(
-            engagement=engagement,
-            target_start=timezone.now(),
-            target_end=timezone.now(),
-            test_type=test_type,
-        )
-        finding = Finding.objects.create(
-            test=dd_test,
-            title="Reconcile finding",
-            severity="High",
-            date=timezone.now(),
-            reporter=self.user,
-            file_path=file_path,
-        )
-        return dd_test, finding
-
+class PipelineOrphanReconciliationTests(SastWorkerTestMixin, AISTApiBase):
     def test_safe_attach_skips_findings_deleted_before_lock(self):
         """
         safe_attach_findings_to_version must not raise when a finding is deleted
@@ -82,14 +44,14 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
         gone by the time we tried to lock it).  The deleted finding is simply skipped
         and does not cause a FK violation at COMMIT time.
         """
-        _dd_test, finding = self._make_test_with_finding(file_path="src/deleted-before-lock.py")
+        _dd_test, finding = self.make_test_with_finding(file_path="src/deleted-before-lock.py")
         deleted_id = finding.id
         finding.delete()
 
         stats = safe_attach_findings_to_version(
             pv=self.pv,
             finding_ids=[deleted_id],
-            logger=_DummyLogger(),
+            logger=_LOGGER,
         )
 
         self.assertEqual(stats.requested, 1)
@@ -98,13 +60,13 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
         self.assertFalse(self.pv.findings.filter(id=deleted_id).exists())
 
     def test_safe_attach_ignores_non_existing_findings(self):
-        _dd_test, finding = self._make_test_with_finding(file_path="src/attach-ignore.py")
+        _dd_test, finding = self.make_test_with_finding(file_path="src/attach-ignore.py")
         missing_id = finding.id + 999999
 
         stats = safe_attach_findings_to_version(
             pv=self.pv,
             finding_ids=[finding.id, missing_id],
-            logger=_DummyLogger(),
+            logger=_LOGGER,
         )
 
         self.assertEqual(stats.requested, 2)
@@ -113,39 +75,24 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
         self.assertFalse(self.pv.findings.filter(id=missing_id).exists())
 
     def test_pipeline_keeps_tests_and_finishes_with_warnings_on_postprocess_failure(self):
-        dd_test, finding = self._make_test_with_finding()
+        dd_test, finding = self.make_test_with_finding()
         pipeline = AISTPipeline.objects.create(
             id="pipe-orphan-int-1",
             project=self.project,
             project_version=self.pv,
             status=AISTStatus.FINISHED,
         )
-        with (
-            patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
-            patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
-            patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
-            patch(
-                "aist.tasks.pipeline.execute_pipeline",
-                return_value=SimpleNamespace(launch_data={
-                    "git": {},
-                    "output_dir": "/aist-output",
-                    "project_path": "/aist-project",
-                    "trim_path": "",
-                    "tmp_analyzer_config_path": "/aist-analyzers.yml",
-                }),
-            ),
-            patch("aist.tasks.pipeline.upload_results_internal", return_value=[SimpleNamespace(test_id=dd_test.id)]),
-            patch("aist.tasks.pipeline.postprocess_findings", side_effect=RuntimeError("forced crash")),
-            self.assertRaises(RuntimeError),
-        ):
-            run_persisted_sast_pipeline(
+        with self.assertRaises(RuntimeError):
+            self.run_sast(
                 pipeline,
-                {
-                    "project_id": self.project.id,
-                    "project_version": self.pv.id,
-                    "analyzers": ["semgrep"],
-                    "selected_languages": ["python"],
-                },
+                project_version=self.pv,
+                upload_results=[ImportResult(analyzer_name="semgrep", test_id=dd_test.id)],
+                extra_patches=[
+                    patch(
+                        "aist.services.pipeline_results.schedule_pipeline_postprocessing",
+                        side_effect=RuntimeError("forced crash"),
+                    ),
+                ],
             )
 
         pipeline.refresh_from_db()
@@ -168,7 +115,7 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
 
             with (
                 self.settings(AIST_PROJECTS_BUILD_DIR=base),
-                patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
+                patch("aist.tasks.sast_execution.install_pipeline_logging", return_value=_LOGGER),
                 patch(
                     "aist.tasks.pipeline.accept_published_launch",
                     return_value=LaunchAcceptance.DUPLICATE,
@@ -179,7 +126,7 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
             self.assertTrue((run_dir / "keep.txt").exists())
 
     def test_finish_pipeline_reconciles_orphans_to_finished(self):
-        dd_test, finding = self._make_test_with_finding(file_path="src/recovered.py")
+        dd_test, finding = self.make_test_with_finding(file_path="src/recovered.py")
         pipeline = AISTPipeline.objects.create(
             id="pipe-orphan-fix-1",
             project=self.project,
@@ -194,39 +141,10 @@ class PipelineOrphanReconciliationTests(AISTApiBase):
         self.assertEqual(pipeline.status, AISTStatus.FINISHED)
         self.assertTrue(pipeline.tests.filter(id=dd_test.id).exists())
         self.assertTrue(self.pv.findings.filter(id=finding.id).exists())
-        self.assertTrue(
-            DojoMeta.objects.filter(
-                finding=finding,
-                name="sourcefile_link",
-            ).exists(),
-        )
-
-    def test_reconciliation_skips_source_link_for_excluded_path_without_deletion(self):
-        self.project.profile = {"paths": {"exclude": ["vendor/"]}}
-        self.project.save(update_fields=["profile"])
-        dd_test, finding = self._make_test_with_finding(file_path="vendor/lib/unsafe.py")
-        pipeline = AISTPipeline.objects.create(
-            id="pipe-orphan-excluded-1",
-            project=self.project,
-            project_version=self.pv,
-            status=AISTStatus.WAITING_DEDUPLICATION_TO_FINISH,
-            launch_data={"imported_test_ids": [dd_test.id]},
-        )
-
-        stats = reconcile_pipeline_orphans(pipeline_id=pipeline.id, dry_run=False)
-        finding.refresh_from_db()
-
-        self.assertTrue(Finding.objects.filter(id=finding.id).exists())
-        self.assertFalse(
-            DojoMeta.objects.filter(
-                finding=finding,
-                name="sourcefile_link",
-            ).exists(),
-        )
-        self.assertEqual(stats["remaining_sourcefile_link_violations"], 0)
+        self.assertTrue(DojoMeta.objects.filter(finding=finding, name=SOURCEFILE_LINK_META_NAME).exists())
 
     def test_reconcile_command_dry_run_and_apply(self):
-        dd_test, finding = self._make_test_with_finding(file_path="src/command.py")
+        dd_test, finding = self.make_test_with_finding(file_path="src/command.py")
         pipeline = AISTPipeline.objects.create(
             id="pipe-orphan-cmd-1",
             project=self.project,
@@ -277,18 +195,20 @@ class PostprocessFindingsTests(AISTApiBase):
             status=AISTStatus.UPLOADING_RESULTS,
         )
 
-        with patch("aist.tasks.pipeline.watch_deduplication") as mock_dedup:
-            mock_dedup.apply_async.return_value = None
-            with self.captureOnCommitCallbacks(execute=True):
-                postprocess_findings(pipeline.id, "INFO")
+        with (
+            patch("aist.services.pipeline_results.current_app") as mock_app,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            schedule_pipeline_postprocessing(pipeline.id, "INFO")
 
         pipeline.refresh_from_db()
         self.assertEqual(pipeline.status, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
         self.assertIsNotNone(pipeline.watch_dedup_task_id)
 
         # The task must have been dispatched with the same ID that was saved
-        mock_dedup.apply_async.assert_called_once()
-        call_kwargs = mock_dedup.apply_async.call_args
+        apply_async = mock_app.signature.return_value.apply_async
+        apply_async.assert_called_once()
+        call_kwargs = apply_async.call_args
         dispatched_task_id = call_kwargs.kwargs.get("task_id") or (
             call_kwargs[1].get("task_id") if len(call_kwargs) > 1 else None
         )
@@ -338,3 +258,65 @@ class ReconciliationRecoveryTests(AISTApiBase):
         self.assertEqual(dedup_pipeline.status, AISTStatus.WAITING_DEDUPLICATION_TO_FINISH)
         self.assertIsNone(dedup_pipeline.watch_dedup_task_id)
         self.assertEqual(enrich_pipeline.status, AISTStatus.FINDING_POSTPROCESSING)
+
+
+class PipelineFinishStatusTests(AISTApiBase):
+
+    """How a pipeline ends once its results are in: reconciliation failures and leftovers end it with warnings."""
+
+    def _uploading_pipeline(self, pipeline_id: str, *, project_version, execution_type=PipelineExecutionType.SAST):
+        return AISTPipeline.objects.create(
+            id=pipeline_id,
+            project=self.project,
+            project_version=project_version,
+            execution_type=execution_type,
+            status=AISTStatus.UPLOADING_RESULTS,
+        )
+
+    def test_a_clean_pipeline_finishes(self):
+        pipeline = self._uploading_pipeline("pipe-finish-clean", project_version=self.pv)
+
+        finish_pipeline(pipeline.id)
+
+        pipeline.refresh_from_db()
+        self.assertEqual(pipeline.status, AISTStatus.FINISHED)
+
+    def test_a_versionless_dast_pipeline_with_findings_finishes_with_warnings_and_links_no_source(self):
+        pipeline = self._uploading_pipeline(
+            "pipe-finish-versionless", project_version=None, execution_type=PipelineExecutionType.DAST,
+        )
+        dd_test, finding = make_test_with_finding(self.product, self.user, file_path="src/app.py")
+        pipeline.tests.add(dd_test)
+
+        with self.assertNoLogs("aist", level="ERROR"):
+            stats = reconcile_pipeline_orphans(pipeline_id=pipeline.id, dry_run=True)
+            finish_pipeline(pipeline.id)
+
+        self.assertEqual(stats.source_links.eligible, 0)
+        self.assertEqual(stats.remaining_missing_project_version_links, 1)
+        pipeline.refresh_from_db()
+        self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
+        self.assertFalse(DojoMeta.objects.filter(finding=finding, name=SOURCEFILE_LINK_META_NAME).exists())
+
+    def test_a_finding_left_with_its_scanned_path_is_linked_relative_to_the_checkout(self):
+        pipeline = self._uploading_pipeline("pipe-finish-untrimmed", project_version=self.pv)
+        pipeline.launch_data = {"trim_path": "/aist-build/widgets"}
+        pipeline.save(update_fields=["launch_data"])
+        dd_test, finding = make_test_with_finding(
+            self.product, self.user, file_path="/aist-build/widgets/src/app.py",
+        )
+        pipeline.tests.add(dd_test)
+
+        finish_pipeline(pipeline.id)
+
+        link = DojoMeta.objects.get(finding=finding, name=SOURCEFILE_LINK_META_NAME).value
+        self.assertEqual(LinkBuilder.parse(link), (self.pv.id, "src/app.py"))
+
+    def test_a_reconciliation_failure_finishes_the_pipeline_with_warnings(self):
+        pipeline = self._uploading_pipeline("pipe-finish-reconcile-crash", project_version=self.pv)
+
+        with patch("aist.utils.pipeline.reconcile_pipeline_orphans", side_effect=RuntimeError("reconcile crashed")):
+            finish_pipeline(pipeline.id)
+
+        pipeline.refresh_from_db()
+        self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)

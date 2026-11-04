@@ -1,8 +1,20 @@
 from __future__ import annotations
 
-from rest_framework import serializers
+from typing import TYPE_CHECKING
 
+from rest_framework import exceptions, serializers, status
+
+from aist.execution.enqueue import (
+    LaunchEnqueueError,
+    LaunchIdempotencyConflictError,
+    LaunchPrincipal,
+    enqueue_pipeline_launch,
+)
 from aist.models import AISTApiToken, PipelineLaunchRequest
+
+if TYPE_CHECKING:
+    from aist.models import AISTProjectLaunchConfig, LaunchSchedule
+    from aist.pipeline_args import PipelineArguments
 
 
 class LaunchRequestHeadersSerializer(serializers.Serializer):
@@ -46,3 +58,40 @@ def launch_request_response(launch_request: PipelineLaunchRequest) -> dict:
         "pipeline_id": launch_request.pipeline_id,
         "queued": launch_request.pipeline_id is None,
     }).data
+
+
+class LaunchConflict(exceptions.APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "The idempotency key was already used for a different launch."
+    default_code = "conflict"
+
+
+def enqueue_requested_launch(
+    request,
+    *,
+    arguments: PipelineArguments,
+    launch_config: AISTProjectLaunchConfig | None = None,
+    schedule: LaunchSchedule | None = None,
+) -> PipelineLaunchRequest:
+    """
+    Queue a launch on behalf of the request's user or API token, keyed by its ``Idempotency-Key``.
+
+    A replayed key with a different launch raises :class:`LaunchConflict` (409); any other rejected launch
+    raises ``ValidationError`` (400).
+    """
+    try:
+        return enqueue_pipeline_launch(
+            arguments=arguments,
+            principal=LaunchPrincipal.for_user(
+                organization=arguments.project.organization,
+                requester=request.user,
+                api_token=launch_principal_token(request),
+            ),
+            launch_config=launch_config,
+            schedule=schedule,
+            client_request_key=launch_request_headers(request).get("client_request_key"),
+        ).request
+    except LaunchIdempotencyConflictError as exc:
+        raise LaunchConflict({"detail": str(exc)}) from exc
+    except LaunchEnqueueError as exc:
+        raise serializers.ValidationError({"detail": str(exc)}) from exc

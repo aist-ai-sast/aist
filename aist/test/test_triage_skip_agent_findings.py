@@ -20,7 +20,7 @@ from aist.models import (
     AISTPipeline,
     AISTStatus,
 )
-from aist.tasks.ai import _prepare_auto_push
+from aist.tasks.ai import AutoPushOutcome, _prepare_auto_push
 from aist.test.test_api import AISTApiBase
 from aist.test.test_local_triage import _noop_logger
 
@@ -81,7 +81,7 @@ class TriageSkipAgentAnalyzerFindingsTests(AISTApiBase):
 
         with self.captureOnCommitCallbacks(execute=True):
             result = _prepare_auto_push(str(pipeline.id), _noop_logger())
-        self.assertIsNone(result, "Local triage should still dispatch (one untagged finding remains).")
+        self.assertEqual(result, AutoPushOutcome.DISPATCHED, "Local triage dispatches the one untagged finding.")
         # The local triage delay() must have been called with finding_ids that
         # contain only the non-agent finding.
         mock_local.delay.assert_called_once()
@@ -111,7 +111,7 @@ class TriageSkipAgentAnalyzerFindingsTests(AISTApiBase):
 
         with self.captureOnCommitCallbacks(execute=True):
             result = _prepare_auto_push(str(pipeline.id), _noop_logger())
-        self.assertIsNone(result)
+        self.assertEqual(result, AutoPushOutcome.DISPATCHED)
         mock_local.delay.assert_called_once()
         called_finding_ids = mock_local.delay.call_args.args[1]
         self.assertIn(finding.id, called_finding_ids)

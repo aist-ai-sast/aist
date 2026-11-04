@@ -1,24 +1,13 @@
 """
-Task 9 — ensure ``CLAUDE_CODE_OAUTH_TOKEN`` is not embedded in any
-container env at boot time.
+No container environment carries ``CLAUDE_CODE_OAUTH_TOKEN`` at boot.
 
-After the integration refactor, the token MUST flow per-request from
-``aist.tasks.pipeline`` / ``aist.tasks.claude`` → BridgeClient → bridge
-``subprocess_env`` → claude subprocess only. A stale env var in
-``docker-compose.yml`` would silently re-introduce a global Claude
-account shared by every organization — defeats the whole point of
-``OrgIntegration(type=CLAUDE_CODE)``.
+The token reaches the ``claude`` subprocess per request only: ``aist.tasks.sast_execution`` /
+``aist.tasks.claude`` → BridgeClient → bridge ``subprocess_env``. A token in ``docker-compose.yml`` would give
+every organization one shared Claude account.
 
-This file complements Task 14's source-tree grep invariant. The
-Django unit-tests image bakes only ``aist/``, ``aist_site/``,
-``sast-combinator/`` and ``vendor/`` — it does NOT include
-``docker-compose.yml`` or ``tools/aist-triage-bridge/`` files. When
-those files are not visible (the normal CI test-run path), each test
-is skipped with a clear marker. When the test suite is invoked from a
-full repo checkout (e.g. via a future Dockerfile that mounts the
-root, or by running pytest outside the image), the tests turn into
-real assertions. Reviewers should still manually verify these files
-during PR review.
+``aist/test/test_claude_integration_architecture.py`` keeps the literal out of the source tree. The unit-test image
+does not include ``docker-compose.yml`` or ``tools/aist-triage-bridge/``; each test is skipped with a marker where
+those files are absent and asserts where they are present.
 """
 from __future__ import annotations
 

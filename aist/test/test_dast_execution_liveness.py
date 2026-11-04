@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from celery.exceptions import Retry
@@ -23,32 +22,12 @@ from aist.models import (
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
-from aist.services.dast_outcomes import public_dast_outcome_code
-from aist.tasks import pipeline as pipeline_tasks
+from aist.services.dast_outcomes import DastRunState, public_dast_outcome_code
+from aist.tasks import dast_execution
+from aist.tasks.pipeline import stop_pipeline_execution
 from aist.test import dast_fixtures
 from aist.test.test_api import AISTApiBase
 from aist.utils.pipeline import _request_dast_pipeline_stop
-
-
-class _FakeTask:
-    def __init__(self, *, retries: int = 0):
-        self.request = type("Request", (), {"retries": retries, "id": "task-1"})()
-        self.retry_calls: list[dict] = []
-
-    def retry(self, **kwargs):
-        self.retry_calls.append(kwargs)
-        return Retry()
-
-
-class _ConnectorResult:
-    def __init__(self, pipeline_id: str, *, run_id: str, log_cursor: int, report_path: Path | None = None):
-        self.recovery = SimpleNamespace(
-            correlation_id=pipeline_id,
-            run_id=run_id,
-            log_cursor=log_cursor,
-        )
-        self.outcome = SimpleNamespace(state=pipeline_tasks.DastConnectorOutcomeState.STOP_PENDING)
-        self.report_path = report_path
 
 
 class _DastPipelineFixture(AISTApiBase):
@@ -103,11 +82,19 @@ class DastExecutionLivenessTests(_DastPipelineFixture):
             expires_at=timezone.now() + timedelta(minutes=5),
         )
 
+    def _stop_pending(self, **kwargs):
+        return dast_fixtures.connector_result(
+            correlation_id=self.pipeline.id,
+            state=dast_execution.DastConnectorOutcomeState.STOP_PENDING,
+            run_id="run-1",
+            **kwargs,
+        )
+
     def test_provider_silence_retries_without_terminalizing_or_releasing_capacity(self):
-        task = _FakeTask(retries=20)
+        task = dast_fixtures.FakeRetryingTask(retries=20)
 
         with self.assertRaises(Retry):
-            pipeline_tasks._retry_dast_execution(task, self.pipeline.id)
+            dast_execution._retry_dast_execution(task, self.pipeline.id)
 
         self.pipeline.refresh_from_db()
         self.lease.refresh_from_db()
@@ -115,6 +102,16 @@ class DastExecutionLivenessTests(_DastPipelineFixture):
         self.assertIsNone(self.lease.released_at)
         self.assertIsNone(public_dast_outcome_code(self.pipeline))
         self.assertEqual(task.retry_calls[0]["countdown"], 300)
+
+    def test_retry_backoff_doubles_from_fifteen_seconds_up_to_five_minutes(self):
+        countdowns = []
+        for retries in range(8):
+            task = dast_fixtures.FakeRetryingTask(retries=retries)
+            with self.assertRaises(Retry):
+                dast_execution._retry_dast_execution(task, self.pipeline.id)
+            countdowns.append(task.retry_calls[0]["countdown"])
+
+        self.assertEqual(countdowns, [15, 30, 60, 120, 240, 300, 300, 300])
 
     def test_reconciliation_always_recovers_an_unfinished_provider_run(self):
         self.assertTrue(DastPipelineLaunchAdapter.should_recover(self.pipeline))
@@ -127,16 +124,16 @@ class DastExecutionLivenessTests(_DastPipelineFixture):
         stale = self.state.last_progress_at
         DastExecutionState.objects.filter(pk=self.state.pk).update(run_id="run-1", log_cursor=784)
 
-        pipeline_tasks._persist_dast_execution_result(
+        dast_execution._persist_dast_execution_result(
             self.pipeline.id,
-            _ConnectorResult(self.pipeline.id, run_id="run-1", log_cursor=784),
+            self._stop_pending(log_cursor=784),
         )
         self.state.refresh_from_db()
         self.assertEqual(self.state.last_progress_at, stale)
 
-        pipeline_tasks._persist_dast_execution_result(
+        dast_execution._persist_dast_execution_result(
             self.pipeline.id,
-            _ConnectorResult(self.pipeline.id, run_id="run-1", log_cursor=791),
+            self._stop_pending(log_cursor=791),
         )
         self.state.refresh_from_db()
         self.assertGreater(self.state.last_progress_at, stale)
@@ -144,33 +141,77 @@ class DastExecutionLivenessTests(_DastPipelineFixture):
     def test_terminal_report_directory_is_persisted_for_reimport(self):
         report_path = Path("output/run/dast_result.json")
 
-        pipeline_tasks._persist_dast_execution_result(
+        dast_execution._persist_dast_execution_result(
             self.pipeline.id,
-            _ConnectorResult(
-                self.pipeline.id,
-                run_id="run-1",
-                log_cursor=1,
-                report_path=report_path,
-            ),
+            self._stop_pending(log_cursor=1, report_path=report_path),
         )
 
         self.pipeline.refresh_from_db()
         self.assertEqual(self.pipeline.launch_data["output_dir"], str(report_path.parent))
 
     def test_local_connector_setup_failure_remains_an_explicit_terminal_outcome(self):
-        task = _FakeTask()
+        task = dast_fixtures.FakeRetryingTask()
         with patch.object(
-            pipeline_tasks,
+            dast_execution,
             "_execute_dast_pipeline",
-            side_effect=pipeline_tasks.DastExecutionLocalFailure("connector could not start"),
+            side_effect=dast_execution.DastExecutionLocalFailure("connector could not start"),
         ):
-            result = pipeline_tasks._run_dast_execution(task, self.pipeline.id, operation=ProviderOperation.EXECUTE)
+            result = dast_execution.run_dast_execution(task, self.pipeline.id, operation=ProviderOperation.EXECUTE)
 
         self.assertIsNone(result)
         self.pipeline.refresh_from_db()
         self.lease.refresh_from_db()
         self.assertEqual(public_dast_outcome_code(self.pipeline), "RUNTIME_FAILED")
         self.assertIsNotNone(self.lease.released_at)
+
+
+class DastSettledRunFinishTests(_DastPipelineFixture):
+
+    """Which settled provider runs the execution finishes itself; a run carrying a report is the report finalizer's."""
+
+    def _settle(self, pipeline_id: str, status: DastRunState):
+        pipeline = AISTPipeline.objects.create(
+            id=pipeline_id,
+            project=self.project,
+            project_version=self.pv,
+            execution_type=PipelineExecutionType.DAST,
+            status=AISTStatus.EXECUTING,
+            run_task_id="task-1",
+        )
+        DastExecutionState.objects.create(pipeline=pipeline)
+        request = self._launch_request(pipeline)
+        result = dast_fixtures.connector_result(correlation_id=pipeline_id, status=status)
+        with patch.object(dast_execution, "_execute_dast_pipeline", return_value=result):
+            dast_execution.run_dast_execution(
+                dast_fixtures.FakeRetryingTask(), pipeline_id, operation=ProviderOperation.EXECUTE,
+            )
+        pipeline.refresh_from_db()
+        request.refresh_from_db()
+        return pipeline, request
+
+    def test_a_run_whose_result_carries_a_report_is_not_finished_here(self):
+        for index, status in enumerate((
+            DastRunState.SUCCEEDED,
+            DastRunState.COMPLETED_WITH_DEGRADATION,
+            DastRunState.FAILED_WITH_PARTIAL_RESULTS,
+        )):
+            with self.subTest(status=status):
+                pipeline, _request = self._settle(f"carries{index}", status)
+
+                self.assertEqual(pipeline.status, AISTStatus.EXECUTING)
+
+    def test_a_failed_or_stopped_run_is_finished_with_warnings(self):
+        cases = (
+            (DastRunState.FAILED, "PROVIDER_FAILED", PipelineLaunchRequestState.DISPATCHED),
+            (DastRunState.STOPPED, "CANCELLED", PipelineLaunchRequestState.CANCELLED),
+        )
+        for index, (status, outcome, request_state) in enumerate(cases):
+            with self.subTest(status=status):
+                pipeline, request = self._settle(f"settled{index}", status)
+
+                self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
+                self.assertEqual(public_dast_outcome_code(pipeline), outcome)
+                self.assertEqual(request.state, request_state)
 
 
 class DastStopBeforeProviderRunTests(_DastPipelineFixture):
@@ -238,6 +279,6 @@ class DastStopSignalDeliveryTests(_DastPipelineFixture):
 
     def test_the_worker_task_sweeps_the_execution_containers(self):
         with patch("aist.tasks.pipeline.cleanup_pipeline_containers") as swept:
-            pipeline_tasks.stop_pipeline_execution(self.pipeline.id)
+            stop_pipeline_execution(self.pipeline.id)
 
         swept.assert_called_once_with(self.pipeline.id)

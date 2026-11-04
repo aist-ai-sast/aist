@@ -2,32 +2,21 @@
 
 # Claude Code — Additions
 
-## Autonomous agents
+## Review subagents
 
-Claude Code will automatically delegate security and API checks to subagents in
-`.claude/agents/` — no explicit invocation needed. They trigger on relevant file changes:
+The review is described in `AGENTS.md` "Review before commit". The reviewers are the
+subagents in `.claude/agents/` that `.sdlc/scope.yaml` maps each reviewer name to; dispatch
+them in parallel with the brief's path. The PostToolUse hook names the reviewers an edited
+file routes to, so the list stays in view across a long session.
 
-- `aist-security-checker` — after any edits to `aist/`, `context_extractor_service/`,
-  `sast-pipeline/`
-- `aist-api-reviewer` — after any edits to `aist/api/`
-- `aist-ui-security-checker` — after any edits to `client-ui/src/pages/`,
-  `client-ui/src/components/`, `client-ui/src/lib/`
-- `aist-migration-validator` — after any edits to `aist/models.py` or `aist/migrations/`
-- `aist-architecture-docs-maintainer` — after any change to a product workflow, tenant
-  boundary, integration, task, runtime service, deployment, or security control (i.e.
-  anything described by a page under `docs/`) — see
-  `.codex/skills/security-architecture-maintainer/SKILL.md` for the exact trace method
+When a code change alters something a page under `docs/` describes — a product workflow,
+tenant boundary, integration, task, runtime service, deployment or security control — also
+run `aist-architecture-docs-maintainer` in update mode; the pages it changes are then
+reviewed by the `docs` reviewer like any other change.
 
-This trigger list is advisory, not enforced by a hook — a session can lose track of it
-across a long conversation or when work is delegated to a sub-agent that doesn't inherit
-this file. Do not treat "the agent didn't flag anything" as equivalent to "the agent ran."
-If you are not certain a relevant checker actually ran against the current diff, run it
-explicitly before finishing.
-
-**Before merging/committing changes to `aist/auth_backends.py`, `aist/members/`,
+**Before committing changes to `aist/auth_backends.py`, `aist/members/`,
 `aist/api/tokens.py`, `aist/api/account.py`, `aist/api/organizations.py`, or any new
-authentication/authorization logic:** the fast checkers above are pattern-based and diff-
-scoped — they will not catch cross-endpoint systemic gaps (e.g. "does every mutating
+authentication/authorization logic:** the routed reviewers are diff-scoped — they will not catch cross-endpoint systemic gaps (e.g. "does every mutating
 endpoint honor token scope") or issues that only manifest under concurrency. For changes in
 this category, also run `/aist-security-check` (still diff-scoped but repeats the fuller
 checklist).

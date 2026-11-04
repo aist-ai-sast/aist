@@ -14,6 +14,17 @@ changes that produced it. Work in either audit mode or update mode.
   navigation. Classify pages as keep, revise, rewrite, merge, or retire. Support
   each finding with the reader question the page fails to answer. Do not edit
   unless the user requested fixes.
+  - **As the `docs` reviewer** under `.sdlc/review-process.md`, the audit covers
+    only the pages the brief's diff changes, and it runs in a session that did not
+    write them. List every claim each page makes about how the system behaves and
+    try to falsify it against the implementation — the code, configuration or test
+    that performs it — never against other prose, which may share the error. A
+    claim no implementation supports, a control described as unconditional that has
+    an opt-out, a guarantee wider than its mechanism, and two pages that contradict
+    each other are findings. Begin the reply with `verdict: clean | findings |
+    blocked`; each finding quotes the sentence, states what the implementation does
+    and what a reader would wrongly do, and carries a severity on
+    `.sdlc/review-process.md`'s scale.
 - **Update mode:** change only the coherent page or page-and-diagram group that
   owns the affected knowledge. Do not batch unrelated pages merely because they
   appeared in the same diff. This also covers authoring the first version of a

@@ -1,31 +1,30 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
+from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from dojo.importers.default_importer import DefaultImporter
+from dojo.importers.services import import_scan
 from dojo.models import (
-    Development_Environment,
     Engagement,
     Finding,
     Product,
-    Product_Type,
     Test,
 )
+from dojo.user.models import DEDUPLICATION_EXECUTION_MODE_ASYNC
 
-from aist.logging_transport import install_pipeline_logging
+from aist.profile import ProjectProfile
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
 
 _import_sast_pipeline_package()
 
 # These imports intentionally come AFTER the call above; suppress E402 explicitly.
 from pipeline.config_utils import AnalyzersConfigHelper  # noqa: E402
-from pipeline.defect_dojo.repo_info import RepoParams, read_repo_params  # noqa: E402
+from pipeline.defect_dojo.repo_info import RepoParams, checkout_relative_path, read_repo_params  # noqa: E402
 
 
 @dataclass
@@ -45,30 +44,24 @@ class ImportConfig:
     engagement_status: str = "In Progress"
 
 
-@dataclass
+class ImportFailure(StrEnum):
+
+    """Why an analyzer's report produced no Test."""
+
+    IMPORT_FAILED = "import_failed"
+
+
+@dataclass(frozen=True)
 class ImportResult:
 
-    """
-    Result returned by :func:`upload_results_internal`.
+    """What importing one configured analyzer's report produced: its Test, or the reason it produced none."""
 
-    ``engagement_id`` and ``test_id`` allow callers to reference the
-    imported objects. ``imported_findings`` records how many findings
-    were created in core and ``enriched_count`` counts the
-    number of findings for which a source file link was successfully
-    attached. ``raw`` contains the underlying test object for
-    introspection by advanced callers. ``analyzer_name`` is the name
-    of the analyzer (from analyzers.yaml) that produced this report,
-    so callers can correlate analyzer outcomes/artifacts with the imported
-    Test for follow-up work.
-    """
-
-    engagement_id: int
-    engagement_name: str
-    test_id: int | None
-    imported_findings: int
-    enriched_count: int
-    raw: Test
-    analyzer_name: str = ""
+    analyzer_name: str
+    test_id: int | None = None
+    engagement_id: int | None = None
+    imported_findings: int = 0
+    failure_code: ImportFailure | None = None
+    failure_message: str = ""
 
 
 def derive_engagement_name(analyzer_name: str, branch: str | None, commit: str | None, name_mode: str) -> str:
@@ -92,42 +85,13 @@ def derive_engagement_name(analyzer_name: str, branch: str | None, commit: str |
     return "-".join([x for x in [analyzer_name, short_sha] if x]) or analyzer_name
 
 
-def resolve_scan_type(analyzer: dict[str, Any]) -> str:
-    ot = (analyzer.get("output_type") or "SARIF")
-    if ot.lower() in {"xml", "generic-xml"}:
-        return "Generic XML Import"
-    return ot
-
-
-def get_or_create_product(product_name: str) -> Product:
-    """
-    Retrieve or create a Product.
-
-    A default product type will be created if necessary. The product is
-    lazily initialised to avoid unnecessary queries. Administrators
-    should ensure that the service account running Celery has permission
-    to create products and engagements if creation is expected.
-    """
-    prod_type_name = getattr(settings, "DEFAULT_PRODUCT_TYPE_NAME", "Default")
-    prod_type, _ = Product_Type.objects.get_or_create(name=prod_type_name)
-    product, _ = Product.objects.get_or_create(
-        name=product_name,
-        defaults={
-            "description": "Created automatically during report import",
-            "prod_type": prod_type,
-        },
-    )
-    return product
-
-
 def ensure_engagement(product: Product, name: str, repo_params: RepoParams, status: str) -> Engagement:
     """
     Get or create an Engagement with repository metadata.
 
-    If an engagement with the same name exists its repository metadata
-    (source_code_management_uri, branch_tag, commit_hash) is updated
-    when different. Otherwise a new engagement is created spanning
-    today to tomorrow with the provided status.
+    An existing engagement of that name takes the given repository metadata
+    (source_code_management_uri, branch_tag, commit_hash) and status where they differ.
+    Otherwise a new engagement is created spanning today to tomorrow with the given status.
     """
     engagement = Engagement.objects.filter(product=product, name=name).first()
     if engagement:
@@ -163,6 +127,44 @@ def ensure_engagement(product: Product, name: str, repo_params: RepoParams, stat
     )
 
 
+@dataclass(frozen=True)
+class FindingExclusion:
+
+    """
+    The findings a project profile keeps out of one scan import.
+
+    Path patterns match the finding's path relative to the checkout root, written with a leading ``/`` so a
+    pattern may anchor at the root.
+    """
+
+    profile: ProjectProfile = field(default_factory=ProjectProfile)
+    checkout_root: str = ""
+
+    def excludes(self, file_path: str, severity: str) -> bool:
+        rooted_path = "/" + checkout_relative_path(file_path, self.checkout_root).lstrip("/")
+        return self.profile.excludes_finding(rooted_path, severity)
+
+
+NO_EXCLUSION = FindingExclusion()
+
+
+class ProfileExcludingImporter(DefaultImporter):
+
+    """DefaultImporter that leaves out every parsed finding `exclusion` excludes, before any is saved."""
+
+    def __init__(self, *, exclusion: FindingExclusion, **kwargs):
+        super().__init__(**kwargs)
+        self.exclusion = exclusion
+
+    def process_findings(self, parsed_findings: list[Finding], **kwargs) -> list[Finding]:
+        kept = [
+            finding
+            for finding in parsed_findings or []
+            if not self.exclusion.excludes(finding.file_path or "", self.sanitize_severity(finding).severity)
+        ]
+        return super().process_findings(kept, **kwargs)
+
+
 def import_scan_via_default_importer(
     engagement: Engagement,
     scan_type: str,
@@ -171,15 +173,9 @@ def import_scan_via_default_importer(
     repo_params: RepoParams,
     minimum_severity: str,
     lead=None,
+    exclusion: FindingExclusion = NO_EXCLUSION,
 ) -> tuple[Test, list[Finding]]:
-    """
-    Import a scan using :class:`DefaultImporter` and return the Test and findings.
-
-    This helper encapsulates the boilerplate required to instantiate
-    DefaultImporter with the correct options for the pipeline use case.
-    Findings are collected from the created test to allow for
-    enrichment and deletion.
-    """
+    """Import the report at `report_path` through :func:`import_scan_file_via_default_importer`."""
     with Path(report_path).open("rb") as report_file:
         return import_scan_file_via_default_importer(
             engagement=engagement,
@@ -189,6 +185,7 @@ def import_scan_via_default_importer(
             repo_params=repo_params,
             minimum_severity=minimum_severity,
             lead=lead,
+            exclusion=exclusion,
         )
 
 
@@ -200,65 +197,53 @@ def import_scan_file_via_default_importer(
     repo_params: RepoParams,
     minimum_severity: str,
     lead=None,
+    exclusion: FindingExclusion = NO_EXCLUSION,
 ) -> tuple[Test, list[Finding]]:
-    """Import an already-open report stream through the common hardened importer."""
-    scan_date = timezone.now()
-    environment = Development_Environment.objects.get_or_create(name="Development")[0]
-    importer = DefaultImporter(
+    """
+    Import an open report stream into a new Test and return it with its saved findings.
+
+    The platform's import service runs :class:`ProfileExcludingImporter`, so a finding ``exclusion`` excludes is
+    never saved. Deduplication always runs asynchronously: the pipeline watches it, whatever the lead prefers.
+    """
+    result = import_scan(
+        importer_class=ProfileExcludingImporter,
+        exclusion=exclusion,
+        user=lead,
+        lead=lead,
         engagement=engagement,
-        test_title=test_title,
+        scan_file=report_file,
         scan_type=scan_type,
-        scan_date=scan_date,
+        test_title=test_title,
+        scan_date=timezone.now(),
+        environment="Development",
+        auto_create_context=True,
         minimum_severity=minimum_severity,
         active=True,
         verified=False,
-        lead=lead,
-        environment=environment,
-        service=None,
-        version=None,
+        deduplication_execution_mode=DEDUPLICATION_EXECUTION_MODE_ASYNC,
         branch_tag=repo_params.branch_tag,
         build_id=repo_params.commit_hash or None,
         commit_hash=repo_params.commit_hash,
-        api_scan_configuration=None,
-        group_by=None,
         create_finding_groups_for_all_findings=False,
-        deduplication_on_engagement=False,
-        auto_create_context=True,
-        user=lead,
     )
-    test_obj, *_rest = importer.process_scan(report_file)
-    # Collect findings associated with the test
-    findings = list(Finding.objects.filter(test=test_obj))
-    return test_obj, findings
+    return result.test, list(Finding.objects.filter(test=result.test))
 
 
 def upload_report_internal(
     analyzer_name: str,
-    product_name: str,
+    product: Product,
     scan_type: str,
     report_path: Path,
     repo_params: RepoParams,
-    trim_path: str,
     cfg: ImportConfig,
-    pipeline_id: str,
-    log_level: str,
+    exclusion: FindingExclusion,
+    logger,
     lead=None,
 ) -> ImportResult:
-    """
-    Replicate the behaviour of :meth:`SastPipelineDDClient.upload_report` without REST.
-
-    This function orchestrates product/engagement creation, scan import
-    and post-processing (file path trimming, link enrichment and deletion
-    of invalid findings). It is intended to be called from
-    :func:`upload_results_internal`.
-    """
-    # Ensure product and engagement exist
-    product = get_or_create_product(product_name)
+    """Import one analyzer's report into its engagement of ``product``, leaving out the findings ``exclusion`` excludes."""
     eng_name = derive_engagement_name(analyzer_name, repo_params.branch_tag, repo_params.commit_hash, cfg.name_mode)
     engagement = ensure_engagement(product, eng_name, repo_params, cfg.engagement_status)
-    logger = install_pipeline_logging(pipeline_id, log_level)
     logger.info("Using engagement '%s' (id=%s)", eng_name, engagement.id)
-    # Import
     test_obj, findings = import_scan_via_default_importer(
         engagement=engagement,
         scan_type=scan_type,
@@ -267,37 +252,28 @@ def upload_report_internal(
         repo_params=repo_params,
         minimum_severity=cfg.minimum_severity,
         lead=lead,
+        exclusion=exclusion,
     )
-    imported_count = len(findings)
-    logger.info("Import finished for %s, %d findings", analyzer_name, imported_count)
-
+    logger.info("Import finished for %s, %d findings", analyzer_name, len(findings))
     return ImportResult(
-        engagement_id=engagement.id,
-        engagement_name=eng_name,
-        test_id=test_obj.id if test_obj else None,
-        imported_findings=imported_count,
-        enriched_count=0,  # will be updated in enrichment callback
-        raw=test_obj,
         analyzer_name=analyzer_name,
+        test_id=test_obj.id,
+        engagement_id=engagement.id,
+        imported_findings=len(findings),
     )
 
 
 def upload_results_internal(
     analyzers_cfg_path: str,
     output_dir: str,
-    product_name: str,
+    product: Product,
     repo_path: str,
-    trim_path: str,
-    pipeline_id: str,
-    log_level: str,
+    exclusion: FindingExclusion,
+    logger,
 ) -> list[ImportResult]:
-    if not (product_name or "").strip():
-        msg = "product_name must not be empty"
-        raise ValueError(msg)
-
+    """Import every configured analyzer's report into ``product``; a report the platform fails to import is a failed result."""
     cfg = ImportConfig()
     repo_dir = repo_path
-    logger = install_pipeline_logging(pipeline_id, log_level)
     try:
         repo_params = read_repo_params(repo_dir)
     except Exception as exc:
@@ -310,9 +286,6 @@ def upload_results_internal(
         repo_params = RepoParams(commit_hash=None, branch_tag=None, repo_url=None, scm_type=None, local_path=repo_dir)
 
     analyzers_cfg = AnalyzersConfigHelper(analyzers_cfg_path)
-    if not analyzers_cfg:
-        return []
-    analyzers = analyzers_cfg.get_analyzers()
 
     # Resolve lead user once for the entire import batch to avoid N queries.
     User = get_user_model()
@@ -322,29 +295,32 @@ def upload_results_internal(
         raise RuntimeError(msg)
 
     results: list[ImportResult] = []
-    for analyzer in analyzers:
-        name = analyzer.get("name") or "unknown"
-        report_name = analyzers_cfg.get_analyzer_result_file_name(analyzer)
-        report_path = Path(output_dir) / report_name
+    for report in analyzers_cfg.get_analyzer_reports():
+        report_path = Path(output_dir) / report.result_file
         if not report_path.exists():
-            logger.error("No result on expected path %s for analyzer %s", report_path, name)
+            # Whether a missing result degrades the run is sast-pipeline's call, reported in its analyzer outcomes.
+            logger.error("No result on expected path %s for analyzer %s", report_path, report.analyzer_name)
             continue
-        scan_type = resolve_scan_type(analyzer)
-        logger.info("Processing report: %s (analyzer=%s, scan_type=%s)", report_path, name, scan_type)
+        logger.info(
+            "Processing report: %s (analyzer=%s, scan_type=%s)", report_path, report.analyzer_name, report.scan_type,
+        )
         try:
-            res = upload_report_internal(
-                analyzer_name=name,
-                product_name=product_name,
-                scan_type=scan_type,
+            results.append(upload_report_internal(
+                analyzer_name=report.analyzer_name,
+                product=product,
+                scan_type=report.scan_type,
                 report_path=report_path,
                 repo_params=repo_params,
-                trim_path=trim_path,
                 cfg=cfg,
-                pipeline_id=pipeline_id,
-                log_level=log_level,
+                exclusion=exclusion,
+                logger=logger,
                 lead=lead,
-            )
-            results.append(res)
+            ))
         except Exception as exc:
-            logger.error("Error during uploading report %s: %s", report_path, exc)
+            logger.exception("Error during uploading report %s", report_path)
+            results.append(ImportResult(
+                analyzer_name=report.analyzer_name,
+                failure_code=ImportFailure.IMPORT_FAILED,
+                failure_message=f"Report import failed: {type(exc).__name__}",
+            ))
     return results

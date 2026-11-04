@@ -16,10 +16,15 @@ from aist.execution.contracts import (
     PipelineTaskName,
     ProviderOperation,
 )
-from aist.integrations.dast_config import DastBindingParameters, DastConfigError, DastTargetSnapshot
+from aist.integrations.dast_config import (
+    DastBindingParameters,
+    DastConfigError,
+    DastExecutionSnapshot,
+    DastTargetSnapshot,
+)
 from aist.integrations.dast_readiness import check_dast_binding_readiness
+from aist.launch_data import PipelineLaunchData
 from aist.models import (
-    AISTProjectVersion,
     DastExecutionOutcome,
     DastExecutionState,
     DastIntegrationState,
@@ -34,8 +39,10 @@ if TYPE_CHECKING:
 DAST_CAPABILITY_REVISION_MISMATCH = "CAPABILITY_REVISION_MISMATCH"
 _ERR_EXECUTION_TYPE = "DAST launch adapter received a different execution type."
 _ERR_REQUEST = "DAST launch request is unavailable in the authorized organization."
-_ERR_BINDING = "DAST launch request requires its authorized project binding."
-_ERR_TRIGGER = "DAST launch request requires a trigger version from the same project."
+_ERR_BINDING = (
+    "DAST launch request requires its project's binding and, exactly when the target needs a source "
+    "repository, a trigger version from that project."
+)
 _ERR_SNAPSHOT = "DAST launch request contains an invalid immutable provider snapshot."
 _ERR_CAPABILITY_MISMATCH = "DAST provider capability revision changed; synchronize the catalog before retrying."
 
@@ -134,6 +141,7 @@ class DastPipelineLaunchAdapter:
                     "dast_binding__target__integration__dast_state",
                     "dast_binding__target__integration__vpn_integration__vpn_secret",
                     "project__product__prod_type",
+                    "trigger_project_version",
                 )
                 .get(
                     pk=context.launch_request_id,
@@ -145,66 +153,37 @@ class DastPipelineLaunchAdapter:
         except PipelineLaunchRequest.DoesNotExist as exc:
             raise ExecutionPlanError(_ERR_REQUEST) from exc
         binding = request.dast_binding
-        if binding is None or binding.project_id != request.project_id:
+        if binding is None:
             raise ExecutionPlanError(_ERR_BINDING)
         readiness = check_dast_binding_readiness(binding)
         if not readiness.ready:
             codes = ", ".join(issue.code.value for issue in readiness.issues)
             message = f"DAST launch is not ready: {codes}."
             raise ExecutionPlanError(message)
-        trigger_version = None
-        if binding.requires_source_repository:
-            try:
-                trigger_version = AISTProjectVersion.objects.get(
-                    pk=request.trigger_project_version_id,
-                    project_id=request.project_id,
-                    project__product__prod_type__aist_organization__id=context.authority.organization_id,
-                )
-            except (AISTProjectVersion.DoesNotExist, TypeError, ValueError) as exc:
-                raise ExecutionPlanError(_ERR_TRIGGER) from exc
-        elif request.trigger_project_version_id is not None:
-            raise ExecutionPlanError(_ERR_TRIGGER)
+        trigger_version = request.trigger_project_version
+        if binding.launch_violations(project_id=request.project_id, trigger_version=trigger_version):
+            raise ExecutionPlanError(_ERR_BINDING)
 
         try:
             frozen_target = DastTargetSnapshot.from_snapshot(request.get_snapshots().capability_snapshot())
-            frozen_parameters = DastBindingParameters.from_snapshot(
-                request.get_snapshots().params_snapshot(),
-                target=frozen_target,
-            )
+            DastBindingParameters.from_snapshot(request.get_snapshots().params_snapshot(), target=frozen_target)
             current_target = binding.target.get_snapshot()
         except DastConfigError as exc:
             raise ExecutionPlanError(_ERR_SNAPSHOT) from exc
-        frozen_revision = (
-            frozen_target.provider_id,
-            frozen_target.contract_revision,
-            frozen_target.capability_revision,
-            frozen_target.schema_digest,
-        )
-        current_revision = (
-            current_target.provider_id,
-            current_target.contract_revision,
-            current_target.capability_revision,
-            current_target.schema_digest,
-        )
-        if frozen_revision != current_revision:
+        if frozen_target.revision_identity != current_target.revision_identity:
             _mark_capability_resync_required(binding.target.integration_id)
             raise ExecutionPlanError(_ERR_CAPABILITY_MISMATCH)
 
-        params_snapshot = frozen_parameters.to_snapshot()
-        capability_snapshot = frozen_target.to_snapshot()
         coalesce_key = request.coalesce_key
         if not coalesce_key:
             detail = "DAST launch request is missing its frozen execution identity."
             raise ExecutionPlanError(detail)
-        initial_launch_data = request.get_initial_launch_data_snapshot()
-        initial_launch_data["dast_execution"] = {
-            "binding_id": binding.pk,
-            "integration_id": binding.target.integration_id,
-            "target_id": frozen_target.provider_id,
-            "source_repo_key": binding.source_repo_key,
-            "parameters": params_snapshot,
-            "capability": capability_snapshot,
-        }
+        launch_data = PipelineLaunchData(request.get_initial_launch_data_snapshot())
+        launch_data.dast_execution = DastExecutionSnapshot(
+            integration_id=binding.target.integration_id,
+            source_repo_key=binding.source_repo_key,
+        )
+        initial_launch_data = launch_data.as_dict()
         return ExecutionPlan(
             execution_type=self.execution_type,
             task_name=PipelineTaskName.RUN_PIPELINE_EXECUTION,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from functools import partial
+from typing import TYPE_CHECKING
 
 from celery import current_app
 from django.db import transaction
@@ -12,6 +13,9 @@ from dojo.models import Finding
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionType
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 from aist.utils.reconciliation import safe_attach_findings_to_version
+
+if TYPE_CHECKING:
+    from aist.launch_data import PipelineLaunchData
 
 
 def attach_findings_to_project_version(
@@ -45,7 +49,18 @@ def attach_findings_to_project_version(
         return existing_ids
 
 
-def schedule_pipeline_postprocessing(pipeline_id: str, log_level: str, *, dedup_task=None) -> None:
+def record_imported_tests(pipeline: AISTPipeline, launch_data: PipelineLaunchData, tests) -> None:
+    """
+    Link a locked pipeline to the tests its import created and add their ids to ``imported_test_ids``.
+
+    Reconciliation reads ``imported_test_ids`` to find tests a pipeline lost; the caller persists ``launch_data``.
+    """
+    tests = list(tests)
+    pipeline.tests.add(*tests)
+    launch_data.imported_test_ids = sorted({*launch_data.imported_test_ids, *(test.pk for test in tests)})
+
+
+def schedule_pipeline_postprocessing(pipeline_id: str, log_level: str) -> None:
     """Persist the deduplication hand-off and publish it only after commit."""
     task_id = uuid.uuid4().hex
     with transaction.atomic():
@@ -58,21 +73,13 @@ def schedule_pipeline_postprocessing(pipeline_id: str, log_level: str, *, dedup_
             AISTStatus.WAITING_DEDUPLICATION_TO_FINISH,
             update_fields_extra=["watch_dedup_task_id", "run_task_id"],
         )
-        if dedup_task is not None:
-            publish = partial(
-                dedup_task.apply_async,
+        transaction.on_commit(partial(
+            current_app.signature(
+                "aist.tasks.dedup.watch_deduplication",
                 kwargs={"pipeline_id": pipeline_id, "log_level": log_level},
-                task_id=task_id,
-            )
-        else:
-            publish = partial(
-                current_app.signature(
-                    "aist.tasks.dedup.watch_deduplication",
-                    kwargs={"pipeline_id": pipeline_id, "log_level": log_level},
-                ).apply_async,
-                task_id=task_id,
-            )
-        transaction.on_commit(publish)
+            ).apply_async,
+            task_id=task_id,
+        ))
 
 
 def finish_or_schedule_pipeline_results(
@@ -88,3 +95,24 @@ def finish_or_schedule_pipeline_results(
         finish_pipeline(pipeline_id)
         return
     schedule_pipeline_postprocessing(pipeline_id, log_level)
+
+
+def attach_findings_and_finish(
+    *,
+    pipeline_id: str,
+    project_version_id: int | None,
+    finding_ids: list[int],
+    log_level: str,
+    logger,
+) -> None:
+    """Attach imported findings to their project version, then finish or start deduplication."""
+    finish_or_schedule_pipeline_results(
+        pipeline_id=pipeline_id,
+        finding_ids=attach_findings_to_project_version(
+            project_version_id=project_version_id,
+            finding_ids=finding_ids,
+            logger=logger,
+        ),
+        log_level=log_level,
+        logger=logger,
+    )

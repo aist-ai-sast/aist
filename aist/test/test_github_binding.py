@@ -18,7 +18,7 @@ class GithubBindingTests(TestCase):
         )
         self.binding = ScmGithubBinding.objects.create(scm=self.repo, installation_id=12345)
 
-    @patch("aist.models.async_to_sync")
+    @patch("aist.models.scm.async_to_sync")
     def test_get_project_info_returns_data(self, mock_async_to_sync):
         Installation.objects.create(installation_id=12345, data={"app_slug": "aist-app"})
         runner = Mock(return_value={"default_branch": "main"})
@@ -36,7 +36,7 @@ class GithubBindingTests(TestCase):
 
         self.assertIsNone(info)
 
-    @patch("aist.models.async_to_sync")
+    @patch("aist.models.scm.async_to_sync")
     def test_build_clone_url_uses_installation_token(self, mock_async_to_sync):
         Installation.objects.create(installation_id=12345, data={"app_slug": "aist-app"})
         runner = Mock(return_value="token-123")
@@ -47,7 +47,7 @@ class GithubBindingTests(TestCase):
         self.assertIn("x-access-token:token-123@", clone_url)
         self.assertIn("/owner/repo.git", clone_url)
 
-    @patch("aist.models.async_to_sync")
+    @patch("aist.models.scm.async_to_sync")
     def test_build_clone_url_embeds_token_on_plain_http_host(self, mock_async_to_sync):
         # GitHub Enterprise Server is sometimes reachable only over http:// on
         # an internal network — the token must still be embedded, not silently
@@ -61,7 +61,7 @@ class GithubBindingTests(TestCase):
 
         self.assertEqual(clone_url, "http://x-access-token:token-123@ghe.internal/owner/repo.git")
 
-    @patch("aist.models.async_to_sync")
+    @patch("aist.models.scm.async_to_sync")
     def test_get_auth_headers_uses_installation_token(self, mock_async_to_sync):
         Installation.objects.create(installation_id=12345, data={"app_slug": "aist-app"})
         runner = Mock(return_value="token-abc")
@@ -71,7 +71,7 @@ class GithubBindingTests(TestCase):
 
         self.assertEqual(headers, {"Authorization": "token token-abc"})
 
-    @patch("aist.models.async_to_sync")
+    @patch("aist.models.scm.async_to_sync")
     def test_get_project_info_returns_none_when_fetch_fails(self, mock_async_to_sync):
         Installation.objects.create(installation_id=12345, data={"app_slug": "aist-app"})
         mock_async_to_sync.return_value = Mock(side_effect=RuntimeError("boom"))

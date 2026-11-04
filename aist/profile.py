@@ -1,11 +1,26 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
-from dojo.models import SEVERITY_CHOICES
+from dojo.models import SEVERITIES
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import best_match
 
-# Single source of truth: DefectDojo's canonical severity list.
-ALLOWED_SEVERITIES: frozenset[str] = frozenset(value for value, _ in SEVERITY_CHOICES)
+from aist.launch_data import AITriageType, LaunchAISettings
+
+
+def _section(data: dict, key: str) -> dict:
+    value = data.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _patterns(raw: object) -> tuple[str, ...]:
+    """Read a stored exclusion list; a bare string is one pattern, and non-string or empty entries are dropped."""
+    if isinstance(raw, str):
+        return (raw,) if raw else ()
+    if isinstance(raw, list | tuple):
+        return tuple(item for item in raw if isinstance(item, str) and item)
+    return ()
 
 
 @dataclass(frozen=True)
@@ -18,22 +33,65 @@ class SeverityConfig:
     exclude: tuple[str, ...] = ()
 
 
-ALLOWED_AI_TRIAGE_TYPES: frozenset[str] = frozenset({"n8n", "local"})
+@dataclass(frozen=True)
+class AnalyzersConfig:
+    include: tuple[str, ...] = ()
+    exclude: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class AiTriageConfig:
-    type: str = "n8n"  # "n8n" | "local"
+    type: AITriageType = AITriageType.N8N
 
 
-# Keys recognised under ``agent_analyzers.full_security``. Unknown keys are
-# rejected by ``validate_dict`` so a typo never silently disables an override.
 FULL_SECURITY_LIMIT_FIELDS: tuple[str, ...] = (
     "max_files",
     "max_bytes",
     "max_file_bytes",
     "max_findings",
 )
+
+_NON_EMPTY_STRINGS = {"type": "array", "items": {"type": "string", "minLength": 1}}
+
+# The shape a profile must have to be saved. Unknown keys are rejected so a typo never silently disables a setting.
+PROFILE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "paths": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"exclude": _NON_EMPTY_STRINGS},
+        },
+        "severity": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"exclude": {"type": "array", "items": {"enum": list(SEVERITIES)}}},
+        },
+        "analyzers": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"include": _NON_EMPTY_STRINGS, "exclude": _NON_EMPTY_STRINGS},
+        },
+        "ai_triage": {
+            "type": ["object", "null"],
+            "additionalProperties": False,
+            "properties": {"type": {"enum": [*AITriageType.values, None]}},
+        },
+        "agent_analyzers": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "full_security": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {name: {"type": "integer", "minimum": 1} for name in FULL_SECURITY_LIMIT_FIELDS},
+                },
+            },
+        },
+    },
+}
+_PROFILE_VALIDATOR = Draft202012Validator(PROFILE_SCHEMA)
 
 
 @dataclass(frozen=True)
@@ -64,6 +122,7 @@ class ProjectProfile:
 
     paths: PathsConfig = field(default_factory=PathsConfig)
     severity: SeverityConfig = field(default_factory=SeverityConfig)
+    analyzers: AnalyzersConfig = field(default_factory=AnalyzersConfig)
     ai_triage: AiTriageConfig = field(default_factory=AiTriageConfig)
     agent_analyzers: AgentAnalyzersConfig = field(default_factory=AgentAnalyzersConfig)
 
@@ -74,16 +133,24 @@ class ProjectProfile:
     @classmethod
     def from_dict(cls, data: dict | None) -> ProjectProfile:
         """Build a :class:`ProjectProfile` from a raw profile dict (or ``None``)."""
-        if not data:
+        if not isinstance(data, dict) or not data:
             return cls()
-        paths_raw = data.get("paths") or {}
-        severity_raw = data.get("severity") or {}
-        ai_triage_raw = data.get("ai_triage") or {}
-        ai_triage_type = ai_triage_raw.get("type", "n8n") if isinstance(ai_triage_raw, dict) else "n8n"
+        paths_raw = _section(data, "paths")
+        severity_raw = _section(data, "severity")
+        analyzers_raw = _section(data, "analyzers")
+        triage_type = _section(data, "ai_triage").get("type")
         return cls(
-            paths=PathsConfig(exclude=tuple(paths_raw.get("exclude") or [])),
-            severity=SeverityConfig(exclude=tuple(severity_raw.get("exclude") or [])),
-            ai_triage=AiTriageConfig(type=ai_triage_type if ai_triage_type in ALLOWED_AI_TRIAGE_TYPES else "n8n"),
+            paths=PathsConfig(exclude=_patterns(paths_raw.get("exclude"))),
+            severity=SeverityConfig(
+                exclude=tuple(name for name in _patterns(severity_raw.get("exclude")) if name in SEVERITIES),
+            ),
+            analyzers=AnalyzersConfig(
+                include=_patterns(analyzers_raw.get("include")),
+                exclude=_patterns(analyzers_raw.get("exclude")),
+            ),
+            ai_triage=AiTriageConfig(
+                type=AITriageType(triage_type) if triage_type in AITriageType.values else AITriageType.N8N,
+            ),
             agent_analyzers=cls._parse_agent_analyzers(data.get("agent_analyzers")),
         )
 
@@ -103,81 +170,35 @@ class ProjectProfile:
                 kwargs[name] = value
         return AgentAnalyzersConfig(full_security=FullSecurityLimits(**kwargs))
 
+    def as_dict(self) -> dict:
+        """The profile in the shape it is saved in, holding only the settings it carries."""
+        sections = {
+            "paths": {"exclude": list(self.paths.exclude)},
+            "severity": {"exclude": list(self.severity.exclude)},
+            "analyzers": {"include": list(self.analyzers.include), "exclude": list(self.analyzers.exclude)},
+            "agent_analyzers": {
+                "full_security": {
+                    name: limit for name, limit in asdict(self.agent_analyzers.full_security).items() if limit is not None
+                },
+            },
+        }
+        saved = {name: {key: value for key, value in section.items() if value} for name, section in sections.items()}
+        return {
+            **{name: section for name, section in saved.items() if section},
+            "ai_triage": {"type": self.ai_triage.type.value},
+        }
+
     # ------------------------------------------------------------------ #
     # Validation (call before persisting user input)                       #
     # ------------------------------------------------------------------ #
 
-    @classmethod
-    def validate_dict(cls, data: dict) -> None:
-        """Raise :exc:`TypeError` / :exc:`ValueError` if *data* is not a valid profile."""
-        if not isinstance(data, dict):
-            msg = 'Profile must be a JSON object (e.g. {"paths": {"exclude": []}}).'
-            raise TypeError(msg)
-
-        severity_raw = data.get("severity", {})
-        if not isinstance(severity_raw, dict):
-            msg = "'severity' must be a JSON object."
-            raise TypeError(msg)
-
-        excluded_sev = severity_raw.get("exclude", [])
-        if not isinstance(excluded_sev, list):
-            msg = "'severity.exclude' must be a list of strings."
-            raise TypeError(msg)
-
-        invalid = {s for s in excluded_sev if s not in ALLOWED_SEVERITIES}
-        if invalid:
-            msg = (
-                f"Invalid severity values: {sorted(invalid)}. "
-                f"Allowed: {sorted(ALLOWED_SEVERITIES)}."
-            )
-            raise ValueError(msg)
-
-        ai_triage_raw = data.get("ai_triage", {})
-        if ai_triage_raw:
-            if not isinstance(ai_triage_raw, dict):
-                msg = "'ai_triage' must be a JSON object."
-                raise TypeError(msg)
-            triage_type = ai_triage_raw.get("type")
-            if triage_type is not None and triage_type not in ALLOWED_AI_TRIAGE_TYPES:
-                msg = (
-                    f"Invalid ai_triage.type: {triage_type!r}. "
-                    f"Allowed: {sorted(ALLOWED_AI_TRIAGE_TYPES)}."
-                )
-                raise ValueError(msg)
-
-        if "agent_analyzers" in data:
-            cls._validate_agent_analyzers(data["agent_analyzers"])
-
     @staticmethod
-    def _validate_agent_analyzers(raw: object) -> None:
-        if not isinstance(raw, dict):
-            msg = "'agent_analyzers' must be a JSON object."
-            raise TypeError(msg)
-        if "full_security" not in raw:
-            return
-        full_raw = raw["full_security"]
-        if not isinstance(full_raw, dict):
-            msg = "'agent_analyzers.full_security' must be a JSON object."
-            raise TypeError(msg)
-        unknown = sorted(set(full_raw) - set(FULL_SECURITY_LIMIT_FIELDS))
-        if unknown:
-            msg = (
-                f"Unknown agent_analyzers.full_security keys: {unknown}. "
-                f"Allowed: {list(FULL_SECURITY_LIMIT_FIELDS)}."
-            )
+    def validate_dict(data: object) -> None:
+        """Raise :exc:`ValueError` naming the first place where *data* does not match :data:`PROFILE_SCHEMA`."""
+        error = best_match(_PROFILE_VALIDATOR.iter_errors(data))
+        if error is not None:
+            msg = f"{error.json_path}: {error.message}"
             raise ValueError(msg)
-        for name in FULL_SECURITY_LIMIT_FIELDS:
-            if name not in full_raw:
-                continue
-            value = full_raw[name]
-            # ``bool`` is a subclass of ``int`` in Python — reject it explicitly
-            # so ``"max_files": true`` cannot pass as the integer 1.
-            if not isinstance(value, int) or isinstance(value, bool):
-                msg = f"'agent_analyzers.full_security.{name}' must be a positive integer."
-                raise TypeError(msg)
-            if value <= 0:
-                msg = f"'agent_analyzers.full_security.{name}' must be > 0 (got {value})."
-                raise ValueError(msg)
 
     # ------------------------------------------------------------------ #
     # Accessors                                                            #
@@ -186,11 +207,16 @@ class ProjectProfile:
     def get_excluded_paths(self) -> list[str]:
         return list(self.paths.exclude)
 
-    def get_excluded_severities(self) -> list[str]:
-        return list(self.severity.exclude)
+    def excludes_finding(self, path: str, severity: str) -> bool:
+        """
+        Whether a finding is kept out of the platform: its `severity` is excluded, or an excluded path pattern is a
+        substring of its `path`, written from the scanned checkout's root with a leading "/" (``/tests/x.py``).
+        """
+        return severity in self.severity.exclude or any(pattern in path for pattern in self.paths.exclude)
 
-    def get_ai_triage_type(self) -> str:
-        return self.ai_triage.type
+    def triage_type_for(self, launch: LaunchAISettings) -> AITriageType:
+        """The triage that handles a launch's findings: the launch's own choice, else this project's."""
+        return launch.triage_type or self.ai_triage.type
 
     def get_full_security_limits(self) -> FullSecurityLimits:
         return self.agent_analyzers.full_security

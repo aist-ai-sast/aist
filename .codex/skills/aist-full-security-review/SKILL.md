@@ -102,7 +102,7 @@ Before reading any file body in detail, build a manifest of the project:
 
 4. **List sinks per sub-project.** Database query builders, shell command launchers, network clients, deserializers, file-system operations on caller-controlled paths, response/log emitters, redirects, secret stores.
 
-5. **Apply exclusions.** Decode `EXCLUDED_PATHS_JSON` and apply the same simple rule as AIST post-processing: drop a file if any exclusion string is contained
+5. **Apply exclusions.** Decode `EXCLUDED_PATHS_JSON` and apply the same simple rule AIST applies when it imports findings: drop a file if any exclusion string is contained
    anywhere in its relative `file_path`. For example, `test` excludes
    `cloud/tests/foo.py`, `static-resources/` excludes
    `public/static-resources/app.js`, and `.spec.ts` excludes

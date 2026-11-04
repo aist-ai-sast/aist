@@ -115,6 +115,9 @@ unfixable = []
 preview = true
 
 [lint.per-file-ignores]
+".sdlc/*.py" = [
+    "INP001",  # standalone scripts run as `python3 .sdlc/<name>.py`; not an importable package
+]
 "unittests/**" = [
     "S105",  # hardcoded passwords in tests are fine
     "S108",  # tmp paths mentioned in tests are fine

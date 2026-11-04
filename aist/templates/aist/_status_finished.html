@@ -1,5 +1,5 @@
 {# aist/_status_finished.html #}
-{% load aist_extras %}
+{% load aist_extras navigation_tags %}
 
 {% if pipeline.status == "FINISHED_WITH_WARNINGS" %}
     <div class="alert alert-warning d-flex align-items-center mb-4" role="alert">
@@ -237,51 +237,17 @@
                     <table class="table text-sm table-hover align-middle mb-0">
                         <thead class="bg-gray-50">
                         <tr>
-                            <th style="width: 120px;">
-                                <a class="no-underline"
-                                   href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort=severity&findings_dir={% if findings_sort == 'severity' and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
-                                    Severity
-                                    {% if findings_sort == "severity" %}
-                                        <i class="fa-solid fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
-                                    {% endif %}
-                                </a>
-                            </th>
-                            <th>
-                                <a class="no-underline"
-                                   href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort=title&findings_dir={% if findings_sort == 'title' and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
-                                    Finding
-                                    {% if findings_sort == "title" %}
-                                        <i class="fa-solid fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
-                                    {% endif %}
-                                </a>
-                            </th>
-                            <th>
-                                <a class="no-underline"
-                                   href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort=file&findings_dir={% if findings_sort == 'file' and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
-                                    Location
-                                    {% if findings_sort == "file" %}
-                                        <i class="fa-solid fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
-                                    {% endif %}
-                                </a>
-                            </th>
-                            <th style="width: 90px;">
-                                <a class="no-underline"
-                                   href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort=cwe&findings_dir={% if findings_sort == 'cwe' and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
-                                    CWE
-                                    {% if findings_sort == "cwe" %}
-                                        <i class="fa-solid fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
-                                    {% endif %}
-                                </a>
-                            </th>
-                            <th style="width: 140px;">
-                                <a class="no-underline"
-                                   href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort=analyzer&findings_dir={% if findings_sort == 'analyzer' and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
-                                    Analyzer
-                                    {% if findings_sort == "analyzer" %}
-                                        <i class="fa-solid fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
-                                    {% endif %}
-                                </a>
-                            </th>
+                            {% for option in findings_sort_options %}{% if option.label %}
+                                <th{% if option.width %} style="width: {{ option.width }};"{% endif %}>
+                                    <a class="no-underline"
+                                       href="?{{ findings_qs_no_sort }}{% if findings_qs_no_sort %}&{% endif %}findings_sort={{ option.key }}&findings_dir={% if findings_sort == option.key and findings_dir == 'asc' %}desc{% else %}asc{% endif %}">
+                                        {{ option.label }}
+                                        {% if findings_sort == option.key %}
+                                            <i class="fa-solid fa-caret-{% if findings_dir == 'asc' %}up{% else %}down{% endif %} ms-1"></i>
+                                        {% endif %}
+                                    </a>
+                                </th>
+                            {% endif %}{% endfor %}
                             <th style="width: 110px;">Actions</th>
                         </tr>
                         </thead>
@@ -344,38 +310,15 @@
                         </small>
                         <nav aria-label="Findings pagination">
                             <ul class="pagination pagination-sm mb-0">
-                                <li class="page-item {% if not findings_page.has_previous %}disabled{% endif %}">
-                                    {% if findings_page.has_previous %}
-                                        <a
-                                           href="?{{ findings_qs_no_page }}{% if findings_qs_no_page %}&{% endif %}findings_page={{ findings_page.previous_page_number }}">
-                                            Prev
-                                        </a>
-                                    {% else %}
-                                        <span>Prev</span>
-                                    {% endif %}
-                                </li>
-                                {% for num in findings_page_numbers %}
-                                    <li class="page-item {% if num == findings_page.number %}active{% endif %}">
-                                        {% if num == findings_page.number %}
-                                            <span>{{ num }}</span>
+                                {% for nav in findings_page|paginate %}
+                                    <li class="page-item {% if nav.is_current %}active{% elif not nav.page_number %}disabled{% endif %}">
+                                        {% if nav.is_current or not nav.page_number %}
+                                            <span>{{ nav.display }}</span>
                                         {% else %}
-                                            <a
-                                               href="?{{ findings_qs_no_page }}{% if findings_qs_no_page %}&{% endif %}findings_page={{ num }}">
-                                                {{ num }}
-                                            </a>
+                                            <a href="?{% url_replace request 'findings_page' nav.page_number %}">{{ nav.display }}</a>
                                         {% endif %}
                                     </li>
                                 {% endfor %}
-                                <li class="page-item {% if not findings_page.has_next %}disabled{% endif %}">
-                                    {% if findings_page.has_next %}
-                                        <a
-                                           href="?{{ findings_qs_no_page }}{% if findings_qs_no_page %}&{% endif %}findings_page={{ findings_page.next_page_number }}">
-                                            Next
-                                        </a>
-                                    {% else %}
-                                        <span>Next</span>
-                                    {% endif %}
-                                </li>
                             </ul>
                         </nav>
                     </div>

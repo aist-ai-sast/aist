@@ -1,17 +1,27 @@
 from __future__ import annotations
 
+import os
+import warnings
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from celery.exceptions import CPendingDeprecationWarning
 from django.http import JsonResponse
 from django.test import RequestFactory, TestCase
+from django.utils import timezone
+from dojo.models import Engagement, Finding, Test, Test_Type
+from fakeredis import FakeRedis
 
-from aist.models import AISTStatus
+from aist.api.pipelines import pipeline_enrich_progress_response
+from aist.models import AISTPipeline, AISTStatus
+from aist.progress import EnrichProgress
 from aist.tasks.ai import push_request_to_ai as _push_request_to_ai
 from aist.tasks.dedup import watch_deduplication as _watch_deduplication
 from aist.tasks.enrich import after_upload_enrich_and_watch as _after_upload_enrich_and_watch
 from aist.tasks.enrich import make_enrich_chord as _make_enrich_chord
+from aist.test.test_api import AISTApiBase
 from aist.utils.pipeline import finish_pipeline
+from aist.utils.reconciliation import ReconciliationStats
 from aist.views.ai import send_request_to_ai as _send_request_to_ai
 
 # ---- Messages / constants ----------------------------------------------------
@@ -34,7 +44,9 @@ def _mk_pipeline(**overrides):
         "status": "UNKNOWN",
         "updated": None,
         "logs": "",
-        "project": SimpleNamespace(product=SimpleNamespace(name="Prod")),
+        "project": SimpleNamespace(product=SimpleNamespace(name="Prod"), profile={}),
+        "project_version_id": None,
+        "source_root": "",
         "launch_data": {},
         "tests": MagicMock(),
         "save": MagicMock(),
@@ -167,9 +179,7 @@ class WatchDeduplicationTests(TestCase):
     def test_findings_without_source_code_finish_instead_of_entering_postprocessing(self):
         """
         A pipeline whose findings describe a running system has no source tree to enrich against
-        and no code for AIST to triage, so deduplication is the end of its tail. Enrichment also
-        deletes findings by a project's excluded paths and severities — rules that would be
-        applied to results they were never written for.
+        and no code for AIST to triage, so deduplication is the end of its tail.
         """
         tests_mgr = MagicMock()
         tests_mgr.exists.return_value = True
@@ -415,7 +425,6 @@ def test_make_enrich_chord_initializes_progress():
         launch_data={
             "trim_path": "",
             "log_level": "INFO",
-            "project_version_descriptor": {},
         },
     )
     pipeline.tests = MagicMock()
@@ -436,7 +445,7 @@ def test_make_enrich_chord_initializes_progress():
             msg = MSG_EXPECTED_SIGNATURE
             raise AssertionError(msg)
         mock_redis.hset.assert_called_with(
-            "aist:progress:pipeline-xyz:enrich",
+            EnrichProgress.key("pipeline-xyz"),
             mapping={"total": 3, "done": 0},
         )
 
@@ -448,7 +457,6 @@ def test_make_enrich_chord_uses_post_dedup_finding_ids():
         launch_data={
             "trim_path": "/src/",
             "log_level": "DEBUG",
-            "project_version_descriptor": {"version": "abc"},
         },
     )
     pipeline.tests = MagicMock()
@@ -473,7 +481,7 @@ def test_make_enrich_chord_empty_findings_returns_direct_callback():
     """When no findings survive dedup, return a direct callback signature (not a chord)."""
     pipeline = _mk_pipeline(
         id="pipeline-empty",
-        launch_data={"log_level": "INFO", "project_version_descriptor": {}},
+        launch_data={"log_level": "INFO"},
     )
     pipeline.tests = MagicMock()
     pipeline.tests.values_list.return_value = [5]
@@ -497,33 +505,101 @@ def test_make_enrich_chord_empty_findings_returns_direct_callback():
 
 
 class FinishPipelineTests(TestCase):
-    def test_absorbs_reconciliation_exception_without_propagating(self):
-        """finish_pipeline must not raise even if reconciliation raises."""
-        mock_pipeline = MagicMock()
-        with patch("aist.utils.pipeline.reconcile_pipeline_orphans", side_effect=RuntimeError("boom")), \
-             patch("aist.utils.pipeline.AISTPipeline") as mock_model, \
-             patch("aist.utils.pipeline.set_pipeline_status"), \
-             patch("aist.utils.pipeline.uninstall_pipeline_file_logging"):
-            mock_model.objects.select_for_update.return_value.get.return_value = mock_pipeline
-            # Should not raise
-            finish_pipeline("pipe-x", degraded=False)
-
     def test_absorbs_status_save_exception_without_propagating(self):
         """finish_pipeline must not raise even if the status save fails."""
-        with patch("aist.utils.pipeline.reconcile_pipeline_orphans", return_value={"remaining_violations": 0}), \
+        with patch("aist.utils.pipeline.reconcile_pipeline_orphans", return_value=ReconciliationStats(pipeline_id="pipe-x", dry_run=False)), \
              patch("aist.utils.pipeline.AISTPipeline") as mock_model, \
              patch("aist.utils.pipeline.uninstall_pipeline_file_logging"):
             mock_model.objects.select_for_update.return_value.get.side_effect = RuntimeError("db error")
             # Should not raise
             finish_pipeline("pipe-x", degraded=False)
 
-    def test_degraded_flag_forces_finished_with_warnings(self):
-        """degraded=True must result in FINISHED_WITH_WARNINGS regardless of reconciliation."""
-        mock_pipeline = MagicMock()
-        with patch("aist.utils.pipeline.reconcile_pipeline_orphans", return_value={"remaining_violations": 0}), \
-             patch("aist.utils.pipeline.AISTPipeline") as mock_model, \
-             patch("aist.utils.pipeline.set_pipeline_status") as mock_set_status, \
-             patch("aist.utils.pipeline.uninstall_pipeline_file_logging"):
-            mock_model.objects.select_for_update.return_value.get.return_value = mock_pipeline
-            finish_pipeline("pipe-x", degraded=True)
-            mock_set_status.assert_called_once_with(mock_pipeline, AISTStatus.FINISHED_WITH_WARNINGS)
+
+class FinishDegradedPipelineTests(AISTApiBase):
+
+    def test_a_degraded_finish_ends_a_clean_pipeline_with_warnings(self):
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-degraded-finish",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI,
+        )
+
+        finish_pipeline(pipeline.id, degraded=True)
+
+        pipeline.refresh_from_db()
+        self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
+
+
+class EnrichProgressStreamTests(TestCase):
+
+    """The enrich progress stream reports done/total while the chord runs and ends once every chunk is done."""
+
+    def test_the_stream_reports_finished_progress_and_ends(self):
+        store = FakeRedis(decode_responses=True)
+        EnrichProgress.start(store, "pipe-progress", 3)
+        EnrichProgress.advance(store, "pipe-progress", 2)
+        EnrichProgress.advance(store, "pipe-progress", 1)
+
+        with patch("aist.api.pipelines.get_redis", return_value=store):
+            events = list(pipeline_enrich_progress_response("pipe-progress").streaming_content)
+
+        self.assertEqual(
+            [event.decode() for event in events],
+            ['data: {"total": 3, "done": 3, "percent": 100}\n\n', "event: done\ndata: ok\n\n"],
+        )
+
+    def test_the_stream_reports_unavailable_progress_once_and_ends(self):
+        broken = MagicMock()
+        broken.hmget.side_effect = ConnectionError("redis down")
+
+        with patch("aist.api.pipelines.get_redis", return_value=broken):
+            events = list(pipeline_enrich_progress_response("pipe-progress").streaming_content)
+
+        self.assertEqual([event.decode() for event in events], ["event: unavailable\ndata: progress unavailable\n\n"])
+
+    def test_progress_before_the_chord_starts_is_not_read_as_complete(self):
+        self.assertIsNone(EnrichProgress.read(FakeRedis(decode_responses=True), "pipe-not-started"))
+
+
+class EnrichChordProgressTests(AISTApiBase):
+
+    """Every finding the enrich chord handles counts once, however the findings are split into chunks."""
+
+    def test_progress_completes_when_findings_outnumber_the_chunks(self):
+        engagement = Engagement.objects.create(
+            name="enrich", target_start=timezone.now(), target_end=timezone.now(), product=self.product,
+        )
+        test = Test.objects.create(
+            engagement=engagement,
+            target_start=timezone.now(),
+            target_end=timezone.now(),
+            test_type=Test_Type.objects.get_or_create(name="Enrich scan")[0],
+        )
+        for index in range(5):
+            Finding.objects.create(
+                test=test, title=f"finding {index}", severity="High", date=timezone.now(), reporter=self.user,
+            )
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-enrich-chunks",
+            project=self.project,
+            project_version=self.pv,
+            status=AISTStatus.FINDING_POSTPROCESSING,
+        )
+        pipeline.tests.add(test)
+        store = FakeRedis(decode_responses=True)
+
+        with (
+            patch.dict(os.environ, {"DD_CELERY_WORKER_AUTOSCALE_MAX": "2"}),
+            patch("aist.tasks.enrich.get_redis", return_value=store),
+            patch("aist.tasks.enrich.install_pipeline_logging", return_value=DummyLogger()),
+            warnings.catch_warnings(),
+        ):
+            # Celery announces a future change to chord-header errbacks while the chord is built.
+            warnings.simplefilter("ignore", CPendingDeprecationWarning)
+            enrich = _make_enrich_chord(pipeline_id=pipeline.id)
+            for chunk in enrich.tasks:
+                chunk.apply()
+
+        self.assertEqual(len(enrich.tasks), 2)
+        self.assertEqual(EnrichProgress.read(store, pipeline.id), EnrichProgress(total=5, done=5))

@@ -36,6 +36,6 @@ class Command(BaseCommand):
             f"processed={result['processed']} "
             f"pipelines_with_remaining_violations={result['pipelines_with_remaining_violations']} "
             f"remaining_violations={result['remaining_violations']} "
-            f"recovered_stuck_dedup={result.get('recovered_stuck_dedup', 0)} "
-            f"recovered_stuck_enrich={result.get('recovered_stuck_enrich', 0)}",
+            f"recovered_stuck_dedup={result['recovered_stuck_dedup']} "
+            f"recovered_stuck_enrich={result['recovered_stuck_enrich']}",
         )

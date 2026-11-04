@@ -15,6 +15,8 @@ from aist.models import (
     WorkItemProvider,
     WorkItemProviderType,
 )
+from aist.models.organizations import resolve_bound_vpn
+from aist.test.vpn_fixtures import refused_vpn_routes
 
 
 class TenantModelIntegrityTests(TransactionTestCase):
@@ -131,6 +133,53 @@ class TenantModelIntegrityTests(TransactionTestCase):
                 name="Tenant integrity invalid routed provider",
                 vpn_integration=vpn_b,
             )
+
+    def test_a_vpn_link_must_point_to_an_active_vpn_of_the_same_organization(self):
+        vpn_a = OrgIntegration.objects.create(
+            organization=self.organization_a,
+            integration_type=OrgIntegrationType.VPN,
+            name="Tenant integrity active VPN A",
+        )
+        rejected = refused_vpn_routes(self.organization_a, self.organization_b)
+
+        def routed_subjects(vpn):
+            return (
+                OrgIntegration(
+                    organization=self.organization_a,
+                    integration_type=OrgIntegrationType.GITLAB,
+                    name="Tenant integrity routed GitLab",
+                    vpn_integration=vpn,
+                ),
+                WorkItemProvider(
+                    organization=self.organization_a,
+                    provider_type=WorkItemProviderType.JIRA,
+                    name="Tenant integrity routed provider",
+                    vpn_integration=vpn,
+                ),
+            )
+
+        for subject in routed_subjects(vpn_a):
+            subject.clean()
+        for case, vpn in rejected.items():
+            for subject in routed_subjects(vpn):
+                with self.subTest(case=case, subject=type(subject).__name__), self.assertRaises(ValidationError) as raised:
+                    subject.clean()
+                self.assertIn("vpn_integration", raised.exception.message_dict)
+
+    def test_a_stored_vpn_link_routes_traffic_only_while_the_link_rule_holds(self):
+        vpn_a = OrgIntegration.objects.create(
+            organization=self.organization_a,
+            integration_type=OrgIntegrationType.VPN,
+            name="Tenant integrity routing VPN A",
+            config={"profile": "a"},
+        )
+
+        resolved = resolve_bound_vpn(vpn_a, organization_id=self.organization_a.pk)
+
+        self.assertEqual((resolved.integration, resolved.config), (vpn_a, {"profile": "a"}))
+        for case, vpn in refused_vpn_routes(self.organization_a, self.organization_b).items():
+            with self.subTest(case=case):
+                self.assertIsNone(resolve_bound_vpn(vpn, organization_id=self.organization_a.pk))
 
     def test_provider_backed_link_cannot_cross_tenant(self):
         provider_b = WorkItemProvider.objects.create(

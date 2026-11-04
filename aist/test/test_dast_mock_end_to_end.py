@@ -53,8 +53,7 @@ from aist.models import (
     ScmType,
     VersionType,
 )
-from aist.tasks import pipeline as pipeline_tasks
-from aist.tasks import pipeline_dispatcher
+from aist.tasks import dast_execution, pipeline_dispatcher
 from aist.test.test_api import AISTApiBase
 from aist.utils.pipeline import finish_pipeline
 
@@ -380,8 +379,8 @@ class _DastContractGatewayFixture(AISTApiBase):
             yield "vpn-dast-e2e", None
 
         with (
-            patch("aist.tasks.pipeline.vpn_sidecar_context", vpn_context),
-            patch("aist.tasks.pipeline.execute_pipeline", side_effect=self.gateway.execute),
+            patch("aist.tasks.dast_execution.vpn_sidecar_context", vpn_context),
+            patch("aist.tasks.dast_execution.execute_pipeline", side_effect=self.gateway.execute),
         ):
             yield
 
@@ -399,7 +398,7 @@ class DastMockEndToEndTests(_DastContractGatewayFixture):
         self.assertIsNone(finding_request.pipeline_id)
 
         with self._runtime_patches(), self.captureOnCommitCallbacks(execute=True):
-            pipeline_tasks._execute_dast_pipeline(clean_request.pipeline_id)
+            dast_execution._execute_dast_pipeline(clean_request.pipeline_id)
         clean_pipeline = AISTPipeline.objects.get(pk=clean_request.pipeline_id)
         self.assertEqual(clean_pipeline.dast_binding_id, clean_request.dast_binding_id)
         self.assertEqual(clean_pipeline.project_version.version, ACTUAL_SHA)
@@ -411,7 +410,7 @@ class DastMockEndToEndTests(_DastContractGatewayFixture):
         )
         self.assertEqual(self._plan_and_publish(finding_request).status, LaunchPlanningStatus.READY)
         with self._runtime_patches(), self.captureOnCommitCallbacks(execute=False):
-            pipeline_tasks._execute_dast_pipeline(finding_request.pipeline_id)
+            dast_execution._execute_dast_pipeline(finding_request.pipeline_id)
         finding_pipeline = AISTPipeline.objects.get(pk=finding_request.pipeline_id)
         self.assertEqual(finding_pipeline.dast_binding_id, finding_request.dast_binding_id)
         self.assertEqual(finding_pipeline.project_version.version, ACTUAL_SHA)
@@ -423,15 +422,15 @@ class DastMockEndToEndTests(_DastContractGatewayFixture):
         # Model the accepted worker reaching the execution boundary before the operator
         # requests cancellation. The second preparation below is the normal recovery path
         # and must carry the persisted stop intent into the connector input.
-        pipeline_tasks._prepare_dast_runtime(cancel_request.pipeline_id)
+        dast_execution._prepare_dast_runtime(cancel_request.pipeline_id)
         stop_url = reverse("aist_api:pipeline_stop", kwargs={"pipeline_id": cancel_request.pipeline_id})
         with patch("aist.utils.pipeline.cleanup_pipeline_containers"):
             stopped = self.client.post(stop_url, format="json")
         self.assertEqual(stopped.status_code, 200)
         self.assertEqual(stopped.data["state"], "STOP_PENDING")
         with self._runtime_patches():
-            result = pipeline_tasks._execute_dast_pipeline(cancel_request.pipeline_id)
-        pipeline_tasks._handle_dast_execution_result(None, cancel_request.pipeline_id, result)
+            result = dast_execution._execute_dast_pipeline(cancel_request.pipeline_id)
+        dast_execution._handle_dast_execution_result(None, cancel_request.pipeline_id, result)
         cancel_request.refresh_from_db()
         cancelled_pipeline = AISTPipeline.objects.get(pk=cancel_request.pipeline_id)
         self.assertEqual(cancel_request.state, PipelineLaunchRequestState.CANCELLED)
@@ -452,7 +451,7 @@ class DastMockEndToEndTests(_DastContractGatewayFixture):
         self.assertEqual(self._plan_and_publish(request).status, LaunchPlanningStatus.READY)
 
         with self._runtime_patches(), self.captureOnCommitCallbacks(execute=True):
-            pipeline_tasks._execute_dast_pipeline(request.pipeline_id)
+            dast_execution._execute_dast_pipeline(request.pipeline_id)
 
         pipeline = AISTPipeline.objects.get(pk=request.pipeline_id)
         self.assertEqual(pipeline.dast_binding_id, request.dast_binding_id)
@@ -480,15 +479,15 @@ class DastMockEndToEndTests(_DastContractGatewayFixture):
 
     def test_a_source_based_dast_result_also_opts_out_of_the_source_code_tail(self):
         """
-        AIST cannot triage a finding it has no code for, and enrichment's path/severity exclusions
-        describe a source tree — so a DAST result opts out for both shapes of target, not only the
-        one that obviously has no repository.
+        AIST cannot triage a finding it has no code for, and enrichment links findings into a source
+        tree — so a DAST result opts out for both shapes of target, not only the one that obviously
+        has no repository.
         """
         request = self._enqueue(self.bindings["admin-api"], "Source-based tail")
         self.assertEqual(self._plan_and_publish(request).status, LaunchPlanningStatus.READY)
 
         with self._runtime_patches(), self.captureOnCommitCallbacks(execute=True):
-            pipeline_tasks._execute_dast_pipeline(request.pipeline_id)
+            dast_execution._execute_dast_pipeline(request.pipeline_id)
 
         pipeline = AISTPipeline.objects.get(pk=request.pipeline_id)
         self.assertEqual(pipeline.project_version.version, ACTUAL_SHA)
@@ -500,13 +499,13 @@ class DastMockEndToEndTests(_DastContractGatewayFixture):
         request = self._enqueue(self.bindings[PERIMETER_TARGET], "Perimeter redelivery")
         self.assertEqual(self._plan_and_publish(request).status, LaunchPlanningStatus.READY)
         with self._runtime_patches(), self.captureOnCommitCallbacks(execute=True):
-            result = pipeline_tasks._execute_dast_pipeline(request.pipeline_id)
+            result = dast_execution._execute_dast_pipeline(request.pipeline_id)
 
         pipeline = AISTPipeline.objects.get(pk=request.pipeline_id)
         test_ids = list(pipeline.tests.values_list("id", flat=True))
 
         with self.captureOnCommitCallbacks(execute=True):
-            pipeline_tasks._handle_dast_execution_result(None, request.pipeline_id, result)
+            dast_execution._handle_dast_execution_result(None, request.pipeline_id, result)
 
         pipeline.refresh_from_db()
         self.assertEqual(list(pipeline.tests.values_list("id", flat=True)), test_ids)

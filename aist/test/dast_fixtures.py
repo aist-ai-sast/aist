@@ -10,7 +10,10 @@ through `TARGET_SHAPES` here and a test covers both shapes by construction.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
+from celery.exceptions import Retry
 from django.utils import timezone
 
 from aist.integrations.dast_config import DastTargetSnapshot
@@ -22,6 +25,25 @@ from aist.models import (
     OrgIntegrationType,
 )
 from aist.services.dast_targets import refresh_dast_targets
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
+
+_import_sast_pipeline_package()
+
+from pipeline.dast.contracts import (  # type: ignore[import-not-found]  # noqa: E402
+    DastConnectorOutcome,
+    DastConnectorOutcomeState,
+    DastRecoveryState,
+    DastRunState,
+    DastTerminalResult,
+    DastTransportMetadata,
+)
+from pipeline.dast.executor import (  # type: ignore[import-not-found]  # noqa: E402
+    DastExecutionResult,
+    DastExecutionTelemetry,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def parameter_schema() -> dict:
@@ -150,3 +172,54 @@ def create_dast_binding(*, project, target, parameters=None, enabled: bool = Tru
         binding.source_repo_key = target.get_snapshot().repository_keys[0]
     binding.save()
     return binding
+
+
+def connector_result(
+    *,
+    correlation_id: str = "pipeline-123",
+    state: DastConnectorOutcomeState = DastConnectorOutcomeState.TERMINAL,
+    status: DastRunState = DastRunState.SUCCEEDED,
+    reason_code: str | None = None,
+    findings: tuple[dict, ...] = (),
+    selection: dict | None = None,
+    run_id: str | None = "run-123",
+    log_cursor: int = 0,
+    report_path: Path | None = None,
+) -> DastExecutionResult:
+    """What the DAST connector hands back for one attempt; a terminal state carries a terminal result."""
+    recovery = DastRecoveryState(
+        correlation_id=correlation_id,
+        idempotency_key="launch-123",
+        run_id=run_id,
+        log_cursor=log_cursor,
+    )
+    terminal = None
+    if state is DastConnectorOutcomeState.TERMINAL:
+        terminal = DastTerminalResult(
+            run_id=run_id,
+            status=status,
+            selection=selection or {},
+            trigger_resolution=None,
+            dast_run_metadata=DastTransportMetadata(source_commits={}),
+            report={"findings": list(findings)},
+        )
+    return DastExecutionResult(
+        outcome=DastConnectorOutcome(state=state, recovery=recovery, reason_code=reason_code),
+        terminal_result=terminal,
+        recovery=recovery,
+        telemetry=DastExecutionTelemetry.empty(),
+        report_path=report_path,
+    )
+
+
+class FakeRetryingTask:
+
+    """A bound Celery task whose ``retry`` records its arguments and returns the ``Retry`` to raise."""
+
+    def __init__(self, *, retries: int = 0):
+        self.request = SimpleNamespace(retries=retries, id="task-1")
+        self.retry_calls: list[dict] = []
+
+    def retry(self, **kwargs):
+        self.retry_calls.append(kwargs)
+        return Retry()

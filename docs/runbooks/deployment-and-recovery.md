@@ -127,6 +127,20 @@ gzip -dc /var/backups/aist-postgres/defectdojo_YYYYmmdd_HHMMSS.sql.gz \
 After restoration, start or restart the application services and verify that
 migrations, login, project listing, and a read-only pipeline request succeed.
 
+## Release a change to queued task arguments
+
+Celery tasks already queued when the workers restart run with the arguments the
+previous release published. When a release changes what a task takes, its
+release notes name the task. Before deploying such a release, stop new launches
+and wait until the broker queue is empty and no worker holds a reserved message
+of a named task:
+
+```bash
+docker compose --env-file .env exec -T valkey valkey-cli llen celery
+docker compose --env-file .env exec -T celeryworker \
+  celery --app=dojo inspect reserved
+```
+
 ## Validate the deployment
 
 ```bash

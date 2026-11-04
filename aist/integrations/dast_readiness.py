@@ -8,19 +8,23 @@ from urllib.parse import urlsplit
 
 from django.utils import timezone
 
-from aist.integrations.dast_config import DastBindingParameters, DastConfigError
+from aist.integrations.dast_config import DastBindingParameters, DastConfigError, DastTargetSnapshot
 from aist.models import (
     DastIntegrationState,
     DastIntegrationValidationState,
     DastProjectBinding,
     OrgIntegrationType,
     OrgIntegrationVPNSecret,
-    VersionType,
 )
+from aist.models.organizations import VpnLinkViolation, vpn_link_violations
 from aist.pipeline_args import DastPipelineArguments
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
+
+_import_sast_pipeline_package()
+
+from pipeline.dast.contracts import CONTRACT_MAJOR  # type: ignore[import-not-found]  # noqa: E402
 
 DAST_CATALOG_MAX_AGE = timedelta(hours=24)
-DAST_CONTRACT_MAJOR = 2
 _TRUSTED_PRIVATE_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -79,6 +83,19 @@ class DastReadinessResult:
         }
 
 
+_VPN_LINK_ISSUES = {
+    VpnLinkViolation.NOT_VPN: DastReadinessCode.VPN_TYPE_INVALID,
+    VpnLinkViolation.OTHER_ORGANIZATION: DastReadinessCode.VPN_ORGANIZATION_MISMATCH,
+    VpnLinkViolation.INACTIVE: DastReadinessCode.VPN_INACTIVE,
+}
+
+
+def _add_issue(issues: list[DastReadinessIssue], code: DastReadinessCode, detail: str) -> None:
+    """Record ``code`` once; the first detail given for it is kept."""
+    if all(issue.code != code for issue in issues):
+        issues.append(DastReadinessIssue(code=code, detail=detail))
+
+
 def check_dast_binding_readiness(
     binding: DastProjectBinding,
     *,
@@ -90,8 +107,7 @@ def check_dast_binding_readiness(
     issues: list[DastReadinessIssue] = []
 
     def add(code: DastReadinessCode, detail: str) -> None:
-        if all(issue.code != code for issue in issues):
-            issues.append(DastReadinessIssue(code=code, detail=detail))
+        _add_issue(issues, code, detail)
 
     target = binding.target
     integration = target.integration
@@ -114,8 +130,11 @@ def check_dast_binding_readiness(
         state = None
     if state is None or state.validation_state != DastIntegrationValidationState.READY:
         add(DastReadinessCode.VALIDATION_NOT_READY, "The DAST integration has not passed connection validation.")
-    if state is None or _contract_major(state.contract_version) != DAST_CONTRACT_MAJOR:
-        add(DastReadinessCode.CONTRACT_INCOMPATIBLE, "The validated DAST API contract is not compatible with v2.")
+    if state is None or _contract_major(state.contract_version) != CONTRACT_MAJOR:
+        add(
+            DastReadinessCode.CONTRACT_INCOMPATIBLE,
+            f"The validated DAST API contract is not compatible with v{CONTRACT_MAJOR}.",
+        )
     if state is None or not state.capabilities_etag or state.capabilities_synced_at is None:
         add(DastReadinessCode.CATALOG_NOT_SYNCED, "The DAST target catalog has not been synchronized.")
     elif checked_at - state.capabilities_synced_at > catalog_max_age:
@@ -137,8 +156,11 @@ def check_dast_binding_readiness(
             "The selected target schema or provider defaults are invalid; synchronize the catalog again.",
         )
     if target_snapshot is not None:
-        if _contract_major(target_snapshot.contract_revision) != DAST_CONTRACT_MAJOR:
-            add(DastReadinessCode.TARGET_CONTRACT_INCOMPATIBLE, "The selected target does not use DAST contract v2.")
+        if _contract_major(target_snapshot.contract_revision) != CONTRACT_MAJOR:
+            add(
+                DastReadinessCode.TARGET_CONTRACT_INCOMPATIBLE,
+                f"The selected target does not use DAST contract v{CONTRACT_MAJOR}.",
+            )
         try:
             binding.get_parameters()
         except DastConfigError:
@@ -156,15 +178,9 @@ def check_dast_binding_readiness(
     vpn_ready = integration.vpn_integration_id is not None
     if integration.vpn_integration_id is not None:
         vpn = integration.vpn_integration
-        if vpn.integration_type != OrgIntegrationType.VPN:
+        for violation in vpn_link_violations(vpn, organization_id=integration.organization_id):
             vpn_ready = False
-            add(DastReadinessCode.VPN_TYPE_INVALID, "The selected route is not a VPN integration.")
-        if vpn.organization_id != integration.organization_id:
-            vpn_ready = False
-            add(DastReadinessCode.VPN_ORGANIZATION_MISMATCH, "The selected VPN belongs to another organization.")
-        if not vpn.is_active:
-            vpn_ready = False
-            add(DastReadinessCode.VPN_INACTIVE, "The selected VPN integration is disabled.")
+            add(_VPN_LINK_ISSUES[violation], violation.label)
         try:
             vpn_secret = vpn.vpn_secret
         except OrgIntegrationVPNSecret.DoesNotExist:
@@ -198,22 +214,19 @@ def check_dast_launch_readiness(arguments, *, now: datetime | None = None) -> Da
     issues = list(base.issues)
 
     def add(code: DastReadinessCode, detail: str) -> None:
-        if all(issue.code != code for issue in issues):
-            issues.append(DastReadinessIssue(code=code, detail=detail))
+        _add_issue(issues, code, detail)
 
-    trigger = payload.trigger_project_version
-    if payload.binding.requires_source_repository:
-        if trigger is None or trigger.project_id != arguments.project.pk or trigger.version_type not in {
-            VersionType.GIT_BRANCH,
-            VersionType.GIT_HASH,
-        }:
-            add(DastReadinessCode.SOURCE_VERSION_INVALID, "Select a Git branch or Git hash from this project.")
-    elif trigger is not None:
-        add(DastReadinessCode.SOURCE_VERSION_INVALID, "This target has no repository requirement; clear the trigger version.")
+    violations = payload.binding.launch_violations(
+        project_id=arguments.project.pk,
+        trigger_version=payload.trigger_project_version,
+    )
+    if violations:
+        add(DastReadinessCode.SOURCE_VERSION_INVALID, violations[0].label)
     try:
         current_target = payload.binding.target.get_snapshot()
         DastBindingParameters.from_snapshot(payload.parameters, target=current_target)
-        if current_target.to_snapshot() != payload.capability:
+        launch_target = DastTargetSnapshot.from_snapshot(payload.capability)
+        if launch_target.revision_identity != current_target.revision_identity:
             add(
                 DastReadinessCode.CAPABILITY_SNAPSHOT_STALE,
                 "The DAST target capability changed; rebuild the launch input.",

@@ -9,6 +9,7 @@ from functools import partial
 from django.db import transaction
 from dojo.celery_dispatch import dojo_dispatch_task
 from dojo.finding import helper as finding_helper
+from dojo.models import Test
 
 from aist.authz import Action
 from aist.dedupe.canonical import DAST_SCAN_TYPE
@@ -34,6 +35,7 @@ from aist.services.pipeline_lifecycle import transition_pipeline_status
 from aist.services.pipeline_results import (
     attach_findings_to_project_version,
     finish_or_schedule_pipeline_results,
+    record_imported_tests,
 )
 from aist.utils.pipeline import set_pipeline_status
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
@@ -250,6 +252,7 @@ def finalize_dast_report(
                 logger=logger, lead=lead, envelope=envelope,
             ))
         finding_ids = [finding_id for section in sections for finding_id in section.finding_ids]
+        record_imported_tests(pipeline, launch_data, Test.objects.filter(pk__in=[section.test_id for section in sections]))
         launch_data.merge({
             "dast_finalization": DastImportReceipt(
                 binding_id=persisted_binding.pk,
@@ -257,7 +260,6 @@ def finalize_dast_report(
                 correlation_id=correlation_id,
                 report_sha256=report_sha256,
             ).as_dict(),
-            "imported_test_ids": [section.test_id for section in sections],
         })
         launch_data.finding_postprocessing = False
         pipeline.project_version = version
@@ -267,13 +269,8 @@ def finalize_dast_report(
             AISTStatus.UPLOADING_RESULTS,
             update_fields_extra=["project_version", "launch_data"],
         )
-        # The importer dispatches this itself, but it does so with `apply_async` from inside this
-        # still-open transaction: the worker picks the task up in milliseconds, reads finding ids
-        # that have not been committed yet, finds nothing and returns silently. Deduplication then
-        # never runs, no ProcessedFinding row is ever written, and the pipeline waits out the full
-        # AIST_DEDUP_MAX_WAIT_S before being force-released — an hour of looking hung. Dispatching
-        # it again once the findings are actually visible is what makes post-processing happen at
-        # all; the in-transaction attempt is a harmless no-op on an empty batch.
+        # Post-processing is dispatched once the findings are committed: a dispatch from inside this
+        # transaction can run before they are visible and process nothing.
         transaction.on_commit(partial(
             dojo_dispatch_task,
             finding_helper.post_process_findings_batch,
@@ -339,7 +336,6 @@ def _import_section(*, pipeline, report, route, version, logger, lead, envelope)
         finding_ids=finding_ids,
         logger=logger,
     )
-    pipeline.tests.add(test_obj)
     DastTestBinding.objects.create(
         test=test_obj, binding=route.binding, project_version=version, repository=route.section.repository,
     )

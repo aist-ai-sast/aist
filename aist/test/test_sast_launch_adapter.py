@@ -1,5 +1,4 @@
 import uuid
-from unittest.mock import patch
 
 from dojo.models import Product
 
@@ -71,14 +70,7 @@ class SastPipelineLaunchAdapterTests(AISTApiBase):
             ),
         )
 
-    @patch("aist.execution.sast.PipelineArguments.normalize_params")
-    def test_manual_and_scheduled_requests_keep_current_sast_plan(self, normalize_params):
-        normalized = {
-            "project_version": {"id": self.pv.id},
-            "log_level": "DEBUG",
-            "selected_languages": ["python"],
-        }
-        normalize_params.side_effect = lambda **_kwargs: dict(normalized)
+    def test_manual_and_scheduled_requests_keep_current_sast_plan(self):
         # Both requests target the same schedule on purpose: capacity and coalescing are
         # now scoped per schedule (H13), so only requests sharing a schedule are expected
         # to share a resource key / coalesce key — not every SAST launch in the install.
@@ -128,10 +120,7 @@ class SastPipelineLaunchAdapterTests(AISTApiBase):
                 self.assertEqual(plan.authority.kind, LaunchAuthorityKind(authority_kind))
                 self.assertEqual(plan.authority.requester_id, requester.id if requester else None)
 
-        self.assertEqual(normalize_params.call_count, 2)
         self.assertEqual(len(set(coalesce_keys)), 1)
-        for call in normalize_params.call_args_list:
-            self.assertEqual(call.kwargs["raw_params"]["project_version"], {"id": self.pv.id})
 
     def test_manual_request_without_config_uses_default_capacity_and_preserves_launch_data(self):
         params = {

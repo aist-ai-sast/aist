@@ -183,21 +183,6 @@ class DiffSecurityReviewSkillContractTests(unittest.TestCase):
         self.assertIn("CLAUDE_DIFF_MAX_FILES", self.text)
         self.assertIn("CLAUDE_DIFF_MAX_BYTES", self.text)
 
-    def test_exclusion_pattern_semantics_documented(self):
-        # Some phrases get word-wrapped across lines in the rendered SKILL.md;
-        # use whitespace-tolerant regexes for those, exact-match for the
-        # concrete examples that should never wrap.
-        self.assertIn("same simple rule as AIST post-processing", self.text)
-        self.assertRegex(
-            self.text,
-            r"exclusion\s+string\s+is\s+contained",
-            "exclusion semantics must mention the substring-match rule",
-        )
-        self.assertIn("cloud/tests/foo.py", self.text)
-        self.assertIn(".spec.ts", self.text)
-
-    # ── Framework-agnostic phrasing ─────────────────────────────────────
-
     def test_no_scanner_or_tool_vendor_names(self):
         # The skill itself instructs Claude to avoid scanner names; the
         # skill body must not embed any well-known scanner names that

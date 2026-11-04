@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1500" height="700" viewBox="0 0 1500 700" role="img" aria-labelledby="title desc">
   <title id="title">AIST pipeline execution lifecycle</title>
-  <desc id="desc">Every interactive, configured, scheduled, or webhook start creates a durable launch request. Admission acquires capacity and creates an admitted pipeline with a durable publish intent, delivered through a retryable broker. A worker accepts one generic task, moves the pipeline to executing, selects SAST or DAST, imports results — or imports a manually uploaded report that skips analyzer execution — and prepares findings for human or AI-assisted review.</desc>
+  <desc id="desc">Every interactive, configured, scheduled, or webhook start creates a durable launch request. Admission acquires capacity and creates an admitted pipeline with a durable publish intent, delivered through a retryable broker. A worker accepts one generic task, moves the pipeline to executing, selects SAST or DAST, imports results — or imports a manually uploaded report that skips analyzer execution. A SAST run's import leaves out findings the project profile excludes. An import with no findings finishes at once; every other import is deduplicated, then static findings are enriched, checked for regressions, and prepared for human or AI-assisted review, while dynamic findings finish after deduplication.</desc>
   <defs>
     <marker id="arrow" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0 0L9 4L0 8Z" fill="#596a78"/></marker>
     <style>
@@ -120,31 +120,37 @@
   <rect class="box" x="515" y="417" width="205" height="92" rx="12" fill="#eaf8f1" stroke="#4d9874"/>
   <circle cx="512" cy="417" r="11" fill="#4d9874"/><text class="badge" x="512" y="421">9</text>
   <text class="head" x="617" y="448">Import</text>
-  <text class="body" x="617" y="473">validate result</text>
-  <text class="body" x="617" y="493">tests · findings</text>
+  <text class="body" x="617" y="473">validate · tests · findings</text>
+  <text class="body" x="617" y="493">SAST run: profile exclusions</text>
   <circle cx="723" cy="417" r="11" class="chip"/><g color="#4d9874"><use href="#ico-download" x="715" y="409" width="16" height="16"/></g>
 
   <rect class="box" x="285" y="417" width="185" height="92" rx="12" fill="#eaf8f1" stroke="#4d9874"/>
   <circle cx="282" cy="417" r="12.5" fill="#4d9874"/><text class="badge" x="282" y="421">10</text>
   <text class="head" x="377" y="448">Post-process</text>
-  <text class="body" x="377" y="473">deduplicate · enrich</text>
-  <text class="body" x="377" y="493">identify regressions</text>
+  <text class="body" x="377" y="473">deduplicate</text>
+  <text class="body" x="377" y="493">SAST: enrich · regressions</text>
   <circle cx="473" cy="417" r="11" class="chip"/><g color="#4d9874"><use href="#ico-layers" x="465" y="409" width="16" height="16"/></g>
 
-  <rect class="box" x="65" y="382" width="175" height="82" rx="12" fill="#eaf8f1" stroke="#4d9874"/>
-  <text class="head" x="152" y="414">Finished</text>
-  <text class="body" x="152" y="439">no findings or warning</text>
+  <rect class="box" x="65" y="382" width="175" height="92" rx="12" fill="#eaf8f1" stroke="#4d9874"/>
+  <text class="head" x="152" y="410">Finished</text>
+  <text class="body" x="152" y="433">no findings or warning</text>
+  <g color="#3f7d92"><use href="#ico-radar" x="80" y="444" width="14" height="14"/></g>
+  <text class="body" x="160" y="456">DAST after dedup</text>
   <circle cx="243" cy="382" r="11" class="chip"/><g color="#4d9874"><use href="#ico-check-circle" x="235" y="374" width="16" height="16"/></g>
-  <rect class="box" x="65" y="497" width="175" height="82" rx="12" fill="#f4efff" stroke="#7d69aa"/>
-  <text class="head" x="152" y="529">Review</text>
-  <text class="body" x="152" y="554">human or AI-assisted</text>
-  <circle cx="243" cy="497" r="11" class="chip"/><g color="#7d69aa"><use href="#ico-eye" x="235" y="489" width="16" height="16"/></g>
+  <rect class="box" x="65" y="492" width="175" height="92" rx="12" fill="#f4efff" stroke="#7d69aa"/>
+  <text class="head" x="152" y="520">Review</text>
+  <text class="body" x="152" y="543">human or AI-assisted</text>
+  <g color="#9e751d"><use href="#ico-bug" x="88" y="554" width="14" height="14"/></g>
+  <text class="body" x="160" y="566">SAST findings</text>
+  <circle cx="243" cy="492" r="11" class="chip"/><g color="#7d69aa"><use href="#ico-eye" x="235" y="484" width="16" height="16"/></g>
 
   <path d="M1250 463H1205" class="flow"/>
-  <path d="M1015 447C995 437 990 423 970 423M1015 479C995 489 990 538 970 538" class="flow"/>
-  <path d="M765 423C745 423 740 447 720 447M765 538C745 538 740 479 720 479" class="flow"/>
+  <path d="M1015 447C995 437 990 423 970 423" class="flow"/><path d="M1015 479C995 489 990 538 970 538" class="flow"/>
+  <path d="M765 423C745 423 740 447 720 447" class="flow"/><path d="M765 538C745 538 740 479 720 479" class="flow"/>
   <path d="M515 463H470" class="flow"/>
-  <path d="M285 447C265 437 260 423 240 423M285 479C265 489 260 538 240 538" class="flow"/>
+  <path d="M560 417C560 397 545 395 525 395H290C265 395 262 400 240 400" class="flow"/>
+  <text class="edge" x="377" y="388">no findings</text>
+  <path d="M285 447C265 437 260 423 240 423" class="flow"/><path d="M285 479C265 489 260 538 240 538" class="flow"/>
 
   <rect x="515" y="547" width="205" height="55" rx="11" class="box" fill="#edf5ff" stroke="#5c83b6" stroke-dasharray="6 4"/>
   <text class="head" x="617" y="569" style="font-size:15px">Manual import</text>

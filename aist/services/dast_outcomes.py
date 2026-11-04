@@ -3,26 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 
 from django.db import transaction
 
+from aist.execution.contracts import DastPipelineOutcomeCode
 from aist.launch_data import PipelineLaunchData
 from aist.models import AISTPipeline, PipelineExecutionType
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
 
+_import_sast_pipeline_package()
 
-class DastPipelineOutcomeCode(StrEnum):
-    SUCCESS_WITH_FINDINGS = "SUCCESS_WITH_FINDINGS"
-    SUCCESS_CLEAN = "SUCCESS_CLEAN"
-    COMPLETED_WITH_DEGRADATION = "COMPLETED_WITH_DEGRADATION"
-    FAILED_WITH_PARTIAL_RESULTS = "FAILED_WITH_PARTIAL_RESULTS"
-    POLICY_NO_ELIGIBLE_STAND = "POLICY_NO_ELIGIBLE_STAND"
-    SOURCE_DRIFT = "SOURCE_DRIFT"
-    PROVIDER_FAILED = "PROVIDER_FAILED"
-    PROVIDER_CREDENTIALS_EXPIRED = "PROVIDER_CREDENTIALS_EXPIRED"
-    RUNTIME_FAILED = "RUNTIME_FAILED"
-    INVALID_RESULT = "INVALID_RESULT"
-    CANCELLED = "CANCELLED"
+from pipeline.dast.contracts import (  # type: ignore[import-not-found]  # noqa: E402
+    DastConnectorOutcomeState,
+    DastRunState,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,31 +34,33 @@ _PROVIDER_REASON_CODES = {
     "PROVIDER_CREDENTIALS_EXPIRED": DastPipelineOutcomeCode.PROVIDER_CREDENTIALS_EXPIRED,
 }
 
+_DEGRADED_STATUS_CODES = {
+    DastRunState.COMPLETED_WITH_DEGRADATION: DastPipelineOutcomeCode.COMPLETED_WITH_DEGRADATION,
+    DastRunState.FAILED_WITH_PARTIAL_RESULTS: DastPipelineOutcomeCode.FAILED_WITH_PARTIAL_RESULTS,
+    DastRunState.STOPPED: DastPipelineOutcomeCode.CANCELLED,
+}
+
 
 def classify_dast_execution_result(result) -> ClassifiedDastOutcome | None:
-    """Map a typed connector result without exposing provider-controlled reason text."""
-    state = result.outcome.state.value
+    """
+    Map a typed connector result without exposing provider-controlled reason text.
+
+    Returns None while the provider run is not settled, which the caller retries.
+    """
+    state = result.outcome.state
     provider_reason = getattr(result.outcome, "reason_code", None)
-    if state in {"stop_pending", "unreachable"}:
+    if state in {DastConnectorOutcomeState.STOP_PENDING, DastConnectorOutcomeState.UNREACHABLE}:
         return None
-    if state == "cancelled_before_start":
+    if state is DastConnectorOutcomeState.CANCELLED_BEFORE_START:
         return ClassifiedDastOutcome(code=DastPipelineOutcomeCode.CANCELLED, degraded=True)
 
     terminal_result = result.terminal_result
-    if state != "terminal" or terminal_result is None:
+    if state is not DastConnectorOutcomeState.TERMINAL or terminal_result is None:
         return ClassifiedDastOutcome(code=DastPipelineOutcomeCode.INVALID_RESULT, degraded=True)
-    terminal_status = terminal_result.status.value
-    if terminal_status == "completed_with_degradation":
-        return ClassifiedDastOutcome(
-            code=DastPipelineOutcomeCode.COMPLETED_WITH_DEGRADATION,
-            degraded=True,
-        )
-    if terminal_status == "failed_with_partial_results":
-        return ClassifiedDastOutcome(
-            code=DastPipelineOutcomeCode.FAILED_WITH_PARTIAL_RESULTS,
-            degraded=True,
-        )
-    if terminal_status == "succeeded":
+    terminal_status = terminal_result.status
+    if terminal_status in _DEGRADED_STATUS_CODES:
+        return ClassifiedDastOutcome(code=_DEGRADED_STATUS_CODES[terminal_status], degraded=True)
+    if terminal_status is DastRunState.SUCCEEDED:
         report = getattr(terminal_result, "report", None)
         findings = report.get("findings") if isinstance(report, dict) else None
         code = (
@@ -73,9 +69,7 @@ def classify_dast_execution_result(result) -> ClassifiedDastOutcome | None:
             else DastPipelineOutcomeCode.SUCCESS_CLEAN
         )
         return ClassifiedDastOutcome(code=code, degraded=False)
-    if terminal_status == "stopped":
-        return ClassifiedDastOutcome(code=DastPipelineOutcomeCode.CANCELLED, degraded=True)
-    if terminal_status == "failed":
+    if terminal_status is DastRunState.FAILED:
         return ClassifiedDastOutcome(
             code=_PROVIDER_REASON_CODES.get(provider_reason, DastPipelineOutcomeCode.PROVIDER_FAILED),
             degraded=True,

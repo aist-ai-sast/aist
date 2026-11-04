@@ -14,6 +14,7 @@ from rest_framework.permissions import SAFE_METHODS
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
+from aist.api.common import VpnLinkField
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.execution.observability import AuditContext, audit_event
@@ -150,7 +151,7 @@ class DastIntegrationOnboardingSerializer(serializers.Serializer):
     """Create/update boundary that keeps bundle parsing and secret extraction together."""
 
     name = serializers.CharField(max_length=255, required=False, default="DAST Gateway")
-    vpn_integration_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+    vpn_integration_id = VpnLinkField(source="vpn_integration", required=False, allow_null=True, write_only=True)
     bundle = DastOnboardingBundleSerializer(write_only=True)
 
     def to_internal_value(self, data):
@@ -169,20 +170,6 @@ class DastIntegrationOnboardingSerializer(serializers.Serializer):
     def validate(self, attrs):
         if "bundle" in attrs:
             attrs["parsed_bundle"] = DastOnboardingBundle.from_mapping(attrs["bundle"])
-        if "vpn_integration_id" in attrs:
-            vpn_id = attrs.pop("vpn_integration_id")
-            vpn = None
-            if vpn_id is not None:
-                organization = self.context["organization"]
-                vpn = OrgIntegration.objects.filter(
-                    pk=vpn_id,
-                    organization=organization,
-                    integration_type=OrgIntegrationType.VPN,
-                    is_active=True,
-                ).first()
-                if vpn is None:
-                    raise serializers.ValidationError({"vpn_integration_id": "Active same-organization VPN required."})
-            attrs["vpn_integration"] = vpn
         return attrs
 
     def create(self, validated_data):
@@ -405,13 +392,12 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
     dast_state = serializers.SerializerMethodField()
 
     # VPN routing FK — nullable, only applicable to non-VPN integration types
-    vpn_integration = serializers.PrimaryKeyRelatedField(
-        queryset=OrgIntegration.objects.filter(integration_type=OrgIntegrationType.VPN),
+    vpn_integration = VpnLinkField(
         allow_null=True,
         required=False,
         help_text=(
             "Optional VPN integration to route requests through. "
-            "Must be a VPN-type integration in the same organization."
+            "Must be an active VPN-type integration in the same organization."
         ),
     )
 
@@ -567,24 +553,6 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
                         "Deactivate the existing one before creating a new active integration."
                     )
                     raise serializers.ValidationError({"is_active": msg})
-
-    def validate_vpn_integration(self, value):
-        if value is None:
-            return value
-        organization = self.context.get("organization")
-        organization_id = (
-            organization.pk if organization is not None
-            else (self.instance.organization_id if self.instance is not None else None)
-        )
-        # Unconditional check — raise even if organization_id is None/empty so that
-        # a missing context never silently allows cross-org VPN linkage.
-        if not organization_id:
-            msg = "Cannot determine organization context; VPN integration cannot be validated."
-            raise serializers.ValidationError(msg)
-        if str(value.organization_id) != str(organization_id):
-            msg = "VPN integration must belong to the same organization."
-            raise serializers.ValidationError(msg)
-        return value
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

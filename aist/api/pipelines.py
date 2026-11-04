@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import re
 import time
 from contextlib import suppress
@@ -23,18 +24,16 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
 
-from aist.ai_filter import validate_and_normalize_filter
+from aist.ai_filter import AIFilterError
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.launch_requests import (
     LaunchRequestResponseSerializer,
-    launch_principal_token,
-    launch_request_headers,
+    enqueue_requested_launch,
     launch_request_response,
 )
 from aist.api.schema import AISTApiTag
 from aist.authz import INTERNAL_SERVICE, Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy, queryset_for_action
-from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
-from aist.launch_data import PipelineLaunchData
+from aist.launch_data import AIMode, PipelineLaunchData
 from aist.logging_transport import (
     BACKLOG_COUNT,
     LOG_ROTATION_BACKUP_COUNT,
@@ -46,6 +45,7 @@ from aist.logging_transport import (
 )
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, DastExecutionState, TestDeduplicationProgress
 from aist.pipeline_args import PipelineArguments
+from aist.progress import EnrichProgress, progress_percent
 from aist.services.dast_outcomes import public_dast_outcome_code
 from aist.services.dast_run_metadata import dast_run_detail
 from aist.utils.export import _build_ai_export_rows
@@ -56,6 +56,8 @@ from aist.utils.pipeline import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,58 +220,20 @@ class PipelineStartAPI(AISTAPIView):
         if api_settings.URL_FORMAT_OVERRIDE:
             setattr(request, api_settings.URL_FORMAT_OVERRIDE, None)
 
-        # validate body
         serializer = PipelineStartRequestSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         project_version = serializer.validated_data["project_version_id"]
         project = project_version.project
-        provided_ai_filter = serializer.validated_data.get("ai_filter", None)
-
-        if not provided_ai_filter:
-            return Response(
-                {"ai_filter": "ai_filter is required for AUTO_DEFAULT"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            normalized_filter = validate_and_normalize_filter(provided_ai_filter)
-        except Exception as e:
-            return Response(
-                {"ai_filter": str(e)},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         raw = {
-            "ai_mode": "AUTO_DEFAULT",
-            "ai_filter_snapshot": normalized_filter,
-            # keep API behavior stable: no analyzers override here (same as before)
-            "analyzers": [],
-            "selected_languages": [],
-            "rebuild_images": False,
-            "log_level": "INFO",
-            "time_class_level": None,
+            "ai_mode": AIMode.AUTO_DEFAULT,
+            "ai_filter_snapshot": serializer.validated_data.get("ai_filter") or None,
             "project_version": project_version.as_dict(),
         }
-
-        organization = project.organization
-        if organization is None:
-            return Response(
-                {"organization": "Project does not belong to an AIST organization."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        principal = LaunchPrincipal.for_user(
-            organization=organization,
-            requester=request.user,
-            api_token=launch_principal_token(request),
-        )
         try:
-            launch_request = enqueue_pipeline_launch(
-                arguments=PipelineArguments.for_sast(project=project, raw_params=raw),
-                principal=principal,
-                client_request_key=launch_request_headers(request).get("client_request_key"),
-            ).request
-        except LaunchEnqueueError as exc:
-            raise ValidationError({"detail": str(exc)}) from exc
+            arguments = PipelineArguments.for_sast(project=project, raw_params=raw)
+        except AIFilterError as exc:
+            return Response({"ai_filter": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        launch_request = enqueue_requested_launch(request, arguments=arguments)
         return Response(launch_request_response(launch_request), status=status.HTTP_202_ACCEPTED)
 
 
@@ -645,6 +609,14 @@ def _render_log_days(text: str, *, previous_day: str | None) -> tuple[str, str |
     return "\n".join(rendered), day
 
 
+def sse_response(events) -> StreamingHttpResponse:
+    """Stream server-sent ``events`` unbuffered and uncached."""
+    resp = StreamingHttpResponse(events, content_type="text/event-stream; charset=utf-8")
+    resp["Cache-Control"] = "no-cache, no-transform"
+    resp["X-Accel-Buffering"] = "no"
+    return resp
+
+
 def pipeline_logs_progressive_response(
     *,
     pipeline: AISTPipeline,
@@ -723,10 +695,7 @@ def stream_logs_sse_response(pipeline: AISTPipeline) -> StreamingHttpResponse:
                 break
             time.sleep(0.3)
 
-    resp = StreamingHttpResponse(event_stream(), content_type="text/event-stream; charset=utf-8")
-    resp["Cache-Control"] = "no-cache, no-transform"
-    resp["X-Accel-Buffering"] = "no"
-    return resp
+    return sse_response(event_stream())
 
 
 def stream_logs_sse_redis_response(pipeline: AISTPipeline) -> StreamingHttpResponse:
@@ -785,10 +754,7 @@ def stream_logs_sse_redis_response(pipeline: AISTPipeline) -> StreamingHttpRespo
                 pubsub.unsubscribe(channel)
                 pubsub.close()
 
-    resp = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
-    resp["Cache-Control"] = "no-cache"
-    resp["X-Accel-Buffering"] = "no"
-    return resp
+    return sse_response(event_stream())
 
 
 def pipeline_status_stream_response(pipeline_id: str) -> StreamingHttpResponse:
@@ -817,11 +783,7 @@ def pipeline_status_stream_response(pipeline_id: str) -> StreamingHttpResponse:
                     last_status = obj.status
                     last_updated = obj.updated
                     yield f"event: status\ndata: {last_status}\n\n"
-                    if last_status in {
-                        AISTStatus.FINISHED,
-                        AISTStatus.FINISHED_WITH_WARNINGS,
-                        getattr(AISTStatus, "FAILED", "FAILED"),
-                    }:
+                    if is_terminal_pipeline_status(last_status):
                         done_at = time.time() + 6
                 elif last_status is not None and obj.updated != last_updated:
                     last_updated = obj.updated
@@ -840,10 +802,7 @@ def pipeline_status_stream_response(pipeline_id: str) -> StreamingHttpResponse:
         finally:
             close_old_connections()
 
-    resp = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
-    resp["Cache-Control"] = "no-cache"
-    resp["X-Accel-Buffering"] = "no"
-    return resp
+    return sse_response(event_stream())
 
 
 def deduplication_progress_payload(pipeline: AISTPipeline, *, user) -> dict:
@@ -866,7 +825,7 @@ def deduplication_progress_payload(pipeline: AISTPipeline, *, user) -> dict:
         total = getattr(t, "total_findings", 0)
         pending = prog.pending_tasks
         processed = max(total - pending, 0)
-        pct = 100 if total == 0 else int(processed * 100 / total)
+        pct = progress_percent(processed, total)
 
         overall_total += total
         overall_processed += processed
@@ -883,7 +842,7 @@ def deduplication_progress_payload(pipeline: AISTPipeline, *, user) -> dict:
             },
         )
 
-    overall_pct = 100 if overall_total == 0 else int(overall_processed * 100 / overall_total)
+    overall_pct = progress_percent(overall_processed, overall_total)
     return {
         "status": pipeline.status,
         "overall": {
@@ -898,25 +857,23 @@ def deduplication_progress_payload(pipeline: AISTPipeline, *, user) -> dict:
 
 def pipeline_enrich_progress_response(pipeline_id: str) -> StreamingHttpResponse:
     redis = get_redis()
-    key = f"aist:progress:{pipeline_id}:enrich"
 
     def event_stream():
         last = None
         last_ping = time.monotonic()
         while True:
             try:
-                total, done = redis.hmget(key, "total", "done")
+                progress = EnrichProgress.read(redis, pipeline_id)
             except Exception:
-                total, done = 0, 0
-            total = int(total or 0)
-            done = int(done or 0)
+                logger.exception("Cannot read enrich progress (pipeline_id=%s)", pipeline_id)
+                yield "event: unavailable\ndata: progress unavailable\n\n"
+                return
 
-            payload = {
-                "total": total,
-                "done": done,
-                "percent": (100 if total == 0 else int(done * 100 / total)),
-            }
-
+            payload = (
+                {"total": 0, "done": 0, "percent": 0}
+                if progress is None
+                else {"total": progress.total, "done": progress.done, "percent": progress.percent}
+            )
             now = (payload["total"], payload["done"])
             if now != last:
                 yield f"data: {json.dumps(payload)}\n\n"
@@ -926,16 +883,13 @@ def pipeline_enrich_progress_response(pipeline_id: str) -> StreamingHttpResponse
                 yield ": ping\n\n"
                 last_ping = time.monotonic()
 
-            if total and done >= total:
+            if progress is not None and progress.finished:
                 yield "event: done\ndata: ok\n\n"
-                break
+                return
 
             time.sleep(1)
 
-    resp = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
-    resp["Cache-Control"] = "no-cache"
-    resp["X-Accel-Buffering"] = "no"
-    return resp
+    return sse_response(event_stream())
 
 
 class PipelineStopAPI(AISTAPIView):
@@ -1137,13 +1091,12 @@ class PipelineSourceInfoAPI(AISTAPIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        product_name = getattr(pipeline.project.product, "name", "")
-        source_root = ld.resolve_source_root(product_name)
+        source_root = pipeline.source_root
 
         return Response({
             "pipeline_id": pipeline.id,
             "status": pipeline.status,
             "project_path": source_root,
-            "project_name": product_name,
+            "project_name": getattr(pipeline.project.product, "name", ""),
             "languages": ld.languages or [],
         })

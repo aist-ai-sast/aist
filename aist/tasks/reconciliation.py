@@ -36,7 +36,7 @@ def _recover_stuck_dedup_pipelines(*, dry_run: bool = False) -> int:
     A pipeline is considered stuck when it has not progressed beyond this status for
     longer than AIST_DEDUP_WATCH_RECOVERY_THRESHOLD_S seconds. The most common cause
     is a Redis failure between the DB commit and the on_commit Celery dispatch in
-    postprocess_findings().
+    schedule_pipeline_postprocessing().
 
     A new task_id is generated and saved atomically so that the recovered watcher
     can be identified and there is no collision with the original (potentially dead) task.
@@ -140,7 +140,7 @@ def _recover_one_stuck_enrich_pipeline(pipeline, make_enrich_chord) -> bool:
 
 @shared_task(name="aist.tasks.reconciliation.reconcile_pipeline_orphans")
 def reconcile_pipeline_orphans_task(pipeline_id: str, *, dry_run: bool = False, async_user_id=None) -> dict:
-    return reconcile_pipeline_orphans(pipeline_id=pipeline_id, dry_run=dry_run)
+    return reconcile_pipeline_orphans(pipeline_id=pipeline_id, dry_run=dry_run).as_dict()
 
 
 @shared_task(name="aist.tasks.reconciliation.reconcile_recent_orphans")
@@ -158,7 +158,7 @@ def reconcile_recent_orphans_task(
     )
     result = {"launch_requests": launch_request_stats}
     result["stale_execution_leases"] = 0 if dry_run else report_stale_execution_leases()
-    result.update(reconcile_recent_pipelines(hours=hours, batch_size=batch_size, dry_run=dry_run))
+    result.update(reconcile_recent_pipelines(hours=hours, batch_size=batch_size, dry_run=dry_run).as_dict())
     result["recovered_stuck_dedup"] = _recover_stuck_dedup_pipelines(dry_run=dry_run)
     result["recovered_stuck_enrich"] = _recover_stuck_enrich_pipelines(dry_run=dry_run)
     return result

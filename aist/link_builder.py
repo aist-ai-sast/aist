@@ -1,123 +1,60 @@
-import time
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
-import requests
-from django.urls import reverse
+from django.urls import Resolver404, resolve, reverse
+from dojo.models import DojoMeta
 
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
 from aist.utils.urls import get_public_base_url
+
+_import_sast_pipeline_package()
+
+from pipeline.defect_dojo.repo_info import checkout_relative_path  # noqa: E402
+
+SOURCEFILE_LINK_META_NAME = "sourcefile_link"
+_FILE_BLOB_VIEW_NAME = "aist_api:project_version_file_blob"
 
 
 class LinkBuilder:
 
-    """Build source links for GitHub/GitLab/Bitbucket; verify remote file existence (handles 429)."""
+    """Build the platform's source link of a scanned file of one project version."""
 
-    def __init__(self, version_descriptor):
-        self.is_local_files = version_descriptor.get("type", "FILE_HASH") == "FILE_HASH"
-        self.version_id = version_descriptor.get("id", "")
-        self.excluded_path = version_descriptor.get("excluded_paths", [])
-
-    @staticmethod
-    def _scm_type(repo_url: str) -> str:
-        host = urlparse(repo_url).netloc.lower()
-        if "github" in host:
-            return "github"
-        if "gitlab" in host:
-            return "gitlab"
-        if "bitbucket.org" in host:
-            return "bitbucket-cloud"
-        if "bitbucket" in host:
-            return "bitbucket-server"
-        if "gitea" in host:
-            return "gitea"
-        if "codeberg" in host:
-            return "codeberg"
-        if "dev.azure.com" in host or "visualstudio.com" in host:
-            return "azure"
-        return "generic"
+    def __init__(self, version_id: int | None, trim_path: str = ""):
+        self.version_id = version_id
+        self.trim_path = trim_path
 
     @staticmethod
     def build_project_version_file_blob(project_version_id: int, subpath: str) -> str:
         base = get_public_base_url()
-        path = reverse("aist_api:project_version_file_blob",
-                       kwargs={"project_version_id": project_version_id, "subpath": subpath})
+        path = reverse(_FILE_BLOB_VIEW_NAME, kwargs={"project_version_id": project_version_id, "subpath": subpath})
         return urljoin(base + "/", path.lstrip("/"))
 
     @staticmethod
-    def build_raw_url(repo_url: str, ref: str, subpath: str) -> str:
-        """
-        Build a raw file URL for the given SCM (GitHub/GitLab/etc).
-        This function converts a repo URL + ref + path into a direct raw download link.
-        """
-        lb = LinkBuilder({"id": 0})
-        scm = lb._scm_type(repo_url)
-        fp = subpath.lstrip("/").replace("\\", "/")
+    def parse(link: str) -> tuple[int, str] | None:
+        """Return (project_version_id, subpath) of a link this builder made, or None for any other URL."""
+        try:
+            match = resolve(unquote(urlparse(link).path))
+        except Resolver404:
+            return None
+        if match.view_name != _FILE_BLOB_VIEW_NAME:
+            return None
+        return match.kwargs["project_version_id"], match.kwargs["subpath"]
 
-        if scm == "github":
-            return f"{repo_url.rstrip('/')}/raw/{ref}/{fp}"
-        if scm == "gitlab":
-            return f"{repo_url.rstrip('/')}/-/raw/{ref}/{fp}"
-        if scm == "bitbucket-cloud":
-            return f"{repo_url.rstrip('/')}/raw/{ref}/{fp}"
-        if scm == "bitbucket-server":
-            return f"{repo_url.rstrip('/')}/raw/{ref}/{fp}"
-        if scm in {"gitea", "codeberg"}:
-            return f"{repo_url.rstrip('/')}/raw/{ref}/{fp}"
-        if scm == "azure":
-            return f"{repo_url.rstrip('/')}/?path=/{fp}&version=GC{ref}&api-version=7.0&download=true"
-        return f"{repo_url.rstrip('/')}/raw/{ref}/{fp}"
-
-    def get_public_redirect_blob_url(self, repo_url: str, ref, file_path: str):
-        scm = self._scm_type(repo_url)
-        ref = ref or "master"
-        file_path = file_path.replace("file://", "")
-        fp = file_path.lstrip("/")
-        if scm == "github":
-            return f"{repo_url.rstrip('/')}/blob/{ref}/{fp}"
-        if scm == "gitlab":
-            return f"{repo_url.rstrip('/')}/-/blob/{ref}/{fp}"
-        if scm == "bitbucket-cloud":
-            return f"{repo_url.rstrip('/')}/src/{ref}/{fp}"
-        if scm == "bitbucket-server":
-            return f"{repo_url.rstrip('/')}/browse/{fp}?at={ref}"
-        if scm in {"gitea", "codeberg"}:
-            return f"{repo_url.rstrip('/')}/src/{ref}/{fp}"
-        if scm == "azure":
-            return f"{repo_url.rstrip('/')}/?path=/{fp}&version=GC{ref}"
-        return f"{repo_url.rstrip('/')}/blob/{ref}/{fp}"
-
-    # for all build proxy aist url
-    # when aistproject created it always creates initial version master
-    # the proxy if it see it's git_hash redirect to blob and pat is not None get the content by itself with token and returns it
+    def relative_path(self, file_path: str) -> str:
+        """Return `file_path` relative to the scanned checkout."""
+        return checkout_relative_path(file_path, self.trim_path)
 
     def build(self, file_path: str) -> str | None:
-        if not file_path:
+        """Return the source link of `file_path`, or None without a path or a project version."""
+        if not file_path or self.version_id is None:
             return None
+        subpath = self.relative_path(file_path.removeprefix("file://")).lstrip("/")
+        return LinkBuilder.build_project_version_file_blob(self.version_id, subpath)
 
-        file_path = file_path.replace("file://", "")
-        fp = file_path.lstrip("/")
-        return LinkBuilder.build_project_version_file_blob(self.version_id, fp)
 
-    def contains_excluded_path(self, url: str) -> bool:
-        return any(path in url for path in self.excluded_path)
-
-    def remote_link_exists(self, url: str, timeout: int = 5, max_retries: int = 3) -> bool | None:
-        """Return True if GET 200/3xx, False if 404, None for other errors. Retries on 429."""
-        if self.is_local_files:
-            return True
-
-        try:
-            r = requests.get(url, allow_redirects=True, timeout=timeout)
-        except requests.RequestException:
-            return None
-        else:
-            if r.status_code == 429 and max_retries > 0:
-                retry = int(r.headers.get("Retry-After", "1"))
-                time.sleep(retry)
-                return self.remote_link_exists(url, timeout, max_retries - 1)
-            if r.status_code == 200:
-                return True
-            if 300 <= r.status_code < 400:
-                return True
-            if r.status_code == 404:
-                return False
-            return None
+def store_source_link(finding_id: int, link: str) -> None:
+    """Record `link` as the finding's source link, replacing any earlier one."""
+    DojoMeta.objects.update_or_create(
+        finding_id=finding_id,
+        name=SOURCEFILE_LINK_META_NAME,
+        defaults={"value": link},
+    )

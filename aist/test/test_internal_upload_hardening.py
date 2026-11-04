@@ -9,59 +9,30 @@ every scan_type, before a Finding is ever saved — duplicating that here would 
 """
 from __future__ import annotations
 
-import json
+import logging
+import shutil
 import tempfile
-from datetime import timedelta
 from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import TestCase
-from django.utils import timezone
-from dojo.models import Engagement, Product, Product_Type
+from dojo.models import Product, Product_Type
 
-from aist.internal_upload import import_scan_via_default_importer
-from aist.utils.pipeline_imports import _import_sast_pipeline_package
-
-_import_sast_pipeline_package()
-
-from pipeline.defect_dojo.repo_info import RepoParams  # noqa: E402
-
-
-def _write_report(payload: dict) -> Path:
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")  # noqa: SIM115
-    tmp.write(json.dumps(payload))
-    tmp.close()
-    return Path(tmp.name)
+from aist.internal_upload import NO_EXCLUSION, upload_results_internal
+from aist.test.agent_analyzer_import import write_analyzers_yaml
+from aist.test.scan_import_helpers import GENERIC_SCAN_TYPE, import_generic_report, upload_engagement
 
 
 class ImportHardeningTests(TestCase):
     def setUp(self):
         prod_type = Product_Type.objects.create(name="Hardening PT")
         product = Product.objects.create(name="Hardening Product", description="desc", prod_type=prod_type)
-        today = timezone.localdate()
-        self.engagement = Engagement.objects.create(
-            name="hardening engagement",
-            product=product,
-            engagement_type="CI/CD",
-            target_start=today,
-            target_end=today + timedelta(days=1),
-        )
-        self.repo_params = RepoParams(repo_url="", branch_tag=None, commit_hash=None, scm_type="generic", local_path=None)
+        self.engagement = upload_engagement(product, "hardening engagement")
         self.lead = get_user_model().objects.create_user(username="hardening-lead")
 
     def _import(self, findings: list[dict]):
-        scan_type = "Generic Findings Import"
-        report_path = _write_report({"type": scan_type, "findings": findings})
-        return import_scan_via_default_importer(
-            engagement=self.engagement,
-            scan_type=scan_type,
-            report_path=report_path,
-            test_title="hardening test",
-            repo_params=self.repo_params,
-            minimum_severity="Info",
-            lead=self.lead,
-        )
+        return import_generic_report(self.engagement, findings, lead=self.lead)
 
     def test_endpoint_with_allowed_scheme_is_kept(self):
         _test_obj, findings = self._import([
@@ -97,3 +68,32 @@ class ImportHardeningTests(TestCase):
         # AIST-side guard needs to be added back — this test is the tripwire for that.
         with self.assertRaises(ValidationError):
             self._import([{"title": "X", "severity": "Nonsense", "description": "d"}])
+
+
+class AnalyzerReportImportFailureTests(TestCase):
+
+    """A report the platform cannot import is a failed result, so the run records why it has no findings for it."""
+
+    def test_an_unparseable_report_is_returned_as_an_import_failure(self):
+        prod_type = Product_Type.objects.create(name="Failure PT")
+        product = Product.objects.create(name="Failure Product", description="desc", prod_type=prod_type)
+        get_user_model().objects.create_user(username="failure-lead")
+        work_dir = Path(tempfile.mkdtemp(prefix="aist-import-failure-"))
+        self.addCleanup(shutil.rmtree, work_dir)
+        config_path = write_analyzers_yaml(
+            work_dir, name="semgrep", skill_name="", result_file="semgrep.json", output_type=GENERIC_SCAN_TYPE,
+        )
+        (work_dir / "semgrep.json").write_text("{not json", encoding="utf-8")
+
+        results = upload_results_internal(
+            analyzers_cfg_path=config_path,
+            output_dir=str(work_dir),
+            product=product,
+            repo_path=str(work_dir),
+            exclusion=NO_EXCLUSION,
+            logger=logging.getLogger(__name__),
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertIsNone(results[0].test_id)
+        self.assertEqual((results[0].analyzer_name, results[0].failure_code), ("semgrep", "import_failed"))

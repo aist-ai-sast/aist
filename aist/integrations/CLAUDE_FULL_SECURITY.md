@@ -14,7 +14,7 @@ triage skip rule. The only structural difference is the analysis scope.
 
 ## How it runs
 
-1. `aist/tasks/pipeline.py` calls `aist.utils.agent_runtime.build_agent_runtime_env`
+1. `aist/tasks/sast_execution.py` calls `aist.utils.agent_runtime.build_agent_runtime_env`
    before `configure_project_run_analyses`. The helper produces a single
    sidecar dict with the union of keys all agent skills might need
    (`EXCLUDED_PATHS_JSON`, `BASE_COMMIT`, `CLAUDE_DIFF_MAX_*`,

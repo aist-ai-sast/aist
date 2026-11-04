@@ -14,6 +14,7 @@ from aist.models import (
     OrgIntegrationType,
 )
 from aist.test.test_api import AISTApiBase
+from aist.test.vpn_fixtures import refused_vpn_routes
 
 TOKEN = "pub_aist.secretvaluevaluevalue"  # noqa: S105
 ROTATED_TOKEN = "pub_aist.rotatedsecretvaluevalue"  # noqa: S105
@@ -214,6 +215,29 @@ class DastOnboardingAPITests(AISTApiBase):
         integration = OrgIntegration.objects.get(pk=integration_id)
         self.assertEqual(integration.vpn_integration_id, vpn.pk)
         self.assertEqual(integration.secret, TOKEN)
+
+    @patch("aist.integrations.dast_validation.current_app.send_task")
+    def test_a_route_that_may_not_carry_this_organization_traffic_is_refused(self, send_task):
+        with self.captureOnCommitCallbacks(execute=True):
+            integration_id = self._import().data["id"]
+        other_organization = Organization.objects.create(
+            name="Other DAST API org",
+            product_type=Product_Type.objects.create(name="Other DAST API PT"),
+        )
+        routes = refused_vpn_routes(self.organization, other_organization)
+        detail_url = reverse(
+            "aist_api:dast_integration_onboarding_detail",
+            kwargs={"integration_id": integration_id},
+        )
+        send_task.reset_mock()
+        for case, vpn in routes.items():
+            with self.subTest(case=case):
+                rerouted = self.client.patch(detail_url, {"vpn_integration_id": vpn.pk}, format="json")
+
+                self.assertEqual(rerouted.status_code, 400)
+                self.assertIn("vpn_integration_id", rerouted.data)
+                self.assertIsNone(OrgIntegration.objects.get(pk=integration_id).vpn_integration_id)
+        send_task.assert_not_called()
 
     @patch("aist.integrations.dast_validation.current_app.send_task")
     def test_disabling_an_integration_does_not_start_a_validation(self, send_task):

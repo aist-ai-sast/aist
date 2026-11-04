@@ -109,7 +109,7 @@ Before reasoning about any specific finding:
 
 3. **Identify trust boundaries** of each sub-project: where external input enters (HTTP handler, CLI argv, message queue consumer, file upload, IPC) and where it leaves (DB query, shell, network call, deserializer, file write, response body, log sink). Map the conventional sanitization / validation / auth patterns the codebase already uses — new code that *deviates* from those patterns is more interesting than new code that follows them.
 
-4. **Apply path exclusions.** Decode `EXCLUDED_PATHS_JSON` and apply the same simple rule as AIST post-processing: drop a changed file if any exclusion
+4. **Apply path exclusions.** Decode `EXCLUDED_PATHS_JSON` and apply the same simple rule AIST applies when it imports findings: drop a changed file if any exclusion
    string is contained anywhere in its relative `file_path`. For example, `test`
    excludes `cloud/tests/foo.py`, `static-resources/` excludes
    `public/static-resources/app.js`, and `.spec.ts` excludes `login.spec.ts`.

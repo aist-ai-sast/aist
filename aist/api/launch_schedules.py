@@ -13,15 +13,10 @@ from rest_framework import serializers, status
 from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 
+from aist.api.launch_requests import enqueue_requested_launch
 from aist.api.schema import AISTApiTag
 from aist.authz import PUBLIC, Action, AISTAPIView, ResourcePolicy
-from aist.execution.enqueue import (
-    LaunchIdempotencyConflictError,
-    LaunchPrincipal,
-    enqueue_pipeline_launch,
-)
 from aist.models import (
-    AISTApiToken,
     AISTProjectLaunchConfig,
     LaunchSchedule,
 )
@@ -51,10 +46,6 @@ def _ensure_aware(value: datetime) -> datetime:
     if timezone.is_naive(value):
         return timezone.make_aware(value, timezone.get_default_timezone())
     return value
-
-
-class LaunchRunOnceHeadersSerializer(serializers.Serializer):
-    client_request_key = serializers.CharField(required=False, allow_blank=False, max_length=255)
 
 
 def _coerce_strict_bool(raw: str) -> bool:
@@ -161,8 +152,8 @@ class LaunchScheduleSerializer(serializers.ModelSerializer):
     def _safe_due_next(self, obj):
         """
         SSOT: rely ONLY on LaunchSchedule model methods.
-        - due_tick uses get_next_run_time(prev <= now) semantics :contentReference[oaicite:1]{index=1}
-        - next_tick uses get_next_scheduled_time(strictly > now) :contentReference[oaicite:2]{index=2}
+        - due_tick uses get_next_run_time(prev <= now) semantics
+        - next_tick uses get_next_scheduled_time(strictly > now)
         """
         now = timezone.now()
         try:
@@ -596,29 +587,13 @@ class LaunchScheduleRunOnceAPI(AISTAPIView):
     def post(self, request, launch_schedule_id: int, *args, **kwargs):
         obj = self.resolve(id=launch_schedule_id)
 
-        # Use launch_config snapshot. Project is derived from launch_config.project :contentReference[oaicite:6]{index=6}
         project = obj.launch_config.project
 
-        token = request.auth if isinstance(request.auth, AISTApiToken) else None
-        principal = LaunchPrincipal.for_user(
-            organization=project.organization,
-            requester=request.user,
-            api_token=token,
-        )
-        key_serializer = LaunchRunOnceHeadersSerializer(data={
-            "client_request_key": request.headers.get("Idempotency-Key"),
-        } if request.headers.get("Idempotency-Key") is not None else {})
-        key_serializer.is_valid(raise_exception=True)
         try:
-            q = enqueue_pipeline_launch(
-                arguments=PipelineArguments.from_launch_config(obj.launch_config),
-                principal=principal,
-                schedule=obj,
-                launch_config=obj.launch_config,
-                client_request_key=key_serializer.validated_data.get("client_request_key"),
-            ).request
-        except LaunchIdempotencyConflictError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+            arguments = PipelineArguments.from_launch_config(obj.launch_config)
+        except ValueError as exc:
+            raise serializers.ValidationError({"detail": str(exc)}) from exc
+        q = enqueue_requested_launch(request, arguments=arguments, launch_config=obj.launch_config, schedule=obj)
 
         project_name = getattr(getattr(project, "product", None), "name", str(project.id))
         return Response(

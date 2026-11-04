@@ -9,9 +9,9 @@ import httpx
 from celery import shared_task
 from django.conf import settings
 
-from aist.integrations.claude import claude_auth_env
-from aist.integrations.resolver import resolve_integration
-from aist.models import AISTProject, OrgIntegrationType, VersionType
+from aist.integrations.claude import claude_subprocess_env
+from aist.integrations.egress import resolve_source_vpn
+from aist.models import AISTProject, VersionType
 from aist.pipeline_args import PipelineArguments
 from aist.utils.vpn import vpn_sidecar_context
 
@@ -31,10 +31,9 @@ def _send_to_bridge(
 
     Returns True on success (202 accepted), False on failure.
 
-    ``subprocess_env`` is the generic per-request env overlay introduced
-    in Task 4 of the Claude-as-Integration plan. The bridge merges these
-    values into the ``claude -p`` subprocess environment. Callers resolve
-    project-scoped credentials via ``aist.integrations.claude.claude_auth_env``
+    ``subprocess_env`` is the per-request env overlay the bridge merges
+    into the ``claude -p`` subprocess environment. Callers resolve
+    project-scoped credentials via ``aist.integrations.claude.claude_subprocess_env``
     and pass the result here as a plain ``dict[str, str]``.
     """
     socket_path = getattr(settings, "AIST_LOCAL_TRIAGE_BRIDGE_SOCKET", "/run/claude-bridge/bridge.sock")
@@ -130,11 +129,8 @@ def analyze_project_after_import(self, project_id: int, project_version_id: int,
     # Empty dict means "no active CLAUDE_CODE OrgIntegration for this
     # project's org", and skip-with-warning matches the operator
     # expectation of "auto-analyze either runs to completion or no-ops".
-    claude_subprocess_env = {
-        var: secret.get_secret_value()
-        for var, secret in claude_auth_env(project).items()
-    }
-    if not claude_subprocess_env:
+    auth_env = claude_subprocess_env(project)
+    if not auth_env:
         logger.warning(
             "Project %s has no active Claude integration; skipping auto-analyze",
             project_id,
@@ -153,7 +149,7 @@ def analyze_project_after_import(self, project_id: int, project_version_id: int,
 
     # ── 1. Clone via integrations (auth + VPN) ──────────────────────────────
     try:
-        vpn_resolved = resolve_integration(project, OrgIntegrationType.VPN)
+        vpn_resolved = resolve_source_vpn(project)
     except Exception:
         logger.exception("Failed to resolve VPN integration for project %s", project_id)
         vpn_resolved = None
@@ -184,12 +180,12 @@ def analyze_project_after_import(self, project_id: int, project_version_id: int,
         skill_name="aist-init-script-generator",
         project_id=project_id,
         source_path=clone_dir,
-        subprocess_env=claude_subprocess_env,
+        subprocess_env=auth_env,
         extra_args=f"project_version_id={version.id}",
     )
     _send_to_bridge(
         skill_name="aist-project-profile-analyzer",
         project_id=project_id,
         source_path=clone_dir,
-        subprocess_env=claude_subprocess_env,
+        subprocess_env=auth_env,
     )

@@ -165,3 +165,6 @@ client-ui/test-results
 !client-ui/src/lib/
 !client-ui/src/lib/**
 /triage/
+
+# Review-process working files (one uncommitted diff each)
+.sdlc/work/

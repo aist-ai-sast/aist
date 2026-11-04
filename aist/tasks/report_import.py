@@ -18,7 +18,7 @@ from aist.models import AISTPipeline, AISTStatus, DastProjectBinding
 from aist.parser_overrides import DAST_SCAN_TYPE
 from aist.services.dast_finalization import finalize_dast_report
 from aist.services.pipeline_lifecycle import transition_pipeline_status
-from aist.tasks.pipeline import attach_findings_and_finish
+from aist.services.pipeline_results import attach_findings_and_finish, record_imported_tests
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
 from aist.utils.report_import import discard_uploaded_report, resolve_import_version
@@ -93,15 +93,14 @@ def _record_provenance(
 ) -> None:
     with transaction.atomic():
         pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-        pipeline.tests.add(test_obj)
         ld = PipelineLaunchData(pipeline.launch_data)
+        record_imported_tests(pipeline, ld, [test_obj])
         ld.merge({
             "source": "manual_import",
             "scan_type": scan_type,
             "uploader_id": uploader_id,
             "filename": filename,
             "sha256": sha256,
-            "imported_test_ids": [test_obj.id],
         })
         pipeline.launch_data = ld.as_dict()
         pipeline.save(update_fields=["launch_data"])

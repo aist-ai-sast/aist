@@ -52,6 +52,13 @@ class ExecutionObservabilityTests(SimpleTestCase):
         outcomes.assert_called_once_with(outcome="error")
         selection.assert_called_once_with(relation="none")
 
+    def test_every_dast_pipeline_outcome_is_counted_under_its_own_label(self):
+        for outcome in ("PROVIDER_CREDENTIALS_EXPIRED", "RUNTIME_FAILED", "SUCCESS_CLEAN"):
+            with self.subTest(outcome=outcome), patch.object(observability.DAST_OUTCOMES_TOTAL, "labels") as outcomes:
+                observability.observe_dast_outcome(outcome=outcome, logs_delivered=0)
+
+            outcomes.assert_called_once_with(outcome=outcome)
+
     def test_audit_payload_has_only_allowlisted_identifiers_and_never_accepts_free_form_detail(self):
         context = AuditContext(
             organization_id=3,

@@ -109,7 +109,7 @@ class AISTAIViewsTests(AISTApiBase):
         self.assertEqual(results[0]["id"], f1.id)
 
     @patch("aist.api.ai.install_pipeline_logging")
-    @patch("aist.api.ai.push_request_to_ai")
+    @patch("aist.tasks.ai.push_request_to_ai")
     def test_send_request_to_ai_happy_path(self, mock_push, mock_log):
         mock_log.return_value = SimpleNamespace(error=lambda *_a, **_k: None)
         pipeline = AISTPipeline.objects.create(

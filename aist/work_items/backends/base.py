@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 import requests
 
+from aist.models.organizations import resolve_bound_vpn
+
 if TYPE_CHECKING:
     from aist.models import WorkItemLink, WorkItemProvider
 
@@ -60,18 +62,13 @@ class WorkItemBackend(ABC):
     def scoped_context(self, execution_id: str):
         """
         Context manager — yield self with proxy_url set if provider.vpn_integration
-        is configured and active.
+        may route the provider organization's traffic.
 
         Must run in a Celery worker (Docker socket access required for VPN sidecar).
         When no VPN is configured, yields self with proxy_url=None.
         """
-        from aist.integrations.resolver import ResolvedIntegration  # noqa: PLC0415
         from aist.utils.vpn import vpn_sidecar_context  # noqa: PLC0415
-        vpn = getattr(self.provider, "vpn_integration", None)
-        vpn_resolved = (
-            ResolvedIntegration(integration=vpn, config=dict(vpn.config or {}))
-            if (vpn and getattr(vpn, "is_active", False)) else None
-        )
+        vpn_resolved = resolve_bound_vpn(self.provider.vpn_integration, organization_id=self.provider.organization_id)
         with vpn_sidecar_context(vpn_resolved, execution_id=execution_id) as (_, proxy_url):
             self.proxy_url = proxy_url
             yield self

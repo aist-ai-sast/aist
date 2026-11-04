@@ -6,8 +6,9 @@ from django.urls import reverse
 from django.utils import timezone
 from dojo.models import Engagement, Finding, Product_Type, Test, Test_Type
 
-from aist.models import Organization, WorkItemProvider, WorkItemProviderType
+from aist.models import Organization, OrgIntegration, OrgIntegrationType, WorkItemProvider, WorkItemProviderType
 from aist.test.test_api import AISTApiBase
+from aist.test.vpn_fixtures import refused_vpn_routes
 
 
 class WorkItemProviderAPIBase(AISTApiBase):
@@ -86,6 +87,38 @@ class WorkItemProviderListCreateAPITests(WorkItemProviderAPIBase):
         self.assertEqual(resp.data["provider_type"], "JIRA")
         self.assertTrue(resp.data["has_token"])
         self.assertNotIn("api_token", resp.data)
+
+    def test_create_rejects_a_route_that_may_not_carry_this_organization_traffic(self):
+        other_org = Organization.objects.create(
+            name="Other VPN Org",
+            product_type=Product_Type.objects.create(name="Other VPN PT"),
+        )
+        for case, vpn in refused_vpn_routes(self.org, other_org).items():
+            with self.subTest(case=case):
+                resp = self.client.post(self.list_url, data={
+                    "provider_type": "JIRA",
+                    "name": f"Jira via {case}",
+                    "base_url": "https://jira.example.com",
+                    "vpn_integration": vpn.pk,
+                }, format="json")
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn("vpn_integration", resp.data)
+                self.assertFalse(WorkItemProvider.objects.filter(name=f"Jira via {case}").exists())
+
+    def test_create_accepts_an_active_vpn_of_the_same_organization(self):
+        vpn = OrgIntegration.objects.create(
+            organization=self.org,
+            integration_type=OrgIntegrationType.VPN,
+            name="Corp VPN",
+        )
+        resp = self.client.post(self.list_url, data={
+            "provider_type": "JIRA",
+            "name": "Jira via Corp VPN",
+            "base_url": "https://jira.example.com",
+            "vpn_integration": vpn.pk,
+        }, format="json")
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(WorkItemProvider.objects.get(name="Jira via Corp VPN").vpn_integration_id, vpn.pk)
 
     def test_create_requires_provider_type(self):
         resp = self.client.post(self.list_url, data={"name": "No Type"}, format="json")

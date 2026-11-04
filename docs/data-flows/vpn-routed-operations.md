@@ -60,9 +60,11 @@ execution container or lock.
 ## Security boundary
 
 The organization owns the VPN configuration and every integration that may use
-it. Cross-organization bindings are rejected or ignored during route
-resolution. A worker decrypts the VPN material only to start the selected
-sidecar; it is not carried in the business payload of the operation.
+it. A route must be an active VPN integration of the consumer's organization: a
+link to a disabled, non-VPN, or other-organization integration is rejected when
+it is saved and ignored or refused during route resolution. A worker decrypts
+the VPN material only to start the selected sidecar; it is not carried in the
+business payload of the operation.
 
 Docker control is a privileged host boundary because the daemon can inspect
 container configuration and network state. The proxy is limited to configured

@@ -2,16 +2,34 @@ from __future__ import annotations
 
 import logging
 import re
+from hashlib import sha256
+from typing import TYPE_CHECKING
 
 from django.db.models import Q
 from dojo.finding.deduplication import set_duplicate
 from dojo.models import DojoMeta, Finding
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
 AIST_EVOLUTION_TAG = "aist:evolved:auto"
 AIST_LHASH_META_NAME = "aist:lhash"
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]")
+
+
+def line_fingerprint(lines: Sequence[str], line_number: int) -> str | None:
+    """
+    Return the AIST_LHASH_META_NAME value of the 1-based `line_number` in `lines`.
+
+    The value is the first 16 hex digits of the SHA-256 of the line without surrounding whitespace;
+    None when the line does not exist or is blank.
+    """
+    if not 1 <= line_number <= len(lines):
+        return None
+    content = lines[line_number - 1].strip()
+    return sha256(content.encode()).hexdigest()[:16] if content else None
 
 
 def _normalize_vuln_id(vuln_id: str) -> str:

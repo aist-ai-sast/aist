@@ -10,13 +10,11 @@ from rest_framework.response import Response
 from aist.api.bootstrap import _import_sast_pipeline_package  # noqa: F401
 from aist.api.launch_requests import (
     LaunchRequestResponseSerializer,
-    launch_principal_token,
-    launch_request_headers,
+    enqueue_requested_launch,
     launch_request_response,
 )
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
-from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
 from aist.integrations.dast_config import DastBindingParameters, DastConfigError
 from aist.integrations.dast_readiness import check_dast_launch_readiness
 from aist.models import (
@@ -29,6 +27,7 @@ from aist.models import (
     PipelineExecutionType,
     VersionType,
 )
+from aist.models.dast import launch_violation_errors
 from aist.pipeline_args import PipelineArguments
 
 
@@ -74,6 +73,18 @@ class LaunchConfigSerializer(serializers.ModelSerializer):
             "updated",
         ]
         read_only_fields = ["id", "project", "created", "updated"]
+
+
+def _validate_dast_launch(binding: DastProjectBinding, trigger: AISTProjectVersion | None, *, project_id: int) -> None:
+    errors = launch_violation_errors(
+        binding.launch_violations(project_id=project_id, trigger_version=trigger),
+        binding_field="dast_binding_id",
+        trigger_field="trigger_project_version_id",
+    )
+    if not binding.enabled:
+        errors.setdefault("dast_binding_id", "DAST binding must be enabled.")
+    if errors:
+        raise serializers.ValidationError(errors)
 
 
 class LaunchConfigCreateRequestSerializer(serializers.Serializer):
@@ -130,17 +141,7 @@ class LaunchConfigCreateRequestSerializer(serializers.Serializer):
             return attrs
         if binding is None:
             raise serializers.ValidationError({"dast_binding_id": "DAST launch config requires an explicit binding."})
-        if not binding.enabled:
-            raise serializers.ValidationError({"dast_binding_id": "DAST binding must be enabled."})
-        if binding.requires_source_repository:
-            if trigger is None:
-                raise serializers.ValidationError({
-                    "trigger_project_version_id": "DAST launch config requires a Git trigger version.",
-                })
-        elif trigger is not None:
-            raise serializers.ValidationError({
-                "trigger_project_version_id": "DAST launch config for a sourceless binding cannot select a trigger version.",
-            })
+        _validate_dast_launch(binding, trigger, project_id=self.context["project"].pk)
         try:
             attrs["params"] = DastBindingParameters.from_snapshot(
                 attrs["params"],
@@ -206,17 +207,7 @@ class LaunchConfigUpdateRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 "dast_binding_id": "DAST launch config requires an explicit binding.",
             })
-        if not binding.enabled:
-            raise serializers.ValidationError({"dast_binding_id": "DAST binding must be enabled."})
-        if binding.requires_source_repository:
-            if trigger is None:
-                raise serializers.ValidationError({
-                    "trigger_project_version_id": "DAST launch config requires a Git trigger version.",
-                })
-        elif trigger is not None:
-            raise serializers.ValidationError({
-                "trigger_project_version_id": "DAST launch config for a sourceless binding cannot select a trigger version.",
-            })
+        _validate_dast_launch(binding, trigger, project_id=self.instance.project_id)
         try:
             attrs["params"] = DastBindingParameters.from_snapshot(
                 attrs.get("params", self.instance.params),
@@ -799,17 +790,6 @@ class ProjectLaunchConfigStartAPI(AISTAPIView):
         if project_version is not None and cfg.execution_type == PipelineExecutionType.SAST:
             req_params = {**req_params, "project_version": project_version.as_dict()}
 
-        organization = project.organization
-        if organization is None:
-            return Response(
-                {"organization": "Project does not belong to an AIST organization."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        principal = LaunchPrincipal.for_user(
-            organization=organization,
-            requester=request.user,
-            api_token=launch_principal_token(request),
-        )
         try:
             arguments = (
                 PipelineArguments.for_sast(
@@ -819,14 +799,9 @@ class ProjectLaunchConfigStartAPI(AISTAPIView):
                 if cfg.execution_type == PipelineExecutionType.SAST
                 else PipelineArguments.from_launch_config(cfg)
             )
-            launch_request = enqueue_pipeline_launch(
-                arguments=arguments,
-                principal=principal,
-                launch_config=cfg,
-                client_request_key=launch_request_headers(request).get("client_request_key"),
-            ).request
-        except LaunchEnqueueError as exc:
+        except ValueError as exc:
             raise serializers.ValidationError({"detail": str(exc)}) from exc
+        launch_request = enqueue_requested_launch(request, arguments=arguments, launch_config=cfg)
         return Response(launch_request_response(launch_request), status=status.HTTP_202_ACCEPTED)
 
 

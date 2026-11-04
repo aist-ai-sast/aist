@@ -2,16 +2,16 @@
 Lint gate — forbid re-deriving "does this DAST launch need a source repository" from raw
 field truthiness anywhere outside the single designated accessor.
 
-`DastProjectBinding.requires_source_repository` (`aist/models.py`) is the only place that
+`DastProjectBinding.requires_source_repository` (`aist/models/dast.py`) is the only place that
 answers this question; every other module must ask it rather than testing
 `source_repo_key`/`repository_keys` truthiness/length directly (see the accessor's own
 docstring). A second, independent re-derivation is exactly how the "sourceless DAST target"
 invariant would silently drift out of sync — one call site relaxed for the sourceless case,
 another still gated on the old raw-field check.
 
-Two files are exempt because they originate the invariant rather than consuming it:
+These files are exempt because they originate the invariant rather than consuming it:
 
-- `aist/models.py` — defines `requires_source_repository` and enforces the field-level
+- `aist/models/dast.py` — defines `requires_source_repository` and enforces the field-level
   invariant that the property depends on.
 - `aist/integrations/dast_config.py` — defines `DastLaunchRequirements.requires_repository()`
   and is the one place that validates `repository_keys` against it when parsing a wire
@@ -30,7 +30,7 @@ from django.test import SimpleTestCase
 _AIST_DIR = Path(__file__).resolve().parent.parent
 
 _EXEMPT_FILES = frozenset({
-    "models.py",
+    "models/dast.py",
     "integrations/dast_config.py",
     "integrations/dast_report.py",
 })

@@ -38,12 +38,7 @@ def _build_ai_export_rows(
         original = item.get("originalFinding") or {}
 
         project_version = pipeline.project_version
-        project_version_label = ""
-        if project_version:
-            if project_version.version_type == "GIT_BRANCH":
-                project_version_label = project_version.last_resolved_commit or project_version.version
-            else:
-                project_version_label = project_version.version
+        project_version_label = project_version.source_ref() if project_version else ""
 
         row = {
             "title": item.get("title") or "",

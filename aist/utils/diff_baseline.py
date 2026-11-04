@@ -6,9 +6,7 @@ previous terminal-success pipeline on the same resolved branch. The other
 two fallback levels (14-day window and first-ever commit) require the
 cloned repo on disk and are handled by the skill itself.
 
-The runtime env shape is built by ``aist.utils.agent_runtime``; this module
-keeps the diff-specific baseline logic and re-exposes ``build_diff_env`` as
-a thin wrapper for callers that historically imported from here.
+The runtime env shape is built by ``aist.utils.agent_runtime``.
 """
 from __future__ import annotations
 
@@ -83,18 +81,3 @@ def get_prior_successful_commit(pipeline: AISTPipeline) -> str | None:
     if not commit and pv.version_type == VersionType.GIT_HASH:
         commit = pv.version
     return commit or None
-
-
-def build_diff_env(pipeline: AISTPipeline) -> dict[str, str]:
-    """
-    Return the runtime sidecar dict for agent-bridge analyzers.
-
-    Backward-compatible alias for :func:`aist.utils.agent_runtime.build_agent_runtime_env`
-    — kept for callers that historically imported this name. The diff skill
-    reads only its own keys (``BASE_COMMIT``, ``EXCLUDED_PATHS_JSON``,
-    ``CLAUDE_DIFF_MAX_*``); the extra full-scan keys are inert for it.
-    """
-    # Local import to avoid a module-level cycle: agent_runtime imports
-    # _positive_int_setting and get_prior_successful_commit from here.
-    from .agent_runtime import build_agent_runtime_env  # noqa: PLC0415
-    return build_agent_runtime_env(pipeline)

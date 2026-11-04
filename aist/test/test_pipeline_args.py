@@ -9,43 +9,34 @@ Covers:
 from __future__ import annotations
 
 import tempfile
+from datetime import timedelta
 from pathlib import Path
-from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from dojo.models import Product, Product_Type, SLA_Configuration
 
-from aist.ai_filter import validate_and_normalize_filter
+from aist.ai_filter import AIFilterError, validate_and_normalize_filter
 from aist.models import AISTProject, AISTProjectScript, AISTProjectVersion, VersionType
-from aist.pipeline_args import PipelineArguments, SastPipelineArguments
+from aist.pipeline_args import PipelineArguments, SastPipelineArguments, TimeClass
+from aist.test.analyzer_catalog import SyntheticAnalyzerCatalogMixin
+
+_CATALOG = {
+    "analyzers": [
+        {"name": "py_fast", "image": "a", "language": ["python"], "time_class": "fast"},
+        {"name": "cpp_fast", "image": "b", "language": ["cpp"], "time_class": "fast"},
+        {"name": "js_fast", "image": "c", "language": ["javascript"], "time_class": "fast"},
+        {"name": "go_fast", "image": "d", "language": ["go"], "time_class": "fast"},
+        {"name": "py_slow", "image": "e", "language": ["python"], "time_class": "slow"},
+    ],
+}
 
 
-class DummyCfg:
+class PipelineArgsProfileTests(SyntheticAnalyzerCatalogMixin, TestCase):
+    CATALOG = _CATALOG
 
-    """Minimal stub to emulate analyzers config object."""
-
-    def __init__(self, available):
-        # use a set to match .add/.remove usage in PipelineArguments
-        self._available = set(available)
-
-    def get_filtered_analyzers(self, analyzers_to_run, max_time_class,
-                               non_compile_project, target_languages,
-                               show_only_parent):
-        # For the test we ignore args and return pre-defined set
-        return self._available
-
-    def get_names(self, analyzer_set):
-        # Return a set, since PipelineArguments expects .remove()/.add()
-        return set(analyzer_set)
-
-
-class PipelineArgsProfileTests(TestCase):
     def setUp(self):
-        # Minimal objects for AISTProject
-        self.user = get_user_model().objects.create(
-            username="tester", email="tester@example.com", password="pass",  # noqa: S106
-        )
+        super().setUp()
         self.sla = SLA_Configuration.objects.create(name="SLA default")
         self.prod_type = Product_Type.objects.create(name="PT")
         self.product = Product.objects.create(
@@ -55,74 +46,30 @@ class PipelineArgsProfileTests(TestCase):
             sla_configuration_id=self.sla.id,
         )
 
-    @patch("aist.pipeline_args._load_analyzers_config")
-    def test_analyzers_without_profile_returns_default(self, load_cfg_mock):
-        """
-        When project.profile is empty/absent:
-        - analyzers property must return the default names from config
-        filtered by languages/time_class/compilable (we stub to a fixed set).
-        """
-        load_cfg_mock.return_value = DummyCfg({"cppcheck", "bandit", "semgrep"})
-
+    def _launch(self, profile: dict, **arguments) -> SastPipelineArguments:
         project = AISTProject.objects.create(
             product=self.product,
             supported_languages=["cpp", "python"],
             compilable=True,
-            profile={},  # no special analyzers profile
+            profile=profile,
         )
+        return SastPipelineArguments(project=project, time_class_level=TimeClass.MEDIUM, **arguments)
 
-        args = SastPipelineArguments(
-            project=project,
-            project_version={},
-            selected_analyzers=[],     # force reading from config
-            selected_languages=["javascript"],  # will be merged with project languages
-            log_level="INFO",
-            rebuild_images=False,
-            ai_mode="MANUAL",
-            ai_filter_snapshot=None,
-            time_class_level="slow",
-        )
+    def test_a_launch_naming_no_analyzer_runs_the_defaults_for_project_and_launch_languages(self):
+        args = self._launch({}, selected_languages=["javascript"])
 
-        # Should equal the default config names
-        self.assertEqual(set(args.analyzers), {"cppcheck", "bandit", "semgrep"})
+        self.assertEqual(set(args.analyzers), {"py_fast", "cpp_fast", "js_fast"})
         self.assertEqual(set(args.languages), {"cpp", "python", "javascript"})
 
-    @patch("aist.pipeline_args._load_analyzers_config")
-    def test_analyzers_with_profile_include_exclude(self, load_cfg_mock):
-        """
-        When project.profile['analyzers'] is present:
-        - remove items in 'exclude'
-        - add items in 'include'
-        """
-        load_cfg_mock.return_value = DummyCfg({"cppcheck", "bandit"})  # start set
+    def test_profile_exclude_and_include_shape_the_defaults_even_above_the_ceiling(self):
+        args = self._launch({"analyzers": {"exclude": ["py_fast", "not_in_catalog"], "include": ["py_slow"]}})
 
-        project = AISTProject.objects.create(
-            product=self.product,
-            supported_languages=["cpp", "python"],
-            compilable=True,
-            profile={
-                "analyzers": {
-                    "exclude": ["bandit"],
-                    "include": ["semgrep"],
-                },
-            },  # profile-driven modifications
-        )
+        self.assertEqual(set(args.analyzers), {"cpp_fast", "py_slow"})
 
-        args = SastPipelineArguments(
-            project=project,
-            project_version={},
-            selected_analyzers=[],     # force reading from config
-            selected_languages=[],
-            log_level="INFO",
-            rebuild_images=False,
-            ai_mode="MANUAL",
-            ai_filter_snapshot=None,
-            time_class_level="slow",
-        )
+    def test_an_explicit_analyzer_list_is_run_as_named(self):
+        args = self._launch({"analyzers": {"exclude": ["go_fast"]}}, selected_analyzers=["go_fast"])
 
-        # Expected = {"cppcheck"} (default) - {"bandit"} + {"semgrep"} = {"cppcheck", "semgrep"}
-        self.assertEqual(set(args.analyzers), {"cppcheck", "semgrep"})
-        self.assertEqual(set(args.languages), {"cpp", "python"})
+        self.assertEqual(args.analyzers, ["go_fast"])
 
     def test_execution_paths_use_the_common_pipeline_layout(self):
         project = AISTProject.objects.create(
@@ -162,12 +109,9 @@ class PipelineArgsProfileTests(TestCase):
 
 class AIFilterValidationTests(TestCase):
     def test_validate_filter_requires_dict(self):
-        with self.assertRaises(ValueError):
-            validate_and_normalize_filter(None)
-        with self.assertRaises(TypeError):
-            validate_and_normalize_filter("nope")
-        with self.assertRaises(TypeError):
-            validate_and_normalize_filter(["nope"])
+        for spec in (None, "nope", ["nope"]):
+            with self.subTest(spec=spec), self.assertRaises(AIFilterError):
+                validate_and_normalize_filter(spec)
 
     def test_validate_filter_requires_limit(self):
         with self.assertRaisesRegex(ValueError, "limit"):
@@ -194,7 +138,7 @@ class AIFilterValidationTests(TestCase):
             validate_and_normalize_filter({"limit": 10, "severity": "HIGH"})
 
     def test_validate_filter_condition_must_be_object(self):
-        with self.assertRaisesRegex(TypeError, "must be an object"):
+        with self.assertRaisesRegex(AIFilterError, "must be an object"):
             validate_and_normalize_filter({"limit": 10, "severity": ["bad"]})
 
     def test_validate_filter_comparison_must_be_supported(self):
@@ -202,7 +146,6 @@ class AIFilterValidationTests(TestCase):
             validate_and_normalize_filter({"limit": 10, "severity": [{"comparison": "NOPE", "value": "HIGH"}]})
 
     def test_validate_filter_requires_value_key_even_for_exists(self):
-        # your validator currently requires 'value' for all comparisons :contentReference[oaicite:7]{index=7}
         with self.assertRaisesRegex(ValueError, "must contain 'value'"):
             validate_and_normalize_filter({"limit": 10, "severity": [{"comparison": "EXISTS"}]})
 
@@ -217,7 +160,6 @@ class AIFilterValidationTests(TestCase):
         ok = validate_and_normalize_filter({"limit": 10, "title": [{"comparison": "REGEX", "value": "abc.*"}]})
         self.assertEqual(ok["title"][0]["comparison"], "REGEX")
 
-        # severity forbids regex :contentReference[oaicite:8]{index=8} + _cond_to_q enforces allow_regex :contentReference[oaicite:9]{index=9}
         validate_and_normalize_filter({"limit": 10, "severity": [{"comparison": "REGEX", "value": "H.*"}]})
         # validate_and_normalize_filter itself doesn't know allow_regex; it's enforced in _cond_to_q/apply layer.
         # So here we just confirm normalize accepts it, but the query builder would reject it.
@@ -273,20 +215,60 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
             profile={},
         )
 
-    def test_normalize_params_prefers_latest_git_branch_when_project_version_omitted(self):
-        branch = AISTProjectVersion.objects.create(
-            project=self.project,
-            version_type=VersionType.GIT_BRANCH,
-            version="main",
-        )
-        AISTProjectVersion.objects.create(
-            project=self.project,
-            version_type=VersionType.GIT_HASH,
-            version="0123456789abcdef0123456789abcdef01234567",
-        )
+    def test_a_launch_naming_no_version_runs_the_active_version_even_after_an_older_branch_ran(self):
+        AISTProjectVersion.objects.create(project=self.project, version_type=VersionType.GIT_BRANCH, version="release")
+        newest = AISTProjectVersion.objects.create(project=self.project, version_type=VersionType.GIT_BRANCH, version="main")
+        AISTProjectVersion.objects.filter(version="release").update(updated=newest.updated + timedelta(hours=1))
 
         normalized = PipelineArguments.normalize_params(project=self.project, raw_params={})
-        self.assertEqual(normalized["project_version"]["id"], branch.id)
+
+        self.assertEqual(normalized["project_version"]["id"], newest.id)
+        self.assertEqual(normalized["project_version"]["id"], self.project.active_version.id)
+
+    def test_a_project_without_branches_launches_its_archive_not_a_sourceless_dast_target(self):
+        archive = AISTProjectVersion.objects.create(
+            project=self.project, version_type=VersionType.FILE_HASH, version="a" * 64,
+        )
+        AISTProjectVersion.objects.create(project=self.project, version_type=VersionType.DAST_TARGET, version="perimeter")
+
+        normalized = PipelineArguments.normalize_params(project=self.project, raw_params={})
+
+        self.assertEqual(normalized["project_version"]["id"], archive.id)
+
+    def test_a_version_of_another_project_is_a_validation_error(self):
+        other_product = Product.objects.create(
+            name="Other Product", description="", prod_type=self.prod_type, sla_configuration_id=self.sla.id,
+        )
+        other_project = AISTProject.objects.create(product=other_product, supported_languages=[], profile={})
+        foreign = AISTProjectVersion.objects.create(project=other_project, version_type=VersionType.GIT_BRANCH, version="main")
+
+        with self.assertRaises(ValueError):
+            PipelineArguments.normalize_params(project=self.project, raw_params={"project_version": foreign.id})
+
+    def test_a_stored_launch_runs_as_admitted_even_when_it_would_no_longer_validate(self):
+        self.project.profile = {"ai_triage": {"type": "local"}}
+        self.project.save(update_fields=["profile"])
+        admitted = PipelineArguments.normalize_params(project=self.project, raw_params={"ai_mode": "AUTO_DEFAULT"})
+        earlier_release = {**admitted, "time_class_level": "normal", "ai_triage_type": None}
+        self.project.profile = {"ai_triage": {"type": "n8n"}}
+        self.project.save(update_fields=["profile"])
+
+        sast = PipelineArguments.from_dict(earlier_release).sast
+
+        self.assertEqual(sast.time_class_level, TimeClass.SLOW)
+        self.assertEqual(sast.ai.mode, "AUTO_DEFAULT")
+        with self.assertRaises(ValueError):
+            PipelineArguments.for_sast(project=self.project, raw_params=earlier_release)
+
+    def test_null_params_take_their_defaults(self):
+        out = PipelineArguments.normalize_params(
+            project=self.project,
+            raw_params={"log_level": None, "analyzers": None, "time_class_level": None, "env": None},
+        )
+
+        self.assertEqual(
+            (out["log_level"], out["analyzers"], out["time_class_level"], out["env"]), ("INFO", [], "slow", {}),
+        )
 
     def test_normalize_params_manual_forces_snapshot_none(self):
         out = PipelineArguments.normalize_params(
@@ -311,33 +293,6 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
                 raw_params={"ai_mode": "AUTO_DEFAULT"},
             )
 
-    def test_build_project_version_descriptor_keeps_excluded_paths_for_resolved_version(self):
-        self.project.profile = {"paths": {"exclude": ["vendor/", "node_modules/"]}}
-        self.project.save(update_fields=["profile"])
-        resolved = AISTProjectVersion.objects.create(
-            project=self.project,
-            version_type=VersionType.GIT_HASH,
-            version="0123456789abcdef0123456789abcdef01234567",
-        )
-        args = SastPipelineArguments(
-            project=self.project,
-            project_version={"id": 0, "version": "main", "type": VersionType.GIT_BRANCH},
-            selected_analyzers=[],
-            selected_languages=[],
-            log_level="INFO",
-            rebuild_images=False,
-            ai_mode="MANUAL",
-            ai_filter_snapshot=None,
-            time_class_level="slow",
-        )
-
-        args.project_version = resolved.as_dict()
-        descriptor = args.build_project_version_descriptor()
-        self.assertEqual(descriptor["id"], resolved.id)
-        self.assertEqual(descriptor["version"], resolved.version)
-        self.assertEqual(descriptor["type"], VersionType.GIT_HASH)
-        self.assertEqual(descriptor["excluded_paths"], ["vendor/", "node_modules/"])
-
     def test_resolve_effective_project_version_creates_hash_and_links_branch(self):
         branch = AISTProjectVersion.objects.create(
             project=self.project,
@@ -351,8 +306,6 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
             selected_languages=[],
             log_level="INFO",
             rebuild_images=False,
-            ai_mode="MANUAL",
-            ai_filter_snapshot=None,
             time_class_level="slow",
         )
         commit = "1234567890abcdef1234567890abcdef12345678"
@@ -458,47 +411,3 @@ class ScriptFromDBTests(TestCase):
             content = Path(resolved).read_text(encoding="utf-8")
 
         self.assertEqual(content, shared_default.content)
-
-
-class AnalyzersDiscardTests(TestCase):
-
-    """Bug fix: exclude with a name not in the set must NOT raise (use discard not remove)."""
-
-    def setUp(self):
-        sla = SLA_Configuration.objects.create(name="SLA disc")
-        prod_type = Product_Type.objects.create(name="PT disc")
-        self.product = Product.objects.create(
-            name="Discard Test Product",
-            description="",
-            prod_type=prod_type,
-            sla_configuration_id=sla.id,
-        )
-
-    @patch("aist.pipeline_args._load_analyzers_config")
-    def test_exclude_nonexistent_analyzer_does_not_raise(self, load_cfg_mock):
-        load_cfg_mock.return_value = DummyCfg({"cppcheck", "bandit"})
-
-        project = AISTProject.objects.create(
-            product=self.product,
-            supported_languages=["cpp"],
-            compilable=False,
-            profile={
-                "analyzers": {
-                    "exclude": ["semgrep"],  # "semgrep" is not in the config set
-                },
-            },
-        )
-        args = SastPipelineArguments(
-            project=project,
-            project_version={},
-            selected_analyzers=[],
-            selected_languages=[],
-            log_level="INFO",
-            rebuild_images=False,
-            ai_mode="MANUAL",
-            ai_filter_snapshot=None,
-            time_class_level="slow",
-        )
-        # Should not raise; "semgrep" simply wasn't there to remove
-        result = set(args.analyzers)
-        self.assertEqual(result, {"cppcheck", "bandit"})

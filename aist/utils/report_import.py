@@ -10,6 +10,7 @@ from django.core.files.storage import default_storage
 from django.db import transaction
 
 from aist.models import AISTProjectVersion, VersionType
+from aist.models.projects import ERR_INVALID_GIT_REF, is_valid_git_ref
 
 
 class ReportImportError(Exception):
@@ -26,6 +27,8 @@ def resolve_import_version(project, commit_hash: str) -> AISTProjectVersion:
     if not commit_hash:
         msg = "commit_hash is required to resolve which project version to attach findings to."
         raise ReportImportError(msg)
+    if not is_valid_git_ref(commit_hash):
+        raise ReportImportError(ERR_INVALID_GIT_REF)
 
     with transaction.atomic():
         version, _created = (

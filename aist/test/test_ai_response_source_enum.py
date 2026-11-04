@@ -17,7 +17,7 @@ class AISTAIResponseSourceEnumTests(AISTApiBase):
         )
 
     def test_agent_analyzer_value_exists_in_enum(self):
-        # Direct value lookup so a typo or rename in models.py is caught.
+        # Direct value lookup so a typo or rename in the model is caught.
         self.assertEqual(AISTAIResponse.Source.AGENT_ANALYZER, "agent_analyzer")
 
     def test_default_source_is_ai_triage(self):

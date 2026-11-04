@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import base64
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from django.test import TestCase
 from dojo.models import Product_Type
 
 from aist.models import Organization, OrgIntegration, RepositoryInfo, ScmGerritBinding, ScmType
+from aist.test.source_version_fixtures import FakeScmHost
 
 
 class GerritBindingTests(TestCase):
@@ -94,19 +95,16 @@ class GerritBindingTests(TestCase):
         self.binding.org_integration.config = {}
         self.assertEqual(self.binding.get_auth_headers(), {})
 
-    @patch("aist.models.base64.b64decode")
-    def test_fetch_raw_bytes_decodes_base64(self, mock_b64decode):
-        mock_b64decode.return_value = b"int main() {}"
-        with patch("requests.get") as mock_get:
-            mock_get.return_value = Mock(status_code=200, text="aW50IG1haW4oKSB7fQ==")
-            mock_get.return_value.raise_for_status = Mock()
-            data = self.binding.fetch_raw_bytes(self.repo, "main", "src/a.c")
-        self.assertEqual(data, b"int main() {}")
+    def test_read_file_decodes_the_base64_content(self):
+        with FakeScmHost(body=b"aW50IG1haW4oKSB7fQ==") as host:
+            data = self.repo.read_file("main", "src/a.c")
 
-    def test_fetch_raw_bytes_returns_none_on_404(self):
-        with patch("requests.get") as mock_get:
-            mock_get.return_value = Mock(status_code=404)
-            self.assertIsNone(self.binding.fetch_raw_bytes(self.repo, "main", "missing.c"))
+        self.assertEqual(data, b"int main() {}")
+        self.assertEqual(host.last.url, self.binding.build_raw_url(self.repo, "main", "src/a.c"))
+
+    def test_read_file_returns_none_on_404(self):
+        with FakeScmHost(status_code=404):
+            self.assertIsNone(self.repo.read_file("main", "missing.c"))
 
     @patch("pygerrit2.GerritRestAPI")
     def test_get_project_info_returns_default_branch(self, mock_rest):

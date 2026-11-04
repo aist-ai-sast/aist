@@ -23,8 +23,8 @@ class PipelineExecutionTaskTests(AISTApiBase):
                 "aist.tasks.pipeline.accept_published_launch",
                 return_value=LaunchAcceptance.ACCEPTED,
             ),
-            patch("aist.tasks.pipeline.install_pipeline_logging") as install_logging,
-            patch("aist.tasks.pipeline._execute_dast_pipeline") as execute,
+            patch("aist.tasks.dast_execution.install_pipeline_logging") as install_logging,
+            patch("aist.tasks.dast_execution._execute_dast_pipeline") as execute,
         ):
             run_pipeline_execution.run(pipeline.pk)
 
@@ -45,19 +45,13 @@ class PipelineExecutionTaskTests(AISTApiBase):
 
         with (
             patch("aist.tasks.pipeline.accept_published_launch", return_value=LaunchAcceptance.ACCEPTED),
-            patch("aist.tasks.pipeline.install_pipeline_logging") as install_logging,
-            patch("aist.tasks.pipeline._execute_sast_pipeline") as execute,
+            patch("aist.tasks.sast_execution.install_pipeline_logging"),
+            patch("aist.tasks.sast_execution._execute_sast_pipeline") as execute,
         ):
             run_pipeline_execution.run(pipeline.pk)
 
-        execute.assert_called_once_with(
-            pipeline.pk,
-            request.params_snapshot,
-            "INFO",
-            None,
-            install_logging.return_value,
-            None,
-        )
+        run, params = execute.call_args.args
+        self.assertEqual((run.pipeline_id, params), (pipeline.pk, request.params_snapshot))
 
     def test_generic_task_rejects_non_executable_persisted_type_before_acceptance(self):
         pipeline = AISTPipeline.objects.create(

@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from django.utils import timezone
+from dojo.models import Product
 
 import aist.execution.dast as dast_module
 from aist.execution.contracts import (
@@ -17,15 +18,20 @@ from aist.execution.dispatching import plan_claimed_launch
 from aist.execution.enqueue import LaunchPrincipal, enqueue_pipeline_launch
 from aist.execution.sast import planning_context_from_launch_request
 from aist.integrations.dast_config import DastConfigError, DastTargetSnapshot
+from aist.launch_data import PipelineLaunchData
 from aist.models import (
+    AISTProject,
     AISTProjectLaunchConfig,
+    AISTProjectVersion,
     DastIntegrationState,
     DastIntegrationValidationState,
+    DastLaunchViolation,
     DastProjectBinding,
     Organization,
     OrgIntegration,
     OrgIntegrationType,
     PipelineExecutionType,
+    VersionType,
 )
 from aist.pipeline_args import PipelineArguments
 from aist.services.dast_targets import refresh_dast_targets
@@ -117,13 +123,42 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
         self.assertEqual(plan.resource_key, f"dast-integration:{self.integration.pk}")
         self.assertEqual(plan.resource_limit, 1)
         self.assertEqual(plan.coalesce_key, request.coalesce_key)
-        snapshot = plan.initial_launch_data["dast_execution"]
-        self.assertEqual(snapshot["binding_id"], self.binding.pk)
-        self.assertEqual(snapshot["source_repo_key"], "adapter-api")
-        self.assertEqual(snapshot["parameters"], {"depth": "deep"})
-        self.assertEqual(snapshot["capability"]["capability_revision"], self.target.capability_revision)
+        self.assertEqual(
+            plan.initial_launch_data["dast_execution"],
+            {"integration_id": self.integration.pk, "source_repo_key": "adapter-api"},
+        )
         self.assertNotIn("gateway_url", str(plan))
         self.assertNotIn(self.integration.secret, str(plan))
+
+    def test_the_planned_execution_reads_back_and_is_refused_once_its_binding_drifts(self):
+        request = self._request()
+        plan = self._plan(request)
+        capability = DastTargetSnapshot.from_snapshot(request.get_snapshots().capability_snapshot())
+
+        planned = PipelineLaunchData(plan.initial_launch_data).dast_execution
+        self.assertEqual(planned.to_snapshot(), plan.initial_launch_data["dast_execution"])
+        planned.verify_against(self.binding, capability=capability)
+
+        other_target = dast_fixtures.create_dast_targets(
+            integration=self.integration,
+            wires=(_target_wire("adapter-api"), _target_wire("other-api")),
+            seen_at=self.now,
+        )[1]
+        other_binding = dast_fixtures.create_dast_binding(project=self.project, target=other_target)
+        with self.assertRaises(DastConfigError):
+            planned.verify_against(other_binding, capability=capability)
+
+        type(self.target).objects.filter(pk=self.target.pk).update(
+            capability_revision=f"sha256:{'f' * 64}",
+        )
+        self.binding.refresh_from_db()
+        self.binding.target.refresh_from_db()
+        with self.assertRaises(DastConfigError):
+            planned.verify_against(self.binding, capability=capability)
+
+    def test_a_pipeline_without_a_planned_execution_has_none_to_read(self):
+        with self.assertRaises(DastConfigError):
+            _ = PipelineLaunchData({}).dast_execution
 
     def test_two_bindings_share_capacity_but_keep_distinct_coalesce_identity(self):
         second_target = refresh_dast_targets(
@@ -167,10 +202,11 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
         )
 
         deep_plan = self._plan(self._request())
-        light_plan = self._plan(self._request(config=light_config))
+        light_request = self._request(config=light_config)
+        light_plan = self._plan(light_request)
 
         self.assertNotEqual(deep_plan.coalesce_key, light_plan.coalesce_key)
-        self.assertEqual(light_plan.initial_launch_data["dast_execution"]["parameters"], {"depth": "light"})
+        self.assertEqual(light_request.get_snapshots().params_snapshot(), {"depth": "light"})
 
     def test_stale_catalog_is_rejected_before_pipeline_planning(self):
         request = self._request()
@@ -200,6 +236,41 @@ class DastPipelineLaunchAdapterTests(AISTApiBase):
         self.config.refresh_from_db()
         with self.assertRaisesRegex(DastConfigError, "parameter_schema"):
             self._request()
+
+    def test_launch_violations_name_every_way_a_launch_misuses_a_binding(self):
+        other_product = Product.objects.create(name="DAST adapter other product", prod_type=self.prod_type)
+        other_project = AISTProject.objects.create(product=other_product, supported_languages=[], profile={})
+        other_version = AISTProjectVersion.objects.create(
+            project=other_project, version_type=VersionType.GIT_BRANCH, version="main",
+        )
+        file_version = AISTProjectVersion.objects.create(
+            project=self.project, version_type=VersionType.FILE_HASH, version="adapter-archive",
+        )
+        perimeter = dast_fixtures.create_dast_binding(
+            project=self.project,
+            target=dast_fixtures.create_dast_targets(
+                integration=self.integration,
+                wires=(_target_wire("adapter-api"), dast_fixtures.perimeter_target_wire()),
+                seen_at=self.now,
+            )[1],
+        )
+        cases = [
+            (self.binding, self.project.pk, self.pv, ()),
+            (self.binding, other_project.pk, self.pv, (
+                DastLaunchViolation.OTHER_PROJECT, DastLaunchViolation.TRIGGER_OTHER_PROJECT,
+            )),
+            (self.binding, self.project.pk, None, (DastLaunchViolation.TRIGGER_REQUIRED,)),
+            (self.binding, self.project.pk, other_version, (DastLaunchViolation.TRIGGER_OTHER_PROJECT,)),
+            (self.binding, self.project.pk, file_version, (DastLaunchViolation.TRIGGER_NOT_GIT,)),
+            (perimeter, self.project.pk, None, ()),
+            (perimeter, self.project.pk, self.pv, (DastLaunchViolation.TRIGGER_NOT_ACCEPTED,)),
+        ]
+        for binding, project_id, trigger, expected in cases:
+            with self.subTest(binding=binding.pk, project_id=project_id, trigger=getattr(trigger, "version", None)):
+                self.assertEqual(
+                    binding.launch_violations(project_id=project_id, trigger_version=trigger),
+                    expected,
+                )
 
     def test_adapter_has_no_runtime_gateway_client_surface(self):
         self.assertFalse(hasattr(dast_module, "DastGatewayClient"))

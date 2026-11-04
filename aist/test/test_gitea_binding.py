@@ -55,11 +55,17 @@ class GiteaBindingTests(TestCase):
         url = self.binding.build_blob_url(self.repo, "main", "src/a.py")
         self.assertEqual(url, "https://gitea.example.com/myorg/myrepo/src/branch/main/src/a.py")
 
-    def test_build_raw_url_targets_gitea_api_raw_endpoint(self):
-        url = self.binding.build_raw_url(self.repo, "main", "src/a.py")
-        self.assertEqual(
-            url,
+    @patch("aist.models.scm.requests.get")
+    def test_read_file_fetches_the_api_raw_endpoint_with_the_token(self, mock_get):
+        mock_get.return_value = Mock(status_code=200, content=b"print(1)\n")
+
+        self.assertEqual(self.repo.read_file("main", "src/a.py"), b"print(1)\n")
+        mock_get.assert_called_once_with(
             "https://gitea.example.com/api/v1/repos/myorg/myrepo/raw/src%2Fa.py?ref=main",
+            headers={"Authorization": "token pat-token-123"},
+            timeout=10,
+            allow_redirects=True,
+            proxies=None,
         )
 
     def test_get_auth_headers_uses_token_header(self):

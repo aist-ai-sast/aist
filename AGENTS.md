@@ -45,7 +45,7 @@ Data flow, runtime deployment, and per-domain component ownership:
 [platform building blocks](docs/architecture/platform-building-blocks.md),
 [runtime deployment](docs/architecture/runtime-deployment.md).
 Key models (`Organization`, `AISTProject`, `AISTProjectVersion`, `AISTPipeline`,
-`ProcessedFinding`, `AISTAIFindingResponse`) live in `aist/models.py`. The
+`ProcessedFinding`, `AISTAIFindingResponse`) live in the `aist/models/` package. The
 [platform building blocks](docs/architecture/platform-building-blocks.md) explain
 their runtime owners without duplicating a source-symbol inventory.
 
@@ -170,6 +170,23 @@ class ExampleAPI(AISTAPIView):
 - Full suite: `run-rest-framework-tests.zsh --clean` and `run-client-ui-tests.zsh --clean`.
   WARNING: long-running, use with caution.
 - Do not run tests/npm/npx locally — all environment is in Docker containers.
+
+## Review before commit
+
+When a change is ready to commit, review it as `.sdlc/review-process.md` describes:
+
+- `python3 .sdlc/route.py` names the reviewers the changed paths route to;
+  `.sdlc/scope.yaml` is the one authority for that routing. The router and the
+  PostToolUse hook that runs it need PyYAML and jsonschema on the host `python3`.
+- Each reviewer gets the same brief — the fixed diff with untracked files included, the
+  intent, and the tests run — and replies with a `verdict:` line and findings that cite a
+  rule of `.sdlc/coding-rules.md` or a check of its own rubric.
+- Every finding ends `fixed`, `rejected` with a ruling the adjudicator upholds, or
+  `escalated` to the operator. A change with an open finding is not ready to commit.
+- Committing stays the operator's step.
+
+A new tracked file must match a rule in `.sdlc/scope.yaml`; `python3 .sdlc/route.py --check`
+fails otherwise.
 
 ## Skills
 

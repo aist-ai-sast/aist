@@ -1,5 +1,5 @@
 """
-build_diff_env(pipeline) prepares runtime config passed to diff-aware
+build_agent_runtime_env(pipeline) prepares runtime config passed to diff-aware
 agent analyzers through configure_project_run_analyses. It only does DB work — the L2/L3 BASE fallbacks
 (14-day window, first-ever commit) are the skill's job because they
 need the cloned repo.
@@ -10,7 +10,8 @@ import json
 
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionType
 from aist.test.test_api import AISTApiBase
-from aist.utils.diff_baseline import build_diff_env, get_prior_successful_commit
+from aist.utils.agent_runtime import build_agent_runtime_env
+from aist.utils.diff_baseline import get_prior_successful_commit
 
 
 class GetPriorSuccessfulCommitTests(AISTApiBase):
@@ -159,26 +160,26 @@ class BuildDiffEnvTests(AISTApiBase):
         )
 
     def test_returns_all_required_keys_with_string_values(self):
-        env = build_diff_env(self.pipeline)
+        env = build_agent_runtime_env(self.pipeline)
         for key in ("BASE_COMMIT", "EXCLUDED_PATHS_JSON", "CLAUDE_DIFF_MAX_FILES", "CLAUDE_DIFF_MAX_BYTES"):
             self.assertIn(key, env)
             self.assertIsInstance(env[key], str)
 
     def test_excluded_paths_serialized_as_json_array(self):
-        env = build_diff_env(self.pipeline)
+        env = build_agent_runtime_env(self.pipeline)
         decoded = json.loads(env["EXCLUDED_PATHS_JSON"])
         self.assertEqual(sorted(decoded), ["third_party/", "vendor/"])
 
     def test_base_commit_empty_when_no_prior_pipeline(self):
-        env = build_diff_env(self.pipeline)
+        env = build_agent_runtime_env(self.pipeline)
         self.assertEqual(env["BASE_COMMIT"], "")
 
     def test_max_files_and_bytes_come_from_django_settings(self):
         with self.settings(CLAUDE_DIFF_MAX_FILES=17, CLAUDE_DIFF_MAX_BYTES=4096):
-            env = build_diff_env(self.pipeline)
+            env = build_agent_runtime_env(self.pipeline)
         self.assertEqual(env["CLAUDE_DIFF_MAX_FILES"], "17")
         self.assertEqual(env["CLAUDE_DIFF_MAX_BYTES"], "4096")
 
     def test_max_files_and_bytes_reject_invalid_settings(self):
         with self.settings(CLAUDE_DIFF_MAX_FILES=0), self.assertRaises(ValueError):
-            build_diff_env(self.pipeline)
+            build_agent_runtime_env(self.pipeline)

@@ -338,7 +338,7 @@
                 if (!bar || !counter) return;
                 const total = parseInt(data?.total ?? 0);
                 const done = parseInt(data?.done ?? 0);
-                const pct = total > 0 ? Math.max(0, Math.min(100, Math.floor(done * 100 / total))) : 0;
+                const pct = parseInt(data?.percent ?? 0);
 
                 bar.style.width = pct + '%';
                 bar.textContent = pct + '%';
@@ -366,6 +366,12 @@
 
                 enrichSrc.addEventListener('done', () => {
                     stopEnrichSSE();
+                });
+
+                enrichSrc.addEventListener('unavailable', () => {
+                    stopEnrichSSE();
+                    const counter = root.querySelector?.('#enrich-counter');
+                    if (counter) counter.textContent = 'Progress unavailable';
                 });
 
                 enrichSrc.onerror = () => { /* noop */

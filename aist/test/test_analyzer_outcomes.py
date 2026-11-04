@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from tempfile import mkdtemp
 from types import SimpleNamespace
@@ -17,11 +16,14 @@ from aist.models import (
 )
 from aist.services.dast_outcomes import (
     DastPipelineOutcomeCode,
+    DastRunState,
     classify_dast_execution_result,
     public_dast_outcome_code,
     record_dast_pipeline_outcome,
 )
-from aist.tasks.pipeline import DastConnectorOutcomeState, _handle_dast_execution_result
+from aist.tasks.dast_execution import _handle_dast_execution_result
+from aist.test import dast_fixtures
+from aist.test.agent_analyzer_import import write_ai_response
 from aist.test.test_api import AISTApiBase
 from aist.utils.analyzer_outcomes import consume_analyzer_outcomes
 from aist.utils.pipeline import finish_pipeline
@@ -89,26 +91,20 @@ class ConsumeAnalyzerOutcomesTests(AISTApiBase):
 
     def test_ai_response_artifact_is_applied_from_outcome_metadata(self):
         output_dir = Path(self._scratch_dir())
-        output_dir.mkdir(parents=True, exist_ok=True)
         artifact_name = "agent_ai_response.json"
-        (output_dir / artifact_name).write_text(
-            json.dumps({
-                "results": {
-                    "true_positives": [
-                        {
-                            "uniqueIdFromTool": "UID-AGENT",
-                            "title": "Agent finding",
-                            "reasoning": "## Verdict\nTP",
-                            "references": [],
-                            "fix": None,
-                        },
-                    ],
-                    "false_positives": [],
-                    "uncertainly": [],
+        write_ai_response(output_dir / artifact_name, {
+            "true_positives": [
+                {
+                    "uniqueIdFromTool": "UID-AGENT",
+                    "title": "Agent finding",
+                    "reasoning": "## Verdict\nTP",
+                    "references": [],
+                    "fix": None,
                 },
-            }),
-            encoding="utf-8",
-        )
+            ],
+            "false_positives": [],
+            "uncertainly": [],
+        })
 
         result = consume_analyzer_outcomes(
             pipeline_id=self.pipeline.id,
@@ -165,30 +161,13 @@ class StandaloneDastOutcomeTests(AISTApiBase):
         )
 
     @staticmethod
-    def _result(*, status: str, reason_code: str | None = None, findings=None):
-        return SimpleNamespace(
-            outcome=SimpleNamespace(
-                state=SimpleNamespace(value="terminal"),
-                reason_code=reason_code,
-            ),
-            terminal_result=SimpleNamespace(
-                status=SimpleNamespace(value=status),
-                report={"findings": findings or []},
-                selection={"relation": "exact", "distance": 0},
-            ),
-            recovery=SimpleNamespace(log_cursor=2),
-            telemetry=SimpleNamespace(logs_delivered=2, max_log_lag_seconds=0.5),
-        )
-
-    @staticmethod
-    def _runtime_result(*, status: str, reason_code: str | None = None, findings=None):
-        result = StandaloneDastOutcomeTests._result(
-            status=status,
+    def _result(*, status: str, reason_code: str | None = None, findings=()):
+        return dast_fixtures.connector_result(
+            status=DastRunState(status),
             reason_code=reason_code,
-            findings=findings,
+            findings=tuple(findings),
+            selection={"relation": "exact", "distance": 0},
         )
-        result.outcome.state = DastConnectorOutcomeState.TERMINAL
-        return result
 
     def test_terminal_scenarios_have_stable_codes_and_degraded_semantics(self):
         scenarios = [
@@ -213,9 +192,9 @@ class StandaloneDastOutcomeTests(AISTApiBase):
                 True,
             ),
             (self._result(status="failed", reason_code="provider-secret-detail"), "PROVIDER_FAILED", True),
-            (self._result(status="unknown"), "INVALID_RESULT", True),
+            (self._result(status="running"), "INVALID_RESULT", True),
             (self._result(status="stopped", reason_code="CANCEL_REQUESTED"), "CANCELLED", True),
-            (self._result(status="stopped", reason_code="CANCEL_REQUESTED"), "CANCELLED", True),
+            (self._result(status="stopped"), "CANCELLED", True),
         ]
 
         for result, expected_code, expected_degraded in scenarios:
@@ -240,7 +219,7 @@ class StandaloneDastOutcomeTests(AISTApiBase):
         _handle_dast_execution_result(
             SimpleNamespace(),
             self.pipeline.id,
-            self._runtime_result(status="failed", reason_code="NO_ELIGIBLE_STAND"),
+            self._result(status="failed", reason_code="NO_ELIGIBLE_STAND"),
         )
 
         self.pipeline.refresh_from_db()

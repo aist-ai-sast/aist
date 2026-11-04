@@ -1369,8 +1369,7 @@
             });
             var queueById = {};
 
-            // Every value here is one of PipelineLaunchRequestState's 9 members
-            // (aist/models.py) — keep in sync if a state is ever added/renamed.
+            // Badge class per PipelineLaunchRequestState value (aist/models/launching.py); others get the default badge.
             var QUEUE_STATE_BADGE_CLASS = {
                 PENDING: "label-warning",
                 CLAIMED: "label-info",
@@ -1381,17 +1380,6 @@
                 FAILED: "label-danger",
                 EXPIRED: "label-default",
                 CANCELLED: "label-default"
-            };
-            var QUEUE_ORIGIN_LABEL = {
-                MANUAL: "Manual",
-                SCHEDULE: "Schedule",
-                SCM_WEBHOOK: "SCM webhook",
-                RECONCILER: "Reconciler"
-            };
-            var QUEUE_EXECUTION_TYPE_LABEL = {
-                SAST: "SAST",
-                DAST: "DAST",
-                MANUAL_IMPORT: "Manual import"
             };
 
             function queueStateTooltip(q) {
@@ -1406,7 +1394,7 @@
             function queueStatusBadge(q) {
                 var state = q.state || "";
                 var cls = QUEUE_STATE_BADGE_CLASS[state] || "label-default";
-                var label = state ? (state.charAt(0) + state.slice(1).toLowerCase()) : "Unknown";
+                var label = q.state_label || "Unknown";
                 var tooltip = queueStateTooltip(q);
                 var html = '<span class="label ' + cls + '"'
                     + (tooltip ? ' title="' + escapeHtml(tooltip) + '"' : "")
@@ -1443,8 +1431,8 @@
                                 escapeHtml(q.project_name || (q.project_id ? String(q.project_id) : "")),
                                 q.schedule_id || "",
                                 q.launch_config_id || "",
-                                escapeHtml(QUEUE_ORIGIN_LABEL[q.origin] || q.origin || ""),
-                                escapeHtml(QUEUE_EXECUTION_TYPE_LABEL[q.execution_type] || q.execution_type || ""),
+                                escapeHtml(q.origin_label || ""),
+                                escapeHtml(q.execution_type_label || ""),
                                 queueStatusBadge(q),
                                 pipelineLink,
                                 fmtAge(q.age_seconds),

@@ -11,12 +11,11 @@ from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_sche
 from rest_framework import serializers, status
 from rest_framework.response import Response
 
+from aist.api.common import VpnLinkField
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.models import (
     Organization,
-    OrgIntegration,
-    OrgIntegrationType,
     WorkItemLink,
     WorkItemProvider,
     WorkItemProviderType,
@@ -50,11 +49,10 @@ class WorkItemProviderSerializer(serializers.ModelSerializer):
     )
 
     # VPN integration FK — nullable, must belong to the same organization
-    vpn_integration = serializers.PrimaryKeyRelatedField(
-        queryset=OrgIntegration.objects.filter(integration_type=OrgIntegrationType.VPN),
+    vpn_integration = VpnLinkField(
         allow_null=True,
         required=False,
-        help_text="Optional VPN OrgIntegration (type=VPN) required to reach this provider. Must belong to the same organization.",
+        help_text="Optional active VPN OrgIntegration (type=VPN) of the same organization required to reach this provider.",
     )
 
     class Meta:
@@ -85,17 +83,6 @@ class WorkItemProviderSerializer(serializers.ModelSerializer):
         if "api_token" not in self.initial_data:
             validated_data.pop("api_token", None)
         return super().update(instance, validated_data)
-
-    def validate_vpn_integration(self, value):
-        if value is None:
-            return value
-        organization = self.context.get("organization")
-        if organization is None and self.instance is not None:
-            organization = self.instance.organization
-        if organization is not None and value.organization_id != organization.id:
-            msg = "VPN integration must belong to the same organization as this provider."
-            raise serializers.ValidationError(msg)
-        return value
 
 
 class WorkItemLinkSerializer(serializers.ModelSerializer):

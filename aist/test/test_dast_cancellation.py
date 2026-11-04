@@ -25,7 +25,7 @@ from aist.models import (
     PipelineLaunchRequestState,
 )
 from aist.services.dast_targets import refresh_dast_targets
-from aist.tasks import pipeline as pipeline_tasks
+from aist.tasks import dast_execution
 from aist.test.test_api import AISTApiBase
 from aist.test.test_dast_target_models import _integration_config, _target_wire
 from aist.utils.pipeline import stop_pipeline
@@ -166,8 +166,8 @@ class DastCancellationTests(AISTApiBase):
     def test_confirmed_provider_stop_is_terminal_before_request_and_lease_release(self):
         pipeline, request = self._pipeline_with_request()
 
-        with patch("aist.tasks.pipeline.finish_pipeline") as finish:
-            pipeline_tasks._finish_dast_cancellation(pipeline.id)
+        with patch("aist.tasks.dast_execution.finish_pipeline") as finish:
+            dast_execution._finish_dast_cancellation(pipeline.id)
 
         request.refresh_from_db()
         self.assertEqual(request.state, PipelineLaunchRequestState.CANCELLED)

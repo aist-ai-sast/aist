@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from enum import StrEnum
 
 from celery.signals import worker_process_init
 from django.db import transaction
@@ -184,16 +185,30 @@ def _get_launch_config_id_from_pipeline(pipeline: AISTPipeline) -> int | None:
     return None
 
 
-def _update_action_run(
+class ActionRunStatus(StrEnum):
+    PENDING = "pending"
+    STARTED = "started"
+    PERFORMED = "performed"
+    FAILED = "failed"
+
+
+class ActionRunSource(StrEnum):
+    RUNNER = "runner"
+    LAUNCH_CONFIG = "launch_config"
+    ONE_OFF = "one_off"
+
+
+def record_action_run(
     pipeline_id: str,
     *,
     key: str,
     action_type: str,
     trigger_status: str,
-    source: str,
-    status: str,
+    source: ActionRunSource,
+    status: ActionRunStatus,
     error: str | None = None,
 ) -> None:
+    """Record the state of one pipeline action run under ``key``, replacing any earlier record of it."""
     with transaction.atomic():
         locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
         if not locked:
@@ -229,7 +244,7 @@ def _claim_action_run(
     key: str,
     action_type: str,
     trigger_status: str,
-    source: str,
+    source: ActionRunSource,
 ) -> bool:
     """Atomically claim one action attempt; an existing key is never run again."""
     with transaction.atomic():
@@ -245,7 +260,7 @@ def _claim_action_run(
             "action_type": action_type,
             "trigger_status": trigger_status,
             "source": source,
-            "status": "pending",
+            "status": ActionRunStatus.PENDING,
             "error": "",
             "updated_at": timezone.now().isoformat(),
         })
@@ -321,39 +336,39 @@ def on_pipeline_status_changed(sender, pipeline_id=None, old_status=None, new_st
                 key=key,
                 action_type=action.action_type,
                 trigger_status=new_status,
-                source="launch_config",
+                source=ActionRunSource.LAUNCH_CONFIG,
             ):
                 continue
             handler = get_action_handler(action)
             if not handler:
-                _update_action_run(
+                record_action_run(
                     pipeline_id=pipeline_id,
                     key=key,
                     action_type=action.action_type,
                     trigger_status=new_status,
-                    source="launch_config",
-                    status="failed",
+                    source=ActionRunSource.LAUNCH_CONFIG,
+                    status=ActionRunStatus.FAILED,
                     error="Handler not found",
                 )
                 continue
             try:
                 handler.run(pipeline=pipeline, new_status=new_status)
-                _update_action_run(
+                record_action_run(
                     pipeline_id=pipeline_id,
                     key=key,
                     action_type=action.action_type,
                     trigger_status=new_status,
-                    source="launch_config",
-                    status="performed",
+                    source=ActionRunSource.LAUNCH_CONFIG,
+                    status=ActionRunStatus.PERFORMED,
                 )
             except Exception as exc:
-                _update_action_run(
+                record_action_run(
                     pipeline_id=pipeline_id,
                     key=key,
                     action_type=action.action_type,
                     trigger_status=new_status,
-                    source="launch_config",
-                    status="failed",
+                    source=ActionRunSource.LAUNCH_CONFIG,
+                    status=ActionRunStatus.FAILED,
                     error=str(exc),
                 )
 
@@ -381,13 +396,13 @@ def on_pipeline_status_changed(sender, pipeline_id=None, old_status=None, new_st
         key = f"one_off:{action_id}:{new_status}"
         action_obj = build_one_off_action(action_payload)
         if not action_obj:
-            _update_action_run(
+            record_action_run(
                 pipeline_id=pipeline_id,
                 key=key,
                 action_type=action_payload.get("action_type") or "",
                 trigger_status=new_status,
-                source="one_off",
-                status="failed",
+                source=ActionRunSource.ONE_OFF,
+                status=ActionRunStatus.FAILED,
                 error="Invalid action payload",
             )
             _mark_one_off_done(pipeline_id, action_id)
@@ -398,40 +413,40 @@ def on_pipeline_status_changed(sender, pipeline_id=None, old_status=None, new_st
             key=key,
             action_type=action_obj.action_type,
             trigger_status=new_status,
-            source="one_off",
+            source=ActionRunSource.ONE_OFF,
         ):
             continue
         handler = get_action_handler(action_obj)
         if not handler:
-            _update_action_run(
+            record_action_run(
                 pipeline_id=pipeline_id,
                 key=key,
                 action_type=action_obj.action_type,
                 trigger_status=new_status,
-                source="one_off",
-                status="failed",
+                source=ActionRunSource.ONE_OFF,
+                status=ActionRunStatus.FAILED,
                 error="Handler not found",
             )
             _mark_one_off_done(pipeline_id, action_id)
             continue
         try:
             handler.run(pipeline=locked, new_status=new_status)
-            _update_action_run(
+            record_action_run(
                 pipeline_id=pipeline_id,
                 key=key,
                 action_type=action_obj.action_type,
                 trigger_status=new_status,
-                source="one_off",
-                status="performed",
+                source=ActionRunSource.ONE_OFF,
+                status=ActionRunStatus.PERFORMED,
             )
         except Exception as exc:
-            _update_action_run(
+            record_action_run(
                 pipeline_id=pipeline_id,
                 key=key,
                 action_type=action_obj.action_type,
                 trigger_status=new_status,
-                source="one_off",
-                status="failed",
+                source=ActionRunSource.ONE_OFF,
+                status=ActionRunStatus.FAILED,
                 error=str(exc),
             )
         _mark_one_off_done(pipeline_id, action_id)

@@ -4,7 +4,7 @@ import logging
 import shutil
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,12 +12,13 @@ from typing import TYPE_CHECKING
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from rest_framework import serializers
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-from aist.ai_filter import validate_and_normalize_filter
 from aist.integrations.dast_config import DastBindingParameters
+from aist.launch_data import LaunchAISettings
 from aist.models import (
     AISTPipeline,
     AISTProject,
@@ -28,8 +29,14 @@ from aist.models import (
     PipelineExecutionType,
     VersionType,
 )
+from aist.profile import ProjectProfile
 from aist.services.pipeline_lifecycle import TERMINAL_PIPELINE_STATUSES
-from aist.utils.pipeline_imports import _load_analyzers_config
+from aist.utils.pipeline_imports import _import_sast_pipeline_package, _load_analyzers_config
+
+_import_sast_pipeline_package()
+
+# These imports intentionally come AFTER the call above; suppress E402 explicitly.
+from pipeline.config_utils import AnalyzerSelection, TimeClass  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 
@@ -46,50 +53,100 @@ BUILD_DIR_WARNING = "AIST_PROJECTS_BUILD_DIR is not set"
 SYSTEM_ENV_KEYS = frozenset({"REPO_URL", "PROJECT_NAME"})
 
 
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+DEFAULT_LOG_LEVEL = "INFO"
+
+
+class SastLaunchParamsSerializer(serializers.Serializer):
+
+    """
+    The shape of SAST launch params and their defaults; a null param takes its default.
+
+    The AI params are read by :meth:`LaunchAISettings.from_params`.
+    """
+
+    rebuild_images = serializers.BooleanField(default=False)
+    log_level = serializers.ChoiceField(choices=LOG_LEVELS, default=DEFAULT_LOG_LEVEL)
+    analyzers = serializers.ListField(child=serializers.CharField(), default=list)
+    selected_languages = serializers.ListField(child=serializers.CharField(), default=list)
+    time_class_level = serializers.ChoiceField(choices=list(TimeClass), default=TimeClass.SLOW)
+    env = serializers.DictField(default=dict)
+
+
+def _caller_env(env: dict) -> dict:
+    """A launch's environment without the keys the platform computes itself."""
+    return {key: value for key, value in env.items() if key not in SYSTEM_ENV_KEYS}
+
+
+def _resolve_project_version(project: AISTProject, requested: object) -> dict:
+    """
+    Return the descriptor of the launch's project version, read from the database.
+
+    ``requested`` is a version id, a descriptor with an ``id``, a descriptor without one (kept as given), or
+    ``None`` for the project's active version. Raises ``ValueError`` for a version the project does not have.
+    """
+    if requested is None:
+        active = project.active_version
+        return active.as_dict() if active else {}
+    if isinstance(requested, dict) and not requested.get("id"):
+        return dict(requested)
+    version_id = requested.get("id") if isinstance(requested, dict) else requested
+    if not isinstance(version_id, int) or isinstance(version_id, bool):
+        msg = "project_version must be an object (dict) or integer id or null"
+        raise ValueError(msg)  # noqa: TRY004 -- an invalid launch param, reported to the caller as such
+    version = AISTProjectVersion.objects.filter(pk=version_id, project=project).first()
+    if version is None:
+        msg = "project_version: no such version in this project"
+        raise ValueError(msg)
+    return version.as_dict()
+
+
+def launch_analyzers(
+    project: AISTProject | None,
+    languages: list[str],
+    max_time_class: object,
+    requested: list[str] | None = None,
+) -> list[str]:
+    """The analyzers a SAST launch of ``project`` runs, as sast-pipeline selects them for the project's profile."""
+    cfg = _load_analyzers_config()
+    if not cfg:
+        return list(requested or [])
+    profile = ProjectProfile.from_dict(project.profile if project else None).analyzers
+    return cfg.select_analyzers(
+        AnalyzerSelection(
+            languages=tuple(languages),
+            max_time_class=TimeClass.of(max_time_class),
+            compilable=project.compilable if project else True,
+            requested=tuple(requested or ()),
+            include=profile.include,
+            exclude=profile.exclude,
+        ),
+    )
+
+
+def analyzer_selection_signature(project_id: object, languages: list[str], max_time_class: object) -> str:
+    """Identifies the inputs of the default :func:`launch_analyzers`, so a form knows when its defaults are stale."""
+    return f"{project_id or ''}::{TimeClass.of(max_time_class)}::{','.join(sorted(set(languages or [])))}"
+
+
 @dataclass
 class SastPipelineArguments:
     project: AISTProject
     project_version: dict = field(default_factory=dict)
     selected_analyzers: list[str] = field(default_factory=list)
     selected_languages: list[str] = field(default_factory=list)
-    log_level: str = "INFO"
+    log_level: str = DEFAULT_LOG_LEVEL
     rebuild_images: bool = False
-    ai_mode: str = "MANUAL"  # MANUAL | AUTO_DEFAULT
-    ai_triage_type: str | None = None  # None = use project default; "n8n" | "local"
-    ai_filter_snapshot: dict | None = None  # resolved effective default at launch time
-    time_class_level: str = "slow"  # TODO: change to enum
+    ai: LaunchAISettings = field(default_factory=LaunchAISettings)
+    time_class_level: TimeClass = TimeClass.SLOW
     is_initialized: bool = False
     additional_environments: dict = field(default_factory=dict)
 
     def __post_init__(self):
         configured_pipeline = getattr(settings, "AIST_PIPELINE_CODE_PATH", None)
         self.pipeline_path: Path | None = Path(configured_pipeline) if configured_pipeline else None
-        self.project_version["excluded_paths"] = self.project.get_excluded_paths()
-        self.project_version["excluded_severities"] = self.project.get_excluded_severities()
-
-    def build_project_version_descriptor(self) -> dict:
-        """
-        Build a runtime descriptor for LinkBuilder/enrich.
-        Keeps policy fields (like excluded paths) owned by PipelineArguments.
-        """
-        base = dict(self.project_version or {})
-        base["excluded_paths"] = self.project.get_excluded_paths()
-        base["excluded_severities"] = self.project.get_excluded_severities()
-        return base
-
-    def enrich_config(self) -> dict:
-        """
-        Fields to persist in launch_data for the enrichment stage.
-
-        Single source of truth: adding a new enrichment parameter means
-        updating only this method (and the reader in enrich.py).
-        Must be called after resolve_effective_project_version() so that
-        project_version reflects the final resolved state.
-        """
-        return {
-            "project_version_descriptor": self.build_project_version_descriptor(),
-            "log_level": self.log_level,
-        }
 
     def resolve_effective_project_version(
         self,
@@ -147,11 +204,11 @@ class SastPipelineArguments:
     @classmethod
     def normalize_params(cls, *, project: AISTProject, raw_params: dict) -> dict:
         """
-        Single source of truth:
-        - validates incoming params
-        - fills defaults
-        - guarantees schema compatible with PipelineArguments.from_dict()
-        - ensures project_version is present as dict (or {}), not passed separately
+        Admit SAST launch params: validate them, fill their defaults and fix the triage type that handles the
+        launch's findings. The result is what :meth:`from_dict` reads.
+
+        Raises ``TypeError`` when the params are not a dict and ``ValueError`` (``AIFilterError`` for the AI
+        filter) naming the first invalid param. Keys this serializer does not know are kept unchanged.
         """
         if raw_params is None:
             raw_params = {}
@@ -159,126 +216,34 @@ class SastPipelineArguments:
             msg = "params must be a JSON object (dict)"
             raise TypeError(msg)
 
-        normalized = dict(raw_params)
-
-        # Always pin project_id so the generic execution worker can reconstruct arguments.
-        normalized["project_id"] = project.id
-
-        # ---- project_version ----
-        pv = normalized.get("project_version")
-        if pv is None:
-            # allow omission: means "latest project version" if exists
-            latest = (
-                AISTProjectVersion.objects
-                .filter(project=project, version_type=VersionType.GIT_BRANCH)
-                .order_by("-updated", "-created")
-                .first()
-            )
-            if latest is None:
-                latest = (
-                    AISTProjectVersion.objects
-                    .filter(project=project)
-                    .order_by("-updated", "-created")
-                    .first()
-                )
-            normalized["project_version"] = latest.as_dict() if latest else {}
-        elif isinstance(pv, int):
-            obj = AISTProjectVersion.objects.get(pk=pv, project=project)
-            normalized["project_version"] = obj.as_dict()
-        elif isinstance(pv, dict):
-            # if dict has id -> resolve to authoritative dict (prevents stale data)
-            pv_id = pv.get("id")
-            if pv_id:
-                obj = AISTProjectVersion.objects.get(pk=pv_id, project=project)
-                normalized["project_version"] = obj.as_dict()
-            else:
-                normalized["project_version"] = dict(pv)
-        else:
-            msg = "project_version must be an object (dict) or integer id or null"
+        serializer = SastLaunchParamsSerializer(data={key: value for key, value in raw_params.items() if value is not None})
+        if not serializer.is_valid():
+            field_name, errors = next(iter(serializer.errors.items()))
+            msg = f"{field_name}: {errors[0]}"
             raise ValueError(msg)
+        params = serializer.validated_data
 
-        # ---- simple fields + defaults ----
-        normalized["rebuild_images"] = bool(normalized.get("rebuild_images"))
+        ai = LaunchAISettings.from_params(raw_params)
+        ai = replace(ai, triage_type=ProjectProfile.from_dict(project.profile).triage_type_for(ai))
+        ai.check(ai.triage_type)
 
-        log_level = normalized.get("log_level", "INFO")
-        if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
-            msg = "Unsupported log_level"
-            raise ValueError(msg)
-        normalized["log_level"] = log_level
-
-        analyzers = normalized.get("analyzers", [])
-        if analyzers is None:
-            analyzers = []
-        # TODO: add proper validation of analyzers
-        if not isinstance(analyzers, list) or not all(isinstance(x, str) for x in analyzers):
-            msg = "analyzers must be list[str]"
-            raise ValueError(msg)
-        normalized["analyzers"] = analyzers
-
-        langs = normalized.get("selected_languages", [])
-        if langs is None:
-            langs = []
-        if not isinstance(langs, list) or not all(isinstance(x, str) for x in langs):
-            msg = "selected_languages must be list[str]"
-            raise ValueError(msg)
-        normalized["selected_languages"] = langs
-
-        tcl = normalized.get("time_class_level", "slow")
-        # keep current behavior; if you later convert to enum - do it here only
-        if tcl is None:
-            tcl = "slow"
-        normalized["time_class_level"] = tcl
-
-        env = normalized.get("env", {})
-        if env is None:
-            env = {}
-        if not isinstance(env, dict):
-            msg = "env must be a JSON object (dict)"
-            raise TypeError(msg)
-
-        # Only caller-owned variables are normalized (and therefore persisted) here.
-        # REPO_URL/PROJECT_NAME are system-computed and added at launch time by
-        # runtime_env; a caller-supplied value for them is dropped rather than rejected,
-        # so re-normalizing a snapshot written by an older release stays valid.
-        normalized["env"] = {key: value for key, value in env.items() if key not in SYSTEM_ENV_KEYS}
-
-        # ---- AI triage type (optional per-launch override) ----
-        ai_triage_type = normalized.get("ai_triage_type")
-        if ai_triage_type is not None and ai_triage_type not in {"n8n", "local"}:
-            msg = "Unsupported ai_triage_type; allowed: n8n, local"
-            raise ValueError(msg)
-        normalized["ai_triage_type"] = ai_triage_type
-
-        # ---- AI mode + snapshot rules ----
-        ai_mode = normalized.get("ai_mode", "MANUAL") or "MANUAL"
-        if ai_mode not in {"MANUAL", "AUTO_DEFAULT"}:
-            msg = "Unsupported ai_mode"
-            raise ValueError(msg)
-        normalized["ai_mode"] = ai_mode
-
-        if ai_mode == "MANUAL":
-            # keep schema stable: snapshot is meaningless in MANUAL
-            normalized["ai_filter_snapshot"] = None
-            return normalized
-
-        # AUTO_DEFAULT: snapshot is required for n8n, optional for local.
-        snap = normalized.get("ai_filter_snapshot")
-        resolved_triage = ai_triage_type  # may be None (resolved later from project profile)
-        if snap is None and resolved_triage != "local":
-            msg = "ai_filter_snapshot is required for AUTO_DEFAULT (n8n triage)"
-            raise ValueError(msg)
-        if snap is not None:
-            normalized["ai_filter_snapshot"] = validate_and_normalize_filter(snap)
-        else:
-            normalized["ai_filter_snapshot"] = None
-
-        return normalized
+        return {
+            **raw_params,
+            **params,
+            "project_id": project.id,
+            "project_version": _resolve_project_version(project, raw_params.get("project_version")),
+            # REPO_URL/PROJECT_NAME are system-computed at launch by runtime_env and never persisted; a
+            # caller-supplied value is dropped, not rejected, so a snapshot of an older release stays valid.
+            "env": _caller_env(params["env"]),
+            **ai.as_params(),
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> SastPipelineArguments:
         """
-        Build PipelineArguments instance from dictionary.
-        The dictionary must contain `project_id` instead of `project`.
+        Build SAST launch arguments from params :meth:`normalize_params` admitted, as they were stored.
+
+        The params are not validated again: a stored launch runs as it was admitted.
         """
         try:
             project = AISTProject.objects.get(id=data["project_id"])
@@ -286,52 +251,21 @@ class SastPipelineArguments:
             msg = MSG_PROJECT_NOT_FOUND_TPL.format(data["project_id"])
             raise ValueError(msg)
 
-        normalized = cls.normalize_params(project=project, raw_params=data)
-
         return cls(
             project=project,
-            project_version=normalized.get("project_version") or {},
-            selected_analyzers=normalized.get("analyzers") or [],
-            selected_languages=normalized.get("selected_languages") or [],
-            log_level=normalized.get("log_level") or "INFO",
-            rebuild_images=normalized.get("rebuild_images") or False,
-            ai_mode=(normalized.get("ai_mode") or "MANUAL"),
-            ai_triage_type=normalized.get("ai_triage_type"),
-            ai_filter_snapshot=normalized.get("ai_filter_snapshot"),
-            time_class_level=normalized.get("time_class_level") or "slow",
-            additional_environments=normalized.get("env") or {},
+            project_version=data["project_version"],
+            selected_analyzers=data["analyzers"],
+            selected_languages=data["selected_languages"],
+            log_level=data["log_level"],
+            rebuild_images=data["rebuild_images"],
+            ai=LaunchAISettings.from_normalized_params(data),
+            time_class_level=TimeClass.of(data["time_class_level"]),
+            additional_environments=data["env"],
         )
 
     @property
     def analyzers(self) -> list[str]:
-        if self.selected_analyzers:
-            return self.selected_analyzers
-
-        cfg = _load_analyzers_config()
-        if not cfg:
-            return self.selected_analyzers
-
-        filtered = cfg.get_filtered_analyzers(
-            analyzers_to_run=None,
-            max_time_class=self.time_class_level,
-            non_compile_project=not self.project.compilable,
-            target_languages=self.languages,
-            show_only_parent=True,
-        )
-        names = set(cfg.get_names(filtered))
-        profile = self.project.profile
-        if not profile:
-            # Just default list, by language
-            return list(names)
-
-        analyzer_profile = profile.get("analyzers", {})
-        if analyzer_profile:
-            if analyzer_profile.get("exclude"):
-                names.difference_update(analyzer_profile.get("exclude"))
-            if analyzer_profile.get("include", None):
-                names.update(analyzer_profile.get("include"))
-
-        return list(names)
+        return launch_analyzers(self.project, self.languages, self.time_class_level, self.selected_analyzers)
 
     @property
     def languages(self) -> list[str]:
@@ -353,7 +287,7 @@ class SastPipelineArguments:
         credential applies to the next launch without rewriting any saved launch config or
         frozen launch request snapshot.
         """
-        env = dict(self.additional_environments)
+        env = _caller_env(self.additional_environments)
         if self.project.repository:
             env["REPO_URL"] = self.project.repository.clone_url
         env["PROJECT_NAME"] = self.normalize_project_name(self.project)
@@ -443,24 +377,11 @@ class DastPipelineArguments:
         trigger_project_version: AISTProjectVersion | None,
         raw_parameters: dict,
     ) -> DastPipelineArguments:
-        if binding.project_id != project.pk:
-            msg = "DAST binding must belong to the launch project."
-            raise ValueError(msg)
+        violations = binding.launch_violations(project_id=project.pk, trigger_version=trigger_project_version)
+        if violations:
+            raise ValueError(violations[0].label)
         if not binding.enabled:
             msg = "DAST binding must be enabled."
-            raise ValueError(msg)
-        if binding.requires_source_repository:
-            if trigger_project_version is None:
-                msg = "DAST trigger version is required for this target."
-                raise ValueError(msg)
-            if trigger_project_version.project_id != project.pk:
-                msg = "DAST trigger version must belong to the launch project."
-                raise ValueError(msg)
-            if trigger_project_version.version_type not in {VersionType.GIT_BRANCH, VersionType.GIT_HASH}:
-                msg = "DAST trigger version must be a Git branch or Git hash."
-                raise ValueError(msg)
-        elif trigger_project_version is not None:
-            msg = "DAST trigger version is not accepted for a target with no repository requirement."
             raise ValueError(msg)
         target = binding.target.get_snapshot()
         # The binding is where an operator configured this target, so its saved parameters are
@@ -603,9 +524,7 @@ class PipelineArguments:
                 "selected_languages": list(self.payload.selected_languages),
                 "log_level": self.payload.log_level,
                 "rebuild_images": self.payload.rebuild_images,
-                "ai_mode": self.payload.ai_mode,
-                "ai_triage_type": self.payload.ai_triage_type,
-                "ai_filter_snapshot": self.payload.ai_filter_snapshot,
+                **self.payload.ai.as_params(),
                 "time_class_level": self.payload.time_class_level,
                 "env": dict(self.payload.additional_environments),
             },
@@ -619,6 +538,7 @@ class PipelineArguments:
 
     @classmethod
     def for_sast(cls, *, project: AISTProject, raw_params: dict) -> PipelineArguments:
+        """Admit a SAST launch of ``project`` with ``raw_params``."""
         normalized = SastPipelineArguments.normalize_params(project=project, raw_params=raw_params)
         return cls(project=project, payload=SastPipelineArguments.from_dict(normalized))
 
@@ -648,9 +568,6 @@ class PipelineArguments:
         if config.dast_binding_id is None:
             msg = "DAST launch config requires a binding."
             raise ValueError(msg)
-        if config.dast_binding.requires_source_repository and config.trigger_project_version_id is None:
-            msg = "DAST launch config requires a trigger version for this target."
-            raise ValueError(msg)
         return cls.for_dast(
             project=config.project,
             binding=config.dast_binding,
@@ -660,8 +577,9 @@ class PipelineArguments:
 
     @classmethod
     def from_dict(cls, data: dict) -> PipelineArguments:
-        project = AISTProject.objects.get(pk=data["project_id"])
-        return cls.for_sast(project=project, raw_params=data)
+        """The SAST launch whose admitted params ``data`` are, as they were stored."""
+        payload = SastPipelineArguments.from_dict(data)
+        return cls(project=payload.project, payload=payload)
 
     @classmethod
     def normalize_project_name(cls, project: AISTProject) -> str:

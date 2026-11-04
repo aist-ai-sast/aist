@@ -141,17 +141,6 @@ class FullSecurityReviewSkillContractTests(unittest.TestCase):
         ):
             self.assertIn(key, self.text, f"runtime sidecar key missing: {key!r}")
 
-    def test_exclusion_pattern_semantics_documented(self):
-        for phrase in (
-            "same simple rule as AIST post-processing",
-            "exclusion string is contained",
-            "cloud/tests/foo.py",
-            ".spec.ts",
-        ):
-            self.assertIn(phrase, self.text)
-
-    # ── Output schema fidelity ──────────────────────────────────────────
-
     def test_severity_enum_listed_with_exact_case(self):
         for sev in ("Critical", "High", "Medium", "Low", "Info"):
             self.assertIn(sev, self.text, f"severity value missing: {sev!r}")

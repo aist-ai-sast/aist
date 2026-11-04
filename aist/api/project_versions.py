@@ -13,6 +13,7 @@ from aist.models import (
     AISTProjectVersion,
     VersionType,
 )
+from aist.models.projects import ERR_INVALID_GIT_REF, is_valid_git_ref
 
 SCRIPT_SOURCE_VERSION = "version"
 SCRIPT_SOURCE_SHARED_DEFAULT = "shared_default"
@@ -59,6 +60,8 @@ class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"version": "This field is required for GIT_BRANCH/GIT_HASH versions."},
             )
+        if version_type in {VersionType.GIT_BRANCH, VersionType.GIT_HASH} and not is_valid_git_ref(version):
+            raise serializers.ValidationError({"version": ERR_INVALID_GIT_REF})
 
         if version:
             exists = AISTProjectVersion.objects.filter(

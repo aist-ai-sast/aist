@@ -105,5 +105,5 @@ Before implementation begins, list any decision points:
 
 ```
 /aist-plan feature="Add pipeline status endpoint to REST API"
-/aist-plan feature="Refactor dedup hash computation" context="aist/dedupe/, aist/models.py"
+/aist-plan feature="Refactor dedup hash computation" context="aist/dedupe/, aist/models/"
 ```

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -46,8 +46,7 @@ class PipelineSourceInfoAPITests(AISTApiBase):
             },
         )
 
-        with patch.object(Path, "is_dir", return_value=False):
-            resp = self.token_client.get(self._url(pipeline.id))
+        resp = self.token_client.get(self._url(pipeline.id))
 
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
@@ -57,31 +56,21 @@ class PipelineSourceInfoAPITests(AISTApiBase):
         self.assertEqual(data["project_name"], "Test Product")
         self.assertEqual(data["languages"], ["python", "javascript"])
 
-    def test_returns_git_subdir_when_present(self):
-        pipeline = AISTPipeline.objects.create(
-            id="pipe-src-git",
-            project=self.project,
-            project_version=self.pv,
-            status=AISTStatus.WAITING_RESULT_FROM_AI,
-            launch_data={
-                "project_path": f"{_PROJ_PATH}/pipe-src-git",
-                "languages": ["python"],
-                "project_version_descriptor": {"type": "GIT_HASH"},
-            },
-        )
+    def test_a_checkout_with_a_directory_named_like_the_product_reports_the_scanned_root(self):
+        with tempfile.TemporaryDirectory() as checkout:
+            (Path(checkout) / self.project.product.name).mkdir()
+            pipeline = AISTPipeline.objects.create(
+                id="pipe-src-git",
+                project=self.project,
+                project_version=self.pv,
+                status=AISTStatus.WAITING_RESULT_FROM_AI,
+                launch_data={"project_path": checkout, "languages": ["python"]},
+            )
 
-        def mock_is_dir(self_path):
-            path_str = str(self_path)
-            return "Test Product" in path_str or path_str.endswith("pipe-src-git")
-
-        with (
-            patch.object(Path, "is_dir", mock_is_dir),
-            patch.object(Path, "exists", return_value=True),
-        ):
             resp = self.token_client.get(self._url(pipeline.id))
 
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("Test Product", resp.json()["project_path"])
+        self.assertEqual(resp.json()["project_path"], checkout)
 
     def test_returns_409_for_terminal_pipeline(self):
         AISTPipeline.objects.create(

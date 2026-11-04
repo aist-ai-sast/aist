@@ -1,0 +1,2 @@
+# A TypeScript source that holds NUL bytes on purpose: diff and review it as text.
+client-ui/src/lib/dastNarrative.ts diff

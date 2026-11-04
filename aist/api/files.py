@@ -5,8 +5,7 @@ from mimetypes import guess_type
 from pathlib import Path
 
 import requests
-from django.http import FileResponse, Http404, HttpResponse
-from django.utils.encoding import iri_to_uri
+from django.http import FileResponse, Http404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
@@ -17,15 +16,9 @@ from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAuthzMixin, ResourcePolicy
 from aist.integrations import egress
 from aist.integrations.scm_errors import ScmFetchError
-from aist.link_builder import LinkBuilder
-from aist.models import AISTProjectVersion, VersionType
+from aist.models import AISTProjectVersion
+from aist.models.projects import SourceFileNotFoundError
 
-# ----------------------------
-# Module-level error messages
-# ----------------------------
-ERR_FILE_NOT_FOUND_IN_ARCHIVE = "File not found in version archive"
-ERR_FILE_NOT_FOUND_IN_REPOSITORY = "File not found in remote repository"
-ERR_BRANCH_HAS_NO_RESOLVED_COMMIT = "Branch has no resolved commit yet"
 # Client-facing SCM failures. Deliberately generic: they never name the SCM host,
 # the ref, the request URL, or the credential.
 ERR_SCM_AUTH_FAILED = (
@@ -60,10 +53,10 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
 
     @extend_schema(
         tags=[AISTApiTag.PROJECTS.value],
-        summary="Get file from extracted project version archive",
+        summary="Get one source file of a project version",
         description=(
-            "Returns the raw bytes of a file located **inside** the extracted archive of the specified "
-            "AIST project version. If the archive hasn't been extracted yet, it will be extracted once."
+            "Returns the raw bytes of a file of the project version's source: its extracted archive for an "
+            "uploaded-archive version, else the project's repository at the version's commit."
         ),
         parameters=[
             OpenApiParameter(
@@ -76,7 +69,7 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
             OpenApiParameter(
                 name="subpath",
                 location=OpenApiParameter.PATH,
-                description="Relative path inside the extracted archive (e.g. `src/main.py`)",
+                description="Path relative to the source root (e.g. `src/main.py`)",
                 required=True,
                 type=str,
             ),
@@ -86,7 +79,10 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
                 response=OpenApiTypes.BINARY,
                 description="Raw file content (binary stream)",
             ),
-            404: OpenApiResponse(description="Project version or file not found"),
+            202: OpenApiResponse(
+                description='The VPN egress tunnel is warming: `{"status": "warming", "retry_after": <seconds>}`',
+            ),
+            404: OpenApiResponse(description="Project version or file not found, or the path is refused"),
             502: OpenApiResponse(
                 description=(
                     'SCM rejected the fetch: `code` is "scm_auth_failed" (integration credentials '
@@ -95,84 +91,8 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
             ),
         },
     )
-    @staticmethod
-    def _bytes_response(data: bytes, filename: str):
-        """Wrap raw bytes in an inline HttpResponse with a guessed content type."""
-        content_type, _ = guess_type(filename)
-        content_type = content_type or "application/octet-stream"
-        resp = HttpResponse(data, content_type=content_type)
-        resp["Content-Disposition"] = f'inline; filename="{iri_to_uri(filename)}"'
-        return resp
-
-    def _return_remote_bytes(
-        self,
-        url: str,
-        filename: str,
-        extra_headers: dict | None = None,
-        *,
-        proxy_url: str | None = None,
-    ):
-        """
-        Download the file from a remote URL and return as HttpResponse.
-
-        When ``proxy_url`` is set the request is routed through the warm per-VPN
-        egress HTTP CONNECT proxy; otherwise it goes out directly (public SCM).
-        """
-        headers = dict(extra_headers or {})
-        proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
-        response = requests.get(url, headers=headers, timeout=10, allow_redirects=True, proxies=proxies)
-
-        if response.status_code == 404:
-            raise Http404(ERR_FILE_NOT_FOUND_IN_REPOSITORY)
-        if response.status_code >= 400:
-            raise ScmFetchError(response.status_code)
-
-        return self._bytes_response(response.content, filename)
-
-    @staticmethod
-    def _return_local_file(project_version, subpath):
-        try:
-            root = project_version.ensure_extracted()
-        except FileNotFoundError as exc:
-            raise Http404(ERR_FILE_NOT_FOUND_IN_ARCHIVE) from exc
-        if root is None:
-            raise Http404(ERR_FILE_NOT_FOUND_IN_ARCHIVE)
-
-        root = root.resolve()
-        safe_rel = subpath.lstrip("/").replace("\\", "/")
-        file_path = (root / safe_rel).resolve()
-        try:
-            file_path.relative_to(root)
-        except ValueError as exc:
-            raise Http404(ERR_FILE_NOT_FOUND_IN_ARCHIVE) from exc
-        if not file_path.exists() or not file_path.is_file():
-            raise Http404(ERR_FILE_NOT_FOUND_IN_ARCHIVE)
-
-        content_type, _ = guess_type(str(file_path))
-        content_type = content_type or "application/octet-stream"
-        resp = FileResponse(file_path.open("rb"), content_type=content_type)
-        resp["Content-Disposition"] = f'inline; filename="{iri_to_uri(file_path.name)}"'
-        return resp
-
     def get(self, request, project_version_id: int, subpath: str, *args, **kwargs):
         project_version = self.resolve(pk=project_version_id)
-
-        # --- Case 1: Local FILE_HASH (from extracted archive) ---
-        if project_version.version_type == VersionType.FILE_HASH:
-            return self._return_local_file(project_version, subpath)
-
-        # --- Case 2: Git-based version (GIT_BRANCH/GIT_HASH) ---
-        if project_version.version_type == VersionType.GIT_BRANCH:
-            ref = (project_version.last_resolved_commit or "").strip()
-            if not ref:
-                ref = (project_version.version or "master").strip()
-        else:
-            ref = (project_version.version or "master").strip()
-        repo_obj = getattr(project_version.project, "repository", None)
-        if not repo_obj:
-            # Case 3: No repository_info and no SCM binding — cannot serve file.
-            # Pipeline workspaces are ephemeral (per-run) and unavailable at request time.
-            raise Http404(ERR_FILE_NOT_FOUND_IN_REPOSITORY)
 
         # If the repo is behind a VPN, route the fetch through this VPN's warm
         # egress proxy (started ahead of time by prewarm_egress).  proxy_url is
@@ -181,12 +101,14 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
         proxy_url = egress.proxy_url_for_project_version(project_version)
 
         try:
-            return self._fetch_git_file(project_version, repo_obj, ref, subpath, proxy_url)
+            stream = project_version.open_source_file(subpath, proxy_url=proxy_url)
+        except SourceFileNotFoundError as exc:
+            raise Http404(str(exc)) from exc
         except ScmFetchError as exc:
-            return self._scm_error_response(project_version, repo_obj, exc)
+            return self._scm_error_response(project_version, exc)
         except (requests.ConnectionError, requests.Timeout):
             if proxy_url is None:
-                raise  # public SCM: preserve prior behaviour (propagate)
+                raise  # public SCM: no tunnel to warm
             # Cold egress tunnel: warm it in the background and ask the UI to retry.
             from aist.tasks.egress import prewarm_egress  # noqa: PLC0415 avoid import cycle
 
@@ -196,9 +118,13 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
                 status=status.HTTP_202_ACCEPTED,
                 headers={"Retry-After": str(WARMING_RETRY_AFTER_SECONDS)},
             )
+        filename = Path(subpath).name
+        return FileResponse(
+            stream, content_type=guess_type(filename)[0] or "application/octet-stream", filename=filename,
+        )
 
     @staticmethod
-    def _scm_error_response(project_version, repo_obj, exc: ScmFetchError) -> Response:
+    def _scm_error_response(project_version, exc: ScmFetchError) -> Response:
         """
         Translate an upstream SCM failure into a 502 the UI can explain.
 
@@ -211,7 +137,7 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
         logger.warning(
             "SCM file fetch failed: project_version_id=%s repo=%s upstream_status=%s",
             project_version.id,
-            repo_obj.repo_full,
+            project_version.project.repository.repo_full,
             exc.status_code,
         )
         if exc.is_auth_failure:
@@ -219,26 +145,6 @@ class ProjectVersionFileBlobAPI(AISTAuthzMixin, generics.GenericAPIView):
         else:
             body = {"detail": ERR_SCM_UNAVAILABLE, "code": SCM_UNAVAILABLE_CODE}
         return Response(body, status=status.HTTP_502_BAD_GATEWAY)
-
-    def _fetch_git_file(self, project_version, repo_obj, ref: str, subpath: str, proxy_url: str | None):
-        """Fetch a single file from the SCM (binding, or public raw URL) at ``ref``."""
-        binding = repo_obj.get_binding()
-        if binding:
-            # Some providers (Gerrit) return base64 content that must be decoded
-            # by the binding rather than streamed verbatim.
-            fetch_raw = getattr(binding, "fetch_raw_bytes", None)
-            if callable(fetch_raw):
-                data = fetch_raw(repo_obj, ref, subpath, proxy_url=proxy_url)
-                if data is None:
-                    raise Http404(ERR_FILE_NOT_FOUND_IN_REPOSITORY)
-                return self._bytes_response(data, Path(subpath).name)
-            raw_url = binding.build_raw_url(repo_obj, ref, subpath)
-            headers = binding.get_auth_headers() or {}
-            return self._return_remote_bytes(raw_url, Path(subpath).name, headers, proxy_url=proxy_url)
-
-        # Fallback to public blob/raw URL if no binding configured.
-        raw_url = LinkBuilder({"id": project_version.id}).build_raw_url(repo_obj.host(), ref, subpath)
-        return self._return_remote_bytes(raw_url, Path(subpath).name, {}, proxy_url=proxy_url)
 
 
 class ProjectVersionPrewarmAPI(AISTAuthzMixin, generics.GenericAPIView):

@@ -14,8 +14,7 @@ from aist.api.schema import AISTApiTag
 from aist.authz import INTERNAL_SERVICE, Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline, AISTStatus
-from aist.tasks import push_request_to_ai, push_request_to_local_triage
-from aist.tasks.ai import _resolve_triage_type
+from aist.tasks.ai import push_to_triage, resolve_triage_type
 from aist.utils.ai_response import sync_ai_finding_responses
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 
@@ -90,11 +89,7 @@ def _push_pipeline_to_ai(pipeline: AISTPipeline, ids_int: list[int], filters: di
             {"error": "Attempt to push to AI before receiving confirmation"},
             status=400,
         )
-    triage_type = _resolve_triage_type(locked)
-    if triage_type == "local":
-        push_request_to_local_triage.delay(pipeline.id, ids_int)
-    else:
-        push_request_to_ai.delay(pipeline.id, ids_int, filters)
+    push_to_triage(resolve_triage_type(locked), pipeline.id, ids_int, filters)
     return None
 
 

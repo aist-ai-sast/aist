@@ -193,7 +193,7 @@ class DastStartViewTests(AISTApiBase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "must belong to the selected project")
+        self.assertContains(response, "must belong to the launch project")
         self.assertFalse(PipelineLaunchRequest.objects.exists())
 
     def test_dast_launch_rejects_file_source_disabled_binding_and_actions(self):

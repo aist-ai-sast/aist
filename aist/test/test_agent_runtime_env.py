@@ -159,30 +159,3 @@ class BuildAgentRuntimeEnvTests(AISTApiBase):
         self.assertEqual(env["CLAUDE_DIFF_MAX_FILES"], "17")
         self.assertEqual(env["CLAUDE_DIFF_MAX_BYTES"], "4096")
         self.assertEqual(env["AGENT_FULL_MAX_FILES"], "9")
-
-
-class BuildDiffEnvBackwardCompatTests(AISTApiBase):
-
-    """
-    ``build_diff_env`` must remain importable and behave as a thin alias for
-    ``build_agent_runtime_env`` so that ``aist.tasks.pipeline`` and the
-    existing test suite keep working through Task 3.
-    """
-
-    def setUp(self):
-        super().setUp()
-        self.branch_pv = AISTProjectVersion.objects.create(
-            project=self.project,
-            version_type=VersionType.GIT_BRANCH,
-            version="main",
-        )
-        self.pipeline = AISTPipeline.objects.create(
-            id="pipe-back-compat",
-            project=self.project,
-            project_version=self.branch_pv,
-            status=AISTStatus.EXECUTING,
-        )
-
-    def test_build_diff_env_returns_same_dict_as_unified_builder(self):
-        from aist.utils.diff_baseline import build_diff_env  # noqa: PLC0415
-        self.assertEqual(build_diff_env(self.pipeline), build_agent_runtime_env(self.pipeline))

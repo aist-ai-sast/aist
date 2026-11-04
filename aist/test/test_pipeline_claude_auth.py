@@ -4,10 +4,10 @@ alongside the existing VPN resolution and forwards the resulting generic
 ``auth_env`` dict to ``build_bridge_client_from_settings``.
 
 Architectural invariants verified here:
-- I1 — ``aist.tasks.pipeline`` does not embed a Claude env-var literal;
-  the resolution call goes through ``aist.integrations.claude.claude_auth_env``.
+- I1 — ``aist.tasks.sast_execution`` does not embed a Claude env-var literal;
+  the resolution call goes through ``aist.integrations.claude.claude_subprocess_env``.
 - I4 — the factory is invoked with a ready dict, not a project; the
-  resolution happens in ``pipeline.py``.
+  resolution happens in ``sast_execution.py``.
 
 Sole test fixture: a minimal pipeline run with all expensive collaborators
 mocked. The assertion target is the ``auth_env`` kwarg passed to
@@ -15,11 +15,8 @@ mocked. The assertion target is the ``auth_env`` kwarg passed to
 """
 from __future__ import annotations
 
-import tempfile
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from aist.execution.dispatching import LaunchAcceptance
 from aist.models import (
     AISTPipeline,
     AISTProjectVersion,
@@ -28,28 +25,14 @@ from aist.models import (
     OrgIntegrationType,
     VersionType,
 )
-from aist.test.pipeline_execution_helpers import run_persisted_sast_pipeline
+from aist.test.pipeline_execution_helpers import SastWorkerTestMixin
 from aist.test.test_api import AISTApiBase
 
 
-class _DummyLogger:
-    def info(self, *args, **kwargs):
-        return None
-
-    def exception(self, *args, **kwargs):
-        return None
-
-
-class PipelineClaudeAuthEnvTests(AISTApiBase):
+class PipelineClaudeAuthEnvTests(SastWorkerTestMixin, AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        acceptance = patch(
-            "aist.tasks.pipeline.accept_published_launch",
-            return_value=LaunchAcceptance.ACCEPTED,
-        )
-        acceptance.start()
-        self.addCleanup(acceptance.stop)
         self.org_prod_type = self.prod_type
         self.org = Organization.objects.create(
             name="Pipeline Claude Org",
@@ -69,38 +52,10 @@ class PipelineClaudeAuthEnvTests(AISTApiBase):
         )
 
     def _run_with_mocks(self) -> MagicMock:
-        """Run the pipeline and return the factory mock for inspection."""
-        with (
-            tempfile.TemporaryDirectory() as runtime_dir,
-            self.settings(
-                AIST_PROJECTS_BUILD_DIR=f"{runtime_dir}/build",
-                AIST_OUTPUT_PATH=f"{runtime_dir}/output",
-            ),
-            patch("aist.tasks.pipeline.AISTProjectVersion.ensure_extracted", return_value=None),
-            patch("aist.tasks.pipeline.install_pipeline_logging", return_value=_DummyLogger()),
-            patch("aist.tasks.pipeline.AnalyzersConfigHelper"),
-            patch("aist.tasks.pipeline.execute_pipeline", return_value=SimpleNamespace(launch_data={
-                "git": {"resolved_commit": ""},
-                "output_dir": "/aist-output",
-                "project_path": "/aist-project",
-                "trim_path": "",
-                "tmp_analyzer_config_path": "/aist-analyzers.yml",
-            })),
-            patch("aist.tasks.pipeline.upload_results_internal", return_value=[]),
-            patch(
-                "aist.tasks.pipeline.build_bridge_client_from_settings",
-            ) as mock_factory,
-        ):
+        """Run the pipeline and return the bridge client factory mock for inspection."""
+        with patch("aist.tasks.sast_execution.build_bridge_client_from_settings") as mock_factory:
             mock_factory.return_value = MagicMock()
-            run_persisted_sast_pipeline(
-                self.pipeline,
-                {
-                    "project_id": self.project.id,
-                    "project_version": self.branch.id,
-                    "analyzers": ["semgrep"],
-                    "selected_languages": ["python"],
-                },
-            )
+            self.run_sast(self.pipeline, project_version=self.branch, upload_results=[])
             return mock_factory
 
     def test_factory_called_with_claude_oauth_token_when_integration_configured(self):

@@ -19,9 +19,20 @@ verdict.
 The execution backend is resolved independently of the selection trigger: a
 per-launch override takes priority over the project profile. AIST supports two
 backends — an **n8n webhook** and a **local Claude bridge** — and either
-selection trigger can use either backend. The selection trigger, backend
-override, and filter snapshot are recorded with the run, so a later
-project-profile change does not rewrite a completed run.
+selection trigger can use either backend. The selection trigger, the backend
+the launch resolves to when it is accepted, and the filter snapshot are recorded
+with the run, so a later project-profile change does not change where that run's
+findings go.
+
+An automatic launch needs a saved filter unless the backend it resolves to —
+the launch's own choice, else the project profile's — is the local bridge,
+which takes every eligible finding when no filter is set. AIST applies this rule
+wherever launch settings are accepted, whether from the run form, the start API,
+or a saved launch configuration, and rejects an automatic webhook launch without
+a filter instead of starting a run that could select nothing. A run that passes
+the rule sends its findings to its recorded backend on its own once
+post-processing completes. A saved launch configuration is checked again each
+time it launches, so one that no longer passes is rejected at that launch.
 
 ## Receive and retain a verdict
 

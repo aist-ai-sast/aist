@@ -4,8 +4,9 @@ import json
 
 from django import forms
 
-from aist.ai_filter import validate_and_normalize_filter
+from aist.ai_filter import AIFilterError
 from aist.integrations.dast_readiness import check_dast_launch_readiness
+from aist.launch_data import AIMode, LaunchAISettings
 from aist.models import (
     OPERATOR_CREATABLE_VERSION_TYPES,
     AISTProject,
@@ -13,7 +14,15 @@ from aist.models import (
     DastProjectBinding,
     VersionType,
 )
-from aist.pipeline_args import PipelineArguments
+from aist.models.dast import launch_violation_errors
+from aist.pipeline_args import (
+    LOG_LEVELS,
+    PipelineArguments,
+    TimeClass,
+    analyzer_selection_signature,
+    launch_analyzers,
+)
+from aist.profile import ProjectProfile
 from aist.utils.pipeline import has_unfinished_pipeline
 from aist.utils.pipeline_imports import _load_analyzers_config
 
@@ -70,10 +79,6 @@ class AISTProjectVersionForm(forms.ModelForm):
         return cleaned
 
 
-def _signature(project_id: str | None, langs: list[str], time_class: str | None) -> str:
-    return f"{project_id or ''}::{time_class or 'slow'}::{','.join(sorted(set(langs or [])))}"
-
-
 class _AISTPipelineArgsBaseForm(forms.Form):
 
     """
@@ -91,28 +96,24 @@ class _AISTPipelineArgsBaseForm(forms.Form):
         queryset=AISTProjectVersion.objects.none(),
         label="Project version",
         required=False,
-        help_text="By default will be used latest commit on master branch",
+        help_text="By default the project's active version runs: its newest branch, at that branch's latest commit.",
     )
     rebuild_images = forms.BooleanField(required=False, initial=False, label="Rebuild images")
     log_level = forms.ChoiceField(
-        choices=[("INFO", "INFO"), ("DEBUG", "DEBUG"), ("WARNING", "WARNING"), ("ERROR", "ERROR")],
+        choices=[(level, level) for level in LOG_LEVELS],
         initial="INFO",
         label="Log level",
     )
     languages = forms.MultipleChoiceField(choices=[], required=False, label="Languages", widget=forms.CheckboxSelectMultiple)
     analyzers = forms.MultipleChoiceField(choices=[], required=False, label="Analyzers to launch", widget=forms.CheckboxSelectMultiple)
-    time_class_level = forms.ChoiceField(choices=[], required=False, label="Maximum time class", initial="slow")
+    time_class_level = forms.ChoiceField(choices=[], required=False, label="Maximum time class", initial=TimeClass.SLOW)
     selection_signature = forms.CharField(required=False, widget=forms.HiddenInput)
 
-    AI_MODE_CHOICES = (
-        ("MANUAL", "Manual selection of findings for AI"),
-        ("AUTO_DEFAULT", "Send findings to AI automatically with configured filter"),
-    )
     ai_mode = forms.ChoiceField(
         label="AI triage",
-        choices=AI_MODE_CHOICES,
+        choices=AIMode.choices,
         widget=forms.RadioSelect,
-        initial="MANUAL",
+        initial=AIMode.MANUAL,
         required=True,
     )
     ai_filter_json = forms.CharField(
@@ -127,28 +128,28 @@ class _AISTPipelineArgsBaseForm(forms.Form):
 
     def clean(self):
         cleaned = super().clean()
-        ai_mode = cleaned.get("ai_mode") or "MANUAL"
-        raw_json = (cleaned.get("ai_filter_json") or "").strip()
-
         cleaned["ai_filter_snapshot"] = None
-        if ai_mode != "AUTO_DEFAULT":
+        ai_mode = cleaned.get("ai_mode") or AIMode.MANUAL
+        if ai_mode != AIMode.AUTO_DEFAULT:
             return cleaned
 
-        if not raw_json:
-            self.add_error("ai_filter_json", "AI filter is required for AUTO_DEFAULT.")
-            return cleaned
-
+        raw_json = (cleaned.get("ai_filter_json") or "").strip()
         try:
-            parsed = json.loads(raw_json)
-        except Exception as exc:
+            snapshot = json.loads(raw_json) if raw_json else None
+        except json.JSONDecodeError as exc:
             self.add_error("ai_filter_json", f"AI filter JSON is invalid: {exc}")
             return cleaned
 
         try:
-            cleaned["ai_filter_snapshot"] = validate_and_normalize_filter(parsed)
-        except Exception as exc:
-            self.add_error("ai_filter_json", f"AI filter is invalid: {exc}")
+            ai = LaunchAISettings.from_params({"ai_mode": ai_mode, "ai_filter_snapshot": snapshot})
+            project = cleaned.get("project") or self._fixed_project
+            if project is not None:
+                ai.check(ProjectProfile.from_dict(project.profile).triage_type_for(ai))
+        except AIFilterError as exc:
+            self.add_error("ai_filter_json", str(exc))
+            return cleaned
 
+        cleaned["ai_filter_snapshot"] = ai.filter_snapshot
         return cleaned
 
     def __init__(self, *args, **kwargs):
@@ -165,7 +166,7 @@ class _AISTPipelineArgsBaseForm(forms.Form):
         self.fields["languages"].widget.attrs.update({"class": "form-check-input"})
         self.fields["analyzers"].widget.attrs.update({"class": "form-check-input"})
         self.fields["project_version"].widget.attrs.update({"class": "form-select"})
-        self.fields["project_version"].empty_label = "Use default (latest on default branch)"
+        self.fields["project_version"].empty_label = "Use the project's active version"
         self.fields["project_version"].queryset = AISTProjectVersion.objects.none()
         self.fields["ai_mode"].widget.attrs.update({"class": "form-check-input"})
 
@@ -175,7 +176,7 @@ class _AISTPipelineArgsBaseForm(forms.Form):
             self.fields["analyzers"].choices = [(x, x) for x in cfg.get_supported_analyzers()]
             self.fields["time_class_level"].choices = [(x, x) for x in cfg.get_analyzers_time_class()]
 
-        # If not bound - nothing to compute (keeps existing behavior) :contentReference[oaicite:1]{index=1}
+        # An unbound form has no project or posted selection to compute defaults from.
         if not self.is_bound:
             return
 
@@ -187,26 +188,16 @@ class _AISTPipelineArgsBaseForm(forms.Form):
         project_supported_languages = (proj.supported_languages if proj else []) or []
         langs_union = list(set((posted_langs or []) + project_supported_languages))
 
-        time_class = self.data.get(self.add_prefix("time_class_level")) or "slow"
+        time_class = self.data.get(self.add_prefix("time_class_level"))
 
-        # Signature-driven defaults (same logic as before) :contentReference[oaicite:2]{index=2}
+        # Analyzer defaults are recomputed when the project, languages or time class change.
         project_id = str(proj.id) if proj else None
         posted_sig = self.data.get(self.add_prefix("selection_signature")) or ""
-        new_sig = _signature(project_id, langs_union, time_class)
+        new_sig = analyzer_selection_signature(project_id, langs_union, time_class)
         self.initial["selection_signature"] = new_sig
         posted_analyzers = self.data.getlist(self.add_prefix("analyzers"))
 
-        defaults = []
-        if cfg and proj:
-            non_compile_project = not proj.compilable
-            filtered = cfg.get_filtered_analyzers(
-                analyzers_to_run=None,
-                max_time_class=time_class,
-                non_compile_project=non_compile_project,
-                target_languages=langs_union,
-                show_only_parent=True,
-            )
-            defaults = cfg.get_names(filtered)
+        defaults = launch_analyzers(proj, langs_union, time_class) if proj else []
 
         # Keep explicit user selection on submit; only inject defaults when analyzers are absent.
         if posted_sig != new_sig and not posted_analyzers:
@@ -238,20 +229,15 @@ class _AISTPipelineArgsBaseForm(forms.Form):
             return None
 
     def get_params_payload(self, *, project: AISTProject) -> dict:
-        """
-        Common payload collector for BOTH modes.
-        SSOT validation/defaulting is PipelineArguments.normalize_params (same as API). :contentReference[oaicite:3]{index=3}
-        """
+        """Collect the launch params for both forms; PipelineArguments.normalize_params validates them and fills defaults."""
         pv: AISTProjectVersion | None = self.cleaned_data.get("project_version")
         raw = {
             "rebuild_images": self.cleaned_data.get("rebuild_images") or False,
             "log_level": self.cleaned_data.get("log_level") or "INFO",
             "selected_languages": self.cleaned_data.get("languages") or [],
             "analyzers": self.cleaned_data.get("analyzers") or [],
-            # Keep existing UI behavior: time_class_level ignored when analyzers explicitly selected :contentReference[oaicite:4]{index=4}
-            "time_class_level": None,
-            "ai_mode": self.cleaned_data.get("ai_mode") or "MANUAL",
-            # ai_filter_snapshot is parsed/validated in clean() for AUTO_DEFAULT
+            "time_class_level": self.cleaned_data.get("time_class_level") or None,
+            "ai_mode": self.cleaned_data.get("ai_mode") or AIMode.MANUAL,
             "ai_filter_snapshot": self.cleaned_data.get("ai_filter_snapshot"),
             "project_version": (pv.as_dict() if pv else None),
         }
@@ -273,17 +259,8 @@ class AISTPipelineRunForm(_AISTPipelineArgsBaseForm):
         if not project:
             return cleaned
 
-        project_version: AISTProjectVersion | None = cleaned.get("project_version")
-        if not project_version:
-            project_version = (
-                project.versions
-                .filter(version_type=VersionType.GIT_BRANCH)
-                .order_by("-updated", "-created")
-                .first()
-            )
-            if project_version is None:
-                project_version = project.versions.order_by("-updated", "-created").first()
-            cleaned["project_version"] = project_version
+        project_version: AISTProjectVersion | None = cleaned.get("project_version") or project.active_version
+        cleaned["project_version"] = project_version
 
         if project_version and has_unfinished_pipeline(project_version):
             self.add_error(
@@ -424,23 +401,14 @@ class DastPipelineRunForm(forms.Form):
         trigger = cleaned.get("trigger_project_version")
         if not project or not binding:
             return cleaned
-        if binding.project_id != project.pk:
-            self.add_error("dast_binding", "The DAST binding must belong to the selected project.")
-            return cleaned
-        if binding.requires_source_repository:
-            if not trigger:
-                self.add_error("trigger_project_version", "This field is required.")
-                return cleaned
-            if trigger.project_id != project.pk:
-                self.add_error(
-                    "trigger_project_version", "The Git source version must belong to the selected project.",
-                )
-                return cleaned
-        elif trigger:
-            self.add_error(
-                "trigger_project_version",
-                "This target has no repository requirement; clear the Git source version.",
-            )
+        errors = launch_violation_errors(
+            binding.launch_violations(project_id=project.pk, trigger_version=trigger),
+            binding_field="dast_binding",
+            trigger_field="trigger_project_version",
+        )
+        for field, message in errors.items():
+            self.add_error(field, message)
+        if errors:
             return cleaned
         try:
             arguments = PipelineArguments.for_dast(

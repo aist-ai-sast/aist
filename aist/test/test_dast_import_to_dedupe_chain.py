@@ -10,7 +10,6 @@ signature) rather than asserting against hand-built rows.
 from __future__ import annotations
 
 import json
-from io import BytesIO
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -24,7 +23,8 @@ from dojo.models import (
 )
 
 from aist.dedupe.canonical import DAST_SCAN_TYPE, finding_signature
-from aist.internal_upload import RepoParams, import_scan_file_via_default_importer
+from aist.internal_upload import RepoParams
+from aist.test.scan_import_helpers import import_report
 
 User = get_user_model()
 
@@ -74,10 +74,11 @@ class DastImportToDedupeChainTests(TestCase):
         self.user = User.objects.create_user("chain", "chain@x.test", "pass")
 
     def _import(self, title: str) -> Finding:
-        test, _findings = import_scan_file_via_default_importer(
-            engagement=self.engagement,
+        test, _findings = import_report(
+            self.engagement,
+            _report(),
+            report_name="report.json",
             scan_type=DAST_SCAN_TYPE,
-            report_file=BytesIO(_report()),
             test_title=title,
             repo_params=RepoParams(
                 repo_url="https://scm.example.test/chain.git",
@@ -86,7 +87,6 @@ class DastImportToDedupeChainTests(TestCase):
                 scm_type="generic",
                 local_path="/tmp/chain",  # noqa: S108
             ),
-            minimum_severity="Info",
             lead=self.user,
         )
         return Finding.objects.get(test=test)

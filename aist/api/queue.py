@@ -32,6 +32,55 @@ _DELETE_BLOCKED_STATES = frozenset({
 })
 
 
+class LaunchRequestQueueRowSerializer(serializers.ModelSerializer):
+
+    """One launch request as the launch dashboard lists it, with its choices' display labels."""
+
+    project_id = serializers.IntegerField(read_only=True)
+    project_name = serializers.CharField(source="project.product.name", read_only=True)
+    schedule_id = serializers.IntegerField(read_only=True, allow_null=True)
+    launch_config_id = serializers.IntegerField(read_only=True, allow_null=True)
+    origin_label = serializers.CharField(source="get_origin_display", read_only=True)
+    execution_type_label = serializers.CharField(source="get_execution_type_display", read_only=True)
+    state_label = serializers.CharField(source="get_state_display", read_only=True)
+    dispatched = serializers.BooleanField(read_only=True)
+    pipeline_id = serializers.CharField(read_only=True, allow_null=True)
+    age_seconds = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PipelineLaunchRequest
+        fields = [
+            "id",
+            "created",
+            "project_id",
+            "project_name",
+            "schedule_id",
+            "launch_config_id",
+            "origin",
+            "origin_label",
+            "execution_type",
+            "execution_type_label",
+            "state",
+            "state_label",
+            "not_before",
+            "expires_at",
+            "capacity_retry_count",
+            "failure_code",
+            "dispatched",
+            "dispatched_at",
+            "pipeline_id",
+            "age_seconds",
+        ]
+        read_only_fields = fields
+
+    def get_age_seconds(self, launch_request: PipelineLaunchRequest) -> int:
+        return max(0, int((self.context["now"] - launch_request.created).total_seconds()))
+
+
+class LaunchRequestQueueSerializer(serializers.Serializer):
+    results = LaunchRequestQueueRowSerializer(many=True)
+
+
 def _blocked_from_delete(request: PipelineLaunchRequest) -> bool:
     if request.state in _DELETE_BLOCKED_STATES:
         return True
@@ -55,7 +104,7 @@ class PipelineLaunchRequestListAPI(AISTAPIView):
             OpenApiParameter(name="only_pending", required=False, type=bool),
             OpenApiParameter(name="limit", required=False, type=int),
         ],
-        responses={200: OpenApiResponse(description="List")},
+        responses={200: LaunchRequestQueueSerializer},
     )
     def get(self, request, *args, **kwargs):
         query_serializer = self.QuerySerializer(data=request.query_params)
@@ -71,34 +120,8 @@ class PipelineLaunchRequestListAPI(AISTAPIView):
         if only_pending:
             qs = qs.filter(state=PipelineLaunchRequestState.PENDING)
 
-        results = []
-        now = timezone.now()
-        for q in qs[:limit]:
-            project_name = getattr(getattr(q.project, "product", None), "name", str(q.project_id))
-            age_seconds = max(0, int((now - q.created).total_seconds()))
-            results.append(
-                {
-                    "id": q.id,
-                    "created": q.created,
-                    "project_id": q.project_id,
-                    "project_name": project_name,
-                    "schedule_id": q.schedule_id,
-                    "launch_config_id": q.launch_config_id,
-                    "origin": q.origin,
-                    "execution_type": q.execution_type,
-                    "state": q.state,
-                    "not_before": q.not_before,
-                    "expires_at": q.expires_at,
-                    "capacity_retry_count": q.capacity_retry_count,
-                    "failure_code": q.failure_code,
-                    "dispatched": q.dispatched,
-                    "dispatched_at": q.dispatched_at,
-                    "pipeline_id": getattr(q.pipeline, "id", None),
-                    "age_seconds": age_seconds,
-                },
-            )
-
-        return Response({"results": results}, status=status.HTTP_200_OK)
+        rows = LaunchRequestQueueRowSerializer(qs[:limit], many=True, context={"now": timezone.now()})
+        return Response({"results": rows.data}, status=status.HTTP_200_OK)
 
 
 class PipelineLaunchRequestClearSerializer(serializers.Serializer):

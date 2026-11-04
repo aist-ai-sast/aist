@@ -2,21 +2,16 @@ from __future__ import annotations
 
 import io
 import json
-import tempfile
 import zipfile
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.http import Http404
 from django.urls import reverse
 
-from aist.api.files import ProjectVersionFileBlobAPI
 from aist.api.project_versions import AISTProjectVersionCreateSerializer
 from aist.models import AISTProjectScript, AISTProjectVersion, RepositoryInfo, ScmType, VersionType
 from aist.test.test_api import AISTApiBase
+from aist.utils.report_import import ReportImportError, resolve_import_version
 
 
 class ProjectVersionsAPITests(AISTApiBase):
@@ -35,29 +30,6 @@ class ProjectVersionsAPITests(AISTApiBase):
             for name, content in files.items():
                 zf.writestr(name, content)
         return buf.getvalue()
-
-    def test_local_file_rejects_parent_directory_escape(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            extraction_root = Path(tmp_dir) / "extracted"
-            extraction_root.mkdir()
-            outside_file = Path(tmp_dir) / "outside.py"
-            outside_file.write_text("secret", encoding="utf-8")
-            project_version = SimpleNamespace(ensure_extracted=lambda: extraction_root)
-
-            with self.assertRaises(Http404):
-                ProjectVersionFileBlobAPI._return_local_file(project_version, "../outside.py")
-
-    def test_local_file_rejects_symlink_escape(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            extraction_root = Path(tmp_dir) / "extracted"
-            extraction_root.mkdir()
-            outside_file = Path(tmp_dir) / "outside.py"
-            outside_file.write_text("secret", encoding="utf-8")
-            (extraction_root / "linked.py").symlink_to(outside_file)
-            project_version = SimpleNamespace(ensure_extracted=lambda: extraction_root)
-
-            with self.assertRaises(Http404):
-                ProjectVersionFileBlobAPI._return_local_file(project_version, "linked.py")
 
     def test_create_version_file_hash_and_blob(self):
         url = reverse("aist_api:project_version_create", kwargs={"project_id": self.project.id})
@@ -182,94 +154,27 @@ class ProjectVersionsAPITests(AISTApiBase):
         self.assertEqual(blob_resp.status_code, 404)
         self.assertEqual(blob_resp.json(), {"detail": "File not found in version archive"})
 
-    @patch("aist.api.files.requests.get")
-    def test_git_branch_blob_uses_last_resolved_commit(self, mock_get):
-        self.project.repository = RepositoryInfo.objects.create(
-            type=ScmType.GITHUB,
-            repo_owner="org",
-            repo_name="repo",
-            base_url="https://github.com",
-        )
+    def test_create_git_version_refuses_a_name_that_is_not_a_git_ref(self):
+        url = reverse("aist_api:project_version_create", kwargs={"project_id": self.project.id})
+        for version_type, name in (
+            (VersionType.GIT_HASH, "../../acme/payroll/main"),
+            (VersionType.GIT_BRANCH, "main/../../payroll"),
+            (VersionType.GIT_BRANCH, "feature branch"),
+        ):
+            with self.subTest(version_type=version_type, name=name):
+                resp = self.client.post(url, data={"version_type": version_type, "version": name}, format="json")
+
+                self.assertEqual(resp.status_code, 400)
+                self.assertFalse(AISTProjectVersion.objects.filter(project=self.project, version=name).exists())
+
+    def test_report_import_refuses_a_commit_that_is_not_a_git_ref(self):
+        self.project.repository = RepositoryInfo.objects.create(type=ScmType.GITHUB, repo_owner="acme", repo_name="widgets")
         self.project.save(update_fields=["repository"])
-        pv = AISTProjectVersion.objects.create(
-            project=self.project,
-            version_type=VersionType.GIT_BRANCH,
-            version="main",
-            last_resolved_commit="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        )
 
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.content = b"print('ok')\n"
-        mock_get.return_value.raise_for_status.return_value = None
+        with self.assertRaises(ReportImportError):
+            resolve_import_version(self.project, "../../acme/payroll/main")
 
-        blob_url = reverse(
-            "aist_api:project_version_file_blob",
-            kwargs={"project_version_id": pv.id, "subpath": "src/app.py"},
-        )
-        resp = self.client.get(blob_url)
-        self.assertEqual(resp.status_code, 200)
-
-        called_url = mock_get.call_args.args[0]
-        self.assertIn("/raw/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/app.py", called_url)
-
-    @patch("aist.api.files.requests.get")
-    def test_git_hash_blob_uses_version(self, mock_get):
-        self.project.repository = RepositoryInfo.objects.create(
-            type=ScmType.GITHUB,
-            repo_owner="org",
-            repo_name="repo",
-            base_url="https://github.com",
-        )
-        self.project.save(update_fields=["repository"])
-        pv = AISTProjectVersion.objects.create(
-            project=self.project,
-            version_type=VersionType.GIT_HASH,
-            version="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        )
-
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.content = b"print('ok')\n"
-        mock_get.return_value.raise_for_status.return_value = None
-
-        blob_url = reverse(
-            "aist_api:project_version_file_blob",
-            kwargs={"project_version_id": pv.id, "subpath": "src/app.py"},
-        )
-        resp = self.client.get(blob_url)
-        self.assertEqual(resp.status_code, 200)
-
-        called_url = mock_get.call_args.args[0]
-        self.assertIn("/raw/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/src/app.py", called_url)
-
-    @patch("aist.api.files.requests.get")
-    def test_git_branch_blob_without_last_resolved_uses_branch_version(self, mock_get):
-        self.project.repository = RepositoryInfo.objects.create(
-            type=ScmType.GITHUB,
-            repo_owner="org",
-            repo_name="repo",
-            base_url="https://github.com",
-        )
-        self.project.save(update_fields=["repository"])
-        pv = AISTProjectVersion.objects.create(
-            project=self.project,
-            version_type=VersionType.GIT_BRANCH,
-            version="main",
-            last_resolved_commit="",
-        )
-
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.content = b"print('ok')\n"
-        mock_get.return_value.raise_for_status.return_value = None
-
-        blob_url = reverse(
-            "aist_api:project_version_file_blob",
-            kwargs={"project_version_id": pv.id, "subpath": "src/app.py"},
-        )
-        resp = self.client.get(blob_url)
-        self.assertEqual(resp.status_code, 200)
-
-        called_url = mock_get.call_args.args[0]
-        self.assertIn("/raw/main/src/app.py", called_url)
+        self.assertFalse(AISTProjectVersion.objects.filter(project=self.project, version__contains="..").exists())
 
     def test_create_version_denies_other_product_project(self):
         url = reverse("aist_api:project_version_create", kwargs={"project_id": self.other_project.id})

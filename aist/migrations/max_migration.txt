@@ -1,1 +1,1 @@
-0058_clear_vendor_marketing_announcement
+0059_admissible_stored_launch_settings

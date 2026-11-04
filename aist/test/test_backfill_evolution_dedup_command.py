@@ -1,154 +1,206 @@
 """
-Unit tests for backfill_evolution_dedup management command.
+Tests for the backfill_evolution_dedup management command.
 
 Covers:
-  - _parse_blob_url        (pure function, no DB)
-  - _fetch_file_lines      (mocked DB + filesystem/HTTP)
-  - Command annotate phase (mocked DB)
-  - Command match phase    (mocked run_evolution_dedup)
+  - LinkBuilder.parse      source links the platform built
+  - _fetch_file_lines      the version's archive or repository, through the shared file reader
+  - annotate phase         lhash written for historical findings, equal to the import-time value
+  - match phase            (mocked run_evolution_dedup)
 """
 from __future__ import annotations
 
+import base64
+from hashlib import sha256
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
+import requests
 from django.test import SimpleTestCase
+from django.urls import reverse
+from dojo.models import DojoMeta, Finding
 
-from aist.management.commands.backfill_evolution_dedup import (
-    Command,
-    _fetch_file_lines,
-    _parse_blob_url,
-)
-from aist.models import VersionType
+from aist.dedupe.evolution import AIST_LHASH_META_NAME
+from aist.link_builder import SOURCEFILE_LINK_META_NAME, LinkBuilder, store_source_link
+from aist.management.commands.backfill_evolution_dedup import Command, _fetch_file_lines
+from aist.models import AISTPipeline, AISTProjectVersion, RepositoryInfo, ScmType
+from aist.parser_overrides import SEMGREP_SCAN_TYPE
+from aist.tasks.enrich import annotate_line_hash_batch
+from aist.test.pipeline_execution_helpers import make_test_with_finding
+from aist.test.source_version_fixtures import COMMIT, OUTSIDE_CONTENT, FakeScmHost, SourceVersionMixin
+from aist.test.test_api import AISTApiBase
+
+SOURCE = "def index():\n    return render(request)\n"
+SOURCE_FILES = {"app/views.py": SOURCE, "README.md": "# widgets\n"}
+
 
 # ---------------------------------------------------------------------------
-# _parse_blob_url
+# LinkBuilder.parse
 # ---------------------------------------------------------------------------
 
 
-class ParseBlobUrlTests(SimpleTestCase):
+class SourceLinkParseTests(SimpleTestCase):
 
-    def test_full_url(self):
-        url = "https://aist.example.com/api/projects_version/42/files/blob/src/views.py"
-        self.assertEqual(_parse_blob_url(url), (42, "src/views.py"))
+    def test_source_link_built_for_a_finding(self):
+        self.assertEqual(LinkBuilder.parse(LinkBuilder(42).build("src/views.py")), (42, "src/views.py"))
 
-    def test_nested_path(self):
-        url = "http://localhost/projects_version/7/files/blob/app/sub/dir/file.py"
-        self.assertEqual(_parse_blob_url(url), (7, "app/sub/dir/file.py"))
+    def test_nested_path_with_characters_the_link_encodes(self):
+        link = LinkBuilder(7).build("app/sub dir/naïve.py")
+        self.assertEqual(LinkBuilder.parse(link), (7, "app/sub dir/naïve.py"))
 
-    def test_query_string_stripped(self):
-        url = "https://host/projects_version/3/files/blob/main.py?foo=bar"
-        self.assertEqual(_parse_blob_url(url), (3, "main.py"))
+    def test_query_string_ignored(self):
+        link = LinkBuilder.build_project_version_file_blob(3, "main.py") + "?download=1"
+        self.assertEqual(LinkBuilder.parse(link), (3, "main.py"))
 
-    def test_unrecognized_url_returns_none(self):
-        self.assertIsNone(_parse_blob_url("https://github.com/org/repo/blob/main/src/f.py"))
+    def test_other_platform_link_returns_none(self):
+        link = "https://aist.example.com" + reverse("aist_api:test_detail", kwargs={"test_id": 3})
+        self.assertIsNone(LinkBuilder.parse(link))
+
+    def test_code_host_link_returns_none(self):
+        self.assertIsNone(LinkBuilder.parse("https://github.com/org/repo/blob/main/src/f.py"))
 
     def test_empty_string_returns_none(self):
-        self.assertIsNone(_parse_blob_url(""))
+        self.assertIsNone(LinkBuilder.parse(""))
 
 
 # ---------------------------------------------------------------------------
 # _fetch_file_lines
 # ---------------------------------------------------------------------------
 
-class FetchFileLinesTests(SimpleTestCase):
 
-    @patch("aist.management.commands.backfill_evolution_dedup.AISTProjectVersion")
-    def test_returns_none_when_version_not_found(self, mock_pv_cls):
-        mock_pv_cls.objects.select_related.return_value.get.side_effect = (
-            mock_pv_cls.DoesNotExist
+class _SourceVersionsBase(SourceVersionMixin, AISTApiBase):
+    def _github_version(self) -> AISTProjectVersion:
+        return self.repository_version(RepositoryInfo.objects.create(type=ScmType.GITHUB, repo_owner="acme", repo_name="widgets"))
+
+    def _gerrit_version(self) -> AISTProjectVersion:
+        repository, _binding = self.gerrit_repository()
+        return self.repository_version(repository)
+
+
+class FetchFileLinesTests(_SourceVersionsBase):
+
+    def test_returns_none_when_version_not_found(self):
+        self.assertIsNone(_fetch_file_lines(999_999, "src/a.py"))
+
+    def test_archive_version_reads_the_extracted_file(self):
+        pv = self.archive_version(SOURCE_FILES)
+
+        self.assertEqual(_fetch_file_lines(pv.id, "app/views.py"), ["def index():", "    return render(request)"])
+
+    def test_archive_path_leaving_the_extraction_is_not_read(self):
+        pv = self.archive_version(SOURCE_FILES)
+        root = pv.ensure_extracted()
+        outside = root.parent / "secret.py"
+        outside.write_text(OUTSIDE_CONTENT, encoding="utf-8")
+        (root / "app" / "linked.py").symlink_to(outside)
+
+        for subpath in ("../secret.py", "app/../../secret.py", str(outside), "app/linked.py"):
+            with self.subTest(subpath=subpath):
+                self.assertIsNone(_fetch_file_lines(pv.id, subpath))
+
+    def test_repository_path_leaving_the_repository_is_never_requested(self):
+        pv = self._github_version()
+
+        with FakeScmHost() as host:
+            self.assertIsNone(_fetch_file_lines(pv.id, "../../acme/payroll/main/.env"))
+        self.assertEqual(host.requests, [])
+
+    def test_public_github_repository_is_read_from_its_raw_url(self):
+        pv = self._github_version()
+
+        with FakeScmHost(body=SOURCE.encode()) as host:
+            lines = _fetch_file_lines(pv.id, "app/views.py")
+
+        self.assertEqual(lines, ["def index():", "    return render(request)"])
+        self.assertEqual(host.last.url, f"https://raw.githubusercontent.com/acme/widgets/{COMMIT}/app/views.py")
+
+    def test_gerrit_content_is_base64_decoded(self):
+        pv = self._gerrit_version()
+
+        with FakeScmHost(body=base64.b64encode(SOURCE.encode())):
+            self.assertEqual(_fetch_file_lines(pv.id, "app/views.py"), ["def index():", "    return render(request)"])
+
+    def test_unreadable_repository_file_returns_none(self):
+        pv = self._github_version()
+        outcomes = {
+            "missing": FakeScmHost(body=b"Not Found", status_code=404),
+            "host failure": FakeScmHost(body=b"oops", status_code=503),
+            "connection error": FakeScmHost(error=requests.ConnectionError("unreachable")),
+        }
+        for label, host in outcomes.items():
+            with self.subTest(label), host:
+                self.assertIsNone(_fetch_file_lines(pv.id, "app/views.py"))
+
+
+# ---------------------------------------------------------------------------
+# Command: annotate phase on stored findings
+# ---------------------------------------------------------------------------
+
+
+class AnnotatePhaseTests(_SourceVersionsBase):
+
+    """A backfilled lhash equals the value the import-time enrichment writes for the same line."""
+
+    EXPECTED_LHASH = sha256(b"return render(request)").hexdigest()[:16]
+
+    def _finding_with_source_link(self, pv: AISTProjectVersion) -> Finding:
+        test, finding = make_test_with_finding(
+            self.product, self.user, file_path="app/views.py", line=2, test_type_name=SEMGREP_SCAN_TYPE,
         )
-        mock_pv_cls.DoesNotExist = Exception
-        result = _fetch_file_lines(999, "src/a.py")
-        self.assertIsNone(result)
+        pipeline = AISTPipeline.objects.create(id=f"pipe-backfill-{pv.id}", project=self.project, project_version=pv)
+        pipeline.tests.add(test)
+        store_source_link(finding.id, LinkBuilder(pv.id).build(finding.file_path))
+        return finding
 
-    @patch("aist.management.commands.backfill_evolution_dedup.AISTProjectVersion")
-    def test_file_hash_reads_from_archive(self, mock_pv_cls):
-        pv = MagicMock()
-        pv.version_type = VersionType.FILE_HASH
-        root = MagicMock()
-        pv.ensure_extracted.return_value = root
+    @staticmethod
+    def _annotate(pv: AISTProjectVersion, *, dry_run: bool = False) -> str:
+        return _run_command(annotate=True, dry_run=dry_run, pipeline_id=f"pipe-backfill-{pv.id}")
 
-        # root / subpath .resolve() → file_path
-        file_path = MagicMock()
-        file_path.exists.return_value = True
-        file_path.is_file.return_value = True
-        file_path.read_text.return_value = "line1\nline2\nline3\n"
-        root.__truediv__ = MagicMock(return_value=MagicMock(resolve=MagicMock(return_value=file_path)))
+    def _stored_lhash(self, finding: Finding) -> str | None:
+        meta = DojoMeta.objects.filter(finding=finding, name=AIST_LHASH_META_NAME).first()
+        return meta.value if meta else None
 
-        mock_pv_cls.objects.select_related.return_value.get.return_value = pv
-        mock_pv_cls.DoesNotExist = type("DoesNotExist", (Exception,), {})
+    def test_archive_backfill_matches_import_time_fingerprint(self):
+        pv = self.archive_version(SOURCE_FILES)
+        finding = self._finding_with_source_link(pv)
+        annotate_line_hash_batch([finding.id], str(pv.ensure_extracted()))
+        import_time = self._stored_lhash(finding)
+        DojoMeta.objects.filter(finding=finding, name=AIST_LHASH_META_NAME).delete()
 
-        result = _fetch_file_lines(1, "src/a.py")
-        self.assertEqual(result, ["line1", "line2", "line3"])
+        output = self._annotate(pv)
 
-    @patch("aist.management.commands.backfill_evolution_dedup.requests")
-    @patch("aist.management.commands.backfill_evolution_dedup.AISTProjectVersion")
-    def test_git_hash_fetches_via_scm_binding(self, mock_pv_cls, mock_requests):
-        pv = MagicMock()
-        pv.version_type = VersionType.GIT_HASH
-        pv.version = "abc123"
-        pv.last_resolved_commit = ""
+        self.assertIn("annotated=1", output)
+        self.assertEqual(import_time, self.EXPECTED_LHASH)
+        self.assertEqual(self._stored_lhash(finding), self.EXPECTED_LHASH)
 
-        binding = MagicMock()
-        binding.build_raw_url.return_value = "https://raw.example.com/file.py"
-        binding.get_auth_headers.return_value = {"Authorization": "token xxx"}
-        pv.project.repository.get_binding.return_value = binding
+    def test_gerrit_backfill_hashes_the_decoded_source(self):
+        pv = self._gerrit_version()
+        finding = self._finding_with_source_link(pv)
 
-        mock_pv_cls.objects.select_related.return_value.get.return_value = pv
-        mock_pv_cls.DoesNotExist = type("DoesNotExist", (Exception,), {})
+        with FakeScmHost(body=base64.b64encode(SOURCE.encode())):
+            output = self._annotate(pv)
 
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.text = "def foo():\n    pass\n"
-        mock_requests.get.return_value = resp
+        self.assertIn("annotated=1", output)
+        self.assertEqual(self._stored_lhash(finding), self.EXPECTED_LHASH)
 
-        result = _fetch_file_lines(2, "src/b.py")
+    def test_dry_run_counts_the_finding_but_writes_nothing(self):
+        pv = self.archive_version(SOURCE_FILES)
+        finding = self._finding_with_source_link(pv)
 
-        self.assertEqual(result, ["def foo():", "    pass"])
-        mock_requests.get.assert_called_once_with(
-            "https://raw.example.com/file.py",
-            headers={"Authorization": "token xxx"},
-            timeout=10,
-            allow_redirects=True,
-        )
+        output = self._annotate(pv, dry_run=True)
 
-    @patch("aist.management.commands.backfill_evolution_dedup.requests")
-    @patch("aist.management.commands.backfill_evolution_dedup.AISTProjectVersion")
-    def test_scm_http_404_returns_none(self, mock_pv_cls, mock_requests):
-        pv = MagicMock()
-        pv.version_type = VersionType.GIT_HASH
-        pv.version = "abc"
-        pv.last_resolved_commit = ""
-        pv.project.repository.get_binding.return_value = MagicMock(
-            build_raw_url=MagicMock(return_value="https://raw/f.py"),
-            get_auth_headers=MagicMock(return_value={}),
-        )
-        mock_pv_cls.objects.select_related.return_value.get.return_value = pv
-        mock_pv_cls.DoesNotExist = type("DoesNotExist", (Exception,), {})
+        self.assertIn("annotated=1", output)
+        self.assertIsNone(self._stored_lhash(finding))
 
-        resp = MagicMock()
-        resp.status_code = 404
-        mock_requests.get.return_value = resp
+    def test_unreachable_source_is_reported_and_leaves_the_finding_unannotated(self):
+        pv = self._github_version()
+        finding = self._finding_with_source_link(pv)
 
-        self.assertIsNone(_fetch_file_lines(3, "src/c.py"))
+        with FakeScmHost(body=b"oops", status_code=503):
+            output = self._annotate(pv)
 
-    @patch("aist.management.commands.backfill_evolution_dedup.requests")
-    @patch("aist.management.commands.backfill_evolution_dedup.AISTProjectVersion")
-    def test_request_exception_returns_none(self, mock_pv_cls, mock_requests):
-        pv = MagicMock()
-        pv.version_type = VersionType.GIT_HASH
-        pv.version = "abc"
-        pv.last_resolved_commit = ""
-        pv.project.repository.get_binding.return_value = MagicMock(
-            build_raw_url=MagicMock(return_value="https://raw/f.py"),
-            get_auth_headers=MagicMock(return_value={}),
-        )
-        mock_pv_cls.objects.select_related.return_value.get.return_value = pv
-        mock_pv_cls.DoesNotExist = type("DoesNotExist", (Exception,), {})
-        mock_requests.get.side_effect = mock_requests.RequestException("timeout")
-
-        self.assertIsNone(_fetch_file_lines(4, "src/d.py"))
+        self.assertIn("skipped_fetch_error=1", output)
+        self.assertIsNone(self._stored_lhash(finding))
+        self.assertTrue(DojoMeta.objects.filter(finding=finding, name=SOURCEFILE_LINK_META_NAME).exists())
 
 
 # ---------------------------------------------------------------------------
@@ -187,93 +239,6 @@ def _mock_pipelines(test_ids_per_pipeline: dict[str, list[int]]):
 # ---------------------------------------------------------------------------
 
 class CommandAnnotatePhaseTests(SimpleTestCase):
-
-    @patch("aist.management.commands.backfill_evolution_dedup._fetch_file_lines")
-    @patch("aist.management.commands.backfill_evolution_dedup.DojoMeta")
-    @patch("aist.management.commands.backfill_evolution_dedup.Finding")
-    @patch.object(Command, "_pipelines_in_scope")
-    def test_dry_run_does_not_write(self, mock_pipelines, mock_finding, mock_dojometa, mock_fetch):
-        mock_pipelines.return_value = _mock_pipelines({"pipe-1": [10]})
-
-        # Findings with no lhash
-        mock_finding.objects.filter.return_value \
-            .exclude.return_value \
-            .only.return_value \
-            .order_by.return_value \
-            .values_list.return_value = [1]
-
-        # sourcefile_link values
-        mock_dojometa.objects.filter.return_value.values_list.side_effect = [
-            [(1, "https://host/projects_version/5/files/blob/src/a.py")],  # link_by_finding
-            [(1, 3)],   # line_by_finding
-        ]
-
-        mock_fetch.return_value = ["x", "y", "vuln_line"]
-
-        _run_command(annotate=True, dry_run=True)
-
-        mock_dojometa.objects.bulk_create.assert_not_called()
-
-    @patch("aist.management.commands.backfill_evolution_dedup._fetch_file_lines")
-    @patch("aist.management.commands.backfill_evolution_dedup.DojoMeta")
-    @patch("aist.management.commands.backfill_evolution_dedup.Finding")
-    @patch.object(Command, "_pipelines_in_scope")
-    def test_apply_writes_dojometa(self, mock_pipelines, mock_finding, mock_dojometa, mock_fetch):
-        mock_pipelines.return_value = _mock_pipelines({"pipe-1": [10]})
-
-        mock_finding.objects.filter.return_value \
-            .exclude.return_value \
-            .only.return_value \
-            .order_by.return_value \
-            .values_list.return_value = [1]
-
-        # line_by_finding: Finding.objects.filter(id__in=...).values_list("id", "line")
-        mock_finding.objects.filter.return_value.values_list.return_value = [(1, 2)]
-
-        # link_by_finding: DojoMeta.objects.filter(...).values_list("finding_id", "value")
-        mock_dojometa.objects.filter.return_value.values_list.return_value = \
-            [(1, "https://host/projects_version/5/files/blob/src/a.py")]
-
-        mock_fetch.return_value = ["line1", "vulnerable_code()"]
-
-        _run_command(annotate=True, dry_run=False)
-
-        mock_dojometa.objects.bulk_create.assert_called_once()
-        created = mock_dojometa.objects.bulk_create.call_args[0][0]
-        self.assertEqual(len(created), 1)
-        # DojoMeta is mocked — check the hash value passed to the constructor
-        h = mock_dojometa.call_args.kwargs["value"]
-        self.assertEqual(len(h), 16)
-        int(h, 16)  # valid hex
-
-    @patch("aist.management.commands.backfill_evolution_dedup._fetch_file_lines")
-    @patch("aist.management.commands.backfill_evolution_dedup.DojoMeta")
-    @patch("aist.management.commands.backfill_evolution_dedup.Finding")
-    @patch.object(Command, "_pipelines_in_scope")
-    def test_fetch_error_reported_in_output(
-        self, mock_pipelines, mock_finding, mock_dojometa, mock_fetch,
-    ):
-        mock_pipelines.return_value = _mock_pipelines({"pipe-1": [10]})
-
-        mock_finding.objects.filter.return_value \
-            .exclude.return_value \
-            .only.return_value \
-            .order_by.return_value \
-            .values_list.return_value = [1]
-
-        # line_by_finding: Finding.objects.filter(id__in=...).values_list("id", "line")
-        mock_finding.objects.filter.return_value.values_list.return_value = [(1, 1)]
-
-        # link_by_finding: DojoMeta.objects.filter(...).values_list("finding_id", "value")
-        mock_dojometa.objects.filter.return_value.values_list.return_value = \
-            [(1, "https://host/projects_version/5/files/blob/src/a.py")]
-
-        mock_fetch.return_value = None  # fetch failed
-
-        output = _run_command(annotate=True)
-
-        self.assertIn("skipped_fetch_error=1", output)
-        mock_dojometa.objects.bulk_create.assert_not_called()
 
     @patch.object(Command, "_pipelines_in_scope")
     def test_no_tests_in_scope_reports_skip(self, mock_pipelines):

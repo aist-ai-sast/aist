@@ -97,11 +97,11 @@ class ProjectProfileAgentAnalyzersTests(AISTApiBase):
     # ------------------------------------------------------------------ #
 
     def test_validate_dict_rejects_non_dict_agent_analyzers(self):
-        with self.assertRaises(TypeError):
+        with self.assertRaises(ValueError):
             ProjectProfile.validate_dict({"agent_analyzers": []})
 
     def test_validate_dict_rejects_non_dict_full_security(self):
-        with self.assertRaises(TypeError):
+        with self.assertRaises(ValueError):
             ProjectProfile.validate_dict({"agent_analyzers": {"full_security": []}})
 
     def test_validate_dict_rejects_zero_or_negative(self):

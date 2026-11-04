@@ -2,7 +2,7 @@ import json
 from operator import itemgetter
 
 from django.contrib.auth.decorators import login_required
-from django.db.models import Case, IntegerField, Q, Value, When
+from django.db.models import Q
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.text import slugify
@@ -10,7 +10,7 @@ from django.views.decorators.http import require_GET, require_POST
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Test
 
-from aist.ai_filter import get_ai_filter_reference, validate_and_normalize_filter
+from aist.ai_filter import get_ai_filter_reference, severity_ordering, validate_and_normalize_filter
 from aist.api.ai import delete_ai_response_for_pipeline, send_request_to_ai_for_pipeline
 from aist.models import AISTPipeline
 from aist.queries import (
@@ -19,23 +19,6 @@ from aist.queries import (
     get_authorized_findings,
     require_product_permission,
 )
-
-
-def _severity_rank_case():
-    """
-    Return a Django Case/When expression that ranks severities for ordering.
-    Critical(0) < High(1) < Medium(2) < Low(3) < Info(4)
-    """
-    return Case(
-        When(severity__iexact="Critical", then=Value(0)),
-        When(severity__iexact="High", then=Value(1)),
-        When(severity__iexact="Medium", then=Value(2)),
-        When(severity__iexact="Low", then=Value(3)),
-        When(severity__iexact="Informational", then=Value(4)),
-        When(severity__iexact="Info", then=Value(4)),
-        default=Value(9),
-        output_field=IntegerField(),
-    )
 
 
 @login_required
@@ -135,7 +118,7 @@ def search_findings_json(request):
         qs = qs.filter(Q(title__icontains=query) | Q(description__icontains=query) | Q(file_path__icontains=query))
 
     # ordering
-    qs = qs.annotate(sev_rank=_severity_rank_case()).order_by("sev_rank", "-date", "-id")
+    qs = qs.order_by(severity_ordering(most_severe_first=True), "-date", "-id")
 
     # hard cap
     try:

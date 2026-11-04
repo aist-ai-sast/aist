@@ -58,7 +58,7 @@ def project_version_create(request: HttpRequest, project_id: int) -> HttpRespons
 @require_POST
 def default_analyzers(request):
     project_id = request.POST.get("project")
-    time_class = request.POST.get("time_class_level") or "slow"
+    time_class = request.POST.get("time_class_level")
     langs = request.POST.getlist("languages") or request.POST.getlist("languages[]")
 
     proj = (
@@ -71,15 +71,14 @@ def default_analyzers(request):
     proj_langs = (proj.supported_languages if proj else []) or []
     langs_union = list(set((langs or []) + proj_langs))
 
-    payload, error = default_analyzers_payload(
-        project=proj,
-        project_id=project_id,
-        langs=langs_union,
-        time_class=time_class,
+    return JsonResponse(
+        default_analyzers_payload(
+            project=proj,
+            project_id=project_id,
+            langs=langs_union,
+            time_class=time_class,
+        ),
     )
-    if error:
-        return HttpResponseBadRequest(error)
-    return JsonResponse(payload)
 
 
 @csrf_exempt

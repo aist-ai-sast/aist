@@ -47,7 +47,7 @@ class GitlabBindingTests(TestCase):
         url = self.binding.build_clone_url(self.repo)
         self.assertEqual(url, "http://oauth2:token@gitlab.internal:8929/group/repo.git")
 
-    @patch("aist.models.gitlab.Gitlab")
+    @patch("aist.models.scm.gitlab.Gitlab")
     def test_get_project_info_returns_attributes(self, mock_gitlab):
         mock_project = Mock()
         mock_project.attributes = {"default_branch": "main"}
@@ -57,7 +57,7 @@ class GitlabBindingTests(TestCase):
 
         self.assertEqual(info, {"default_branch": "main"})
 
-    @patch("aist.models.gitlab.Gitlab")
+    @patch("aist.models.scm.gitlab.Gitlab")
     def test_get_project_info_handles_not_found(self, mock_gitlab):
         mock_gitlab.return_value.projects.get.side_effect = gitlab.exceptions.GitlabGetError(
             error_message="Not Found",
@@ -69,7 +69,7 @@ class GitlabBindingTests(TestCase):
 
         self.assertIsNone(info)
 
-    @patch("aist.models.gitlab.Gitlab")
+    @patch("aist.models.scm.gitlab.Gitlab")
     def test_get_project_info_with_proxy_url_sets_session_proxies(self, mock_gitlab):
         """When proxy_url is given, a requests.Session with proxies must be passed to Gitlab()."""
         mock_project = Mock()
@@ -85,7 +85,7 @@ class GitlabBindingTests(TestCase):
         self.assertEqual(session.proxies.get("https"), proxy)
         self.assertEqual(session.proxies.get("http"), proxy)
 
-    @patch("aist.models.gitlab.Gitlab")
+    @patch("aist.models.scm.gitlab.Gitlab")
     def test_get_project_info_without_proxy_url_has_no_session(self, mock_gitlab):
         """When proxy_url is None (default), no session kwarg is passed."""
         mock_project = Mock()

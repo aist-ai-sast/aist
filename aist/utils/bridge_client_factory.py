@@ -2,14 +2,14 @@
 Construct a ``BridgeClient`` instance from Django settings.
 
 Keeps Django settings access in ONE place: AIST callers
-(``aist/tasks/ai.py``, ``aist/tasks/pipeline.py``) call
+(``aist/tasks/ai.py``, ``aist/tasks/sast_execution.py``) call
 ``build_bridge_client_from_settings()`` and pass the result to
 ``pipeline.bridge_client``-using code, which itself is Django-agnostic.
 
 Architectural invariant I4 — this module is a thin settings-only
 constructor. It does NOT resolve integrations, touch the DB, or know
 anything about specific agents. The caller resolves any per-pipeline
-credentials (e.g. via ``aist.integrations.claude.claude_auth_env``) and
+credentials (e.g. via ``aist.integrations.claude.claude_subprocess_env``) and
 hands the resulting generic env dict to this factory.
 """
 from __future__ import annotations

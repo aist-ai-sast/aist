@@ -1,0 +1,337 @@
+# Which change goes to which reviewer.
+#
+# This file is the one authority for path-to-reviewer routing. CLAUDE.md, AGENTS.md, the agents'
+# descriptions and the PostToolUse hook point here rather than keeping their own lists.
+#
+# Matching is FIRST MATCH WINS, top to bottom, so a specific rule sits above the directory rule that
+# would otherwise swallow it. Every pattern is an `fnmatch` pattern, in which `*` also matches `/`, so
+# `dir/**` is everything under `dir/` and `dir/*.ts` includes nested files.
+#
+# The schema `route.py` validates this file against is SCOPE_SCHEMA there; a list written as a scalar is
+# rejected rather than read one character at a time.
+#
+# Coverage is arithmetic: every file in `git ls-files` matches exactly one rule. A tracked file matching no
+# rule is a defect — a new component would otherwise enter the system unreviewed.
+# `python3 .sdlc/route.py --check` holds that and `required_reviewers`; run it after adding a file or a part.
+
+version: 1
+
+# Routings that are invariants rather than per-part choices, so a new part cannot be added without them.
+# Each inner list is satisfied by any one of its reviewers. A part may route to more than its tags require,
+# never to less.
+required_reviewers:
+  tenant-isolation:
+    - [api]
+    - [security]
+  sensitive:
+    - [security, ui-security]
+
+# What each criticality tag means. Every tag below must be one of these.
+criticality_vocabulary:
+  tenant-isolation: decides or serves which organization's data a caller reaches
+  sensitive: handles credentials, subprocesses, containers, outbound requests, files or user-facing output
+  data-integrity: defines or migrates persisted data, or the deduplication that keys it
+  product: a user-visible outcome changes when this does
+  support: tooling, documentation or doctrine; no product outcome rides on it
+
+# Reviewer name -> the agent that performs it. `.sdlc/review-process.md` names each rubric.
+reviewers:
+  api: aist-api-reviewer
+  security: aist-security-checker
+  ui-security: aist-ui-security-checker
+  migration: aist-migration-validator
+  code: aist-code-reviewer
+  reuse: aist-reuse-reviewer
+  structure: aist-structure-reviewer
+  test-value: aist-test-value-reviewer
+  comment: aist-comment-reviewer
+  regression: aist-regression-guard
+  architecture: aist-architecture-reviewer
+  docs: aist-architecture-docs-maintainer
+
+rules:
+
+  # ---- the review layer itself
+
+  - part: review-output
+    criticality: [support]
+    reviewers: []
+    paths:
+      - .sdlc/work/**
+    note: >
+      What the review process produces for one uncommitted diff. Git-ignored; routing it would make writing a
+      review record change the diff it covers.
+
+  - part: vendored-reviewer-bases
+    criticality: [support]
+    reviewers: []
+    paths:
+      - .sdlc/reviewers/base/**
+    note: >
+      Third-party rubrics copied verbatim with their source, commit and licence. A reviewer asked to improve an
+      unmodified upstream file will find something, and acting on it silently forks the base. Change one by
+      re-copying from its source.
+
+  - part: review-layer-code
+    criticality: [support]
+    reviewers: [code, reuse, structure, test-value, comment, security]
+    paths:
+      - .sdlc/*.py
+      - .claude/hooks/**
+    note: >
+      The router and the hook that reads it. security reviews them because a router that drops a path sends
+      a change to fewer reviewers than it needs, silently.
+
+  - part: agent-harness-config
+    criticality: [sensitive]
+    reviewers: [security]
+    paths:
+      - .claude/settings.json
+      - .claude/settings.local.json
+    note: >
+      The commands the harness runs as hooks on every tool call, and the permissions an agent session holds
+      without asking. A change here changes what an agent may execute on a developer's machine.
+
+  - part: review-doctrine
+    criticality: [support]
+    reviewers: []
+    paths:
+      - .sdlc/**
+      - .claude/agents/**
+      - AGENTS.md
+      - CLAUDE.md
+    note: >
+      Rules, rubrics and agent definitions. No reviewer here judges prose contracts; a change to them goes to
+      the operator's own diff review, as `.sdlc/review-process.md` "Independent reading" states.
+
+  # ---- skills the product executes: the SAST pipeline and AIST tasks run these as analyzers and triage
+
+  - part: product-skills
+    criticality: [product, sensitive]
+    reviewers: [security, regression]
+    paths:
+      - .codex/skills/aist-diff-security-review/**
+      - .codex/skills/aist-full-security-review/**
+      - .codex/skills/aist-intake-review/**
+      - .codex/skills/aist-intake-diff-review/**
+      - .codex/skills/aist-finding-triage/**
+      - .codex/skills/aist-init-script-generator/**
+      - .codex/skills/aist-project-profile-analyzer/**
+      - aist/ai_triage_system_prompt.md
+      - aist/integrations/*.md
+    note: >
+      The product image copies `.codex/` and runs these with tools against customer code, so a change alters
+      what an analyzer reports and what an agent may do. Development-only skills route to `dev-skills`.
+
+  - part: dev-skills
+    criticality: [support]
+    reviewers: []
+    paths:
+      - .codex/**
+      - .claude/skills/**
+    note: Skills a developer session runs. Prose doctrine, like `review-doctrine`.
+
+  # ---- tests, ahead of the code they sit beside
+
+  - part: backend-tests
+    criticality: [support]
+    reviewers: [test-value, code, reuse, comment]
+    paths:
+      - aist/test/**
+      - aist/fixtures/**
+    note: >
+      Judged for whether each test is evidence. Lint gates live here too (`aist/test/test_*_lint.py`); they are
+      checks, not product tests, as `.sdlc/coding-rules.md` CR6 states.
+
+  - part: ui-tests
+    criticality: [support]
+    reviewers: [test-value, code, reuse, comment]
+    paths:
+      - client-ui/e2e/**
+      - client-ui/src/*.test.ts
+      - client-ui/src/*.test.tsx
+
+  # ---- tenant boundary
+
+  - part: tenant-access
+    criticality: [tenant-isolation, product]
+    reviewers: [api, security, code, reuse, structure, comment, regression, architecture]
+    paths:
+      - aist/api/**
+      - aist/authz/**
+      - aist/members/**
+      - aist/auth_backends.py
+      - aist/authentication.py
+      - aist/queries.py
+      - aist/roles.py
+      - aist/api_urls.py
+    note: >
+      Every endpoint and every access decision. CLAUDE.md additionally asks for `/aist-security-check` on a
+      change to authentication or authorization logic.
+
+  # ---- persisted data
+
+  - part: data-model
+    criticality: [data-integrity, tenant-isolation, product]
+    reviewers: [migration, api, security, code, reuse, structure, comment, regression, architecture]
+    reuse_excludes:
+      - aist/migrations/**
+    paths:
+      - aist/models/**
+      - aist/migrations/**
+    note: >
+      Models carry the organization foreign keys that tenant scoping filters on, so a model change is a tenant
+      change as well as a data change.
+
+  - part: deduplication
+    criticality: [data-integrity, product]
+    reviewers: [code, reuse, structure, comment, regression]
+    paths:
+      - aist/dedupe/**
+      - aist/parser_overrides.py
+
+  # ---- execution, integrations and background work
+
+  - part: execution-and-integrations
+    criticality: [sensitive, product]
+    reviewers: [security, code, reuse, structure, comment, regression, architecture]
+    paths:
+      - aist/tasks/**
+      - aist/execution/**
+      - aist/integrations/**
+      - aist/services/**
+      - aist/work_items/**
+      - aist/internal_upload.py
+      - aist/github_events.py
+      - aist/scm_import.py
+      - aist/launch_data.py
+      - aist/pipeline_args.py
+      - aist/default_script.py
+      - aist/celery_signals.py
+      - aist/logging_transport.py
+      - aist/notifications.py
+    note: Outbound requests, credentials, subprocesses, containers and task results all live here.
+
+  # ---- superuser-only Django pages (/aist-admin/)
+
+  - part: django-admin-ui
+    criticality: [sensitive, product]
+    reviewers: [security, code, reuse, structure, comment, regression]
+    reuse_excludes:
+      - aist/static/**
+      - aist/tailwind.css
+    paths:
+      - aist/templates/**
+      - aist/views/**
+      - aist/static/**
+      - aist/templatetags/**
+      - aist/forms.py
+      - aist/admin.py
+      - aist/tailwind.css
+      - aist/vite.py
+
+  - part: aist-core
+    criticality: [sensitive, product]
+    reviewers: [security, code, reuse, structure, comment, regression, architecture]
+    paths:
+      - aist/**
+    note: Every other module of the platform package.
+
+  - part: site-settings
+    criticality: [sensitive, product]
+    reviewers: [security, code, comment, regression]
+    paths:
+      - aist_site/**
+      - manage.py
+      - wsgi.py
+    note: Settings, middleware and URL roots — what every request passes through.
+
+  # ---- client-ui
+
+  - part: ui-security-surface
+    criticality: [sensitive, product]
+    reviewers: [ui-security, code, reuse, structure, comment, regression]
+    paths:
+      - client-ui/src/pages/**
+      - client-ui/src/components/**
+      - client-ui/src/lib/**
+
+  - part: ui-other
+    criticality: [product]
+    reviewers: [code, reuse, structure, comment]
+    reuse_excludes:
+      - client-ui/package-lock.json
+    paths:
+      - client-ui/**
+
+  # ---- documentation
+
+  - part: security-docs
+    criticality: [support]
+    reviewers: [docs, security]
+    paths:
+      - docs/security/**
+      - SECURITY.md
+    note: >
+      These pages publish security properties as fact, and an operator sizes their own controls on them, so a
+      property the implementation does not support is a security finding as well as a documentation one.
+
+  - part: docs
+    criticality: [support]
+    reviewers: [docs]
+    paths:
+      - docs/**
+      - README.md
+
+  # ---- build, deploy and submodules
+
+  - part: build-and-deploy
+    criticality: [sensitive]
+    reviewers: [security, code]
+    paths:
+      - docker/**
+      - Dockerfile.*
+      - docker-compose*.yml
+      - infra/**
+      - .github/**
+      - .dockerignore
+      - .gitmodules
+      - requirements*.txt
+      - ct.yaml
+      - app.json
+    note: Images, compose files, CI and dependency pins; privileged mode and host networking are judged here.
+
+  - part: submodules
+    criticality: [sensitive, product]
+    reviewers: [security, regression, architecture]
+    paths:
+      - sast-combinator
+      - sast-combinator/**
+      - vendor/defectdojo
+      - vendor/defectdojo/**
+    note: >
+      A submodule pointer is one line in this repository's diff; `.sdlc/review-process.md` step 1 has the
+      dispatcher add the submodule's own diff, which is what the reviewers read. The `/**` patterns claim the
+      files inside, which this repository does not track, so an edit there still names its reviewers. This
+      part does not route to `reuse`, which keeps `vendor/` out of the read set.
+
+  - part: tooling
+    criticality: [support]
+    reviewers: [code]
+    paths:
+      - scripts/**
+      - tools/**
+      - run-*.zsh
+      - ruff.toml
+      - .markdownlint-cli2.yaml
+      - .gitignore
+      - .gitattributes
+
+  - part: repository-assets
+    criticality: [support]
+    reviewers: []
+    paths:
+      - logo.jpg
+      - unit_test_result.txt
+      - test_ai_response.json
+    note: Static files with no behaviour.

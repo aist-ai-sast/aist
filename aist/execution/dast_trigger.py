@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from aist.models import VersionType
+from aist.models.projects import is_valid_git_ref
 
 if TYPE_CHECKING:
     from aist.models import AISTProjectVersion
@@ -41,7 +42,7 @@ class DastTrigger:
             raise DastTriggerError(_ERR_REPOSITORY)
         ref = project_version.requested_ref()
         if project_version.version_type == VersionType.GIT_BRANCH:
-            if not _valid_git_branch(ref):
+            if not is_valid_git_ref(ref):
                 raise DastTriggerError(_ERR_BRANCH)
         elif project_version.version_type == VersionType.GIT_HASH:
             if _FULL_GIT_HASH.fullmatch(ref) is None:
@@ -61,16 +62,3 @@ class DastTrigger:
             "type": self.type,
             "ref": self.ref,
         }
-
-
-def _valid_git_branch(value: str) -> bool:
-    if not value or len(value) > 255:
-        return False
-    if value.startswith(("-", ".", "/")) or value.endswith((".", "/", ".lock")):
-        return False
-    if ".." in value or "@{" in value or "//" in value:
-        return False
-    return not any(
-        character.isspace() or ord(character) < 32 or character in "~^:?*[\\"
-        for character in value
-    )

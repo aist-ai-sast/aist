@@ -6,11 +6,12 @@ from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.urls import reverse
 from dojo.authorization.roles_permissions import Roles
-from dojo.models import Product_Type_Member, Role
+from dojo.models import Product_Type, Product_Type_Member, Role
 from rest_framework.test import APIClient
 
-from aist.models import OrgIntegration, OrgIntegrationType, ProjectIntegrationOverride
+from aist.models import Organization, OrgIntegration, OrgIntegrationType, ProjectIntegrationOverride
 from aist.test.test_api import AISTApiBase
+from aist.test.vpn_fixtures import refused_vpn_routes
 
 
 def _dast_config(**overrides):
@@ -803,28 +804,46 @@ class OrgIntegrationVPNLinkTests(AISTApiBase):
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn("vpn_integration", resp.data)
 
-    def test_cross_org_vpn_rejected(self):
-        """VPN integration from a different org must be rejected."""
-        from dojo.models import Product_Type  # noqa: PLC0415
-
-        from aist.models import Organization  # noqa: PLC0415
-
+    def test_a_route_that_may_not_carry_this_organization_traffic_is_refused(self):
         other_org = Organization.objects.create(
             name="Other Org",
             product_type=Product_Type.objects.create(name="Other PT"),
         )
-        foreign_vpn = OrgIntegration.objects.create(
-            organization=other_org,
-            integration_type="VPN",
-            name="Foreign VPN",
+        for case, route in refused_vpn_routes(self.org, other_org).items():
+            with self.subTest(case=case):
+                resp = self.client.post(self.list_url, {
+                    "integration_type": "GITLAB",
+                    "name": f"GitLab via {case}",
+                    "config": {},
+                    "vpn_integration": route.pk,
+                }, format="json")
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn("vpn_integration", resp.data)
+                self.assertFalse(OrgIntegration.objects.filter(name=f"GitLab via {case}").exists())
+
+    def test_a_foreign_vpn_is_indistinguishable_from_a_missing_one(self):
+        other_org = Organization.objects.create(
+            name="Other Org",
+            product_type=Product_Type.objects.create(name="Other PT"),
         )
-        resp = self.client.post(self.list_url, {
-            "integration_type": "GITLAB",
-            "name": "Smuggled GitLab",
-            "config": {},
-            "vpn_integration": foreign_vpn.pk,
-        }, format="json")
-        self.assertEqual(resp.status_code, 400)
+        foreign_vpn = OrgIntegration.objects.create(organization=other_org, integration_type="VPN", name="Foreign VPN")
+        missing_pk = OrgIntegration.objects.order_by("-pk").first().pk + 1000
+
+        responses = [
+            self.client.post(self.list_url, {
+                "integration_type": "GITLAB",
+                "name": "Probe GitLab",
+                "config": {},
+                "vpn_integration": pk,
+            }, format="json")
+            for pk in (foreign_vpn.pk, missing_pk)
+        ]
+
+        self.assertEqual([r.status_code for r in responses], [400, 400])
+        self.assertEqual(
+            str(responses[0].data["vpn_integration"][0]).replace(str(foreign_vpn.pk), "<pk>"),
+            str(responses[1].data["vpn_integration"][0]).replace(str(missing_pk), "<pk>"),
+        )
 
 
 class VpnProjectOverrideTests(AISTApiBase):
@@ -991,17 +1010,6 @@ class VpnOrgIsolationAPITests(AISTApiBase):
         self.list_url = reverse("aist_api:org_integration_list_create", kwargs={"org_id": self.org.pk})
         self.gitlab_url = reverse("aist_api:org_integration_detail",
                                   kwargs={"integration_id": self.gitlab.pk})
-
-    def test_cross_org_vpn_link_rejected_on_create(self):
-        """Cannot link a VPN integration from another org at creation time."""
-        resp = self.client.post(self.list_url, {
-            "integration_type": "GITLAB",
-            "name": "Smuggled GitLab",
-            "config": {},
-            "vpn_integration": self.cross_vpn.pk,
-        }, format="json")
-        self.assertEqual(resp.status_code, 400)
-        self.assertFalse(OrgIntegration.objects.filter(name="Smuggled GitLab").exists())
 
     def test_cross_org_vpn_link_rejected_on_patch(self):
         """Cannot link a VPN integration from another org via PATCH."""

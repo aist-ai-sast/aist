@@ -6,11 +6,20 @@ from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlsplit, urlunsplit
 
 from jsonschema import Draft202012Validator, SchemaError
 from jsonschema import ValidationError as JsonSchemaValidationError
+
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
+
+_import_sast_pipeline_package()
+
+from pipeline.dast.contracts import CONTRACT_MAJOR  # type: ignore[import-not-found]  # noqa: E402
+
+if TYPE_CHECKING:
+    from aist.models import DastProjectBinding
 
 
 class DastConfigError(ValueError):
@@ -208,8 +217,8 @@ class DastIntegrationConfig:
         if isinstance(contract_major, bool) or not isinstance(contract_major, int):
             msg = "contract_major must be an integer."
             raise DastConfigError(msg)
-        if contract_major != 2:
-            msg = "Only DAST contract_major 2 is supported."
+        if contract_major != CONTRACT_MAJOR:
+            msg = f"Only DAST contract_major {CONTRACT_MAJOR} is supported."
             raise DastConfigError(msg)
         integrator_public_id = cls._required_string(snapshot["integrator_public_id"], "integrator_public_id")
         server_fingerprint = cls._required_string(snapshot["server_fingerprint"], "server_fingerprint")
@@ -357,6 +366,11 @@ class DastTargetSnapshot:
             autonomous_ready=autonomous_ready,
         )
 
+    @property
+    def revision_identity(self) -> tuple[str, str, str, str]:
+        """The provider's identity of this capability revision; equal identities describe the same capability."""
+        return (self.provider_id, self.contract_revision, self.capability_revision, self.schema_digest)
+
     @classmethod
     def _bounded_string(cls, value: Any, field: str, limit: int) -> str:
         text = DastIntegrationConfig._required_string(value, field)
@@ -459,3 +473,44 @@ class DastBindingParameters:
 
     def to_snapshot(self) -> dict[str, Any]:
         return deepcopy(self.values)
+
+
+@dataclass(frozen=True, slots=True)
+class DastExecutionSnapshot:
+
+    """
+    The binding facts a DAST pipeline was planned against that its launch request does not freeze.
+
+    The binding, parameters and capability revision are the launch request's own snapshots.
+    """
+
+    integration_id: int
+    source_repo_key: str
+
+    @classmethod
+    def from_snapshot(cls, snapshot: Any) -> DastExecutionSnapshot:
+        if not isinstance(snapshot, Mapping) or not {"integration_id", "source_repo_key"} <= set(snapshot):
+            msg = "DAST execution snapshot does not match its fields."
+            raise DastConfigError(msg)
+        integration_id = snapshot["integration_id"]
+        source_repo_key = snapshot["source_repo_key"]
+        if isinstance(integration_id, bool) or not isinstance(integration_id, int):
+            msg = "DAST execution snapshot integration_id must be an integer."
+            raise DastConfigError(msg)
+        if not isinstance(source_repo_key, str):
+            msg = "DAST execution snapshot source_repo_key must be a string."
+            raise DastConfigError(msg)
+        return cls(integration_id=integration_id, source_repo_key=source_repo_key)
+
+    def to_snapshot(self) -> dict[str, Any]:
+        return {"integration_id": self.integration_id, "source_repo_key": self.source_repo_key}
+
+    def verify_against(self, binding: DastProjectBinding, *, capability: DastTargetSnapshot) -> None:
+        """Raise DastConfigError unless ``binding`` and its target still are what ``capability`` was planned on."""
+        if (
+            self.integration_id != binding.target.integration_id
+            or self.source_repo_key != binding.source_repo_key
+            or capability.revision_identity != binding.target.get_snapshot().revision_identity
+        ):
+            msg = "DAST binding or capability changed since the pipeline was planned."
+            raise DastConfigError(msg)

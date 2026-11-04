@@ -66,11 +66,23 @@ Completed analyzers and standalone providers return a report through the
 platform import boundary. AIST validates the report, associates imported tests
 with the pipeline, and associates findings with the selected project version.
 
+A SAST run imports each analyzer's report on its own. A report the platform
+cannot import adds no findings, but the remaining reports are still imported;
+the run records which analyzer's report failed and finishes with warnings. A
+report that was never written is judged by the analyzer outcome the execution
+runtime reports, not by the import.
+
 A report produced outside AIST can also be imported manually. Confirmation
 creates an import pipeline and skips analyzer execution, then joins the same
 validation, import, and finding-processing lifecycle. The import workflow must
 derive or validate the source version required by the selected format rather
 than accepting an unrelated revision.
+
+A SAST run applies the project profile's path and severity exclusions while its
+reports are imported. A finding whose severity the profile excludes, or whose
+path within the scanned source contains an excluded path pattern, is never
+stored, so it does not reach deduplication, enrichment, or triage. Manually
+imported reports and DAST results are imported without profile exclusions.
 
 A report can also describe the run that produced it, rather than only its
 findings. AIST keeps that description with the pipeline and presents it there, so
@@ -84,13 +96,15 @@ description is treated.
 An empty valid result finishes without creating findings. Otherwise AIST waits
 for import and deduplication to complete, enriches the findings with available
 source context, identifies regressions, and advances the pipeline to human or
-AI-assisted review.
+AI-assisted review. Deduplication of a pipeline's import always runs in the
+background, whatever deduplication preference a user has set, because AIST
+watches it to completion itself.
 
 Findings that describe a running system take the shorter tail: after
 deduplication the pipeline finishes. Source-context enrichment rewrites file
-paths, drops findings excluded by a project's path or severity profile, and
-prepares code for triage — all of it about a source tree a dynamic result does
-not have, and AIST cannot meaningfully triage a finding it has no code for.
+paths relative to the scanned source, attaches source links, and prepares code
+for triage — all of it about a source tree a dynamic result does not have, and
+AIST cannot meaningfully triage a finding it has no code for.
 Such findings are imported, deduplicated and reviewable by a human, but they are
 not enriched and not sent for AI triage.
 

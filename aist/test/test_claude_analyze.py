@@ -63,7 +63,7 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
     @patch("aist.tasks.claude._send_to_bridge")
     @patch("aist.tasks.claude.subprocess")
     @patch("aist.tasks.claude.vpn_sidecar_context", _fake_vpn_ctx)
-    @patch("aist.tasks.claude.resolve_integration", return_value=None)
+    @patch("aist.tasks.claude.resolve_source_vpn", return_value=None)
     def test_clones_requested_branch_and_binds_generator_to_it(self, mock_resolve, mock_subprocess, mock_bridge):
         mock_bridge.return_value = True
         AISTProjectVersion.objects.create(
@@ -99,7 +99,7 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
     @patch("aist.tasks.claude._send_to_bridge")
     @patch("aist.tasks.claude.subprocess.run", side_effect=Exception("clone failed"))
     @patch("aist.tasks.claude.vpn_sidecar_context", _fake_vpn_ctx)
-    @patch("aist.tasks.claude.resolve_integration", return_value=None)
+    @patch("aist.tasks.claude.resolve_source_vpn", return_value=None)
     def test_clone_failure_does_not_call_bridge(self, mock_resolve, mock_run, mock_bridge):
         analyze_project_after_import(self.project.id, self.main.id)
 
@@ -108,7 +108,7 @@ class AnalyzeProjectAfterImportTests(AISTApiBase):
     @patch("aist.tasks.claude._send_to_bridge")
     @patch("aist.tasks.claude.subprocess")
     @patch("aist.tasks.claude.vpn_sidecar_context", _fake_vpn_ctx)
-    @patch("aist.tasks.claude.resolve_integration", return_value=None)
+    @patch("aist.tasks.claude.resolve_source_vpn", return_value=None)
     def test_skipped_when_no_active_claude_integration(self, mock_resolve, mock_subprocess, mock_bridge):
         # Deactivate the integration set up by setUp() — auto-analyze
         # must short-circuit BEFORE cloning so we don't waste git/disk

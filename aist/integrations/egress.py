@@ -36,10 +36,13 @@ from typing import TYPE_CHECKING
 
 from django.conf import settings
 
+from aist.integrations.resolver import ResolvedIntegration, resolve_integration
+from aist.models import OrgIntegrationType
+from aist.models.organizations import resolve_bound_vpn
 from aist.utils import vpn
 
 if TYPE_CHECKING:
-    from aist.models import AISTProjectVersion, OrgIntegration
+    from aist.models import AISTProject, AISTProjectVersion, OrgIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -101,42 +104,28 @@ def _allowed_ips() -> list[str]:
 
 # --- VPN resolution ----------------------------------------------------------
 
-def vpn_integration_for_project_version(pv: AISTProjectVersion) -> OrgIntegration | None:
+def resolve_source_vpn(project: AISTProject) -> ResolvedIntegration | None:
     """
-    The active VPN integration a project version's source must be fetched
-    through, or ``None`` when no VPN is needed (public SCM).
+    The VPN every reach into ``project``'s repository goes through, or ``None`` when none is needed.
 
-    Primary wiring is the VPN attached to the SCM integration that owns the repo
-    (same one used by validate / list flows via ``scoped_session``).  Falls back
-    to the project/org-level VPN default (``resolve_integration``), which also
-    honours ``ProjectIntegrationOverride``.
+    The VPN bound to the SCM integration that owns the repository comes first; a binding that may
+    not route this project's traffic is ignored. Otherwise the project/org VPN default applies,
+    honouring ``ProjectIntegrationOverride``.
     """
-    from aist.integrations.resolver import resolve_integration  # noqa: PLC0415 avoid circular import
-    from aist.models import OrgIntegrationType  # noqa: PLC0415
-
-    repo = getattr(pv.project, "repository", None)
+    repo = getattr(project, "repository", None)
     binding = repo.get_binding() if repo is not None else None
     scm_integration = getattr(binding, "org_integration", None) if binding is not None else None
-    vpn_integration = getattr(scm_integration, "vpn_integration", None) if scm_integration is not None else None
-    if vpn_integration is not None and getattr(vpn_integration, "is_active", False):
-        # SECURITY: defense-in-depth cross-org guard (mirrors resolve_integration).
-        # A corrupt/hand-inserted SCM binding must never route a project's fetch
-        # through another org's VPN credentials.  On mismatch, ignore this wiring
-        # and fall through to the org-scoped resolver below.
-        proj_org = getattr(pv.project, "organization_id", None)
-        vpn_org = getattr(vpn_integration, "organization_id", None)
-        if proj_org is not None and vpn_org is not None and vpn_org != proj_org:
-            logger.error(
-                "egress: cross-org VPN binding ignored — project_version=%s vpn_org=%s project_org=%s",
-                getattr(pv, "pk", None), vpn_org, proj_org,
-            )
-        else:
-            return vpn_integration
+    bound = resolve_bound_vpn(
+        getattr(scm_integration, "vpn_integration", None),
+        organization_id=project.organization_id,
+    )
+    return bound or resolve_integration(project, OrgIntegrationType.VPN)
 
-    resolved = resolve_integration(pv.project, OrgIntegrationType.VPN)
-    if resolved is not None and getattr(resolved.integration, "is_active", False):
-        return resolved.integration
-    return None
+
+def vpn_integration_for_project_version(pv: AISTProjectVersion) -> OrgIntegration | None:
+    """The VPN integration a project version's source is fetched through, or ``None`` (public SCM)."""
+    resolved = resolve_source_vpn(pv.project)
+    return resolved.integration if resolved is not None else None
 
 
 def proxy_url_for_project_version(pv: AISTProjectVersion) -> str | None:

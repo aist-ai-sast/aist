@@ -35,7 +35,8 @@ def _flatten_single_root_directory(root: Path) -> None:
             shutil.rmtree(inner_dir, ignore_errors=True)
 
 
-def _safe_join(root: Path, target: str) -> Path:
+def safe_join(root: Path, target: str) -> Path:
+    """Return `target` resolved under `root`, symlinks included; raise ValueError when it leaves `root`."""
     target = target.replace("\\", "/")
     joined = (root / target).resolve()
     allowed_prefix = str(root.resolve()) + os.sep
@@ -49,9 +50,9 @@ def _safe_extract_zip_member(zf, member, root: Path) -> None:
     """Extract one member from a ZIP file safely, avoiding path traversal."""
     name = member.filename
     if name.endswith("/"):
-        (_safe_join(root, name)).mkdir(parents=True, exist_ok=True)
+        safe_join(root, name).mkdir(parents=True, exist_ok=True)
         return
-    out_path = _safe_join(root, name)
+    out_path = safe_join(root, name)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with zf.open(member) as src, Path(out_path).open("wb") as dst:
         while True:
@@ -67,7 +68,7 @@ def _safe_extract_tar_member(tf, member, root: Path) -> None:
         return
     if member.islnk() or member.issym() or member.ischr() or member.isblk() or member.isfifo():
         return
-    out_path = _safe_join(root, member.name + ("/" if member.isdir() else ""))
+    out_path = safe_join(root, member.name + ("/" if member.isdir() else ""))
     if member.isdir():
         out_path.mkdir(parents=True, exist_ok=True)
         return

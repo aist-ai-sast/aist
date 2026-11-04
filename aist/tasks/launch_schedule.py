@@ -17,6 +17,19 @@ logger = logging.getLogger("aist")
 _SCHEDULE_BATCH_SIZE = 100
 
 
+_INVALID_LAUNCH_CONFIG = "INVALID_LAUNCH_CONFIG"
+
+
+def _scheduled_launch(config) -> PipelineArguments:
+    """The launch a schedule's config makes now; a config that no longer validates is a rejected admission."""
+    try:
+        return PipelineArguments.from_launch_config(config)
+    except LaunchEnqueueError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise LaunchEnqueueError(str(exc), code=_INVALID_LAUNCH_CONFIG) from exc
+
+
 @dataclass(frozen=True, slots=True)
 class _DueScheduleClaim:
     schedule_id: int
@@ -89,7 +102,7 @@ def process_launch_schedules(async_user_id=None):
         project = config.project
         try:
             enqueue_pipeline_launch(
-                arguments=PipelineArguments.from_launch_config(config),
+                arguments=_scheduled_launch(config),
                 principal=LaunchPrincipal.for_schedule(organization=project.organization),
                 schedule=sched,
                 launch_config=config,

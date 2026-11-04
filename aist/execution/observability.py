@@ -5,26 +5,14 @@ from dataclasses import dataclass
 
 from prometheus_client import Counter, Histogram
 
-from aist.execution.contracts import ProviderOperation
+from aist.execution.contracts import DastPipelineOutcomeCode, ProviderOperation
 
 _logger = logging.getLogger("aist.execution.audit")
 
 _EXECUTION_TYPES = {"all"}
 _QUEUE_EVENTS = frozenset({"claimed", "coalesced", "expired", "capacity_wait"})
 _PROVIDER_OPERATIONS = frozenset(ProviderOperation)
-_DAST_OUTCOMES = frozenset({
-    "SUCCESS_WITH_FINDINGS",
-    "SUCCESS_CLEAN",
-    "COMPLETED_WITH_DEGRADATION",
-    "FAILED_WITH_PARTIAL_RESULTS",
-    "POLICY_NO_ELIGIBLE_STAND",
-    "SOURCE_DRIFT",
-    "PROVIDER_FAILED",
-    "INVALID_RESULT",
-    "CANCELLED",
-    "pending",
-    "error",
-})
+_DAST_OUTCOMES = frozenset(DastPipelineOutcomeCode) | {"pending", "error"}
 _RELATIONS = frozenset({"exact", "ancestor", "descendant", "divergent", "none"})
 _AUDIT_EVENTS = frozenset({
     "dast_integration_imported",

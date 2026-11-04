@@ -144,14 +144,18 @@ class AISTPipelineDetailAIModeTests(AISTApiBase):
         )
 
     def test_pipeline_detail_ai_mode_visibility(self):
+        auto = "AUTO_DEFAULT in progress."
+        manual = "Push selected findings to AI"
         cases = (
-            ("AUTO_DEFAULT", "AUTO_DEFAULT in progress.", "Push selected findings to AI"),
-            ("MANUAL", "Push selected findings to AI", "AUTO_DEFAULT in progress."),
+            ("auto with filter", {"mode": "AUTO_DEFAULT", "filter_snapshot": {"limit": 5}}, auto, manual),
+            ("auto with local triage", {"mode": "AUTO_DEFAULT", "triage_type": "local"}, auto, manual),
+            ("auto that cannot push", {"mode": "AUTO_DEFAULT", "triage_type": "n8n"}, manual, auto),
+            ("manual", {"mode": "MANUAL"}, manual, auto),
         )
         url = reverse("aist:pipeline_detail", kwargs={"pipeline_id": self.pipeline.id})
-        for mode, expected_text, unexpected_text in cases:
-            with self.subTest(mode=mode):
-                self.pipeline.launch_data = {"ai": {"mode": mode}}
+        for case, ai, expected_text, unexpected_text in cases:
+            with self.subTest(case=case):
+                self.pipeline.launch_data = {"ai": ai}
                 self.pipeline.save(update_fields=["launch_data"])
                 resp = self.client.get(url)
                 self.assertEqual(resp.status_code, 200)

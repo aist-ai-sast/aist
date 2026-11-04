@@ -1,6 +1,98 @@
 from __future__ import annotations
 
-from pathlib import Path
+from dataclasses import dataclass
+
+from django.db import models
+
+from aist.ai_filter import AIFilterError, validate_and_normalize_filter
+from aist.integrations.dast_config import DastExecutionSnapshot
+
+
+class AIMode(models.TextChoices):
+    MANUAL = "MANUAL", "Manual selection of findings for AI"
+    AUTO_DEFAULT = "AUTO_DEFAULT", "Send findings to AI automatically with configured filter"
+
+
+class AITriageType(models.TextChoices):
+    N8N = "n8n", "n8n"
+    LOCAL = "local", "Local"
+
+
+AI_FILTER_REQUIRED = "ai_filter is required for AUTO_DEFAULT"
+
+# Launch-param key of each LaunchAISettings field.
+_PARAM_KEYS = {"mode": "ai_mode", "triage_type": "ai_triage_type", "filter_snapshot": "ai_filter_snapshot"}
+
+
+@dataclass(frozen=True)
+class LaunchAISettings:
+
+    """How a pipeline's findings reach AI triage, fixed when it is launched."""
+
+    mode: AIMode = AIMode.MANUAL
+    triage_type: AITriageType | None = None
+    filter_snapshot: dict | None = None
+
+    @classmethod
+    def from_dict(cls, raw: dict | None) -> LaunchAISettings:
+        """Read stored ``launch_data["ai"]``; unknown values fall back to the defaults."""
+        raw = raw or {}
+        triage_type = raw.get("triage_type")
+        return cls(
+            mode=AIMode(raw["mode"]) if raw.get("mode") in AIMode.values else AIMode.MANUAL,
+            triage_type=AITriageType(triage_type) if triage_type in AITriageType.values else None,
+            filter_snapshot=raw.get("filter_snapshot"),
+        )
+
+    @classmethod
+    def from_params(cls, params: dict) -> LaunchAISettings:
+        """
+        Read the launch params' ``ai_mode`` / ``ai_triage_type`` / ``ai_filter_snapshot``.
+
+        Raises ``ValueError`` for an unknown mode or triage type and ``AIFilterError`` for an invalid filter.
+        A MANUAL launch carries no filter.
+        """
+        mode = params.get("ai_mode") or AIMode.MANUAL
+        if mode not in AIMode.values:
+            msg = "Unsupported ai_mode"
+            raise ValueError(msg)
+        triage_type = params.get("ai_triage_type")
+        if triage_type is not None and triage_type not in AITriageType.values:
+            msg = f"Unsupported ai_triage_type; allowed: {', '.join(AITriageType.values)}"
+            raise ValueError(msg)
+        snapshot = params.get("ai_filter_snapshot")
+        return cls(
+            mode=AIMode(mode),
+            triage_type=AITriageType(triage_type) if triage_type else None,
+            filter_snapshot=(
+                validate_and_normalize_filter(snapshot) if mode == AIMode.AUTO_DEFAULT and snapshot is not None else None
+            ),
+        )
+
+    @classmethod
+    def from_normalized_params(cls, params: dict) -> LaunchAISettings:
+        """Read the AI settings of launch params :meth:`from_params` already accepted, without validating them again."""
+        return cls.from_dict({name: params.get(key) for name, key in _PARAM_KEYS.items()})
+
+    def as_dict(self) -> dict:
+        return {
+            "mode": str(self.mode),
+            "triage_type": str(self.triage_type) if self.triage_type else None,
+            "filter_snapshot": self.filter_snapshot,
+        }
+
+    def as_params(self) -> dict:
+        stored = self.as_dict()
+        return {key: stored[name] for name, key in _PARAM_KEYS.items()}
+
+    def pushes_automatically(self, triage_type: AITriageType) -> bool:
+        """Whether findings go to ``triage_type`` on their own: AUTO_DEFAULT with a filter, or with local triage."""
+        return self.mode == AIMode.AUTO_DEFAULT and (bool(self.filter_snapshot) or triage_type == AITriageType.LOCAL)
+
+    def check(self, triage_type: AITriageType) -> None:
+        """Raise ``AIFilterError`` when an AUTO_DEFAULT launch would not push to ``triage_type`` for lack of a filter."""
+        if self.mode == AIMode.AUTO_DEFAULT and not self.pushes_automatically(triage_type):
+            raise AIFilterError(AI_FILTER_REQUIRED)
 
 
 class PipelineLaunchData:
@@ -14,7 +106,7 @@ class PipelineLaunchData:
     - fields we write ourselves (log_level, enrich config, etc.).
 
     This class provides typed, named access to all known fields and preserves
-    any unknown keys so that round-tripping through ``from_dict`` / ``as_dict``
+    any unknown keys so that round-tripping through the constructor and ``as_dict``
     never silently drops data from the external package.
 
     Usage::
@@ -26,10 +118,6 @@ class PipelineLaunchData:
 
     def __init__(self, data: dict | None = None) -> None:
         self._data: dict = dict(data or {})
-
-    # ------------------------------------------------------------------ #
-    # External — sast-combinator output. No setters: we do not own these. #
-    # ------------------------------------------------------------------ #
 
     @property
     def trim_path(self) -> str:
@@ -53,40 +141,6 @@ class PipelineLaunchData:
         return ((self._data.get("git") or {}).get("resolved_commit") or "").strip()
 
     @property
-    def is_git_based(self) -> bool:
-        """
-        True if the project was checked out from a git repository.
-
-        Derived from ``project_version_descriptor.type``, which mirrors
-        :attr:`AISTProjectVersion.version_type` and is written to ``launch_data``
-        during the enrichment configuration step.
-        """
-        version_type = (self.project_version_descriptor or {}).get("type", "")
-        return version_type in {"GIT_BRANCH", "GIT_HASH"}
-
-    def resolve_source_root(self, product_name: str = "") -> str:
-        """
-        Return the on-disk path to the project sources.
-
-        For git-based projects the sast-combinator clones the repository into a
-        subdirectory named after the product inside ``project_path``.  For
-        file-upload projects ``project_path`` is already the source root.
-
-        Returns ``project_path`` as-is when the expected subdirectory is absent
-        (graceful fallback so callers never get an empty string).
-        """
-        base = self.project_path
-        if self.is_git_based and product_name:
-            sub = Path(base) / product_name
-            if sub.is_dir():
-                return str(sub)
-        return base
-
-    # ------------------------------------------------------------------ #
-    # Internal — our fields, with setters.                                 #
-    # ------------------------------------------------------------------ #
-
-    @property
     def languages(self) -> list[str]:
         return self._data.get("languages") or []
 
@@ -95,17 +149,12 @@ class PipelineLaunchData:
         self._data["languages"] = value
 
     @property
-    def ai(self) -> dict:
-        return self._data.get("ai") or {}
+    def ai(self) -> LaunchAISettings:
+        return LaunchAISettings.from_dict(self._data.get("ai"))
 
     @ai.setter
-    def ai(self, value: dict) -> None:
-        self._data["ai"] = value
-
-    @property
-    def ai_triage_type(self) -> str | None:
-        """Resolved triage type stored at launch time (``ai.triage_type``)."""
-        return self.ai.get("triage_type")
+    def ai(self, value: LaunchAISettings) -> None:
+        self._data["ai"] = value.as_dict()
 
     @property
     def finding_postprocessing(self) -> bool:
@@ -113,9 +162,9 @@ class PipelineLaunchData:
         Whether this pipeline's findings go through enrichment and AI triage after dedup.
 
         Set to False by an import whose findings describe a running system rather than a source
-        tree: enrichment trims file paths, links findings to source and deletes those matching a
-        project's excluded severities or paths, and AIST cannot triage a finding it has no code
-        for. Absent means True, so every existing pipeline keeps the source-code tail.
+        tree: enrichment trims file paths and links findings to source, and AIST cannot triage a
+        finding it has no code for. Absent means True, so every existing pipeline keeps the
+        source-code tail.
         """
         return self._data.get("finding_postprocessing", True) is not False
 
@@ -138,14 +187,6 @@ class PipelineLaunchData:
     @log_level.setter
     def log_level(self, value: str) -> None:
         self._data["log_level"] = value
-
-    @property
-    def project_version_descriptor(self) -> dict:
-        return self._data.get("project_version_descriptor") or {}
-
-    @project_version_descriptor.setter
-    def project_version_descriptor(self, value: dict) -> None:
-        self._data["project_version_descriptor"] = value
 
     @property
     def imported_test_ids(self) -> list[int]:
@@ -215,12 +256,17 @@ class PipelineLaunchData:
     def one_off_actions_done(self, value: list[str]) -> None:
         self._data["one_off_actions_done"] = value
 
-    # ------------------------------------------------------------------ #
-    # Serialisation                                                        #
-    # ------------------------------------------------------------------ #
+    @property
+    def dast_execution(self) -> DastExecutionSnapshot:
+        """The DAST plan frozen at launch; raises ``DastConfigError`` when absent or malformed."""
+        return DastExecutionSnapshot.from_snapshot(self._data.get("dast_execution"))
+
+    @dast_execution.setter
+    def dast_execution(self, value: DastExecutionSnapshot) -> None:
+        self._data["dast_execution"] = value.to_snapshot()
 
     def merge(self, fields: dict) -> None:
-        """Merge a dict of fields (e.g. from ``PipelineArguments.enrich_config()``)."""
+        """Merge a dict of fields into launch data."""
         self._data.update(fields)
 
     def as_dict(self) -> dict:

@@ -1,7 +1,6 @@
 """AI response artifact sync resolves analyzer entries to imported Findings."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from tempfile import mkdtemp
 
@@ -14,6 +13,7 @@ from aist.models import (
     AISTPipeline,
     AISTStatus,
 )
+from aist.test.agent_analyzer_import import write_ai_response
 from aist.test.test_api import AISTApiBase
 from aist.utils.ai_response_artifact import apply_ai_response_artifact
 
@@ -63,58 +63,50 @@ class ApplyAiResponseArtifactTests(AISTApiBase):
             unique_id_from_tool="UID-FP",
         )
 
-    def _write_ai_response(self, output_dir: Path, payload: dict) -> None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / _AI_RESPONSE_FILENAME).write_text(
-            json.dumps(payload), encoding="utf-8",
-        )
-
     def test_resolves_unique_ids_and_creates_ai_finding_responses(self):
         output_dir = Path(self._scratch_dir())
-        self._write_ai_response(output_dir, {
-            "results": {
-                "true_positives": [
-                    {
-                        "uniqueIdFromTool": "UID-TP",
-                        "title": "SSRF",
-                        "reasoning": "## Verdict\nTP\n## Evidence\nx",
-                        "references": ["https://example.test/cwe-918"],
-                        "epssScore": 0.05,
-                        "impactScore": 7.5,
-                        "exploitabilityScore": 4.0,
-                        "uncertaintyLevel": 0.1,
-                        "uncertaintySpread": 0.05,
-                        "exploitCodeMaturity": "",
-                        "fix": {
-                            "fixType": "code_change",
-                            "fixSummary": "Validate URL host",
-                            "diffAvailable": True,
-                            "diff": "-old\n+new\n",
-                            "codeAfter": None,
-                            "stepByStep": ["Step 1: validate scheme", "Step 2: allow-list hosts"],
-                            "testingHint": None,
-                            "secretsManagement": None,
-                            "suppressionAnnotation": None,
-                        },
+        write_ai_response(output_dir / _AI_RESPONSE_FILENAME, {
+            "true_positives": [
+                {
+                    "uniqueIdFromTool": "UID-TP",
+                    "title": "SSRF",
+                    "reasoning": "## Verdict\nTP\n## Evidence\nx",
+                    "references": ["https://example.test/cwe-918"],
+                    "epssScore": 0.05,
+                    "impactScore": 7.5,
+                    "exploitabilityScore": 4.0,
+                    "uncertaintyLevel": 0.1,
+                    "uncertaintySpread": 0.05,
+                    "exploitCodeMaturity": "",
+                    "fix": {
+                        "fixType": "code_change",
+                        "fixSummary": "Validate URL host",
+                        "diffAvailable": True,
+                        "diff": "-old\n+new\n",
+                        "codeAfter": None,
+                        "stepByStep": ["Step 1: validate scheme", "Step 2: allow-list hosts"],
+                        "testingHint": None,
+                        "secretsManagement": None,
+                        "suppressionAnnotation": None,
                     },
-                ],
-                "false_positives": [
-                    {
-                        "uniqueIdFromTool": "UID-FP",
-                        "title": "Hardcoded secret",
-                        "reasoning": "## Verdict\nFP\n## Evidence\nfixture only",
-                        "references": [],
-                        "epssScore": None,
-                        "impactScore": None,
-                        "exploitabilityScore": None,
-                        "uncertaintyLevel": None,
-                        "uncertaintySpread": None,
-                        "exploitCodeMaturity": "",
-                        "fix": None,
-                    },
-                ],
-                "uncertainly": [],
-            },
+                },
+            ],
+            "false_positives": [
+                {
+                    "uniqueIdFromTool": "UID-FP",
+                    "title": "Hardcoded secret",
+                    "reasoning": "## Verdict\nFP\n## Evidence\nfixture only",
+                    "references": [],
+                    "epssScore": None,
+                    "impactScore": None,
+                    "exploitabilityScore": None,
+                    "uncertaintyLevel": None,
+                    "uncertaintySpread": None,
+                    "exploitCodeMaturity": "",
+                    "fix": None,
+                },
+            ],
+            "uncertainly": [],
         })
 
         result = apply_ai_response_artifact(
@@ -149,40 +141,38 @@ class ApplyAiResponseArtifactTests(AISTApiBase):
 
     def test_drops_entries_with_unresolvable_unique_ids(self):
         output_dir = Path(self._scratch_dir())
-        self._write_ai_response(output_dir, {
-            "results": {
-                "true_positives": [
-                    # UID-TP resolves; UID-MISSING does not.
-                    {
-                        "uniqueIdFromTool": "UID-TP",
-                        "title": "SSRF",
-                        "reasoning": "## Verdict\nTP\n## Evidence\nx",
-                        "references": [],
-                        "epssScore": None,
-                        "impactScore": None,
-                        "exploitabilityScore": None,
-                        "uncertaintyLevel": None,
-                        "uncertaintySpread": None,
-                        "exploitCodeMaturity": "",
-                        "fix": None,
-                    },
-                    {
-                        "uniqueIdFromTool": "UID-MISSING",
-                        "title": "Phantom",
-                        "reasoning": "## Verdict\nTP",
-                        "references": [],
-                        "epssScore": None,
-                        "impactScore": None,
-                        "exploitabilityScore": None,
-                        "uncertaintyLevel": None,
-                        "uncertaintySpread": None,
-                        "exploitCodeMaturity": "",
-                        "fix": None,
-                    },
-                ],
-                "false_positives": [],
-                "uncertainly": [],
-            },
+        write_ai_response(output_dir / _AI_RESPONSE_FILENAME, {
+            "true_positives": [
+                # UID-TP resolves; UID-MISSING does not.
+                {
+                    "uniqueIdFromTool": "UID-TP",
+                    "title": "SSRF",
+                    "reasoning": "## Verdict\nTP\n## Evidence\nx",
+                    "references": [],
+                    "epssScore": None,
+                    "impactScore": None,
+                    "exploitabilityScore": None,
+                    "uncertaintyLevel": None,
+                    "uncertaintySpread": None,
+                    "exploitCodeMaturity": "",
+                    "fix": None,
+                },
+                {
+                    "uniqueIdFromTool": "UID-MISSING",
+                    "title": "Phantom",
+                    "reasoning": "## Verdict\nTP",
+                    "references": [],
+                    "epssScore": None,
+                    "impactScore": None,
+                    "exploitabilityScore": None,
+                    "uncertaintyLevel": None,
+                    "uncertaintySpread": None,
+                    "exploitCodeMaturity": "",
+                    "fix": None,
+                },
+            ],
+            "false_positives": [],
+            "uncertainly": [],
         })
 
         result = apply_ai_response_artifact(
@@ -257,9 +247,7 @@ class ApplyAiResponseArtifactTests(AISTApiBase):
         )
 
         output_dir = Path(self._scratch_dir())
-        self._write_ai_response(output_dir, {
-            "results": {"true_positives": [], "false_positives": [], "uncertainly": []},
-        })
+        write_ai_response(output_dir / _AI_RESPONSE_FILENAME, {"true_positives": [], "false_positives": [], "uncertainly": []})
 
         apply_ai_response_artifact(
             pipeline=self.pipeline,

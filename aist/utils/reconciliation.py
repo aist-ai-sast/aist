@@ -10,11 +10,10 @@ from django.utils import timezone
 from dojo.models import DojoMeta, Finding, Test
 
 from aist.launch_data import PipelineLaunchData
-from aist.link_builder import LinkBuilder
+from aist.link_builder import SOURCEFILE_LINK_META_NAME, LinkBuilder, store_source_link
 from aist.models import AISTPipeline, AISTProjectVersion, VersionType
 
 LOGGER = logging.getLogger(__name__)
-SOURCEFILE_LINK_META_NAME = "sourcefile_link"
 ATTACH_CHUNK_SIZE = 500
 
 
@@ -44,7 +43,6 @@ class AttachStats:
 @dataclass
 class SourceLinkStats:
     missing_before_fix: int = 0
-    excluded: int = 0
     eligible: int = 0
     remaining_missing: int = 0
 
@@ -86,7 +84,6 @@ class ReconciliationStats:
             "pv_attach": self.pv_attach.as_dict(),
             "parent_attach": self.parent_attach.as_dict(),
             "missing_sourcefile_link": self.source_links.missing_before_fix,
-            "excluded_sourcefile_link": self.source_links.excluded,
             "remaining_missing_pipeline_test_links": self.remaining_missing_pipeline_test_links,
             "remaining_missing_project_version_links": self.remaining_missing_project_version_links,
             "remaining_sourcefile_link_violations": self.source_links.remaining_missing,
@@ -107,17 +104,6 @@ def _normalize_ids(raw_ids) -> list[int]:
         except (TypeError, ValueError):
             continue
     return sorted(set(normalized))
-
-
-def _build_version_descriptor(pipeline: AISTPipeline) -> dict:
-    pv = pipeline.project_version
-    project = pipeline.project if pipeline.project_id else None
-    return {
-        "id": pv.id if pv else "",
-        "type": pv.version_type if pv else VersionType.FILE_HASH,
-        "excluded_paths": project.get_excluded_paths() if project else [],
-        "excluded_severities": project.get_excluded_severities() if project else [],
-    }
 
 
 def _get_pipeline(pipeline_id: str) -> AISTPipeline | None:
@@ -200,19 +186,14 @@ def _attach_missing_findings_to_pipeline_versions(
     return pv_attach_stats, parent_attach_stats
 
 
-def _collect_source_link_candidates(findings_qs, linker: LinkBuilder) -> tuple[list[tuple[int, str]], int]:
+def _collect_source_link_candidates(findings_qs, linker: LinkBuilder) -> list[tuple[int, str]]:
     candidates = findings_qs.exclude(file_path__isnull=True).exclude(file_path="")
     eligible: list[tuple[int, str]] = []
-    excluded_count = 0
     for finding in candidates.iterator():
         link = linker.build(finding.file_path or "")
-        if not link:
-            continue
-        if linker.contains_excluded_path(link):
-            excluded_count += 1
-            continue
-        eligible.append((finding.id, link))
-    return eligible, excluded_count
+        if link:
+            eligible.append((finding.id, link))
+    return eligible
 
 
 def _reconcile_source_links(
@@ -221,8 +202,8 @@ def _reconcile_source_links(
     pipeline: AISTPipeline,
     dry_run: bool,
 ) -> SourceLinkStats:
-    linker = LinkBuilder(_build_version_descriptor(pipeline))
-    eligible_candidates, excluded_count = _collect_source_link_candidates(findings_qs, linker)
+    linker = LinkBuilder(pipeline.project_version_id, PipelineLaunchData(pipeline.launch_data).trim_path)
+    eligible_candidates = _collect_source_link_candidates(findings_qs, linker)
     eligible_ids = [fid for fid, _ in eligible_candidates]
 
     missing_before_fix = 0
@@ -233,11 +214,7 @@ def _reconcile_source_links(
         missing_before_fix += 1
         if dry_run:
             continue
-        DojoMeta.objects.update_or_create(
-            finding_id=finding_id,
-            name=SOURCEFILE_LINK_META_NAME,
-            defaults={"value": link},
-        )
+        store_source_link(finding_id, link)
 
     existing_link_ids = set(
         DojoMeta.objects.filter(
@@ -248,7 +225,6 @@ def _reconcile_source_links(
     remaining_missing = max(len(eligible_ids) - len(existing_link_ids), 0)
     return SourceLinkStats(
         missing_before_fix=missing_before_fix,
-        excluded=excluded_count,
         eligible=len(eligible_ids),
         remaining_missing=remaining_missing,
     )
@@ -312,7 +288,7 @@ def reconcile_pipeline_orphans(
     pipeline_id: str,
     dry_run: bool = False,
     logger=None,
-) -> dict:
+) -> ReconciliationStats:
     logger = logger or LOGGER
     pipeline = _get_pipeline(pipeline_id)
     if not pipeline:
@@ -321,7 +297,7 @@ def reconcile_pipeline_orphans(
             dry_run=dry_run,
             pipeline_missing=True,
             remaining_missing_pipeline_test_links=1,
-        ).as_dict()
+        )
 
     imported_ids = _get_imported_test_ids(pipeline)
     missing_pipeline_links, fixed_pipeline_links = _link_missing_pipeline_tests(
@@ -364,7 +340,7 @@ def reconcile_pipeline_orphans(
         source_links=source_link_stats,
         remaining_missing_pipeline_test_links=remaining_missing_pipeline_links,
         remaining_missing_project_version_links=len(remaining_missing_pv),
-    ).as_dict()
+    )
 
 
 def _collect_recent_pipeline_ids(*, hours: int, batch_size: int) -> list[str]:
@@ -378,13 +354,28 @@ def _collect_recent_pipeline_ids(*, hours: int, batch_size: int) -> list[str]:
     )
 
 
+@dataclass(frozen=True)
+class RecentReconciliationStats:
+
+    """What reconciling the pipelines of the last ``hours`` repaired and what it left."""
+
+    dry_run: bool
+    hours: int
+    processed: int
+    pipelines_with_remaining_violations: int
+    remaining_violations: int
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
 def reconcile_recent_pipelines(
     *,
     hours: int = 24,
     batch_size: int = 200,
     dry_run: bool = False,
     logger=None,
-) -> dict:
+) -> RecentReconciliationStats:
     logger = logger or LOGGER
     pipelines = _collect_recent_pipeline_ids(hours=hours, batch_size=batch_size)
 
@@ -394,14 +385,14 @@ def reconcile_recent_pipelines(
     for pipeline_id in pipelines:
         stats = reconcile_pipeline_orphans(pipeline_id=pipeline_id, dry_run=dry_run, logger=logger)
         processed += 1
-        violations += int(stats.get("remaining_violations") or 0)
-        if stats.get("remaining_violations"):
+        violations += stats.remaining_violations
+        if stats.remaining_violations:
             with_warnings += 1
 
-    return {
-        "dry_run": dry_run,
-        "hours": max(int(hours or 1), 1),
-        "processed": processed,
-        "pipelines_with_remaining_violations": with_warnings,
-        "remaining_violations": violations,
-    }
+    return RecentReconciliationStats(
+        dry_run=dry_run,
+        hours=max(int(hours or 1), 1),
+        processed=processed,
+        pipelines_with_remaining_violations=with_warnings,
+        remaining_violations=violations,
+    )

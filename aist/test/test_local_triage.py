@@ -13,11 +13,14 @@ from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus
 from aist.pipeline_args import PipelineArguments
 from aist.profile import ProjectProfile
 from aist.tasks.ai import (
+    AutoPushOutcome,
     _prepare_auto_push,
-    _resolve_effective_filter,
-    _resolve_triage_type,
+    auto_push_to_ai_if_configured,
     push_request_to_local_triage,
+    resolve_triage_type,
 )
+from aist.tasks.enrich import after_upload_enrich_and_watch
+from aist.test.pipeline_execution_helpers import SastWorkerTestMixin
 from aist.test.test_api import AISTApiBase
 
 
@@ -33,23 +36,23 @@ class ProjectProfileAiTriageTests(AISTApiBase):
 
     def test_default_triage_type_is_n8n(self):
         profile = ProjectProfile.from_dict(None)
-        self.assertEqual(profile.get_ai_triage_type(), "n8n")
+        self.assertEqual(profile.ai_triage.type, "n8n")
 
     def test_from_dict_with_ai_triage_local(self):
         profile = ProjectProfile.from_dict({"ai_triage": {"type": "local"}})
-        self.assertEqual(profile.get_ai_triage_type(), "local")
+        self.assertEqual(profile.ai_triage.type, "local")
 
     def test_from_dict_with_ai_triage_n8n(self):
         profile = ProjectProfile.from_dict({"ai_triage": {"type": "n8n"}})
-        self.assertEqual(profile.get_ai_triage_type(), "n8n")
+        self.assertEqual(profile.ai_triage.type, "n8n")
 
     def test_from_dict_with_invalid_triage_type_falls_back_to_n8n(self):
         profile = ProjectProfile.from_dict({"ai_triage": {"type": "invalid"}})
-        self.assertEqual(profile.get_ai_triage_type(), "n8n")
+        self.assertEqual(profile.ai_triage.type, "n8n")
 
     def test_from_dict_empty_ai_triage(self):
         profile = ProjectProfile.from_dict({"ai_triage": {}})
-        self.assertEqual(profile.get_ai_triage_type(), "n8n")
+        self.assertEqual(profile.ai_triage.type, "n8n")
 
     def test_validate_dict_accepts_valid_ai_triage(self):
         ProjectProfile.validate_dict({"ai_triage": {"type": "local"}})
@@ -60,13 +63,13 @@ class ProjectProfileAiTriageTests(AISTApiBase):
             ProjectProfile.validate_dict({"ai_triage": {"type": "bad"}})
 
     def test_validate_dict_rejects_non_dict_ai_triage(self):
-        with self.assertRaises(TypeError):
+        with self.assertRaises(ValueError):
             ProjectProfile.validate_dict({"ai_triage": "local"})
 
 
 class ResolveTriageTypeTests(AISTApiBase):
 
-    """Tests for _resolve_triage_type helper."""
+    """Tests for resolve_triage_type."""
 
     def _make_pipeline(self, *, profile=None, launch_ai=None):
         if profile is not None:
@@ -83,63 +86,25 @@ class ResolveTriageTypeTests(AISTApiBase):
 
     def test_default_is_n8n(self):
         pipeline = self._make_pipeline()
-        self.assertEqual(_resolve_triage_type(pipeline), "n8n")
+        self.assertEqual(resolve_triage_type(pipeline), "n8n")
 
     def test_project_profile_local(self):
         pipeline = self._make_pipeline(profile={"ai_triage": {"type": "local"}})
-        self.assertEqual(_resolve_triage_type(pipeline), "local")
+        self.assertEqual(resolve_triage_type(pipeline), "local")
 
     def test_per_launch_overrides_project(self):
         pipeline = self._make_pipeline(
             profile={"ai_triage": {"type": "n8n"}},
             launch_ai={"triage_type": "local"},
         )
-        self.assertEqual(_resolve_triage_type(pipeline), "local")
+        self.assertEqual(resolve_triage_type(pipeline), "local")
 
     def test_per_launch_n8n_overrides_project_local(self):
         pipeline = self._make_pipeline(
             profile={"ai_triage": {"type": "local"}},
             launch_ai={"triage_type": "n8n"},
         )
-        self.assertEqual(_resolve_triage_type(pipeline), "n8n")
-
-
-class ResolveEffectiveFilterTests(AISTApiBase):
-
-    """Tests for _resolve_effective_filter helper."""
-
-    def test_no_snap_returns_none(self):
-        self.assertIsNone(_resolve_effective_filter(None, "n8n"))
-        self.assertIsNone(_resolve_effective_filter(None, "local"))
-
-    def test_no_per_type_returns_root(self):
-        snap = {"severity": ["High"], "limit": 10}
-        result = _resolve_effective_filter(snap, "n8n")
-        self.assertEqual(result, snap)
-
-    def test_per_type_override(self):
-        snap = {
-            "severity": ["High"],
-            "limit": 10,
-            "per_type": {
-                "n8n": {"severity": ["Critical"], "limit": 5},
-                "local": {"severity": ["High", "Medium"]},
-            },
-        }
-        n8n_filter = _resolve_effective_filter(snap, "n8n")
-        self.assertEqual(n8n_filter, {"severity": ["Critical"], "limit": 5})
-
-        local_filter = _resolve_effective_filter(snap, "local")
-        self.assertEqual(local_filter, {"severity": ["High", "Medium"]})
-
-    def test_per_type_missing_type_falls_back_to_root(self):
-        snap = {
-            "severity": ["High"],
-            "limit": 10,
-            "per_type": {"n8n": {"severity": ["Critical"]}},
-        }
-        result = _resolve_effective_filter(snap, "local")
-        self.assertEqual(result, snap)
+        self.assertEqual(resolve_triage_type(pipeline), "n8n")
 
 
 class LocalTriageCompleteAPITests(AISTApiBase):
@@ -308,23 +273,6 @@ class LocalTriageCompleteAPITests(AISTApiBase):
         )
 
 
-class PipelineLaunchDataTriageTypeTests(AISTApiBase):
-
-    """Tests for PipelineLaunchData.ai_triage_type accessor."""
-
-    def test_none_when_not_set(self):
-        ld = PipelineLaunchData({"ai": {"mode": "AUTO_DEFAULT"}})
-        self.assertIsNone(ld.ai_triage_type)
-
-    def test_returns_value_when_set(self):
-        ld = PipelineLaunchData({"ai": {"mode": "AUTO_DEFAULT", "triage_type": "local"}})
-        self.assertEqual(ld.ai_triage_type, "local")
-
-    def test_none_when_ai_missing(self):
-        ld = PipelineLaunchData({})
-        self.assertIsNone(ld.ai_triage_type)
-
-
 class PrepareAutoPushLocalTriageTests(AISTApiBase):
 
     """Tests for _prepare_auto_push branching between n8n and local."""
@@ -366,7 +314,7 @@ class PrepareAutoPushLocalTriageTests(AISTApiBase):
             launch_ai={"mode": "AUTO_DEFAULT", "triage_type": "local"},
         )
         result = _prepare_auto_push(str(pipeline.id), _noop_logger())
-        self.assertIsNone(result)  # dispatched
+        self.assertEqual(result, AutoPushOutcome.DISPATCHED)
         pipeline.refresh_from_db()
         self.assertEqual(pipeline.status, AISTStatus.PUSH_TO_AI)
 
@@ -376,8 +324,7 @@ class PrepareAutoPushLocalTriageTests(AISTApiBase):
             launch_ai={"mode": "AUTO_DEFAULT"},
         )
         result = _prepare_auto_push(str(pipeline.id), _noop_logger())
-        # No filter_snapshot → finish ok (not degraded)
-        self.assertFalse(result)
+        self.assertEqual(result, AutoPushOutcome.NOTHING_TO_PUSH)
 
     @patch("aist.tasks.ai.push_request_to_local_triage")
     def test_local_triage_without_filter_takes_all(self, mock_local):
@@ -387,7 +334,7 @@ class PrepareAutoPushLocalTriageTests(AISTApiBase):
             n_findings=5,
         )
         result = _prepare_auto_push(str(pipeline.id), _noop_logger())
-        self.assertIsNone(result)  # dispatched
+        self.assertEqual(result, AutoPushOutcome.DISPATCHED)
 
     @patch("aist.tasks.ai.push_request_to_local_triage")
     def test_local_with_zero_findings_finishes_ok(self, mock_local):
@@ -397,8 +344,42 @@ class PrepareAutoPushLocalTriageTests(AISTApiBase):
             n_findings=0,
         )
         result = _prepare_auto_push(str(pipeline.id), _noop_logger())
-        self.assertFalse(result)  # finish ok, no findings
+        self.assertEqual(result, AutoPushOutcome.NOTHING_TO_PUSH)
         mock_local.delay.assert_not_called()
+
+    @patch("aist.tasks.ai.push_request_to_local_triage")
+    def test_a_repeated_auto_push_leaves_a_pipeline_already_in_triage_running(self, mock_local):
+        pipeline = self._make_pipeline_with_findings(
+            launch_ai={"mode": "AUTO_DEFAULT", "triage_type": "local"},
+        )
+        AISTPipeline.objects.filter(pk=pipeline.pk).update(status=AISTStatus.WAITING_RESULT_FROM_AI)
+
+        auto_push_to_ai_if_configured.run(str(pipeline.id))
+
+        pipeline.refresh_from_db()
+        self.assertEqual(pipeline.status, AISTStatus.WAITING_RESULT_FROM_AI)
+        mock_local.delay.assert_not_called()
+
+    @patch("aist.tasks.ai.push_request_to_local_triage")
+    def test_a_filterless_auto_launch_is_triaged_locally_after_enrichment_when_the_profile_says_local(self, mock_local):
+        pipeline = self._make_pipeline_with_findings(
+            profile={"ai_triage": {"type": "local"}},
+            launch_ai={"mode": "AUTO_DEFAULT"},
+        )
+        AISTPipeline.objects.filter(pk=pipeline.pk).update(status=AISTStatus.FINDING_POSTPROCESSING)
+        finding_ids = sorted(Finding.objects.filter(test=self.test_obj).values_list("id", flat=True))
+
+        with (
+            patch("aist.tasks.ai.auto_push_to_ai_if_configured.delay", side_effect=auto_push_to_ai_if_configured.run),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            after_upload_enrich_and_watch.run([len(finding_ids)], str(pipeline.id), [self.test_obj.id], "INFO")
+
+        pipeline.refresh_from_db()
+        self.assertEqual(pipeline.status, AISTStatus.PUSH_TO_AI)
+        mock_local.delay.assert_called_once()
+        self.assertEqual(mock_local.delay.call_args.args[0], str(pipeline.id))
+        self.assertEqual(sorted(mock_local.delay.call_args.args[1]), finding_ids)
 
 
 class PushLocalTriageTaskTests(AISTApiBase):
@@ -531,8 +512,8 @@ class SendRequestRoutingTests(AISTApiBase):
             target_end=timezone.now(), test_type=self.tt,
         )
 
-    @patch("aist.api.ai.push_request_to_local_triage")
-    @patch("aist.api.ai.push_request_to_ai")
+    @patch("aist.tasks.ai.push_request_to_local_triage")
+    @patch("aist.tasks.ai.push_request_to_ai")
     @patch("aist.api.ai.install_pipeline_logging")
     def test_local_project_routes_to_local_task(self, mock_log, mock_n8n, mock_local):
         mock_log.return_value = _noop_logger()
@@ -561,8 +542,8 @@ class SendRequestRoutingTests(AISTApiBase):
         mock_local.delay.assert_called_once()
         mock_n8n.delay.assert_not_called()
 
-    @patch("aist.api.ai.push_request_to_local_triage")
-    @patch("aist.api.ai.push_request_to_ai")
+    @patch("aist.tasks.ai.push_request_to_local_triage")
+    @patch("aist.tasks.ai.push_request_to_ai")
     @patch("aist.api.ai.install_pipeline_logging")
     def test_n8n_project_routes_to_n8n_task(self, mock_log, mock_n8n, mock_local):
         mock_log.return_value = _noop_logger()
@@ -595,10 +576,18 @@ class PipelineArgsTriageTypeTests(AISTApiBase):
     """Tests for ai_triage_type in PipelineArguments."""
 
     def test_normalize_accepts_valid_triage_types(self):
-        for triage_type in ("n8n", "local", None):
+        for triage_type in ("n8n", "local"):
             params = {"project_id": self.project.id, "ai_triage_type": triage_type}
             normalized = PipelineArguments.normalize_params(project=self.project, raw_params=params)
             self.assertEqual(normalized["ai_triage_type"], triage_type)
+
+    def test_a_launch_choosing_no_triage_type_is_fixed_to_the_project_triage_at_admission(self):
+        self.project.profile = {"ai_triage": {"type": "local"}}
+        self.project.save(update_fields=["profile"])
+
+        normalized = PipelineArguments.normalize_params(project=self.project, raw_params={"ai_mode": "AUTO_DEFAULT"})
+
+        self.assertEqual(normalized["ai_triage_type"], "local")
 
     def test_normalize_rejects_invalid_triage_type(self):
         params = {"project_id": self.project.id, "ai_triage_type": "invalid"}
@@ -621,5 +610,56 @@ class PipelineArgsTriageTypeTests(AISTApiBase):
             "ai_mode": "AUTO_DEFAULT",
             "ai_triage_type": "n8n",
         }
-        with self.assertRaises(ValueError, msg="ai_filter_snapshot is required"):
+        with self.assertRaisesMessage(ValueError, "ai_filter is required for AUTO_DEFAULT"):
             PipelineArguments.normalize_params(project=self.project, raw_params=params)
+
+    def test_auto_default_without_snapshot_is_ok_when_the_project_triages_locally(self):
+        self.project.profile = {"ai_triage": {"type": "local"}}
+        self.project.save(update_fields=["profile"])
+
+        normalized = PipelineArguments.normalize_params(
+            project=self.project,
+            raw_params={"project_id": self.project.id, "ai_mode": "AUTO_DEFAULT"},
+        )
+
+        self.assertEqual(normalized["ai_mode"], "AUTO_DEFAULT")
+        self.assertIsNone(normalized["ai_filter_snapshot"])
+
+
+class SastRunRecordsLaunchAISettingsTests(SastWorkerTestMixin, AISTApiBase):
+
+    """A SAST run stores the launch's AI settings, which decide whether its findings later reach triage on their own."""
+
+    def test_an_auto_default_launch_with_local_triage_is_recorded_and_pushes_without_a_filter(self):
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-ai-settings", project=self.project, project_version=self.pv, status=AISTStatus.FINISHED,
+        )
+
+        self.run_sast(
+            pipeline,
+            project_version=self.pv,
+            upload_results=[],
+            launch_params={"ai_mode": "AUTO_DEFAULT", "ai_triage_type": "local"},
+        )
+
+        pipeline.refresh_from_db()
+        self.assertEqual(
+            pipeline.launch_data["ai"], {"mode": "AUTO_DEFAULT", "triage_type": "local", "filter_snapshot": None},
+        )
+        self.assertTrue(PipelineLaunchData(pipeline.launch_data).ai.pushes_automatically(resolve_triage_type(pipeline)))
+
+    def test_a_launch_admitted_under_local_triage_still_pushes_after_the_profile_switches_to_n8n(self):
+        self.project.profile = {"ai_triage": {"type": "local"}}
+        self.project.save(update_fields=["profile"])
+        admitted = PipelineArguments.normalize_params(project=self.project, raw_params={"ai_mode": "AUTO_DEFAULT"})
+        self.project.profile = {"ai_triage": {"type": "n8n"}}
+        self.project.save(update_fields=["profile"])
+        pipeline = AISTPipeline.objects.create(
+            id="pipe-ai-frozen-triage", project=self.project, project_version=self.pv, status=AISTStatus.FINISHED,
+        )
+
+        self.run_sast(pipeline, project_version=self.pv, upload_results=[], launch_params=admitted)
+
+        pipeline.refresh_from_db()
+        self.assertEqual(resolve_triage_type(pipeline), "local")
+        self.assertTrue(PipelineLaunchData(pipeline.launch_data).ai.pushes_automatically(resolve_triage_type(pipeline)))

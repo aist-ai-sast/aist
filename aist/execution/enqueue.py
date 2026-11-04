@@ -84,7 +84,7 @@ class LaunchPrincipal:
     api_token: AISTApiToken | None = None
 
     def __post_init__(self) -> None:
-        if self.organization.pk is None:
+        if self.organization is None or self.organization.pk is None:
             raise LaunchEnqueueError(_ERR_ORGANIZATION)
         if self.kind == LaunchAuthorityKind.USER:
             if self.requester is None or self.requester.pk is None or self.api_token is not None:
@@ -119,7 +119,7 @@ class LaunchPrincipal:
     def for_user(
         cls,
         *,
-        organization: Organization,
+        organization: Organization | None,
         requester: AbstractBaseUser,
         api_token: AISTApiToken | None = None,
     ) -> LaunchPrincipal:

@@ -5,9 +5,8 @@ import uuid
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Case, IntegerField, Q, Value, When
+from django.db.models import Q
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -16,7 +15,14 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from dojo.utils import add_breadcrumb
 
-from aist.ai_filter import apply_ai_filter, get_ai_filter_reference
+from aist.ai_filter import (
+    AIFilterError,
+    apply_ai_filter,
+    get_ai_filter_reference,
+    select_by_ai_filter,
+    severity_ordering,
+    validate_and_normalize_filter,
+)
 from aist.api.launch_configs import ACTION_CREATE_SERIALIZERS
 from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
 from aist.forms import AISTPipelineRunForm, DastPipelineRunForm
@@ -30,7 +36,8 @@ from aist.queries import (
 )
 from aist.services.dast_queue import queue_is_addressable
 from aist.services.pipeline_lifecycle import PipelineTransitionError, transition_allowed
-from aist.utils.http import _fmt_duration, _qs_without
+from aist.tasks.ai import resolve_triage_type
+from aist.utils.http import _fmt_duration, _qs_without, page_of
 from aist.utils.pipeline import (
     get_terminal_pipeline_statuses,
     is_terminal_pipeline_status,
@@ -40,6 +47,8 @@ from aist.utils.pipeline import (
 from aist.views._common import ERR_PIPELINE_NOT_FOUND
 
 FINDINGS_PAGE_SIZES = [25, 50, 100, 200]
+START_HISTORY_PAGE_SIZES = [8]
+PIPELINE_LIST_PAGE_SIZES = [10, 20, 50, 100]
 FINDINGS_SEVERITY_BADGES = {
     "Critical": "danger",
     "High": "danger",
@@ -47,15 +56,29 @@ FINDINGS_SEVERITY_BADGES = {
     "Low": "success",
     "Info": "secondary",
 }
+# Each sort key with its ordering per direction; keys with a label are the table's sortable column headers.
 FINDINGS_SORT_OPTIONS = [
-    {"key": "severity", "label": "Severity"},
-    {"key": "date", "label": "Date"},
-    {"key": "title", "label": "Title"},
-    {"key": "cwe", "label": "CWE"},
-    {"key": "file", "label": "File"},
-    {"key": "analyzer", "label": "Analyzer"},
-    {"key": "id", "label": "ID"},
+    {
+        "key": "severity",
+        "label": "Severity",
+        "width": "120px",
+        "order": {
+            "desc": severity_ordering(most_severe_first=True),
+            "asc": severity_ordering(most_severe_first=False),
+        },
+    },
+    {"key": "title", "label": "Finding", "order": {"desc": "-title", "asc": "title"}},
+    {"key": "file", "label": "Location", "order": {"desc": "-file_path", "asc": "file_path"}},
+    {"key": "cwe", "label": "CWE", "width": "90px", "order": {"desc": "-cwe", "asc": "cwe"}},
+    {
+        "key": "analyzer",
+        "label": "Analyzer",
+        "width": "140px",
+        "order": {"desc": "-test__test_type__name", "asc": "test__test_type__name"},
+    },
+    {"key": "date", "order": {"desc": "-date", "asc": "date"}},
 ]
+_FINDINGS_ORDERINGS = {option["key"]: option["order"] for option in FINDINGS_SORT_OPTIONS}
 
 
 def _parse_bool_param(value: str | None) -> bool:
@@ -88,19 +111,6 @@ def _summarize_ai_filter(snapshot: dict | None) -> str:
     return ", ".join(parts)
 
 
-def _severity_rank_case():
-    return Case(
-        When(severity__iexact="Critical", then=Value(0)),
-        When(severity__iexact="High", then=Value(1)),
-        When(severity__iexact="Medium", then=Value(2)),
-        When(severity__iexact="Low", then=Value(3)),
-        When(severity__iexact="Informational", then=Value(4)),
-        When(severity__iexact="Info", then=Value(4)),
-        default=Value(9),
-        output_field=IntegerField(),
-    )
-
-
 def _build_findings_context(request: HttpRequest, pipeline: AISTPipeline) -> dict:
     base_context = {
         "findings_total": 0,
@@ -108,14 +118,12 @@ def _build_findings_context(request: HttpRequest, pipeline: AISTPipeline) -> dic
         "findings_showing_total": 0,
         "findings_page": None,
         "findings_rows": [],
-        "findings_page_numbers": [],
         "findings_page_size": FINDINGS_PAGE_SIZES[0],
         "findings_page_sizes": FINDINGS_PAGE_SIZES,
         "findings_apply_ai_filter": False,
         "findings_ai_filter_available": False,
         "findings_ai_filter_summary": "",
         "findings_ai_filter_snapshot": None,
-        "findings_ai_filter_pretty": "",
         "findings_ai_filter_error": "",
         "findings_qs_no_page": "",
         "findings_qs_no_ai": "",
@@ -140,104 +148,29 @@ def _build_findings_context(request: HttpRequest, pipeline: AISTPipeline) -> dic
     )
     base_total = base_qs.count()
 
-    launch_ai = PipelineLaunchData(pipeline.launch_data).ai
-    ai_filter_snapshot = launch_ai.get("filter_snapshot")
+    ai_filter_snapshot = PipelineLaunchData(pipeline.launch_data).ai.filter_snapshot
     ai_filter_available = bool(ai_filter_snapshot)
-    ai_filter_pretty = json.dumps(ai_filter_snapshot, indent=2, sort_keys=True) if ai_filter_snapshot else ""
 
     apply_ai_filter_flag = ai_filter_available and _parse_bool_param(request.GET.get("apply_ai_filter"))
     ai_filter_error = ""
-    qs = base_qs
+    qs, filtered_total, showing_total, limit = base_qs, base_total, base_total, None
     if apply_ai_filter_flag:
         try:
-            qs = apply_ai_filter(qs, ai_filter_snapshot)
-        except ValueError as exc:
+            qs, filtered_total, limit = _ai_filter_selection(base_qs, ai_filter_snapshot)
+            showing_total = qs.count()
+        except AIFilterError as exc:
             ai_filter_error = str(exc)
             apply_ai_filter_flag = False
-            qs = base_qs
 
-    filtered_total = qs.count()
-
-    raw_sort = (request.GET.get("findings_sort") or "date").strip()
-    sort_keys = {opt["key"] for opt in FINDINGS_SORT_OPTIONS}
-    sort_key = raw_sort if raw_sort in sort_keys else "date"
-
-    direction = (request.GET.get("findings_dir") or "desc").strip().lower()
-    if direction not in {"asc", "desc"}:
-        direction = "desc"
-
-    if sort_key == "severity":
-        qs = qs.annotate(sev_rank=_severity_rank_case())
-        order_expr = "-sev_rank" if direction == "asc" else "sev_rank"
-    elif sort_key == "date":
-        order_expr = "date" if direction == "asc" else "-date"
-    elif sort_key == "title":
-        order_expr = "title" if direction == "asc" else "-title"
-    elif sort_key == "cwe":
-        order_expr = "cwe" if direction == "asc" else "-cwe"
-    elif sort_key == "file":
-        order_expr = "file_path" if direction == "asc" else "-file_path"
-    elif sort_key == "analyzer":
-        order_expr = "test__test_type__name" if direction == "asc" else "-test__test_type__name"
-    else:
-        order_expr = "id" if direction == "asc" else "-id"
-
-    qs = qs.order_by(order_expr, "-id")
-
-    limit = None
-    if apply_ai_filter_flag and isinstance(ai_filter_snapshot, dict):
-        raw_limit = ai_filter_snapshot.get("limit")
-        if raw_limit is not None:
-            try:
-                limit = int(raw_limit)
-            except (TypeError, ValueError):
-                limit = None
-    if limit and limit > 0:
-        qs = list(qs[:limit])
-
-    page_size = FINDINGS_PAGE_SIZES[0]
-    raw_page_size = request.GET.get("findings_page_size")
-    if raw_page_size:
-        try:
-            parsed = int(raw_page_size)
-        except ValueError:
-            parsed = page_size
-        if parsed in FINDINGS_PAGE_SIZES:
-            page_size = parsed
-
-    paginator = Paginator(qs, page_size)
-    page_obj = paginator.get_page(request.GET.get("findings_page") or 1)
-
-    rows = []
-    for finding in page_obj.object_list:
-        test_type = getattr(getattr(finding.test, "test_type", None), "name", None)
-        file_label = finding.file_path or "-"
-        if finding.line:
-            file_label = f"{file_label}:{finding.line}" if finding.file_path else f"Line {finding.line}"
-        rows.append(
-            {
-                "id": finding.id,
-                "title": finding.title,
-                "severity": finding.severity,
-                "severity_class": FINDINGS_SEVERITY_BADGES.get(finding.severity, "secondary"),
-                "file_label": file_label,
-                "cwe": finding.cwe or "",
-                "test_type": test_type or "-",
-                "date": finding.date,
-                "description": finding.description or "",
-                "mitigation": finding.mitigation or "",
-                "is_false_positive": bool(finding.false_p),
-            },
-        )
-
-    def _page_window(page):
-        if not page or page.paginator.num_pages <= 1:
-            return []
-        start = max(1, page.number - 2)
-        end = min(page.paginator.num_pages, page.number + 2)
-        return list(range(start, end + 1))
-
-    showing_total = min(filtered_total, limit) if limit and limit > 0 else filtered_total
+    sort_key, direction, ordering = _findings_ordering(request)
+    page_obj = page_of(
+        request,
+        qs.order_by(ordering, "-id"),
+        sizes=FINDINGS_PAGE_SIZES,
+        default=FINDINGS_PAGE_SIZES[0],
+        prefix="findings_",
+    )
+    rows = [_finding_row(finding) for finding in page_obj.object_list]
 
     return {
         "findings_total": base_total,
@@ -245,14 +178,12 @@ def _build_findings_context(request: HttpRequest, pipeline: AISTPipeline) -> dic
         "findings_showing_total": showing_total,
         "findings_page": page_obj,
         "findings_rows": rows,
-        "findings_page_numbers": _page_window(page_obj),
-        "findings_page_size": page_size,
+        "findings_page_size": page_obj.paginator.per_page,
         "findings_page_sizes": FINDINGS_PAGE_SIZES,
         "findings_apply_ai_filter": apply_ai_filter_flag,
         "findings_ai_filter_available": ai_filter_available,
         "findings_ai_filter_summary": _summarize_ai_filter(ai_filter_snapshot),
         "findings_ai_filter_snapshot": ai_filter_snapshot,
-        "findings_ai_filter_pretty": ai_filter_pretty,
         "findings_ai_filter_error": ai_filter_error,
         "findings_qs_no_page": _qs_without(request, "findings_page"),
         "findings_qs_no_ai": _qs_without(request, "findings_page", "apply_ai_filter"),
@@ -260,7 +191,45 @@ def _build_findings_context(request: HttpRequest, pipeline: AISTPipeline) -> dic
         "findings_sort": sort_key,
         "findings_dir": direction,
         "findings_sort_options": FINDINGS_SORT_OPTIONS,
-        "findings_limit": limit if limit and limit > 0 else None,
+        "findings_limit": limit,
+    }
+
+
+def _ai_filter_selection(base_qs, snapshot: dict) -> tuple:
+    """Return the findings the launch's AI filter selects, how many matched its conditions, and its limit."""
+    selected_ids = list(select_by_ai_filter(base_qs, snapshot).values_list("id", flat=True))
+    matched_total = apply_ai_filter(base_qs, snapshot).count()
+    return base_qs.filter(id__in=selected_ids), matched_total, validate_and_normalize_filter(snapshot)["limit"]
+
+
+def _findings_ordering(request: HttpRequest) -> tuple[str, str, str]:
+    """Return the requested sort key, its direction and the ordering expression; unknown values fall back."""
+    sort_key = (request.GET.get("findings_sort") or "date").strip()
+    if sort_key not in _FINDINGS_ORDERINGS:
+        sort_key = "date"
+    direction = (request.GET.get("findings_dir") or "desc").strip().lower()
+    if direction not in {"asc", "desc"}:
+        direction = "desc"
+    return sort_key, direction, _FINDINGS_ORDERINGS[sort_key][direction]
+
+
+def _finding_row(finding: Finding) -> dict:
+    test_type = getattr(getattr(finding.test, "test_type", None), "name", None)
+    file_label = finding.file_path or "-"
+    if finding.line:
+        file_label = f"{file_label}:{finding.line}" if finding.file_path else f"Line {finding.line}"
+    return {
+        "id": finding.id,
+        "title": finding.title,
+        "severity": finding.severity,
+        "severity_class": FINDINGS_SEVERITY_BADGES.get(finding.severity, "secondary"),
+        "file_label": file_label,
+        "cwe": finding.cwe or "",
+        "test_type": test_type or "-",
+        "date": finding.date,
+        "description": finding.description or "",
+        "mitigation": finding.mitigation or "",
+        "is_false_positive": bool(finding.false_p),
     }
 
 
@@ -309,9 +278,7 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
 
     history_qs = history_qs.order_by("-updated")
 
-    per_page = int(request.GET.get("page_size") or 8)
-    paginator = Paginator(history_qs, per_page)
-    page_obj = paginator.get_page(request.GET.get("page") or 1)
+    page_obj = page_of(request, history_qs, sizes=START_HISTORY_PAGE_SIZES, default=START_HISTORY_PAGE_SIZES[0])
 
     history_items = [{
         "id": p.id,
@@ -416,10 +383,6 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                 Permissions.Product_Edit,
                 user=request.user,
             )
-            organization = project.organization
-            if organization is None:
-                form.add_error(None, "Project does not belong to an AIST organization.")
-                return render_start(form)
             launch_data = PipelineLaunchData({})
             launch_data.one_off_actions = one_off_actions
             launch_data.one_off_actions_done = []
@@ -427,7 +390,7 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
                 launch_request = enqueue_pipeline_launch(
                     arguments=arguments,
                     principal=LaunchPrincipal.for_user(
-                        organization=organization,
+                        organization=project.organization,
                         requester=request.user,
                     ),
                     client_request_key=client_request_key,
@@ -452,7 +415,6 @@ def pipeline_list(request):
     q = (request.GET.get("q") or "").strip()
 
     status = (request.GET.get("status") or "ALL").upper()  # ALL | FINISHED
-    per_page = int(request.GET.get("page_size") or 20)
 
     qs = (
         get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
@@ -471,8 +433,7 @@ def pipeline_list(request):
             Q(project__product__name__icontains=q),
         )
 
-    paginator = Paginator(qs, per_page)
-    page_obj = paginator.get_page(request.GET.get("page") or 1)
+    page_obj = page_of(request, qs, sizes=PIPELINE_LIST_PAGE_SIZES, default=20)
 
     items = [{
         "id": p.id,
@@ -505,6 +466,7 @@ def pipeline_list(request):
             "search_query": q,
             "status": status,
             "projects": projects,
+            "page_sizes": PIPELINE_LIST_PAGE_SIZES,
         },
     )
 
@@ -516,34 +478,25 @@ def pipeline_detail(request, pipeline_id: str):
         get_authorized_aist_pipelines(Permissions.Product_View, user=request.user),
         id=pipeline_id,
     )
-    findings_context = _build_findings_context(request, pipeline)
-    # The lifecycle forbids leaving a terminal status, so the action is offered only where
-    # it can succeed.
-    can_return_to_push_to_ai = transition_allowed(
-        pipeline.status, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI,
-    )
+    status_context = {
+        "pipeline": pipeline,
+        # The lifecycle forbids leaving a terminal status, so the action is offered only where it can succeed.
+        "can_return_to_push_to_ai": transition_allowed(pipeline.status, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI),
+        "ai_auto_triage": PipelineLaunchData(pipeline.launch_data).ai.pushes_automatically(resolve_triage_type(pipeline)),
+        **_build_findings_context(request, pipeline),
+    }
     if request.headers.get("X-Partial") == "status":
-        return render(
-            request,
-            "aist/_pipeline_status_container.html",
-            {
-                "pipeline": pipeline,
-                "can_return_to_push_to_ai": can_return_to_push_to_ai,
-                **findings_context,
-            },
-        )
+        return render(request, "aist/_pipeline_status_container.html", status_context)
 
     add_breadcrumb(parent=pipeline, title="Pipeline Detail", top_level=False, request=request)
     return render(
         request,
         "aist/pipeline_detail.html",
         {
-            "pipeline": pipeline,
+            **status_context,
             # Whether this pipeline names a DAST run at all. What the queue then shows -- including
             # whether the run is over and may no longer be commanded -- is the gateway's answer.
             "dast_queue_addressable": queue_is_addressable(pipeline),
-            "can_return_to_push_to_ai": can_return_to_push_to_ai,
-            **findings_context,
         },
     )
 

@@ -27,6 +27,7 @@ from aist.models import (
     OrgIntegrationType,
     VersionType,
 )
+from aist.pipeline_args import analyzer_selection_signature, launch_analyzers
 from aist.profile import ProjectProfile
 from aist.utils.pipeline_imports import _load_analyzers_config
 
@@ -49,6 +50,19 @@ def _create_initial_script(project: AISTProject, content: str, user=None) -> AIS
         user=user,
     )
     return script
+
+
+class ProjectProfileField(serializers.JSONField):
+
+    """A project profile as JSON, rejected unless it matches the profile schema; empty means no profile."""
+
+    def to_internal_value(self, data):
+        value = super().to_internal_value(data) or {}
+        try:
+            ProjectProfile.validate_dict(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        return value
 
 
 class AISTProjectSerializer(serializers.ModelSerializer):
@@ -158,7 +172,7 @@ class AISTProjectCreateRequestSerializer(serializers.Serializer):
             return _validate_script_content(value)
         return value
     supported_languages = serializers.ListField(child=serializers.CharField(), required=False, default=list)
-    profile = serializers.JSONField(required=False, default=dict)
+    profile = ProjectProfileField(required=False, default=dict)
 
     def get_fields(self):
         fields = super().get_fields()
@@ -170,15 +184,6 @@ class AISTProjectCreateRequestSerializer(serializers.Serializer):
                 user=request.user,
             )
         return fields
-
-    def validate_profile(self, value):
-        if not value:
-            return {}
-        try:
-            ProjectProfile.validate_dict(value)
-        except (TypeError, ValueError) as exc:
-            raise serializers.ValidationError(str(exc)) from exc
-        return value
 
 
 class AISTProjectCreateResponseSerializer(serializers.Serializer):
@@ -195,7 +200,7 @@ class DefaultAnalyzersRequestSerializer(serializers.Serializer):
 class ProjectUpdateRequestSerializer(serializers.Serializer):
     supported_languages = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     compilable = serializers.BooleanField(required=False, default=False)
-    profile = serializers.JSONField(required=False, default=dict)
+    profile = ProjectProfileField(required=False, default=dict)
 
     def to_internal_value(self, data):
         if "organization" in data:
@@ -211,15 +216,6 @@ class ProjectUpdateRequestSerializer(serializers.Serializer):
             else:
                 mutable["supported_languages"] = parsed_languages
         return super().to_internal_value(mutable)
-
-    def validate_profile(self, value):
-        if not value:
-            return {}
-        try:
-            ProjectProfile.validate_dict(value)
-        except (TypeError, ValueError) as exc:
-            raise serializers.ValidationError(str(exc)) from exc
-        return value
 
 
 class AISTProjectListAPI(AISTAuthzMixin, generics.ListAPIView):
@@ -594,23 +590,11 @@ def project_meta_payload(project: AISTProject) -> dict:
     }
 
 
-def default_analyzers_payload(*, project: AISTProject | None, project_id: str | None, langs: list[str], time_class: str):
-    cfg = _load_analyzers_config()
-    if not cfg:
-        return None, "config not loaded"
-
-    filtered = cfg.get_filtered_analyzers(
-        analyzers_to_run=None,
-        max_time_class=time_class,
-        non_compile_project=not project.compilable if project else False,
-        target_languages=langs,
-        show_only_parent=True,
-    )
-    defaults = cfg.get_names(filtered)
+def default_analyzers_payload(*, project: AISTProject | None, project_id: str | None, langs: list[str], time_class):
     return {
-        "defaults": defaults,
-        "signature": f"{project.id if project else (project_id or '')}::{time_class}::{','.join(sorted(set(langs or [])))}",
-    }, None
+        "defaults": launch_analyzers(project, langs, time_class),
+        "signature": analyzer_selection_signature(project.id if project else project_id, langs, time_class),
+    }
 
 
 def update_project_from_payload(*, project: AISTProject, payload: dict):
@@ -671,19 +655,18 @@ class AISTDefaultAnalyzersAPI(AISTAPIView):
         serializer = DefaultAnalyzersRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         project_id = serializer.validated_data.get("project")
-        time_class = serializer.validated_data.get("time_class_level") or "slow"
+        time_class = serializer.validated_data.get("time_class_level")
         langs = serializer.validated_data.get("languages", [])
 
         project = self.authorized_queryset_for_request().filter(id=project_id).first()
         if not project:
             return Response({"detail": "Project not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        payload, error = default_analyzers_payload(
-            project=project,
-            project_id=str(project_id) if project_id is not None else None,
-            langs=langs,
-            time_class=time_class,
+        return Response(
+            default_analyzers_payload(
+                project=project,
+                project_id=str(project_id) if project_id is not None else None,
+                langs=langs,
+                time_class=time_class,
+            ),
         )
-        if error:
-            return Response({"detail": error}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(payload)

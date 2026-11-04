@@ -30,6 +30,7 @@ from aist.integrations.dast_report import (
     DastTokenUsage,
     ValidatedDastRunMetadata,
 )
+from aist.launch_data import AIMode
 from aist.models import (
     AISTAIFindingResponse,
     AISTAIResponse,
@@ -58,6 +59,12 @@ from aist.models import (
     VersionType,
 )
 from aist.services.dast_queue_demo import demo_descriptor, demo_page
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
+
+_import_sast_pipeline_package()
+
+# These imports intentionally come AFTER the call above; suppress E402 explicitly.
+from pipeline.config_utils import TimeClass  # noqa: E402
 
 
 @dataclass(frozen=True, slots=True)
@@ -897,71 +904,11 @@ class Command(BaseCommand):
         )
 
         for spec in DEMO_PROJECTS:
-            organization = organizations_by_name[spec.organization_name]
-            product_type = organization.ensure_product_type()
-
-            product, _ = Product.objects.get_or_create(
-                name=spec.product_name,
-                defaults={
-                    "description": f"Demo product for {spec.slug}",
-                    "prod_type": product_type,
-                    "sla_configuration": sla_config,
-                },
-            )
-
-            product_updates: list[str] = []
-            if product.prod_type_id != product_type.id:
-                product.prod_type = product_type
-                product_updates.append("prod_type")
-            if product.sla_configuration_id != sla_config.id:
-                product.sla_configuration = sla_config
-                product_updates.append("sla_configuration")
-            desired_description = f"Demo product for {spec.slug}"
-            if product.description != desired_description:
-                product.description = desired_description
-                product_updates.append("description")
-            if product_updates:
-                product.save(update_fields=product_updates)
-
-            # Must precede the findings below, which inherit these on save.
-            desired_tags = sorted(spec.tags)
-            if sorted(tag.name for tag in product.tags.all()) != desired_tags:
-                product.tags.set(desired_tags)
-
-            project, _ = AISTProject.objects.get_or_create(
-                product=product,
-                defaults={
-                    "supported_languages": list(spec.supported_languages),
-                    "compilable": spec.compilable,
-                    "profile": {"team": "application-security", "environment": "demo"},
-                },
-            )
-            project_updates: list[str] = []
-            supported_languages = list(spec.supported_languages)
-            if project.supported_languages != supported_languages:
-                project.supported_languages = supported_languages
-                project_updates.append("supported_languages")
-            if project.compilable != spec.compilable:
-                project.compilable = spec.compilable
-                project_updates.append("compilable")
-            if project_updates:
-                project.save(update_fields=project_updates)
-
+            product = self._ensure_demo_product(spec, organizations_by_name[spec.organization_name], sla_config)
+            project = self._ensure_demo_project(spec, product)
             project_created_at = now - timedelta(days=spec.project_age_days)
             AISTProject.objects.filter(pk=project.pk).update(created=project_created_at)
-
-            main_version, _ = AISTProjectVersion.objects.get_or_create(
-                project=project,
-                version="main",
-                version_type=VersionType.GIT_BRANCH,
-                defaults={"description": "Default demo branch"},
-            )
-            release_version, _ = AISTProjectVersion.objects.get_or_create(
-                project=project,
-                version="release-v1",
-                version_type=VersionType.GIT_BRANCH,
-                defaults={"description": "Stable demo release"},
-            )
+            main_version, release_version = self._ensure_demo_versions(project)
 
             dast_bindings, dast_launch_configs = self._ensure_project_dast_bindings_and_configs(
                 spec=spec,
@@ -969,100 +916,9 @@ class Command(BaseCommand):
                 trigger_version=main_version,
                 targets=dast_targets_by_organization[spec.organization_name],
             )
-
-            launch_config, _ = AISTProjectLaunchConfig.objects.get_or_create(
-                project=project,
-                name=spec.launch_config_name,
-                defaults={
-                    "execution_type": PipelineExecutionType.SAST,
-                    "description": f"Demo launch config for {spec.slug}",
-                    "params": {
-                        "analyzers": ["semgrep", "snyk"],
-                        "time_class_level": "normal",
-                        "log_level": "INFO",
-                        "ai_mode": "AUTO_DEFAULT",
-                        "ai_filter_snapshot": demo_ai_filter_snapshot(),
-                    },
-                    "is_default": True,
-                },
-            )
-
-            launch_config_updates: list[str] = []
-            if launch_config.execution_type != PipelineExecutionType.SAST:
-                launch_config.execution_type = PipelineExecutionType.SAST
-                launch_config_updates.append("execution_type")
-            if launch_config.dast_binding_id is not None:
-                launch_config.dast_binding = None
-                launch_config_updates.append("dast_binding")
-            if launch_config.trigger_project_version_id is not None:
-                launch_config.trigger_project_version = None
-                launch_config_updates.append("trigger_project_version")
-            desired_params = {
-                "analyzers": ["semgrep", "snyk"],
-                "time_class_level": "normal",
-                "log_level": "INFO",
-                "ai_mode": "AUTO_DEFAULT",
-                "ai_filter_snapshot": demo_ai_filter_snapshot(),
-            }
-            if launch_config.params != desired_params:
-                launch_config.params = desired_params
-                launch_config_updates.append("params")
-            desired_cfg_description = f"Demo launch config for {spec.slug}"
-            if launch_config.description != desired_cfg_description:
-                launch_config.description = desired_cfg_description
-                launch_config_updates.append("description")
-            if not launch_config.is_default:
-                launch_config.is_default = True
-                launch_config_updates.append("is_default")
-            if launch_config_updates:
-                launch_config.save(update_fields=launch_config_updates)
-
-            schedule, _ = LaunchSchedule.objects.get_or_create(
-                launch_config=launch_config,
-                defaults={
-                    "cron_expression": spec.cron_expression,
-                    "enabled": True,
-                    "max_concurrent_runs": 1,
-                },
-            )
-            schedule.last_run_at = now - timedelta(days=spec.schedule_last_run_days_ago)
-            schedule_updates = ["last_run_at"]
-            if schedule.cron_expression != spec.cron_expression:
-                schedule.cron_expression = spec.cron_expression
-                schedule_updates.append("cron_expression")
-            if not schedule.enabled:
-                schedule.enabled = True
-                schedule_updates.append("enabled")
-            if schedule.max_concurrent_runs != 1:
-                schedule.max_concurrent_runs = 1
-                schedule_updates.append("max_concurrent_runs")
-            desired_next_run_at = schedule.get_next_scheduled_time(now=now)
-            if schedule.next_run_at != desired_next_run_at:
-                schedule.next_run_at = desired_next_run_at
-                schedule_updates.append("next_run_at")
-            schedule.save(update_fields=schedule_updates)
-
-            engagement, _ = Engagement.objects.get_or_create(
-                product=product,
-                name=f"{spec.slug} security engagement",
-                defaults={
-                    "target_start": project_created_at,
-                    "target_end": today + timedelta(days=365),
-                },
-            )
-            if engagement.target_end < today:
-                engagement.target_end = today + timedelta(days=365)
-                engagement.save(update_fields=["target_end"])
-
-            dojo_test, _ = Test.objects.get_or_create(
-                engagement=engagement,
-                test_type=test_type,
-                title=f"{spec.slug} baseline scan",
-                defaults={
-                    "target_start": project_created_at,
-                    "target_end": now,
-                },
-            )
+            launch_config = self._ensure_demo_launch_config(spec, project)
+            schedule = self._ensure_demo_schedule(spec, launch_config, now)
+            engagement, dojo_test = self._ensure_demo_scan(spec, product, test_type, project_created_at, now, today)
 
             finding_ids = self._ensure_project_findings(
                 spec=spec,
@@ -1107,6 +963,114 @@ class Command(BaseCommand):
                 base_date=today,
             )
             self._ensure_demo_ai_responses(project=project)
+
+    @staticmethod
+    def _ensure_demo_product(spec: DemoProjectSpec, organization: Organization, sla_config) -> Product:
+        product, _ = Product.objects.update_or_create(
+            name=spec.product_name,
+            defaults={
+                "description": f"Demo product for {spec.slug}",
+                "prod_type": organization.ensure_product_type(),
+                "sla_configuration": sla_config,
+            },
+        )
+        # Must precede the findings, which inherit these on save.
+        desired_tags = sorted(spec.tags)
+        if sorted(tag.name for tag in product.tags.all()) != desired_tags:
+            product.tags.set(desired_tags)
+        return product
+
+    @staticmethod
+    def _ensure_demo_project(spec: DemoProjectSpec, product: Product) -> AISTProject:
+        project, _ = AISTProject.objects.update_or_create(
+            product=product,
+            defaults={"supported_languages": list(spec.supported_languages), "compilable": spec.compilable},
+            create_defaults={
+                "supported_languages": list(spec.supported_languages),
+                "compilable": spec.compilable,
+                "profile": {},
+            },
+        )
+        return project
+
+    @staticmethod
+    def _ensure_demo_versions(project: AISTProject) -> tuple[AISTProjectVersion, AISTProjectVersion]:
+        main_version, _ = AISTProjectVersion.objects.get_or_create(
+            project=project,
+            version="main",
+            version_type=VersionType.GIT_BRANCH,
+            defaults={"description": "Default demo branch"},
+        )
+        release_version, _ = AISTProjectVersion.objects.get_or_create(
+            project=project,
+            version="release-v1",
+            version_type=VersionType.GIT_BRANCH,
+            defaults={"description": "Stable demo release"},
+        )
+        return main_version, release_version
+
+    @staticmethod
+    def _ensure_demo_launch_config(spec: DemoProjectSpec, project: AISTProject) -> AISTProjectLaunchConfig:
+        launch_config, _ = AISTProjectLaunchConfig.objects.update_or_create(
+            project=project,
+            name=spec.launch_config_name,
+            defaults={
+                "execution_type": PipelineExecutionType.SAST,
+                "dast_binding": None,
+                "trigger_project_version": None,
+                "description": f"Demo launch config for {spec.slug}",
+                "params": {
+                    "analyzers": ["semgrep", "snyk"],
+                    "time_class_level": TimeClass.SLOW,
+                    "log_level": "INFO",
+                    "ai_mode": AIMode.AUTO_DEFAULT,
+                    "ai_filter_snapshot": demo_ai_filter_snapshot(),
+                },
+                "is_default": True,
+            },
+        )
+        return launch_config
+
+    @staticmethod
+    def _ensure_demo_schedule(spec: DemoProjectSpec, launch_config: AISTProjectLaunchConfig, now) -> LaunchSchedule:
+        schedule, _ = LaunchSchedule.objects.update_or_create(
+            launch_config=launch_config,
+            defaults={
+                "cron_expression": spec.cron_expression,
+                "enabled": True,
+                "max_concurrent_runs": 1,
+                "last_run_at": now - timedelta(days=spec.schedule_last_run_days_ago),
+            },
+        )
+        next_run_at = schedule.get_next_scheduled_time(now=now)
+        if schedule.next_run_at != next_run_at:
+            schedule.next_run_at = next_run_at
+            schedule.save(update_fields=["next_run_at"])
+        return schedule
+
+    @staticmethod
+    def _ensure_demo_scan(spec: DemoProjectSpec, product: Product, test_type, project_created_at, now, today):
+        engagement, _ = Engagement.objects.get_or_create(
+            product=product,
+            name=f"{spec.slug} security engagement",
+            defaults={
+                "target_start": project_created_at,
+                "target_end": today + timedelta(days=365),
+            },
+        )
+        if engagement.target_end < today:
+            engagement.target_end = today + timedelta(days=365)
+            engagement.save(update_fields=["target_end"])
+        dojo_test, _ = Test.objects.get_or_create(
+            engagement=engagement,
+            test_type=test_type,
+            title=f"{spec.slug} baseline scan",
+            defaults={
+                "target_start": project_created_at,
+                "target_end": now,
+            },
+        )
+        return engagement, dojo_test
 
     def _ensure_project_dast_bindings_and_configs(
         self,

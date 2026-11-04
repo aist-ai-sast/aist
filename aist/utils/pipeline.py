@@ -69,34 +69,24 @@ def set_pipeline_status(
 
 def finish_pipeline(pipeline_id: str, *, degraded: bool = False) -> None:
     """
-    Transition pipeline to a terminal status (FINISHED or FINISHED_WITH_WARNINGS).
-
-    Two independent phases so that a reconciliation failure never prevents the status
-    update, and a status-update failure never propagates to the caller:
-
-    Phase 1 - reconciliation: runs its own transactions; exceptions are absorbed and
-    recorded as violations so the pipeline lands in FINISHED_WITH_WARNINGS instead of
-    staying stuck.
-
-    Phase 2 - status save: opens its own transaction.atomic() with a fresh SELECT FOR
-    UPDATE so the pipeline object is never stale, even when called from an exception
-    handler.  All exceptions are absorbed and logged.
+    Repair the pipeline's links, then set FINISHED, or FINISHED_WITH_WARNINGS when `degraded` or links stay broken;
+    never raises.
     """
-    # Phase 1: reconciliation - independent transactions managed by reconcile_pipeline_orphans
     try:
-        reconcile_stats = reconcile_pipeline_orphans(pipeline_id=pipeline_id, dry_run=False, logger=_logger)
+        remaining_violations = reconcile_pipeline_orphans(
+            pipeline_id=pipeline_id, dry_run=False, logger=_logger,
+        ).remaining_violations
     except Exception:
         _logger.exception("Pipeline reconciliation failed (pipeline_id=%s)", pipeline_id)
-        reconcile_stats = {"remaining_violations": 1}
+        remaining_violations = 1
 
-    # Phase 2: status update in its own independent transaction
     try:
-        _finalize_pipeline_status(pipeline_id, degraded=degraded, reconcile_stats=reconcile_stats)
+        _finalize_pipeline_status(pipeline_id, degraded=degraded, remaining_violations=remaining_violations)
     except Exception:
         _logger.exception("Failed to set terminal status (pipeline_id=%s)", pipeline_id)
 
 
-def _finalize_pipeline_status(pipeline_id: str, *, degraded: bool, reconcile_stats: dict) -> None:
+def _finalize_pipeline_status(pipeline_id: str, *, degraded: bool, remaining_violations: int) -> None:
     with transaction.atomic():
         pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
         if is_terminal_pipeline_status(pipeline.status):
@@ -111,7 +101,7 @@ def _finalize_pipeline_status(pipeline_id: str, *, degraded: bool, reconcile_sta
         target_status = (
             AISTStatus.FINISHED_WITH_WARNINGS
             if degraded or launch_data_degraded or dast_delivery_degraded
-            or (reconcile_stats.get("remaining_violations") or 0) > 0
+            or remaining_violations > 0
             else AISTStatus.FINISHED
         )
         set_pipeline_status(pipeline, target_status)

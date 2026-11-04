@@ -12,7 +12,7 @@ agent-bridge plumbing and may run together in the same pipeline.
 
 ## How it runs
 
-1. `aist/tasks/pipeline.py` calls `aist.utils.diff_baseline.build_diff_env`
+1. `aist/tasks/sast_execution.py` calls `aist.utils.agent_runtime.build_agent_runtime_env`
    before `configure_project_run_analyses`. That helper does one DB lookup:
    the previous terminal-success pipeline's commit on the same resolved
    branch. It produces `BASE_COMMIT`, `EXCLUDED_PATHS_JSON`,
@@ -55,7 +55,7 @@ reachable commit:
 
 | Level | Source                                                                                                                                               |
 |-------|------------------------------------------------------------------------------------------------------------------------------------------------------|
-| L1    | `$BASE_COMMIT` (env var, populated by `build_diff_env` from the previous terminal-success pipeline on the same resolved branch).                     |
+| L1    | `$BASE_COMMIT` (env var, populated by `build_agent_runtime_env` from the previous terminal-success pipeline on the same resolved branch).                     |
 | L2    | `git log --since='14 days ago' --reverse --format='%H' | head -1` against the cloned repo.                                                          |
 | L3    | `git rev-list --max-parents=0 HEAD | head -1` (very first commit). Diff covers the whole project history into HEAD; expect this to trip truncation. |
 

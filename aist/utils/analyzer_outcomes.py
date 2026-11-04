@@ -29,6 +29,19 @@ def _result_by_analyzer(import_results: list[Any] | None) -> dict[str, Any]:
     }
 
 
+def analyzer_degraded_reason(analyzer_name: str, code: str, message: str) -> dict[str, str]:
+    """The degraded reason a pipeline records for one analyzer."""
+    return {"source": f"analyzer:{analyzer_name}", "code": code, "message": message}
+
+
+def _import_failure_reasons(import_results: list[Any] | None) -> list[dict[str, str]]:
+    return [
+        analyzer_degraded_reason(result.analyzer_name, result.failure_code, result.failure_message)
+        for result in import_results or []
+        if getattr(result, "failure_code", None)
+    ]
+
+
 def _normalize_degraded_reasons(outcomes: list[dict]) -> list[dict[str, str]]:
     reasons: list[dict[str, str]] = []
     for outcome in outcomes:
@@ -46,11 +59,11 @@ def _normalize_degraded_reasons(outcomes: list[dict]) -> list[dict[str, str]]:
         for message in messages:
             if not isinstance(message, dict):
                 continue
-            reasons.append({
-                "source": f"analyzer:{analyzer_name}",
-                "code": str(message.get("code") or outcome.get("status") or "degraded"),
-                "message": str(message.get("text") or ""),
-            })
+            reasons.append(analyzer_degraded_reason(
+                analyzer_name,
+                str(message.get("code") or outcome.get("status") or "degraded"),
+                str(message.get("text") or ""),
+            ))
     return reasons
 
 
@@ -78,17 +91,14 @@ def consume_analyzer_outcomes(
     logger=None,
 ) -> ConsumeAnalyzerOutcomesResult:
     """
-    Persist generic analyzer outcomes and consume supported artifacts.
+    Persist generic analyzer outcomes and failed report imports as degraded reasons, and consume supported artifacts.
 
     This is the AIST boundary for ``sast-pipeline`` analyzer metadata. It does
     not know analyzer names or runner implementations; it only understands the
     normalized outcome schema and supported artifact formats.
     """
     logger = logger or log
-    if not outcomes:
-        return ConsumeAnalyzerOutcomesResult(degraded_reasons=0, ai_artifacts_applied=0)
-
-    reasons = _normalize_degraded_reasons(outcomes)
+    reasons = _normalize_degraded_reasons(outcomes or []) + _import_failure_reasons(import_results)
     if reasons:
         with transaction.atomic():
             pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
@@ -96,6 +106,9 @@ def consume_analyzer_outcomes(
             launch_data.add_analyzer_degraded_reasons(reasons)
             pipeline.launch_data = launch_data.as_dict()
             pipeline.save(update_fields=["launch_data", "updated"])
+
+    if not outcomes:
+        return ConsumeAnalyzerOutcomesResult(degraded_reasons=len(reasons), ai_artifacts_applied=0)
 
     results_by_name = _result_by_analyzer(import_results)
     ai_artifacts_applied = 0

@@ -23,27 +23,25 @@ from aist.models import (
     PipelineLaunchRequest,
     VersionType,
 )
+from aist.test.analyzer_catalog import SyntheticAnalyzerCatalogMixin
 
 
-class DummyConfig:
-    def get_supported_languages(self):
-        return ["python"]
-
-    def get_supported_analyzers(self):
-        return ["semgrep", "snyk", "bearer"]
-
-    def get_analyzers_time_class(self):
-        return ["slow"]
-
-    def get_filtered_analyzers(self, **_kwargs):
-        return ["semgrep", "snyk", "bearer"]
-
-    def get_names(self, _filtered):
-        return list(_filtered)
+def _fast(name: str, *languages: str) -> dict:
+    return {"name": name, "image": name, "language": list(languages), "time_class": "fast"}
 
 
-class OneOffActionsTests(TestCase):
+class OneOffActionsTests(SyntheticAnalyzerCatalogMixin, TestCase):
+    CATALOG = {
+        "analyzers": [
+            _fast("semgrep", "python", "go"),
+            _fast("snyk", "python"),
+            _fast("bearer", "python"),
+            _fast("gosec", "go"),
+        ],
+    }
+
     def setUp(self):
+        super().setUp()
         self.client = Client()
         self.user = get_user_model().objects.create_user(
             username="tester",
@@ -91,27 +89,26 @@ class OneOffActionsTests(TestCase):
 
     @override_settings(DB_KEY="test-secret")
     def test_start_pipeline_persists_one_off_actions_in_launch_request(self):
-        with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):
-            url = reverse("aist:start_pipeline")
-            payload = {
-                "project": self.project.id,
-                "project_version": self.pv.id,
-                "log_level": "INFO",
-                "time_class_level": "slow",
-                "ai_mode": "MANUAL",
-                "one_off_actions": json.dumps(
-                    [
-                        {
-                            "trigger_status": AISTStatus.FINISHED,
-                            "action_type": "PUSH_TO_SLACK",
-                            "config": {"channels": ["#alerts"], "title": "Hi", "description": "Desc"},
-                        },
-                    ],
-                ),
-            }
+        url = reverse("aist:start_pipeline")
+        payload = {
+            "project": self.project.id,
+            "project_version": self.pv.id,
+            "log_level": "INFO",
+            "time_class_level": "slow",
+            "ai_mode": "MANUAL",
+            "one_off_actions": json.dumps(
+                [
+                    {
+                        "trigger_status": AISTStatus.FINISHED,
+                        "action_type": "PUSH_TO_SLACK",
+                        "config": {"channels": ["#alerts"], "title": "Hi", "description": "Desc"},
+                    },
+                ],
+            ),
+        }
 
-            resp = self.client.post(url, data=payload)
-            self.assertEqual(resp.status_code, 302)
+        resp = self.client.post(url, data=payload)
+        self.assertEqual(resp.status_code, 302)
 
         launch_request = PipelineLaunchRequest.objects.get()
         launch_data = launch_request.initial_launch_data_snapshot
@@ -124,22 +121,21 @@ class OneOffActionsTests(TestCase):
 
     @patch("celery.app.task.Task.apply_async")
     def test_repeated_start_click_is_idempotent_and_preserves_requester(self, mock_apply_async):
-        with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):
-            url = reverse("aist:start_pipeline")
-            payload = {
-                "project": self.project.id,
-                "project_version": self.pv.id,
-                "log_level": "INFO",
-                "time_class_level": "slow",
-                "ai_mode": "MANUAL",
-                "one_off_actions": "[]",
-                "client_request_key": "classic-start-click-1",
-            }
+        url = reverse("aist:start_pipeline")
+        payload = {
+            "project": self.project.id,
+            "project_version": self.pv.id,
+            "log_level": "INFO",
+            "time_class_level": "slow",
+            "ai_mode": "MANUAL",
+            "one_off_actions": "[]",
+            "client_request_key": "classic-start-click-1",
+        }
 
-            first = self.client.post(url, data=payload)
-            second = self.client.post(url, data=payload)
-            self.assertEqual(first.status_code, 302)
-            self.assertEqual(second.status_code, 302)
+        first = self.client.post(url, data=payload)
+        second = self.client.post(url, data=payload)
+        self.assertEqual(first.status_code, 302)
+        self.assertEqual(second.status_code, 302)
 
         launch_request = PipelineLaunchRequest.objects.get()
         self.assertEqual(launch_request.requester, self.user)
@@ -151,37 +147,35 @@ class OneOffActionsTests(TestCase):
         mock_apply_async.assert_not_called()
 
     def test_start_pipeline_keeps_explicit_analyzers_selection_in_request(self):
-        with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):
-            url = reverse("aist:start_pipeline")
-            payload = {
-                "project": self.project.id,
-                "project_version": self.pv.id,
-                "log_level": "INFO",
-                "time_class_level": "slow",
-                "analyzers": ["bearer"],
-                "ai_mode": "MANUAL",
-                "one_off_actions": "[]",
-            }
-            resp = self.client.post(url, data=payload)
-            self.assertEqual(resp.status_code, 302)
+        url = reverse("aist:start_pipeline")
+        payload = {
+            "project": self.project.id,
+            "project_version": self.pv.id,
+            "log_level": "INFO",
+            "time_class_level": "slow",
+            "analyzers": ["bearer"],
+            "ai_mode": "MANUAL",
+            "one_off_actions": "[]",
+        }
+        resp = self.client.post(url, data=payload)
+        self.assertEqual(resp.status_code, 302)
 
         launch_request = PipelineLaunchRequest.objects.get()
         self.assertEqual(launch_request.params_snapshot.get("analyzers"), ["bearer"])
 
     def test_start_pipeline_recomputes_default_analyzers_when_language_changed(self):
-        with patch("aist.forms._load_analyzers_config", return_value=DummyConfig()):
-            query_data = QueryDict("", mutable=True)
-            query_data.update(
-                {
-                    "project": str(self.project.id),
-                    "time_class_level": "slow",
-                },
-            )
-            query_data.setlist("languages", ["go"])
-            query_data["selection_signature"] = "stale-signature"
+        query_data = QueryDict("", mutable=True)
+        query_data.update(
+            {
+                "project": str(self.project.id),
+                "time_class_level": "slow",
+            },
+        )
+        query_data.setlist("languages", ["go"])
+        query_data["selection_signature"] = "stale-signature"
 
-            form = AISTPipelineRunForm(query_data)
-            self.assertEqual(form.data.getlist("analyzers"), ["semgrep", "snyk", "bearer"])
+        form = AISTPipelineRunForm(query_data)
+        self.assertEqual(form.data.getlist("analyzers"), ["semgrep", "snyk", "bearer", "gosec"])
 
     @patch("aist.celery_signals.get_action_handler")
     def test_one_off_action_runs_once(self, mock_get_handler):

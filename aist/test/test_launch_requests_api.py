@@ -5,11 +5,13 @@ from unittest.mock import patch
 
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from aist.models import (
     AISTPipeline,
     AISTProjectLaunchConfig,
     PipelineExecutionLease,
+    PipelineExecutionType,
     PipelineLaunchOrigin,
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
@@ -40,8 +42,25 @@ class LaunchRequestAdminAPITests(AISTApiBase):
             item = by_id[request.pk]
             self.assertEqual(item["state"], PipelineLaunchRequestState.PENDING)
             self.assertEqual(item["capacity_retry_count"], 2)
-            self.assertEqual(item["not_before"], request.not_before)
+            self.assertEqual(parse_datetime(item["not_before"]), request.not_before)
             self.assertIn("expires_at", item)
+
+    def test_queue_rows_name_their_origin_execution_type_and_state(self):
+        request = PipelineLaunchRequest.objects.create(
+            project=self.project,
+            origin=PipelineLaunchOrigin.SCM_WEBHOOK,
+            execution_type=PipelineExecutionType.SAST,
+            state=PipelineLaunchRequestState.CLAIMED,
+        )
+
+        response = self.client.get(reverse("aist_api:pipeline_launch_request_list"))
+
+        row = next(item for item in response.data["results"] if item["id"] == request.pk)
+        self.assertEqual(
+            (row["origin_label"], row["execution_type_label"], row["state_label"]),
+            ("SCM webhook", "SAST", "Claimed"),
+        )
+        self.assertEqual(row["project_name"], self.project.product.name)
 
     def test_delete_launch_request(self):
         cfg = AISTProjectLaunchConfig.objects.create(

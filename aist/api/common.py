@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from dojo.models import SEVERITY_CHOICES
+from dojo.models import SEVERITIES
 from rest_framework import serializers
 
-API_SEVERITY_VALUES = tuple(value for value, _label in SEVERITY_CHOICES)
+from aist.models import OrgIntegration
+from aist.models.organizations import vpn_link_violations
+
+API_SEVERITY_VALUES = tuple(SEVERITIES)
 
 
 def empty_severity_counts() -> dict[str, int]:
@@ -72,3 +75,28 @@ class TimezoneNameField(serializers.CharField):
             msg = "Invalid timezone."
             raise serializers.ValidationError(msg) from exc
         return value
+
+
+class VpnLinkField(serializers.PrimaryKeyRelatedField):
+
+    """
+    An integration of the serializer's ``organization`` context that may route that organization's traffic.
+
+    Integrations of other organizations are indistinguishable from missing ones.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(queryset=OrgIntegration.objects.none(), **kwargs)
+
+    def get_queryset(self):
+        organization = self.context.get("organization")
+        if organization is None:
+            return OrgIntegration.objects.none()
+        return OrgIntegration.objects.filter(organization=organization)
+
+    def to_internal_value(self, data):
+        vpn = super().to_internal_value(data)
+        violations = vpn_link_violations(vpn, organization_id=self.context["organization"].pk)
+        if violations:
+            raise serializers.ValidationError(violations[0].label)
+        return vpn

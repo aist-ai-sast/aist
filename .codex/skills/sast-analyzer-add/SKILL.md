@@ -27,8 +27,8 @@ Before writing anything:
    — understand the config structure and find an analyzer similar to the new one.
 2. Read the Dockerfile and `analyze.sh` of the most similar existing analyzer in
    `sast-combinator/sast-pipeline/Dockerfiles/<similar-analyzer>/`.
-3. Read `sast-combinator/sast-pipeline/pipeline/defect_dojo/utils.py`
-   — check `resolve_scan_type()` to understand how `output_type` maps to importer names.
+3. Read `AnalyzerReport.of()` in `sast-combinator/sast-pipeline/pipeline/config_utils.py`
+   to understand how `output_type` maps to importer names.
 
 ### Step 2 — Create Dockerfile
 
@@ -115,12 +115,9 @@ Add to `sast-combinator/sast-pipeline/pipeline/config/analyzers.yaml`:
     - javascript
 ```
 
-If `output_type` is not yet handled by `resolve_scan_type()` in `utils.py`, add a mapping:
-```python
-# In pipeline/defect_dojo/utils.py, resolve_scan_type()
-if output_type == "My Tool Output":
-    return "My Tool Importer Name"  # must match exact platform importer name
-```
+`output_type` is the exact platform importer name (scan type); `AnalyzerReport.of()` in
+`pipeline/config_utils.py` passes it through unchanged and maps only `xml` / `generic-xml` to
+`Generic XML Import`. An output that needs another mapping is mapped there, in one place.
 
 ### Step 5 — Write test
 
@@ -174,7 +171,7 @@ Create minimal fixture files:
 - [ ] `Dockerfiles/<name>/Dockerfile` — non-root, pinned base image, no secrets
 - [ ] `Dockerfiles/<name>/analyze.sh` — `set -euo pipefail`, correct args, output verified
 - [ ] `pipeline/config/analyzers.yaml` — entry added with correct `output_type`
-- [ ] `resolve_scan_type()` updated if new output_type added
+- [ ] `AnalyzerReport.of()` updated if the new `output_type` is not an importer name
 - [ ] Test file created with fixture files (no live paths)
 - [ ] Run ruff on changed Python files
 

@@ -10,13 +10,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from aist.api.files import ProjectVersionFileBlobAPI
 from aist.integrations import egress
+from aist.models import OrgIntegrationType, RepositoryInfo, ScmType
 from aist.tasks.egress import prewarm_egress, reap_egress
+from aist.test.source_version_fixtures import FakeScmHost
 
 
 class EnsureWarmTests(SimpleTestCase):
@@ -109,7 +110,14 @@ class ReapIdleTests(SimpleTestCase):
 class VpnResolutionTests(SimpleTestCase):
 
     def _pv_with_scm_vpn(self, *, vpn_active, proj_org=1, vpn_org=1):
-        vpn_integration = SimpleNamespace(id=7, is_active=vpn_active, organization_id=vpn_org)
+        vpn_integration = SimpleNamespace(
+            id=7,
+            pk=7,
+            integration_type=OrgIntegrationType.VPN,
+            is_active=vpn_active,
+            organization_id=vpn_org,
+            config={"profile": "scm-vpn"},
+        )
         binding = SimpleNamespace(org_integration=SimpleNamespace(vpn_integration=vpn_integration))
         repo = SimpleNamespace(get_binding=lambda: binding)
         return SimpleNamespace(pk=99, project=SimpleNamespace(repository=repo, organization_id=proj_org))
@@ -122,21 +130,36 @@ class VpnResolutionTests(SimpleTestCase):
         # SCM binding points at a VPN from a different org → must NOT be used;
         # falls through to the org-scoped resolver (mocked to None here).
         pv = self._pv_with_scm_vpn(vpn_active=True, proj_org=1, vpn_org=2)
-        with patch("aist.integrations.resolver.resolve_integration", return_value=None):
+        with patch("aist.integrations.egress.resolve_integration", return_value=None):
             self.assertIsNone(egress.vpn_integration_for_project_version(pv))
 
     def test_inactive_scm_vpn_falls_back_to_none(self):
         pv = self._pv_with_scm_vpn(vpn_active=False)
-        with patch("aist.integrations.resolver.resolve_integration", return_value=None):
+        with patch("aist.integrations.egress.resolve_integration", return_value=None):
             self.assertIsNone(egress.vpn_integration_for_project_version(pv))
+
+    def test_repository_clones_go_through_the_scm_bound_vpn_before_the_project_default(self):
+        project = self._pv_with_scm_vpn(vpn_active=True).project
+        with patch("aist.integrations.egress.resolve_integration") as project_default:
+            resolved = egress.resolve_source_vpn(project)
+
+        self.assertEqual(resolved.integration.pk, 7)
+        self.assertEqual(resolved.config, {"profile": "scm-vpn"})
+        project_default.assert_not_called()
+
+    def test_a_scm_vpn_that_may_not_route_the_project_falls_back_to_the_project_default(self):
+        project = self._pv_with_scm_vpn(vpn_active=True, proj_org=1, vpn_org=2).project
+        default = SimpleNamespace(integration=SimpleNamespace(pk=8), config={})
+        with patch("aist.integrations.egress.resolve_integration", return_value=default):
+            self.assertIs(egress.resolve_source_vpn(project), default)
 
     def test_proxy_url_for_project_version(self):
         pv = self._pv_with_scm_vpn(vpn_active=True)
         self.assertEqual(egress.proxy_url_for_project_version(pv), "http://aist-vpn-egress-7:1080")
 
     def test_no_repo_no_vpn(self):
-        pv = SimpleNamespace(project=SimpleNamespace(repository=None))
-        with patch("aist.integrations.resolver.resolve_integration", return_value=None):
+        pv = SimpleNamespace(project=SimpleNamespace(repository=None, organization_id=1))
+        with patch("aist.integrations.egress.resolve_integration", return_value=None):
             self.assertIsNone(egress.proxy_url_for_project_version(pv))
 
 
@@ -155,24 +178,22 @@ class TaskContractTests(SimpleTestCase):
             self.assertEqual(reap_egress.run(async_user_id=1), 0)
 
 
-class RemoteBytesProxyTests(SimpleTestCase):
+class RepositoryReadProxyTests(SimpleTestCase):
 
-    """`_return_remote_bytes` routes through the proxy only when given one."""
+    """`RepositoryInfo.read_file` routes through the egress proxy only when given one."""
 
-    def _view(self):
-        return ProjectVersionFileBlobAPI()
-
-    def _ok_response(self):
-        resp = MagicMock(status_code=200, content=b"data")
-        resp.raise_for_status = MagicMock()
-        return resp
+    def _repository(self):
+        return RepositoryInfo(
+            type=ScmType.GITLAB, repo_owner="acme", repo_name="widgets", base_url="https://gitlab.internal.example",
+        )
 
     def test_passes_proxies_when_proxy_url_set(self):
-        with patch("aist.api.files.requests.get", return_value=self._ok_response()) as get:
-            self._view()._return_remote_bytes("https://h/f", "f", proxy_url="http://p:1080")
-        self.assertEqual(get.call_args.kwargs["proxies"], {"http": "http://p:1080", "https": "http://p:1080"})
+        with FakeScmHost(body=b"data") as host:
+            data = self._repository().read_file("main", "f.py", proxy_url="http://p:1080")
+        self.assertEqual(data, b"data")
+        self.assertEqual(host.last.proxies["https"], "http://p:1080")
 
     def test_no_proxies_without_proxy_url(self):
-        with patch("aist.api.files.requests.get", return_value=self._ok_response()) as get:
-            self._view()._return_remote_bytes("https://h/f", "f")
-        self.assertIsNone(get.call_args.kwargs["proxies"])
+        with FakeScmHost(body=b"data") as host:
+            self._repository().read_file("main", "f.py")
+        self.assertEqual(host.last.proxies, {})

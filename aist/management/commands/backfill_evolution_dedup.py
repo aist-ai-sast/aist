@@ -6,12 +6,8 @@ deduplication feature was introduced.
 
   Phase 1 — Annotate (--annotate)
     For each finding that has a ``sourcefile_link`` DojoMeta but no
-    ``aist:lhash``, fetch the file content via the same logic used by
-    ProjectVersionFileBlobAPI and write the line-content hash.
-
-    Supported sources:
-      - FILE_HASH versions: project_version.ensure_extracted() → local disk
-      - GIT_BRANCH / GIT_HASH: SCM binding (GitHub / GitLab) → HTTP fetch
+    ``aist:lhash``, read the file through ``AISTProjectVersion.open_source_file`` (the
+    reader behind the file blob endpoint) and write the line-content hash.
 
     Findings whose project version is no longer accessible are skipped
     and counted in the summary.
@@ -31,10 +27,7 @@ Scope flags (can be combined):
 from __future__ import annotations
 
 import logging
-import re
 from collections import defaultdict
-from hashlib import sha256
-from typing import TYPE_CHECKING
 
 import requests
 from django.core.management.base import BaseCommand
@@ -42,18 +35,14 @@ from django.db.models import Exists, OuterRef
 from dojo.models import DojoMeta, Finding
 
 from aist.dedupe.custom import SUPPORTED_SCAN_TYPES
-from aist.dedupe.evolution import AIST_LHASH_META_NAME, run_evolution_dedup
-from aist.link_builder import LinkBuilder
-from aist.models import AISTPipeline, AISTProjectVersion, VersionType
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from aist.dedupe.evolution import AIST_LHASH_META_NAME, line_fingerprint, run_evolution_dedup
+from aist.integrations import egress
+from aist.integrations.scm_errors import ScmFetchError
+from aist.link_builder import SOURCEFILE_LINK_META_NAME, LinkBuilder
+from aist.models import AISTPipeline, AISTProjectVersion
+from aist.models.projects import SourceFileNotFoundError
 
 logger = logging.getLogger(__name__)
-
-# Pattern to extract (project_version_id, subpath) from a sourcefile_link URL.
-# URL example: https://host/api/projects_version/42/files/blob/src/views.py
-_BLOB_URL_RE = re.compile(r"/projects_version/(\d+)/files/blob/(.+?)(?:\?.*)?$")
 
 
 class Command(BaseCommand):
@@ -177,7 +166,7 @@ class Command(BaseCommand):
         # Fetch sourcefile_link values for these findings in one query.
         link_by_finding: dict[int, str] = dict(
             DojoMeta.objects
-            .filter(finding_id__in=finding_ids, name="sourcefile_link")
+            .filter(finding_id__in=finding_ids, name=SOURCEFILE_LINK_META_NAME)
             .values_list("finding_id", "value"),
         )
         # Also fetch lines.
@@ -200,7 +189,7 @@ class Command(BaseCommand):
             line = line_by_finding.get(fid)
             if not line:
                 continue
-            parsed = _parse_blob_url(link)
+            parsed = LinkBuilder.parse(link)
             if parsed is None:
                 skipped_parse_error += 1
                 continue
@@ -218,16 +207,11 @@ class Command(BaseCommand):
 
             to_create = []
             for fid, line in members:
-                try:
-                    content = lines[line - 1].strip()
-                except IndexError:
+                fingerprint = line_fingerprint(lines, line)
+                if fingerprint is None:
                     skipped_blank += 1
                     continue
-                if not content:
-                    skipped_blank += 1
-                    continue
-                h = sha256(content.encode()).hexdigest()[:16]
-                to_create.append(DojoMeta(name=AIST_LHASH_META_NAME, value=h, finding_id=fid))
+                to_create.append(DojoMeta(name=AIST_LHASH_META_NAME, value=fingerprint, finding_id=fid))
 
             if to_create and not dry_run:
                 DojoMeta.objects.bulk_create(to_create, ignore_conflicts=True)
@@ -317,81 +301,19 @@ class Command(BaseCommand):
 # Module-level helpers (testable in isolation)                        #
 # ------------------------------------------------------------------ #
 
-def _parse_blob_url(url: str) -> tuple[int, str] | None:
-    """
-    Extract (project_version_id, subpath) from a sourcefile_link URL.
-    Returns None if the URL does not match the expected pattern.
-    """
-    m = _BLOB_URL_RE.search(url)
-    if not m:
-        return None
-    return int(m.group(1)), m.group(2)
-
-
 def _fetch_file_lines(project_version_id: int, subpath: str) -> list[str] | None:
-    """
-    Return the lines of ``subpath`` from the given project version, or None
-    if the content cannot be retrieved.
-
-    Mirrors the logic in ProjectVersionFileBlobAPI.get() so the same
-    sources (local archive, SCM HTTP) are supported without going through HTTP.
-    """
-    try:
-        pv = (
-            AISTProjectVersion.objects
-            .select_related("project__repository")
-            .get(id=project_version_id)
-        )
-    except AISTProjectVersion.DoesNotExist:
-        return None
-
-    if pv.version_type == VersionType.FILE_HASH:
-        return _lines_from_archive(pv, subpath)
-
-    return _lines_from_scm(pv, subpath)
-
-
-def _lines_from_archive(pv: AISTProjectVersion, subpath: str) -> list[str] | None:
-    """Read a file from a FILE_HASH project version's extracted archive."""
-    try:
-        root: Path | None = pv.ensure_extracted()
-    except FileNotFoundError:
-        return None
-    if root is None:
-        return None
-    safe_rel = subpath.lstrip("/")
-    file_path = (root / safe_rel).resolve()
-    if not file_path.exists() or not file_path.is_file():
+    """Return the lines of ``subpath`` in the given project version, or None when it cannot be read."""
+    pv = (
+        AISTProjectVersion.objects
+        .select_related("project__repository")
+        .filter(id=project_version_id)
+        .first()
+    )
+    if pv is None:
         return None
     try:
-        return file_path.read_text(errors="replace").splitlines()
-    except OSError:
+        with pv.open_source_file(subpath, proxy_url=egress.proxy_url_for_project_version(pv)) as source:
+            data = source.read()
+    except (SourceFileNotFoundError, ScmFetchError, requests.RequestException, OSError):
         return None
-
-
-def _lines_from_scm(pv: AISTProjectVersion, subpath: str) -> list[str] | None:
-    """Fetch a file from a git-based project version via its SCM binding."""
-    if pv.version_type == VersionType.GIT_BRANCH:
-        ref = (pv.last_resolved_commit or pv.version or "master").strip()
-    else:
-        ref = (pv.version or "master").strip()
-
-    repo_obj = getattr(pv.project, "repository", None)
-    if not repo_obj:
-        return None
-
-    binding = repo_obj.get_binding()
-    if binding:
-        raw_url = binding.build_raw_url(repo_obj, ref, subpath)
-        headers = binding.get_auth_headers() or {}
-    else:
-        raw_url = LinkBuilder.build_raw_url(repo_obj.host(), ref, subpath)
-        headers = {}
-
-    try:
-        resp = requests.get(raw_url, headers=headers, timeout=10, allow_redirects=True)
-        if resp.status_code != 200:
-            return None
-        return resp.text.splitlines()
-    except requests.RequestException:
-        return None
+    return data.decode("utf-8", errors="replace").splitlines()

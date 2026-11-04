@@ -1,1 +1,4 @@
 -r vendor/defectdojo/requirements-dev.txt
+
+# In-memory Redis for tests of the Redis-held pipeline progress; unit tests run without the broker.
+fakeredis==2.40.0

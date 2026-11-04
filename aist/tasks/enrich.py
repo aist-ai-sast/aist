@@ -1,19 +1,19 @@
 import logging
 import os
 from collections import defaultdict
-from hashlib import sha256
 from math import ceil
 from pathlib import Path
-from typing import Any
 
 from celery import chain, chord, shared_task
 from django.db import transaction
-from dojo.models import DojoMeta, Finding, Test
+from dojo.models import DojoMeta, Finding
 
+from aist.dedupe.evolution import AIST_LHASH_META_NAME, line_fingerprint
 from aist.launch_data import PipelineLaunchData
-from aist.link_builder import LinkBuilder
+from aist.link_builder import LinkBuilder, store_source_link
 from aist.logging_transport import get_redis, install_pipeline_logging
 from aist.models import AISTPipeline, AISTStatus
+from aist.progress import EnrichProgress
 from aist.utils.pipeline import set_pipeline_status
 
 logger = logging.getLogger(__name__)
@@ -40,10 +40,9 @@ def on_enrich_chord_error(*args, pipeline_id: str, **kwargs) -> None:
 
 
 @shared_task(bind=True)
-def report_enrich_done(self, result: int, pipeline_id: str, async_user_id=None):
-    redis = get_redis()
-    key = f"aist:progress:{pipeline_id}:enrich"
-    redis.hincrby(key, "done", 1)
+def report_enrich_done(self, result: int, pipeline_id: str, findings: int, async_user_id=None):
+    """Count a finished chunk's ``findings`` towards the pipeline's enrich progress and pass its result on."""
+    EnrichProgress.advance(get_redis(), pipeline_id, findings)
     return result
 
 
@@ -54,7 +53,7 @@ def after_upload_enrich_and_watch(results: list[int],
                                   log_level,
                                   async_user_id=None) -> None:
     from aist.dedupe.evolution import run_evolution_dedup  # noqa: PLC0415
-    from aist.tasks.ai import auto_push_to_ai_if_configured  # noqa: PLC0415
+    from aist.tasks.ai import auto_push_to_ai_if_configured, resolve_triage_type  # noqa: PLC0415
     from aist.tasks.regression import detect_regressions_for_pipeline  # noqa: PLC0415
 
     logger = install_pipeline_logging(pipeline_id, log_level)
@@ -62,11 +61,6 @@ def after_upload_enrich_and_watch(results: list[int],
 
     with transaction.atomic():
         pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
-
-        if test_ids:
-            tests = list(Test.objects.filter(id__in=test_ids))
-            pipeline.tests.set(tests, clear=True)
-
         set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
 
     logger.info("Enrichment finished: %s findings enriched.", enriched)
@@ -84,103 +78,73 @@ def after_upload_enrich_and_watch(results: list[int],
         )
     except Exception:
         logger.exception("Regression detection failed (pipeline_id=%s); continuing.", pipeline_id)
-    ld = PipelineLaunchData(pipeline.launch_data)
-    ai = ld.ai
-    if ai.get("mode") == "AUTO_DEFAULT":
-        # n8n requires filter_snapshot; local triage can work without it.
-        triage_type = ai.get("triage_type") or "n8n"
-        if ai.get("filter_snapshot") or triage_type == "local":
-            auto_push_to_ai_if_configured.delay(pipeline_id)
+    if PipelineLaunchData(pipeline.launch_data).ai.pushes_automatically(resolve_triage_type(pipeline)):
+        auto_push_to_ai_if_configured.delay(pipeline_id)
 
 
-def _enrich_finding_link(
-    f,
-    file_path: str,
-    trim_path: str,
-    project_version_descriptor: dict[str, Any],
-    finding_id: int,
-    test_id,
-) -> int:
-    if trim_path and file_path.startswith(trim_path):
-        tp = trim_path if trim_path.endswith("/") else trim_path + "/"
-        f.file_path = file_path.replace(tp, "")
+def _enrich_finding_link(f, linker: LinkBuilder) -> int:
+    file_path = linker.relative_path(f.file_path or "")
+    if file_path != (f.file_path or ""):
+        f.file_path = file_path
         f.save(update_fields=["file_path"])
-        file_path = f.file_path
 
-    linker = LinkBuilder(project_version_descriptor)
     try:
         link = linker.build(file_path)
     except Exception:
         logger.exception(
-            "Failed to build source link for finding enrichment: "
-            "finding_id=%s file_path=%s test_id=%s project_version_descriptor=%s",
-            finding_id,
+            "Failed to build source link for finding enrichment: finding_id=%s file_path=%s test_id=%s version_id=%s",
+            f.id,
             file_path,
-            test_id,
-            project_version_descriptor,
+            f.test_id,
+            linker.version_id,
         )
         return 0
 
     if not link:
         return 0
-    acceptable = not linker.contains_excluded_path(link)
-    if acceptable:
-        try:
-            DojoMeta.objects.update_or_create(
-                finding=f,
-                name="sourcefile_link",
-                defaults={"value": link},
-            )
-        except Exception:
-            logger.exception(
-                "Failed to upsert sourcefile_link meta for finding enrichment: "
-                "finding_id=%s file_path=%s test_id=%s project_version_descriptor=%s",
-                finding_id,
-                file_path,
-                test_id,
-                project_version_descriptor,
-            )
-            return 0
-    else:
-        f.delete()
+    try:
+        store_source_link(f.id, link)
+    except Exception:
+        logger.exception(
+            "Failed to upsert sourcefile_link meta for finding enrichment: "
+            "finding_id=%s file_path=%s test_id=%s version_id=%s",
+            f.id,
+            file_path,
+            f.test_id,
+            linker.version_id,
+        )
+        return 0
     return 1
+
+
+def _enrich_finding(finding_id: int, linker: LinkBuilder) -> int:
+    try:
+        f = Finding.objects.get(id=finding_id)
+    except Finding.DoesNotExist:
+        logger.info("Finding %s no longer exists; nothing to enrich.", finding_id)
+        return 0
+    try:
+        return _enrich_finding_link(f, linker)
+    except Exception:
+        logger.exception(
+            "Unexpected finding enrichment error: finding_id=%s file_path=%s test_id=%s version_id=%s",
+            finding_id,
+            f.file_path,
+            f.test_id,
+            linker.version_id,
+        )
+        return 0
 
 
 @shared_task(bind=False)
 def enrich_finding_task(
     finding_id: int,
     trim_path: str,
-    project_version_descriptor: dict[str, Any],
+    project_version_id: int | None,
     async_user_id=None,
 ) -> int:
-    """Enrich a single finding by trimming its file path and attaching a source link."""
-    try:
-        f = Finding.objects.select_related("test__engagement").get(id=finding_id)
-    except Finding.DoesNotExist:
-        return 0
-    else:
-        file_path = f.file_path or ""
-        test_id = getattr(f, "test_id", None)
-
-        # Severity exclusion — evaluated before any further work so that excluded
-        # findings never reach the link-building stage.
-        excluded_severities = project_version_descriptor.get("excluded_severities", [])
-        if excluded_severities and f.severity in excluded_severities:
-            f.delete()
-            return 1
-
-        try:
-            return _enrich_finding_link(f, file_path, trim_path, project_version_descriptor, finding_id, test_id)
-        except Exception:
-            logger.exception(
-                "Unexpected finding enrichment error: "
-                "finding_id=%s file_path=%s test_id=%s project_version_descriptor=%s",
-                finding_id,
-                file_path,
-                test_id,
-                project_version_descriptor,
-            )
-            return 0
+    """Enrich a single finding by trimming its file path and attaching a source link into its project version."""
+    return _enrich_finding(finding_id, LinkBuilder(project_version_id, trim_path))
 
 
 @shared_task(bind=False)
@@ -191,7 +155,7 @@ def annotate_line_hash_batch(
 ) -> int:
     """
     Compute a content fingerprint (SHA-256 of the vulnerable line) for each
-    finding and persist it as DojoMeta(name="aist:lhash").
+    finding and persist it as DojoMeta(name=AIST_LHASH_META_NAME).
 
     Groups findings by file path so each source file is read at most once per
     batch. Must run before enrich_finding_batch within the same chunk — see
@@ -223,14 +187,9 @@ def annotate_line_hash_batch(
         except OSError:
             continue
         for f in file_findings:
-            try:
-                content = lines[f.line - 1].strip()
-            except IndexError:
-                continue
-            if not content:
-                continue
-            h = sha256(content.encode()).hexdigest()[:16]
-            to_create.append(DojoMeta(name="aist:lhash", value=h, finding_id=f.id))
+            fingerprint = line_fingerprint(lines, f.line)
+            if fingerprint:
+                to_create.append(DojoMeta(name=AIST_LHASH_META_NAME, value=fingerprint, finding_id=f.id))
 
     if to_create:
         DojoMeta.objects.bulk_create(to_create, ignore_conflicts=True)
@@ -241,15 +200,16 @@ def annotate_line_hash_batch(
 def enrich_finding_batch(
     finding_ids: list[int],
     trim_path: str,
-    project_version_descriptor: dict[str, Any],
+    project_version_id: int | None,
     async_user_id=None,
 ) -> int:
+    linker = LinkBuilder(project_version_id, trim_path)
     processed = 0
-    for fid in finding_ids:
+    for finding_id in finding_ids:
         try:
-            processed += int(enrich_finding_task.run(fid, trim_path, project_version_descriptor) or 0)
-        except Exception:  # noqa: S112
-            continue
+            processed += _enrich_finding(finding_id, linker)
+        except Exception:
+            logger.exception("Enrichment failed for finding_id=%s; continuing with the batch.", finding_id)
     return processed
 
 
@@ -262,22 +222,21 @@ def make_enrich_chord(*, pipeline_id: str):
 
     Steps:
       1) Re-fetch finding IDs from DB (reflects post-dedup state).
-      2) Split findings into K chunks (K ~= number of active workers).
+      2) Split findings into at most DD_CELERY_WORKER_AUTOSCALE_MAX chunks.
       3) Initialize Redis progress (total = live finding count, done = 0).
-      4) Per chunk: annotate line hashes first, then enrich (sequential within chunk).
+      4) Per chunk: annotate line hashes first, from the untrimmed file_path, then enrich (sequential within chunk).
          Chunks run in parallel across workers.
 
     Returns:
         celery.canvas.Signature: A chord (or simple task) signature ready to dispatch.
 
     """
-    pipeline = AISTPipeline.objects.select_related("project__product").get(id=pipeline_id)
+    pipeline = AISTPipeline.objects.select_related("project__product", "project_version").get(id=pipeline_id)
     ld = PipelineLaunchData(pipeline.launch_data)
     log_level = ld.log_level
     test_ids = list(pipeline.tests.values_list("id", flat=True))
     trim_path = ld.trim_path
-    project_version_descriptor = ld.project_version_descriptor
-    source_root = ld.resolve_source_root(pipeline.project.product.name)
+    source_root = pipeline.source_root
 
     # Re-fetch finding IDs after dedup — duplicates may have been deleted.
     finding_ids = list(Finding.objects.filter(test_id__in=test_ids).values_list("id", flat=True))
@@ -295,17 +254,13 @@ def make_enrich_chord(*, pipeline_id: str):
     chunk_size = ceil(total / k)
     chunks = [finding_ids[i: i + chunk_size] for i in range(0, total, chunk_size)]
 
-    # Initialize progress in Redis: UI reads aist:progress:<pipeline_id>:enrich.
-    redis = get_redis()
-    redis.hset(f"aist:progress:{pipeline_id}:enrich", mapping={"total": total, "done": 0})
+    EnrichProgress.start(get_redis(), pipeline_id, total)
 
-    # annotate_line_hash_batch runs first (before enrich trims file_path and
-    # potentially deletes excluded-path findings), then enrich runs on the same chunk.
     header = [
         chain(
             annotate_line_hash_batch.si(chunk, source_root),
-            enrich_finding_batch.si(chunk, trim_path, project_version_descriptor),
-            report_enrich_done.s(pipeline_id),
+            enrich_finding_batch.si(chunk, trim_path, pipeline.project_version_id),
+            report_enrich_done.s(pipeline_id, len(chunk)),
         )
         for chunk in chunks
     ]

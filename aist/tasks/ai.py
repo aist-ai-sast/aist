@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterable
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -7,11 +8,12 @@ import requests
 from celery import shared_task
 from django.conf import settings
 from django.db import transaction
+from django.db.models import QuerySet
 from dojo.models import Finding
 
-from aist.ai_filter import apply_ai_filter
-from aist.integrations.claude import claude_auth_env
-from aist.launch_data import PipelineLaunchData
+from aist.ai_filter import AIFilterError, select_by_ai_filter
+from aist.integrations.claude import claude_subprocess_env
+from aist.launch_data import AITriageType, PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTAIResponse, AISTPipeline, AISTStatus
 from aist.profile import ProjectProfile
@@ -123,33 +125,9 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
         set_pipeline_status(pipeline, AISTStatus.WAITING_RESULT_FROM_AI)
 
 
-def _resolve_triage_type(pipeline: AISTPipeline) -> str:
-    """
-    Resolve the effective triage type for a pipeline.
-
-    Priority: launch_data.ai.triage_type > project.profile.ai_triage.type > "n8n".
-    """
-    ld = PipelineLaunchData(pipeline.launch_data)
-    per_launch = ld.ai_triage_type
-    if per_launch in {"n8n", "local"}:
-        return per_launch
-    profile = ProjectProfile.from_dict(pipeline.project.profile)
-    return profile.get_ai_triage_type()
-
-
-def _resolve_effective_filter(snap: dict | None, triage_type: str) -> dict | None:
-    """
-    Resolve per-type filter from the snapshot.
-
-    1. If snap has ``per_type[triage_type]`` → use it.
-    2. Otherwise → use the root-level filter (backward compat).
-    """
-    if not snap:
-        return None
-    per_type = snap.get("per_type")
-    if isinstance(per_type, dict) and triage_type in per_type:
-        return per_type[triage_type]
-    return snap
+def resolve_triage_type(pipeline: AISTPipeline) -> AITriageType:
+    """The triage that handles a pipeline's findings: the launch's own choice, else the project's profile."""
+    return ProjectProfile.from_dict(pipeline.project.profile).triage_type_for(PipelineLaunchData(pipeline.launch_data).ai)
 
 
 def _gather_local_triage_payload(pipeline_id: str, log) -> tuple[bool, str, str, dict[str, str]]:
@@ -167,19 +145,9 @@ def _gather_local_triage_payload(pipeline_id: str, log) -> tuple[bool, str, str,
                 pipeline_id,
             )
             return False, "", "", {}
-        ld = PipelineLaunchData(pipeline.launch_data)
-        product_name = getattr(pipeline.project.product, "name", "") or ""
-        source_path = ld.resolve_source_root(product_name)
-        callback_url = build_local_triage_callback_url(pipeline_id)
-        # Resolve Claude credentials for the pipeline's project. The
-        # factory itself stays agent-agnostic (invariant I4) and the
-        # Claude-specific env-var mapping lives in
-        # aist/integrations/claude.py (invariant I1).
-        claude_auth = {
-            var: secret.get_secret_value()
-            for var, secret in claude_auth_env(pipeline.project).items()
-        }
-        return True, source_path, callback_url, claude_auth
+        # The bridge client factory stays agent-agnostic (invariant I4); the Claude-specific env-var
+        # mapping lives in aist/integrations/claude.py (invariant I1).
+        return True, pipeline.source_root, build_local_triage_callback_url(pipeline_id), claude_subprocess_env(pipeline.project)
 
 
 @shared_task(bind=True)
@@ -270,19 +238,59 @@ def push_request_to_local_triage(
         set_pipeline_status(pipeline, AISTStatus.WAITING_RESULT_FROM_AI)
 
 
-def _prepare_auto_push(pipeline_id: str, logger) -> bool | None:
+def push_to_triage(triage_type: AITriageType, pipeline_id: str, finding_ids: list[int], filters: dict) -> None:
+    """Queue the push of a pipeline's ``finding_ids`` to the triage of ``triage_type``."""
+    match triage_type:
+        case AITriageType.LOCAL:
+            push_request_to_local_triage.delay(pipeline_id, finding_ids)
+        case AITriageType.N8N:
+            push_request_to_ai.delay(pipeline_id, finding_ids, filters)
+        case _:
+            msg = f"No triage push for {triage_type!r}"
+            raise ValueError(msg)
+
+
+class AutoPushOutcome(Enum):
+    DISPATCHED = "dispatched"
+    ALREADY_HANDLED = "already_handled"
+    NOTHING_TO_PUSH = "nothing_to_push"
+    DEGRADED = "degraded"
+
+
+def _local_selection(findings: QuerySet, ai_filter: dict | None, pipeline_id: str, logger) -> list[int]:
+    """Local triage takes the findings the filter selects, or every finding when there is no filter."""
+    finding_ids = list((select_by_ai_filter(findings, ai_filter) if ai_filter else findings).values_list("id", flat=True))
+    if not finding_ids:
+        logger.warning("AUTO_DEFAULT (local): 0 active findings (pipeline_id=%s)", pipeline_id)
+    return finding_ids
+
+
+def _n8n_selection(findings: QuerySet, ai_filter: dict | None, pipeline_id: str, logger) -> list[int]:
+    """n8n triage takes only the findings a filter selects."""
+    if not ai_filter:
+        logger.warning("AUTO_DEFAULT: Filter snapshot not configured (pipeline_id=%s)", pipeline_id)
+        return []
+    finding_ids = list(select_by_ai_filter(findings, ai_filter).values_list("id", flat=True))
+    if not finding_ids:
+        logger.warning("AUTO_DEFAULT: filter matched 0 findings (pipeline_id=%s)", pipeline_id)
+    return finding_ids
+
+
+_AUTO_PUSH_SELECTION = {
+    AITriageType.LOCAL: _local_selection,
+    AITriageType.N8N: _n8n_selection,
+}
+
+# Statuses in which a pipeline's findings have already gone to triage, or the pipeline is over.
+_PUSH_HANDLED_STATUSES = frozenset({AISTStatus.PUSH_TO_AI, AISTStatus.WAITING_RESULT_FROM_AI})
+
+
+def _prepare_auto_push(pipeline_id: str, logger) -> AutoPushOutcome:
     """
-    Lock the pipeline, validate pre-conditions, and schedule the AI push via on_commit.
+    Lock the pipeline and schedule the AI push of its findings via on_commit.
 
-    Called inside auto_push_to_ai_if_configured. finish_pipeline must be called by
-    the caller *outside* any transaction to avoid a deadlock between the AISTPipeline
-    lock (held here) and the AISTProjectVersion lock (acquired by reconciliation).
-
-    Returns:
-        True  - finish pipeline as FINISHED_WITH_WARNINGS
-        False - finish pipeline as FINISHED
-        None  - AI task dispatched; no finish needed
-
+    The caller finishes the pipeline outside this transaction unless the push was dispatched, so the
+    AISTPipeline lock held here is never held while reconciliation takes the AISTProjectVersion lock.
     """
     with transaction.atomic():
         pipeline = (
@@ -293,80 +301,40 @@ def _prepare_auto_push(pipeline_id: str, logger) -> bool | None:
             .get(id=pipeline_id)
         )
 
+        if pipeline.status in _PUSH_HANDLED_STATUSES or is_terminal_pipeline_status(pipeline.status):
+            logger.info("Auto push already handled; pipeline is %s (pipeline_id=%s)", pipeline.status, pipeline_id)
+            return AutoPushOutcome.ALREADY_HANDLED
         if pipeline.status != AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI:
             logger.error(
                 "Unexpected pipeline status %s for auto push (pipeline_id=%s)",
                 pipeline.status,
                 pipeline_id,
             )
-            return True  # degraded
+            return AutoPushOutcome.DEGRADED
 
-        triage_type = _resolve_triage_type(pipeline)
-        snap = PipelineLaunchData(pipeline.launch_data).ai.get("filter_snapshot")
-        effective_filter = _resolve_effective_filter(snap, triage_type)
+        triage_type = resolve_triage_type(pipeline)
+        ai_filter = PipelineLaunchData(pipeline.launch_data).ai.filter_snapshot
 
-        # Findings already triaged by analyzer-produced AI artifacts carry
-        # pre-judged TP/FP verdicts. Re-running them through post-import triage
-        # would either waste budget or overwrite the analyzer verdict.
-        qs = Finding.objects.filter(test__in=pipeline.tests.all(), active=True).exclude(
+        # Findings already triaged by analyzer-produced AI artifacts carry pre-judged TP/FP verdicts;
+        # post-import triage would waste budget on them or overwrite the analyzer verdict.
+        findings = Finding.objects.filter(test__in=pipeline.tests.all(), active=True).exclude(
             aist_ai_responses__source_response__source=AISTAIResponse.Source.AGENT_ANALYZER,
         )
-
-        if triage_type == "local":
-            # Local triage: apply per-type filter if configured, otherwise take all.
-            if effective_filter:
-                qs = apply_ai_filter(qs, effective_filter)
-                raw_limit = effective_filter.get("limit")
-                if raw_limit is not None:
-                    try:
-                        limit = int(raw_limit)
-                    except (TypeError, ValueError):
-                        limit = None
-                    if limit:
-                        qs = qs[:limit]
-            finding_ids = list(qs.values_list("id", flat=True))
-
-            if not finding_ids:
-                logger.warning("AUTO_DEFAULT (local): 0 active findings (pipeline_id=%s)", pipeline_id)
-                return False  # finish ok
-
-            set_pipeline_status(pipeline, AISTStatus.PUSH_TO_AI)
-            transaction.on_commit(
-                lambda: push_request_to_local_triage.delay(pipeline_id, finding_ids),
-            )
-            return None  # dispatched
-
-        # n8n triage (default)
-        if not effective_filter:
-            logger.warning("AUTO_DEFAULT: Filter snapshot not configured (pipeline_id=%s)", pipeline_id)
-            return False  # finish ok
-
-        raw_limit = effective_filter.get("limit")
         try:
-            limit = int(raw_limit)
-        except (TypeError, ValueError):
-            logger.warning(
-                "AUTO_DEFAULT: Invalid filter limit %r (pipeline_id=%s)", raw_limit, pipeline_id,
-            )
-            return True  # degraded
-
-        qs = apply_ai_filter(qs, effective_filter)
-        finding_ids = list(qs.values_list("id", flat=True)[:limit])
-
+            finding_ids = _AUTO_PUSH_SELECTION[triage_type](findings, ai_filter, pipeline_id, logger)
+        except AIFilterError as exc:
+            logger.warning("AUTO_DEFAULT: invalid AI filter %s (pipeline_id=%s)", exc, pipeline_id)
+            return AutoPushOutcome.DEGRADED
         if not finding_ids:
-            logger.warning("AUTO_DEFAULT: filter matched 0 findings (pipeline_id=%s)", pipeline_id)
-            return False  # finish ok
-
+            return AutoPushOutcome.NOTHING_TO_PUSH
         set_pipeline_status(pipeline, AISTStatus.PUSH_TO_AI)
-        transaction.on_commit(
-            lambda: push_request_to_ai.delay(pipeline_id, finding_ids, {"filter": effective_filter}),
-        )
-        return None  # dispatched
+        transaction.on_commit(lambda: push_to_triage(triage_type, pipeline_id, finding_ids, {"filter": ai_filter}))
+        return AutoPushOutcome.DISPATCHED
 
 
 @shared_task(name="aist.auto_push_to_ai_if_configured")
 def auto_push_to_ai_if_configured(pipeline_id: str, async_user_id=None):
     logger = install_pipeline_logging(pipeline_id)
-    degraded = _prepare_auto_push(pipeline_id, logger)
-    if degraded is not None:
-        finish_pipeline(pipeline_id, degraded=degraded)
+    outcome = _prepare_auto_push(pipeline_id, logger)
+    if outcome in {AutoPushOutcome.NOTHING_TO_PUSH, AutoPushOutcome.DEGRADED}:
+        finish_pipeline(pipeline_id, degraded=outcome == AutoPushOutcome.DEGRADED)

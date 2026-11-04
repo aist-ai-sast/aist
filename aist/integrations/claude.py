@@ -4,11 +4,11 @@ Claude as a first-class ``OrgIntegration`` — single concentrator.
 This module is the **only** place in the codebase that knows the mapping
 between an ``OrgIntegration(type=CLAUDE_CODE)`` and concrete environment
 variable names that ``claude -p`` expects. Other modules (``BridgeClient``,
-``run_sast_pipeline``, ``build_bridge_client_from_settings``, the
+``run_sast_execution``, ``build_bridge_client_from_settings``, the
 agent_bridge_runner) deal with a generic ``subprocess_env``/``auth_env``
 dict and stay agent-agnostic.
 
-Architectural invariants (enforced by Task 14 meta-test):
+Architectural invariants (enforced by ``aist/test/test_claude_integration_architecture.py``):
 
 - I1 — the literal ``"CLAUDE_CODE_OAUTH_TOKEN"`` appears **only** in this
   file (plus its tests and the bridge entrypoint cleanup task).
@@ -72,10 +72,8 @@ def claude_auth_env(project: AISTProject) -> dict[str, SecretStr]:
     and fail fast at the call site rather than silently passing through.
 
     The returned secret is wrapped in ``pydantic.SecretStr`` so that
-    ``repr()``/``str()``/structured logging frameworks mask it by default.
-    Callers must explicitly call ``.get_secret_value()`` to extract the
-    raw token at the boundary where it must be passed to the
-    ``claude -p`` subprocess (the bridge's ``subprocess.create_subprocess_exec``).
+    ``repr()``/``str()``/structured logging frameworks mask it by default;
+    :func:`claude_subprocess_env` unwraps it for the ``claude -p`` subprocess.
     """
     resolved = resolve_integration(project, OrgIntegrationType.CLAUDE_CODE)
     if resolved is None:
@@ -88,6 +86,11 @@ def claude_auth_env(project: AISTProject) -> dict[str, SecretStr]:
     if env_var is None:
         return {}
     return {env_var: SecretStr(secret)}
+
+
+def claude_subprocess_env(project: AISTProject) -> dict[str, str]:
+    """The project's Claude credentials unwrapped for the agent bridge's subprocess env; empty when unavailable."""
+    return {var: secret.get_secret_value() for var, secret in claude_auth_env(project).items()}
 
 
 def validate_claude_secret_format(secret: str, auth_mode: str = _AUTH_MODE_OAUTH) -> tuple[bool, str]:

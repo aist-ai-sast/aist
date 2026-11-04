@@ -309,7 +309,7 @@ class LaunchRequestReconciliationTests(AISTApiBase):
         """
         A successful execution task is READY while the pipeline waits for dedup/enrich.
         That hand-off must not be reconciled as a dead execution, or the pipeline is forced
-        terminal and the enrichment stage (path/severity exclusion) is cut short.
+        terminal and the enrichment stage (path trimming and source links) is cut short.
         """
         now = timezone.now()
         request = self._request(state=PipelineLaunchRequestState.DISPATCHED)

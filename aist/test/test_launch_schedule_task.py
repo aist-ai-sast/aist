@@ -154,6 +154,33 @@ class ProcessLaunchSchedulesTests(AISTApiBase):
         sched.refresh_from_db()
         self.assertEqual(sched.last_run_at, due_time)
 
+    def test_a_config_that_no_longer_validates_is_recorded_and_the_rest_of_the_tick_still_launches(self):
+        self.project.profile = {"ai_triage": {"type": "local"}}
+        self.project.save(update_fields=["profile"])
+        stale = AISTProjectLaunchConfig.objects.create(
+            project=self.project,
+            name="Filterless auto triage",
+            params={"project_version": {"id": self.pv.id}, "ai_mode": "AUTO_DEFAULT"},
+        )
+        self.project.profile = {"ai_triage": {"type": "n8n"}}
+        self.project.save(update_fields=["profile"])
+        stale_schedule = LaunchSchedule.objects.create(cron_expression="*/5 * * * *", enabled=True, launch_config=stale)
+        healthy, healthy_schedule = self._mk_config_and_schedule()
+        now = timezone.now()
+        due_time = now - timedelta(minutes=5)
+        LaunchSchedule.objects.filter(pk__in=[stale_schedule.pk, healthy_schedule.pk]).update(next_run_at=due_time)
+
+        with patch("aist.tasks.launch_schedule.timezone.now", return_value=now):
+            process_launch_schedules()
+
+        stale_schedule.refresh_from_db()
+        self.assertEqual(stale_schedule.last_error_code, "INVALID_LAUNCH_CONFIG")
+        self.assertIn("ai_filter", stale_schedule.last_error_detail)
+        self.assertIsNone(stale_schedule.last_run_at)
+        self.assertEqual(
+            list(PipelineLaunchRequest.objects.values_list("launch_config_id", flat=True)), [healthy.id],
+        )
+
     def test_due_dast_schedule_freezes_its_exact_binding_and_replays_one_tick(self):
         binding, config, schedule = self._mk_dast_config_and_schedule()
         now = timezone.now()

@@ -1,6 +1,6 @@
 ---
 name: aist-architecture-docs-maintainer
-description: Maintains AIST reader-facing architecture, data-flow, and threat-model documentation from verified code changes.
+description: Maintains AIST reader-facing architecture, data-flow, and threat-model documentation from verified code changes. In audit mode it is the `docs` reviewer `.sdlc/scope.yaml` routes changed pages to, falsifying each claim against the implementation.
 ---
 
 Use the repository documentation workflow in

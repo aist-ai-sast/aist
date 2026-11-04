@@ -174,6 +174,43 @@ class PipelineStartAPITests(AISTApiBase):
         self.assertEqual(first.data["id"], second.data["id"])
         self.assertEqual(PipelineLaunchRequest.objects.count(), 1)
 
+    def test_a_reused_idempotency_key_for_a_different_launch_is_a_conflict(self):
+        def start(severity):
+            return self.client.post(
+                self._url(),
+                data={
+                    "project_version_id": self.pv.id,
+                    "ai_filter": {"limit": 50, "severity": [{"comparison": "EQUALS", "value": severity}]},
+                },
+                format="json",
+                HTTP_IDEMPOTENCY_KEY="manual-api-click-2",
+            )
+
+        first = start("HIGH")
+        replay = start("LOW")
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(replay.status_code, 409)
+        self.assertEqual(PipelineLaunchRequest.objects.count(), 1)
+
+    def test_a_project_outside_any_organization_cannot_be_launched(self):
+        superuser = get_user_model().objects.create_superuser(
+            username="start-superuser", email="start-superuser@example.com", password="pass",  # noqa: S106
+        )
+        self.client.force_authenticate(user=superuser)
+
+        resp = self.client.post(
+            self._url(),
+            data={
+                "project_version_id": self.other_pv.id,
+                "ai_filter": {"limit": 50, "severity": [{"comparison": "EQUALS", "value": "HIGH"}]},
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(PipelineLaunchRequest.objects.exists())
+
     def test_start_pipeline_rejects_cross_org_project_version(self):
         resp = self.client.post(
             self._url(),
@@ -2056,6 +2093,22 @@ class AISTUIApiTests(AISTApiBase):
         self.project.refresh_from_db()
         self.assertEqual(sorted(self.project.supported_languages), ["go", "python"])
 
+    def test_project_update_rejects_an_unknown_profile_key_and_keeps_the_stored_profile(self):
+        stored = {"paths": {"exclude": ["vendor/"]}}
+        self.project.profile = stored
+        self.project.save(update_fields=["profile"])
+        url = reverse("aist_api:project_detail", kwargs={"project_id": self.project.id})
+
+        resp = self.client.post(
+            url,
+            data={"supported_languages": "python", "profile": '{"paths": {"excludes": ["tests/"]}}'},
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("excludes", str(resp.data["profile"]))
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.profile, stored)
+
     def test_project_update_keeps_organization_when_not_provided(self):
         org = Organization.objects.create(name="Org Keep", product_type=self.prod_type)
         self.project.refresh_from_db()
@@ -2409,7 +2462,7 @@ class LaunchConfigAPITests(AISTApiBase):
         self.assertEqual(r1.status_code, 201)
         cfg1_id = r1.data["id"]
 
-        # create second default -> first should be unset :contentReference[oaicite:8]{index=8}
+        # create second default -> first should be unset
         r2 = self.client.post(
             self._list_create_url(),
             data={"name": "Preset 2", "is_default": True, "params": {"log_level": "INFO"}},

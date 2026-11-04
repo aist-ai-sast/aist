@@ -54,8 +54,9 @@ reaches a terminal outcome, the execution package atomically writes the report
 from the typed connector result into the same product/version/pipeline/timestamp
 layout and returns its path. AIST persists the provider checkpoint before it
 reads and imports that file. The platform importer validates the selected
-format, records tests on the pipeline, and creates or updates findings for the
-effective project version.
+format, records tests on the pipeline, and creates findings in the pipeline
+project's own product for the effective project version; deduplication matches
+them against earlier findings afterwards.
 
 After report hand-off and container cleanup, the report remains in durable
 pipeline output while connector credentials and recovery files are removed with

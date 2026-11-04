@@ -13,9 +13,10 @@ the two sidecar lifecycles and the runtime security boundary.
 | Operation | Route selection |
 |---|---|
 | SCM validation, discovery, and import | VPN attached to the SCM integration, when configured |
-| SAST source acquisition and builder access | VPN resolved for the project and selected source integration |
+| SAST and Claude-analysis source acquisition, builder access | VPN attached to the SCM integration that owns the repository, otherwise the project or organization VPN |
 | Work-item status synchronization | VPN attached to the work-item provider |
-| Interactive source-file fetch | Warm egress for the VPN resolved from the authorized project version |
+| Interactive source-file fetch | Warm egress for the same VPN, resolved from the authorized project version |
+| Deduplication backfill source read | The same warm egress, used only when it is already warm |
 | DAST validation and execution | Only the VPN explicitly attached to the DAST integration |
 
 AI-triage webhooks and Slack delivery do not currently use this route. Local AI
@@ -45,10 +46,16 @@ sidecar owned by a pipeline execution.
    private access, select this VPN.
 5. Validate the consuming integration through the normal integration action.
 
-The VPN and its consumer must belong to the same organization. A project can
-also resolve an organization VPN through its integration configuration, but
-DAST deliberately does not use that fallback: its private gateway requires the
-route attached directly to the DAST integration.
+The selected route must be an active VPN integration of the consumer's own
+organization. AIST rejects any other choice when the consumer is saved, and it
+checks the same rule again before using the route: a route that was disabled or
+stopped being a VPN of that organization after it was selected is never used,
+and a DAST integration whose route breaks the rule is not ready and does not run.
+An SCM integration's route that breaks the rule is ignored, and the project or
+organization VPN applies instead. A project can also resolve an organization VPN through
+its integration configuration, but DAST deliberately does not use that
+fallback: its private gateway requires the route attached directly to the DAST
+integration.
 
 ## Credentials and failure behavior
 
