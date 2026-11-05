@@ -5,12 +5,17 @@ Covers two units independently (no shared state):
   1. annotate_line_hash_batch — reads source files, writes DojoMeta aist:lhash
   2. run_evolution_dedup     — matches findings across pipelines by lhash
 
-All tests use mocks/stubs; no database or filesystem is required.
+No database is required: the ORM is stubbed. annotate_line_hash_batch reads real files under a temporary
+directory.
 """
 from __future__ import annotations
 
+import hashlib
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -111,176 +116,101 @@ class NormalizeVulnIdTests(SimpleTestCase):
 
 class AnnotateLineHashBatchTests(SimpleTestCase):
 
-    def _run(self, finding_ids, source_root, findings, *, expected_creates):
-        """
-        Helper: patches Finding.objects and DojoMeta.objects, runs the task,
-        asserts bulk_create received exactly expected_creates DojoMeta entries.
-        """
+    """The task reads real files under a temporary checkout; only the ORM is stubbed."""
+
+    def setUp(self):
+        super().setUp()
+        self.source_root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.source_root, ignore_errors=True)
+        self.outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.outside, ignore_errors=True)
+
+    def _write(self, root: Path, relative: str, content: str) -> Path:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def _run(self, findings, *, trim_path=""):
+        """Run the task over ``findings``; return the (finding_id, value) pairs it stored."""
         mock_qs = MagicMock()
         mock_qs.__iter__ = lambda _: iter(findings)
-
         with (
             patch("aist.tasks.enrich.Finding") as mock_finding,
-            patch("aist.tasks.enrich.DojoMeta") as mock_dojometa,
+            patch("aist.tasks.enrich.DojoMeta", side_effect=SimpleNamespace) as mock_dojometa,
         ):
             mock_finding.objects.filter.return_value.only.return_value = mock_qs
-            result = annotate_line_hash_batch(finding_ids, source_root)
+            result = annotate_line_hash_batch([f.id for f in findings], str(self.source_root), trim_path)
+        created = mock_dojometa.objects.bulk_create.call_args[0][0] if mock_dojometa.objects.bulk_create.called else []
+        self.assertEqual(result, len(created))
+        for entry in created:
+            self.assertEqual(entry.name, AIST_LHASH_META_NAME)
+        return [(entry.finding_id, entry.value) for entry in created]
 
-        if expected_creates:
-            mock_dojometa.objects.bulk_create.assert_called_once()
-            created = mock_dojometa.objects.bulk_create.call_args[0][0]
-            self.assertEqual(len(created), len(expected_creates))
-            for entry, (exp_finding_id, exp_hash) in zip(created, expected_creates, strict=False):
-                self.assertEqual(entry.finding_id, exp_finding_id)
-                self.assertEqual(entry.value, exp_hash)
-        else:
-            mock_dojometa.objects.bulk_create.assert_not_called()
-
-        return result
+    @staticmethod
+    def _expected(line: str) -> str:
+        return hashlib.sha256(line.strip().encode()).hexdigest()[:16]
 
     def test_empty_source_root_returns_zero(self):
         result = annotate_line_hash_batch([1, 2], "")
         self.assertEqual(result, 0)
 
+    def test_each_finding_gets_the_fingerprint_of_its_line(self):
+        self._write(self.source_root, "app/views.py", "def login():\n    run(query)\n")
+        stored = self._run([
+            _Finding(id=1, file_path="app/views.py", line=1),
+            _Finding(id=2, file_path="app/views.py", line=2),
+        ])
+        self.assertEqual(stored, [(1, self._expected("def login():")), (2, self._expected("run(query)"))])
+
     def test_reads_file_once_per_unique_path(self):
-        """Two findings in the same file → file opened once."""
-        src = "/src"
-        f1 = _Finding(id=1, file_path="app/views.py", line=1)
-        f2 = _Finding(id=2, file_path="app/views.py", line=2)
-
-        mock_qs = MagicMock()
-        mock_qs.__iter__ = lambda _: iter([f1, f2])
-
-        file_content = "def login():\n    pass\n"
-
-        with (
-            patch("aist.tasks.enrich.Finding") as mock_finding,
-            patch("aist.tasks.enrich.DojoMeta"),
-            patch("aist.tasks.enrich.Path") as mock_path_cls,
-        ):
-            mock_finding.objects.filter.return_value.only.return_value = mock_qs
-
-            mock_path_instance = MagicMock()
-            mock_path_instance.is_absolute.return_value = False
-            mock_path_cls.return_value = mock_path_instance
-
-            joined = MagicMock()
-            joined.read_text.return_value = file_content
-            mock_path_instance.__truediv__ = MagicMock(return_value=joined)
-
-            annotate_line_hash_batch([1, 2], src)
-
-        # read_text called once despite two findings in the file
-        joined.read_text.assert_called_once()
+        self._write(self.source_root, "app/views.py", "def login():\n    pass\n")
+        with patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as read_text:
+            self._run([
+                _Finding(id=1, file_path="app/views.py", line=1),
+                _Finding(id=2, file_path="app/views.py", line=2),
+            ])
+        self.assertEqual(read_text.call_count, 1)
 
     def test_skips_finding_without_line(self):
-        f = _Finding(id=10, file_path="src/a.py", line=None)
-        result = self._run([10], "/src", [f], expected_creates=None)
-        self.assertEqual(result, 0)
+        self._write(self.source_root, "src/a.py", "code()\n")
+        self.assertEqual(self._run([_Finding(id=10, file_path="src/a.py", line=None)]), [])
 
     def test_skips_blank_line_content(self):
-        f = _Finding(id=11, file_path="src/a.py", line=2)
+        self._write(self.source_root, "src/a.py", "line1\n   \nline3\n")
+        self.assertEqual(self._run([_Finding(id=11, file_path="src/a.py", line=2)]), [])
 
-        mock_qs = MagicMock()
-        mock_qs.__iter__ = lambda _: iter([f])
+    def test_a_missing_file_is_skipped(self):
+        self.assertEqual(self._run([_Finding(id=12, file_path="missing/file.py", line=1)]), [])
 
-        with (
-            patch("aist.tasks.enrich.Finding") as mock_finding,
-            patch("aist.tasks.enrich.DojoMeta") as mock_dojometa,
-            patch("aist.tasks.enrich.Path") as mock_path_cls,
-        ):
-            mock_finding.objects.filter.return_value.only.return_value = mock_qs
-            p = MagicMock()
-            p.is_absolute.return_value = False
-            mock_path_cls.return_value = p
-            joined = MagicMock()
-            joined.read_text.return_value = "line1\n   \nline3\n"  # line 2 is blank
-            p.__truediv__ = MagicMock(return_value=joined)
+    def test_an_absolute_path_inside_the_source_root_is_read(self):
+        path = self._write(self.source_root, "src/b.py", "vulnerable_line\n")
+        self.assertEqual(self._run([_Finding(id=20, file_path=str(path), line=1)]), [(20, self._expected("vulnerable_line"))])
 
-            annotate_line_hash_batch([11], "/src")
+    def test_an_absolute_container_path_under_the_checkout_root_is_read_from_the_source_root(self):
+        self._write(self.source_root, "src/b.py", "vulnerable_line\n")
+        stored = self._run(
+            [_Finding(id=21, file_path="/workspace/shop/src/b.py", line=1)], trim_path="/workspace/shop",
+        )
+        self.assertEqual(stored, [(21, self._expected("vulnerable_line"))])
 
-        mock_dojometa.objects.bulk_create.assert_not_called()
+    def test_a_path_outside_the_source_root_is_not_read(self):
+        outside = self._write(self.outside, "secret.txt", "worker secret\n")
+        cases = {
+            "absolute path": str(outside),
+            "file URI": outside.as_uri(),
+            "traversal": f"../{self.outside.name}/secret.txt",
+            "encoded traversal": f"file:///workspace/shop/%2e%2e/{self.outside.name}/secret.txt",
+        }
+        for label, file_path in cases.items():
+            with self.subTest(label):
+                self.assertEqual(self._run([_Finding(id=30, file_path=file_path, line=1)], trim_path="/workspace/shop"), [])
 
-    def test_skips_on_oserror(self):
-        f = _Finding(id=12, file_path="missing/file.py", line=1)
-
-        mock_qs = MagicMock()
-        mock_qs.__iter__ = lambda _: iter([f])
-
-        with (
-            patch("aist.tasks.enrich.Finding") as mock_finding,
-            patch("aist.tasks.enrich.DojoMeta") as mock_dojometa,
-            patch("aist.tasks.enrich.Path") as mock_path_cls,
-        ):
-            mock_finding.objects.filter.return_value.only.return_value = mock_qs
-            p = MagicMock()
-            p.is_absolute.return_value = False
-            mock_path_cls.return_value = p
-            joined = MagicMock()
-            joined.read_text.side_effect = OSError("not found")
-            p.__truediv__ = MagicMock(return_value=joined)
-
-            result = annotate_line_hash_batch([12], "/src")
-
-        self.assertEqual(result, 0)
-        mock_dojometa.objects.bulk_create.assert_not_called()
-
-    def test_absolute_file_path_used_directly(self):
-        """If file_path is absolute, Path(file_path) is used as-is."""
-        f = _Finding(id=20, file_path="/abs/path/file.py", line=1)
-
-        mock_qs = MagicMock()
-        mock_qs.__iter__ = lambda _: iter([f])
-
-        with (
-            patch("aist.tasks.enrich.Finding") as mock_finding,
-            patch("aist.tasks.enrich.DojoMeta"),
-            patch("aist.tasks.enrich.Path") as mock_path_cls,
-        ):
-            mock_finding.objects.filter.return_value.only.return_value = mock_qs
-
-            abs_path_mock = MagicMock()
-            abs_path_mock.is_absolute.return_value = True
-            abs_path_mock.read_text.return_value = "vulnerable_line\n"
-            mock_path_cls.return_value = abs_path_mock
-
-            annotate_line_hash_batch([20], "/source_root")
-
-        # Path() called with the absolute file_path, not joined with source_root
-        mock_path_cls.assert_any_call("/abs/path/file.py")
-        abs_path_mock.read_text.assert_called_once()
-
-    def test_hash_is_16_hex_chars(self):
-        """The stored hash must be a 16-character hex substring of SHA-256."""
-        f = _Finding(id=30, file_path="src/b.py", line=1)
-
-        mock_qs = MagicMock()
-        mock_qs.__iter__ = lambda _: iter([f])
-
-        with (
-            patch("aist.tasks.enrich.Finding") as mock_finding,
-            patch("aist.tasks.enrich.DojoMeta") as mock_dojometa,
-            patch("aist.tasks.enrich.Path") as mock_path_cls,
-        ):
-            mock_finding.objects.filter.return_value.only.return_value = mock_qs
-            p = MagicMock()
-            p.is_absolute.return_value = False
-            mock_path_cls.return_value = p
-            joined = MagicMock()
-            joined.read_text.return_value = "some_vulnerable_code()\n"
-            p.__truediv__ = MagicMock(return_value=joined)
-
-            annotate_line_hash_batch([30], "/src")
-
-        # DojoMeta() was called once; check the value kwarg passed to the constructor
-        mock_dojometa.objects.bulk_create.assert_called_once()
-        created = mock_dojometa.objects.bulk_create.call_args[0][0]
-        self.assertEqual(len(created), 1)
-        # Each entry is the return value of DojoMeta(...); check via call_args_list
-        self.assertEqual(mock_dojometa.call_count, 1)
-        value_arg = mock_dojometa.call_args.kwargs["value"]
-        self.assertEqual(len(value_arg), 16)
-        int(value_arg, 16)  # must be valid hex
+    def test_a_symlink_out_of_the_source_root_is_not_followed(self):
+        outside = self._write(self.outside, "secret.txt", "worker secret\n")
+        (self.source_root / "src").mkdir()
+        (self.source_root / "src" / "link.py").symlink_to(outside)
+        self.assertEqual(self._run([_Finding(id=31, file_path="src/link.py", line=1)]), [])
 
 
 # ---------------------------------------------------------------------------

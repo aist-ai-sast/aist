@@ -1,21 +1,13 @@
 from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
-from django.test import TransactionTestCase
 
-from aist.test.migration_state import historical_state
+from aist.test.migration_state import HistoricalMigrationTestCase
 
 
-class DastLaunchRecoveryMigrationTests(TransactionTestCase):
+class DastLaunchRecoveryMigrationTests(HistoricalMigrationTestCase):
     migrate_from = [("aist", "0042_dast_generic_execution")]
     migrate_to = [("aist", "0043_pipeline_lifecycle_states")]
 
-    def setUp(self):
-        super().setUp()
-        executor = MigrationExecutor(connection)
-        pinned = historical_state(executor, self.migrate_from)
-        executor.migrate(pinned)
-        old_apps = executor.loader.project_state(pinned).apps
-
+    def prepare(self, old_apps):
         ProductType = old_apps.get_model("dojo", "Product_Type")
         Product = old_apps.get_model("dojo", "Product")
         SLAConfiguration = old_apps.get_model("dojo", "SLA_Configuration")
@@ -153,14 +145,6 @@ class DastLaunchRecoveryMigrationTests(TransactionTestCase):
         self.dast_schedule_id = schedule.pk
 
         connection.commit()
-        executor = MigrationExecutor(connection)
-        executor.migrate(self.migrate_to)
-        self.apps = executor.loader.project_state(self.migrate_to).apps
-
-    def tearDown(self):
-        executor = MigrationExecutor(connection)
-        executor.migrate(executor.loader.graph.leaf_nodes())
-        super().tearDown()
 
     def test_lifecycle_and_dast_launch_control_are_migrated_without_losing_history(self):
         AISTPipeline = self.apps.get_model("aist", "AISTPipeline")

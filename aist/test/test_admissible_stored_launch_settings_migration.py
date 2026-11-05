@@ -1,12 +1,8 @@
 """Migration 0059 rewrites stored launch settings that launches now refuse into what they already behaved as."""
 from __future__ import annotations
 
-from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
-from django.test import TransactionTestCase
-
 from aist.profile import ProjectProfile
-from aist.test.migration_state import historical_state
+from aist.test.migration_state import HistoricalMigrationTestCase
 
 STORED_PROFILES = {
     "seeded labels": {"team": "Platform", "environment": "staging"},
@@ -23,17 +19,11 @@ STORED_PROFILES = {
 }
 
 
-class AdmissibleStoredLaunchSettingsMigrationTests(TransactionTestCase):
+class AdmissibleStoredLaunchSettingsMigrationTests(HistoricalMigrationTestCase):
     migrate_from = [("aist", "0058_clear_vendor_marketing_announcement")]
     migrate_to = [("aist", "0059_admissible_stored_launch_settings")]
 
-    def setUp(self):
-        super().setUp()
-        executor = MigrationExecutor(connection)
-        pinned = historical_state(executor, self.migrate_from)
-        executor.migrate(pinned)
-        old_apps = executor.loader.project_state(pinned).apps
-
+    def prepare(self, old_apps):
         ProductType = old_apps.get_model("dojo", "Product_Type")
         Product = old_apps.get_model("dojo", "Product")
         SLAConfiguration = old_apps.get_model("dojo", "SLA_Configuration")
@@ -66,10 +56,6 @@ class AdmissibleStoredLaunchSettingsMigrationTests(TransactionTestCase):
             execution_type="SAST",
             params={"analyzers": ["semgrep"], "time_class_level": "fast"},
         ).id
-
-        executor = MigrationExecutor(connection)
-        executor.migrate(self.migrate_to)
-        self.apps = executor.loader.project_state(self.migrate_to).apps
 
     def test_every_stored_profile_can_be_saved_again_and_reads_as_before(self):
         AISTProject = self.apps.get_model("aist", "AISTProject")

@@ -1,21 +1,12 @@
-from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
-from django.test import TransactionTestCase
 
-from aist.test.migration_state import historical_state
+from aist.test.migration_state import HistoricalMigrationTestCase
 
 
-class PipelineLaunchRequestMigrationTests(TransactionTestCase):
+class PipelineLaunchRequestMigrationTests(HistoricalMigrationTestCase):
     migrate_from = [("aist", "0041_tenant_integrity_invariants")]
     migrate_to = [("aist", "0042_dast_generic_execution")]
 
-    def setUp(self):
-        super().setUp()
-        executor = MigrationExecutor(connection)
-        pinned = historical_state(executor, self.migrate_from)
-        executor.migrate(pinned)
-        old_apps = executor.loader.project_state(pinned).apps
-
+    def prepare(self, old_apps):
         ProductType = old_apps.get_model("dojo", "Product_Type")
         Product = old_apps.get_model("dojo", "Product")
         SLAConfiguration = old_apps.get_model("dojo", "SLA_Configuration")
@@ -54,10 +45,6 @@ class PipelineLaunchRequestMigrationTests(TransactionTestCase):
             dispatched=False,
         ).id
 
-        executor = MigrationExecutor(connection)
-        executor.migrate(self.migrate_to)
-        self.apps = executor.loader.project_state(self.migrate_to).apps
-
     def test_legacy_rows_are_backfilled_as_sast_requests(self):
         LaunchRequest = self.apps.get_model("aist", "PipelineLaunchRequest")
         scheduled = LaunchRequest.objects.get(pk=self.scheduled_id)
@@ -72,8 +59,3 @@ class PipelineLaunchRequestMigrationTests(TransactionTestCase):
         self.assertEqual(manual.origin, "MANUAL")
         self.assertEqual(manual.authority_kind, "USER")
         self.assertEqual(manual.state, "PENDING")
-
-    def tearDown(self):
-        executor = MigrationExecutor(connection)
-        executor.migrate(executor.loader.graph.leaf_nodes())
-        super().tearDown()

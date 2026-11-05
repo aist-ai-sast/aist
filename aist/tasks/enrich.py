@@ -14,7 +14,13 @@ from aist.link_builder import LinkBuilder, store_source_link
 from aist.logging_transport import get_redis, install_pipeline_logging
 from aist.models import AISTPipeline, AISTStatus
 from aist.progress import EnrichProgress
+from aist.utils.archive import safe_join
 from aist.utils.pipeline import set_pipeline_status
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
+
+_import_sast_pipeline_package()
+
+from pipeline.defect_dojo.repo_info import checkout_relative_path  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -147,19 +153,42 @@ def enrich_finding_task(
     return _enrich_finding(finding_id, LinkBuilder(project_version_id, trim_path))
 
 
+def _checkout_source_lines(source_root: Path, file_path: str, trim_path: str) -> list[str] | None:
+    """
+    The lines of the regular file ``file_path`` names inside the checkout at ``source_root``.
+
+    ``file_path`` is read relative to the scanned checkout root ``trim_path``. None when it resolves outside
+    ``source_root``, is not a regular file, or cannot be read.
+    """
+    try:
+        full = safe_join(source_root, checkout_relative_path(file_path, trim_path))
+    except ValueError:
+        return None
+    if not full.is_file():
+        return None
+    try:
+        return full.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+
+
 @shared_task(bind=False)
 def annotate_line_hash_batch(
     finding_ids: list[int],
     source_root: str,
+    trim_path: str = "",
     async_user_id=None,
 ) -> int:
     """
     Compute a content fingerprint (SHA-256 of the vulnerable line) for each
     finding and persist it as DojoMeta(name=AIST_LHASH_META_NAME).
 
+    A finding's file is read under ``source_root`` at its path relative to the
+    scanned checkout root ``trim_path``. A finding whose file resolves outside
+    ``source_root`` or is not a readable regular file gets no fingerprint.
+
     Groups findings by file path so each source file is read at most once per
-    batch. Must run before enrich_finding_batch within the same chunk — see
-    make_enrich_chord for the chain ordering.
+    batch.
     """
     if not source_root:
         return 0
@@ -177,14 +206,14 @@ def annotate_line_hash_batch(
 
     to_create = []
     for file_path, file_findings in by_file.items():
-        full = (
-            Path(file_path)
-            if Path(file_path).is_absolute()
-            else Path(source_root) / file_path
-        )
-        try:
-            lines = full.read_text(errors="replace").splitlines()
-        except OSError:
+        lines = _checkout_source_lines(Path(source_root), file_path, trim_path)
+        if lines is None:
+            logger.warning(
+                "No line fingerprint for findings %s: their source file is not readable inside the checkout "
+                "(file_path=%s)",
+                [f.id for f in file_findings],
+                file_path,
+            )
             continue
         for f in file_findings:
             fingerprint = line_fingerprint(lines, f.line)
@@ -224,7 +253,7 @@ def make_enrich_chord(*, pipeline_id: str):
       1) Re-fetch finding IDs from DB (reflects post-dedup state).
       2) Split findings into at most DD_CELERY_WORKER_AUTOSCALE_MAX chunks.
       3) Initialize Redis progress (total = live finding count, done = 0).
-      4) Per chunk: annotate line hashes first, from the untrimmed file_path, then enrich (sequential within chunk).
+      4) Per chunk: annotate line hashes, then enrich (sequential within chunk).
          Chunks run in parallel across workers.
 
     Returns:
@@ -258,7 +287,7 @@ def make_enrich_chord(*, pipeline_id: str):
 
     header = [
         chain(
-            annotate_line_hash_batch.si(chunk, source_root),
+            annotate_line_hash_batch.si(chunk, source_root, trim_path),
             enrich_finding_batch.si(chunk, trim_path, pipeline.project_version_id),
             report_enrich_done.s(pipeline_id, len(chunk)),
         )

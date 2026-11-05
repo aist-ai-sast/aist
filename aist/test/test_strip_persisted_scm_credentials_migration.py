@@ -1,28 +1,20 @@
 """Migration 0053 scrubs the SCM credential out of params already in the database."""
 from __future__ import annotations
 
-from django.db import DatabaseError, connection, transaction
-from django.db.migrations.executor import MigrationExecutor
-from django.test import TransactionTestCase
+from django.db import DatabaseError, transaction
 
-from aist.test.migration_state import historical_state
+from aist.test.migration_state import HistoricalMigrationTestCase
 
 CLONE_URL = "https://oauth2:{}@gitlab.example.com/group/repo.git".format(
     "xglpat-migration1234567890".removeprefix("x"),
 )
 
 
-class StripPersistedScmCredentialsMigrationTests(TransactionTestCase):
+class StripPersistedScmCredentialsMigrationTests(HistoricalMigrationTestCase):
     migrate_from = [("aist", "0052_dastintegrationstate_sync_status")]
     migrate_to = [("aist", "0053_strip_persisted_scm_credentials")]
 
-    def setUp(self):
-        super().setUp()
-        executor = MigrationExecutor(connection)
-        pinned = historical_state(executor, self.migrate_from)
-        executor.migrate(pinned)
-        old_apps = executor.loader.project_state(pinned).apps
-
+    def prepare(self, old_apps):
         ProductType = old_apps.get_model("dojo", "Product_Type")
         Product = old_apps.get_model("dojo", "Product")
         SLAConfiguration = old_apps.get_model("dojo", "SLA_Configuration")
@@ -91,10 +83,6 @@ class StripPersistedScmCredentialsMigrationTests(TransactionTestCase):
             ).id
             for _ in range(3)
         ]
-
-        executor = MigrationExecutor(connection)
-        executor.migrate(self.migrate_to)
-        self.apps = executor.loader.project_state(self.migrate_to).apps
 
     def test_every_launch_config_keeps_only_the_operator_env(self):
         AISTProjectLaunchConfig = self.apps.get_model("aist", "AISTProjectLaunchConfig")

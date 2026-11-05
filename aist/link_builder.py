@@ -47,7 +47,7 @@ class LinkBuilder:
         """Return the source link of `file_path`, or None without a path or a project version."""
         if not file_path or self.version_id is None:
             return None
-        subpath = self.relative_path(file_path.removeprefix("file://")).lstrip("/")
+        subpath = self.relative_path(file_path).lstrip("/")
         return LinkBuilder.build_project_version_file_blob(self.version_id, subpath)
 
 

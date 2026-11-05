@@ -1,21 +1,12 @@
-from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
-from django.test import TransactionTestCase
 
-from aist.test.migration_state import historical_state
+from aist.test.migration_state import HistoricalMigrationTestCase
 
 
-class GenericExecutionForwardMigrationTests(TransactionTestCase):
+class GenericExecutionForwardMigrationTests(HistoricalMigrationTestCase):
     migrate_from = [("aist", "0041_tenant_integrity_invariants")]
     migrate_to = [("aist", "0042_dast_generic_execution")]
 
-    def setUp(self):
-        super().setUp()
-        executor = MigrationExecutor(connection)
-        pinned = historical_state(executor, self.migrate_from)
-        executor.migrate(pinned)
-        old_apps = executor.loader.project_state(pinned).apps
-
+    def prepare(self, old_apps):
         ProductType = old_apps.get_model("dojo", "Product_Type")
         Product = old_apps.get_model("dojo", "Product")
         SLAConfiguration = old_apps.get_model("dojo", "SLA_Configuration")
@@ -73,10 +64,6 @@ class GenericExecutionForwardMigrationTests(TransactionTestCase):
         self.config_id = launch_config.id
         self.schedule_id = schedule.id
 
-        executor = MigrationExecutor(connection)
-        executor.migrate(self.migrate_to)
-        self.apps = executor.loader.project_state(self.migrate_to).apps
-
     def test_pre_generic_sast_data_survives_with_deterministic_types(self):
         AISTPipeline = self.apps.get_model("aist", "AISTPipeline")
         AISTProjectLaunchConfig = self.apps.get_model("aist", "AISTProjectLaunchConfig")
@@ -99,8 +86,3 @@ class GenericExecutionForwardMigrationTests(TransactionTestCase):
         self.assertEqual(request.execution_type, "SAST")
         self.assertEqual(request.params_snapshot, config.params)
         self.assertIsNotNone(request.task_id)
-
-    def tearDown(self):
-        executor = MigrationExecutor(connection)
-        executor.migrate(executor.loader.graph.leaf_nodes())
-        super().tearDown()
