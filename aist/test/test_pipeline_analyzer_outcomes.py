@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from aist.internal_upload import ImportFailure, ImportResult
 from aist.models import AISTPipeline, AISTStatus
+from aist.test.analyzer_catalog import write_analyzers_config
 from aist.test.pipeline_execution_helpers import SastWorkerTestMixin
 from aist.test.test_api import AISTApiBase
 
@@ -59,13 +60,12 @@ class AnalyzerOutcomesPipelineTests(SastWorkerTestMixin, AISTApiBase):
         with TemporaryDirectory() as tmp:
             output_dir = str(Path(tmp) / "out")
             Path(output_dir).mkdir()
-            cfg_path = Path(tmp) / "analyzers.yaml"
-            cfg_path.write_text("analyzers: []\n", encoding="utf-8")
+            cfg_path = write_analyzers_config(Path(tmp), [])
             with patch("aist.services.pipeline_results.finish_pipeline") as mock_finish:
                 self._run_with_common_patches(
                     pipeline=pipeline,
                     output_dir=output_dir,
-                    analyzer_config_path=str(cfg_path),
+                    analyzer_config_path=cfg_path,
                     upload_results=[],
                 )
 

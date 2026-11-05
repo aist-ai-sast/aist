@@ -14,6 +14,13 @@ _import_sast_pipeline_package()
 from pipeline.config_utils import AnalyzersConfigHelper  # noqa: E402
 
 
+def write_analyzers_config(directory: Path, analyzers: list[dict]) -> str:
+    """Write ``analyzers`` as the analyzers.yaml sast-pipeline reads in ``directory``, and return its path."""
+    path = Path(directory) / "analyzers.yaml"
+    path.write_text(yaml.safe_dump({"analyzers": analyzers}), encoding="utf-8")
+    return str(path)
+
+
 class SyntheticAnalyzerCatalogMixin:
 
     """
@@ -28,9 +35,9 @@ class SyntheticAnalyzerCatalogMixin:
         super().setUp()
         catalog_dir = tempfile.TemporaryDirectory()
         self.addCleanup(catalog_dir.cleanup)
-        path = Path(catalog_dir.name) / "analyzers.yaml"
-        path.write_text(yaml.safe_dump(self.CATALOG), encoding="utf-8")
-        catalog = AnalyzersConfigHelper(str(path))
+        catalog = AnalyzersConfigHelper(
+            write_analyzers_config(Path(catalog_dir.name), self.CATALOG.get("analyzers", [])),
+        )
         for target in ("aist.pipeline_args._load_analyzers_config", "aist.forms._load_analyzers_config"):
             loader = patch(target, return_value=catalog)
             loader.start()

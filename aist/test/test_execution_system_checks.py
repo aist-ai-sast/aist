@@ -1,11 +1,11 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import yaml
 from django.core.checks import run_checks
 from django.test import SimpleTestCase, override_settings
 
 from aist.checks import AIST_EXECUTION_CHECK_TAG
+from aist.test.analyzer_catalog import write_analyzers_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PIPELINE_ROOT = PROJECT_ROOT / "sast-combinator" / "sast-pipeline"
@@ -38,20 +38,14 @@ class ExecutionSystemCheckTests(SimpleTestCase):
                 "Dockerfiles/dast_connector/Dockerfile",
             ):
                 (pipeline_root / relative_path).touch()
-            catalog = {
-                "analyzers": [
-                    {
-                        "name": "dast",
-                        "type": "simple",
-                        "execution_type": "dast",
-                        "image": "aist-dast-connector:v2",
-                    },
-                ],
-            }
-            (pipeline_root / "pipeline" / "config" / "analyzers.yaml").write_text(
-                yaml.safe_dump(catalog),
-                encoding="utf-8",
-            )
+            write_analyzers_config(pipeline_root / "pipeline" / "config", [
+                {
+                    "name": "dast",
+                    "type": "simple",
+                    "execution_type": "dast",
+                    "image": "aist-dast-connector:v2",
+                },
+            ])
             with override_settings(AIST_PIPELINE_CODE_PATH=temporary_directory):
                 errors = run_checks(tags=[AIST_EXECUTION_CHECK_TAG], include_deployment_checks=True)
 

@@ -14,33 +14,26 @@ import shutil
 import tempfile
 from pathlib import Path
 
-import yaml
 from dojo.models import Finding
 
 from aist.internal_upload import NO_EXCLUSION, upload_results_internal
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline, AISTStatus
+from aist.test.analyzer_catalog import write_analyzers_config
 from aist.test.scan_import_helpers import write_generic_report
 from aist.utils.ai_response_artifact import apply_ai_response_artifact
 
 
 def write_analyzers_yaml(directory: Path, *, name: str, skill_name: str, result_file: str, output_type: str) -> str:
     """Write a one-entry analyzers.yaml that ``upload_results_internal`` iterates, and return its path."""
-    config = {
-        "analyzers": [
-            {
-                "name": name,
-                "type": "agent-bridge",
-                "enabled": True,
-                "time_class": "slow",
-                "skill_name": skill_name,
-                "output_type": output_type,
-                "result_file": result_file,
-            },
-        ],
-    }
-    config_path = directory / "analyzers.yaml"
-    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
-    return str(config_path)
+    return write_analyzers_config(directory, [{
+        "name": name,
+        "type": "agent-bridge",
+        "enabled": True,
+        "time_class": "slow",
+        "skill_name": skill_name,
+        "output_type": output_type,
+        "result_file": result_file,
+    }])
 
 
 def write_ai_response(path: Path, results: dict) -> None:

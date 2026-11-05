@@ -271,7 +271,11 @@ def upload_results_internal(
     exclusion: FindingExclusion,
     logger,
 ) -> list[ImportResult]:
-    """Import every configured analyzer's report into ``product``; a report the platform fails to import is a failed result."""
+    """
+    Import every analyzer report sast-pipeline produced into ``product``.
+
+    A report the platform fails to import is a failed result.
+    """
     cfg = ImportConfig()
     repo_dir = repo_path
     try:
@@ -287,7 +291,6 @@ def upload_results_internal(
 
     analyzers_cfg = AnalyzersConfigHelper(analyzers_cfg_path)
 
-    # Resolve lead user once for the entire import batch to avoid N queries.
     User = get_user_model()
     lead = User.objects.order_by("id").first()
     if lead is None:
@@ -295,12 +298,9 @@ def upload_results_internal(
         raise RuntimeError(msg)
 
     results: list[ImportResult] = []
-    for report in analyzers_cfg.get_analyzer_reports():
-        report_path = Path(output_dir) / report.result_file
-        if not report_path.exists():
-            # Whether a missing result degrades the run is sast-pipeline's call, reported in its analyzer outcomes.
-            logger.error("No result on expected path %s for analyzer %s", report_path, report.analyzer_name)
-            continue
+    # Whether an analyzer produced a result, and whether its absence degrades the run, is sast-pipeline's call.
+    for report in analyzers_cfg.get_produced_reports(output_dir):
+        report_path = report.path_in(output_dir)
         logger.info(
             "Processing report: %s (analyzer=%s, scan_type=%s)", report_path, report.analyzer_name, report.scan_type,
         )
