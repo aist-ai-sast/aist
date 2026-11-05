@@ -93,6 +93,8 @@ class DemoProjectSpec:
     cron_expression: str
     schedule_last_run_days_ago: int
     queue_day_offsets: tuple[int, ...]
+    # One pipeline of this project stays EXECUTING, so the pages that follow a running pipeline have one to show.
+    has_running_pipeline: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +218,9 @@ DEMO_USERS = [
     DemoUserSpec("helios_maintainer", "Helios", "Maintainer", "helios_maintainer@example.local", "Maintainer", "Helios Core"),
 ]
 
+DEMO_RUNNING_PIPELINE_COMMIT = "5e1f0c2a9b7d4e6f8a1c3b5d7e9f0a2c4b6d8e0f"
+DEMO_RUNNING_PIPELINE_AGE = timedelta(days=40)
+
 DEMO_PROJECTS = [
     DemoProjectSpec(
         slug="payments-api",
@@ -276,6 +281,7 @@ DEMO_PROJECTS = [
         cron_expression="45 3 * * 2,5",
         schedule_last_run_days_ago=3,
         queue_day_offsets=(20, 16, 12, 8, 5, 1),
+        has_running_pipeline=True,
     ),
     DemoProjectSpec(
         slug="analytics-core",
@@ -963,6 +969,34 @@ class Command(BaseCommand):
                 base_date=today,
             )
             self._ensure_demo_ai_responses(project=project)
+            if spec.has_running_pipeline:
+                self._ensure_running_pipeline(spec=spec, project=project, now=now)
+
+    def _ensure_running_pipeline(self, *, spec: DemoProjectSpec, project: AISTProject, now) -> None:
+        """
+        A SAST pipeline left EXECUTING on a commit of its own.
+
+        Its own version keeps the project's other versions free to launch; launched weeks ago, it sorts after
+        the historical runs instead of ahead of them.
+        """
+        version, _ = AISTProjectVersion.objects.get_or_create(
+            project=project,
+            version=DEMO_RUNNING_PIPELINE_COMMIT,
+            version_type=VersionType.GIT_HASH,
+            defaults={"description": "Commit of the demo run that is still executing"},
+        )
+        self._upsert_demo_pipeline(
+            pipeline_id=f"demo-{spec.slug}-running",
+            project=project,
+            project_version=version,
+            trigger_project_version=None,
+            execution_type=PipelineExecutionType.SAST,
+            started=now - DEMO_RUNNING_PIPELINE_AGE,
+            finished_at=None,
+            launch_data={"source": "bootstrap_demo_access"},
+            dojo_test=None,
+            status=AISTStatus.EXECUTING,
+        )
 
     @staticmethod
     def _ensure_demo_product(spec: DemoProjectSpec, organization: Organization, sla_config) -> Product:
@@ -1277,8 +1311,10 @@ class Command(BaseCommand):
         started,
         finished_at,
         launch_data: dict,
-        dojo_test: Test,
+        dojo_test: Test | None,
+        status: str = AISTStatus.FINISHED,
     ) -> AISTPipeline:
+        """A demo pipeline launched at ``started``; last touched at ``finished_at``, or at ``started`` while running."""
         pipeline, _ = AISTPipeline.objects.update_or_create(
             id=pipeline_id,
             defaults={
@@ -1287,15 +1323,15 @@ class Command(BaseCommand):
                 "trigger_project_version": trigger_project_version,
                 "dast_binding": dast_binding,
                 "execution_type": execution_type,
-                "status": AISTStatus.FINISHED,
+                "status": status,
                 "started": started,
                 "finished_at": finished_at,
                 "launch_data": launch_data,
                 "created": started,
             },
         )
-        pipeline.tests.set([dojo_test])
-        AISTPipeline.objects.filter(pk=pipeline.pk).update(created=started, updated=finished_at)
+        pipeline.tests.set([dojo_test] if dojo_test else [])
+        AISTPipeline.objects.filter(pk=pipeline.pk).update(created=started, updated=finished_at or started)
         return pipeline
 
     def _ensure_dast_run_metadata(

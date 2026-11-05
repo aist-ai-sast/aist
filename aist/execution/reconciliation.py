@@ -158,7 +158,7 @@ def _mark_pipeline_reconciled_failure(
         "reconciled_at": now.isoformat(),
     }
     pipeline.launch_data = launch_data
-    if pipeline.status != AISTStatus.FINISHED_WITH_WARNINGS:
+    if not pipeline.finished_with_warnings:
         set_pipeline_status(
             pipeline,
             AISTStatus.FINISHED_WITH_WARNINGS,

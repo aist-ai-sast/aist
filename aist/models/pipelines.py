@@ -123,6 +123,10 @@ class AISTPipeline(models.Model):
         return f"{self.execution_type}Pipeline[{self.id}] {self.status}"
 
     @property
+    def finished_with_warnings(self) -> bool:
+        return self.status == AISTStatus.FINISHED_WITH_WARNINGS
+
+    @property
     def source_root(self) -> str:
         """The on-disk path of the scanned sources, as sast-pipeline reported it."""
         return PipelineLaunchData(self.launch_data).project_path

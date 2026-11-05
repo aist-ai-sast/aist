@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
@@ -495,8 +495,17 @@ class CalendarEventsApiTests(TestCase):
         self.assertEqual(response.data["events"][0]["summary"]["reasons"]["severity_changed"], 1)
 
     def test_calendar_event_detail_pipeline_started(self):
+        detail = self._pipeline_event_detail()
+
+        self.assertTrue(detail["id"].startswith("pipeline_started:"))
+        self.assertEqual(detail["event_type"], "pipeline_started")
+        self.assertEqual(detail["summary"]["pipeline_id"], self.pipeline.id)
+        self.assertIn("duration_seconds", detail["summary"])
+
+    def _pipeline_event_detail(self):
+        """The detail of the one pipeline_started event in the base range."""
         start, end = self._base_range()
-        response = self.client.get(
+        listed = self.client.get(
             self._url(),
             data={
                 "start": start.isoformat(),
@@ -505,16 +514,34 @@ class CalendarEventsApiTests(TestCase):
                 "event_types": ["pipeline_started"],
             },
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data["events"]), 1)
-        event_id = response.data["events"][0]["id"]
-
-        detail = self.client.get(self._detail_url(event_id))
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(len(listed.data["events"]), 1)
+        detail = self.client.get(self._detail_url(listed.data["events"][0]["id"]))
         self.assertEqual(detail.status_code, 200)
-        self.assertEqual(detail.data["id"], event_id)
-        self.assertEqual(detail.data["event_type"], "pipeline_started")
-        self.assertEqual(detail.data["summary"]["pipeline_id"], self.pipeline.id)
-        self.assertIn("duration_seconds", detail.data["summary"])
+        return detail.data
+
+    def test_calendar_event_of_a_running_pipeline_counts_its_duration_to_now(self):
+        launched = timezone.now() - timedelta(hours=2)
+        AISTPipeline.objects.filter(pk=self.pipeline.pk).update(
+            status="EXECUTING", created=launched, updated=launched + timedelta(seconds=3),
+        )
+
+        detail = self._pipeline_event_detail()
+
+        self.assertGreaterEqual(detail["summary"]["duration_seconds"], 2 * 3600)
+        self.assertIsNone(detail["end"])
+
+    def test_calendar_event_of_a_finished_pipeline_ends_when_it_finished(self):
+        launched = timezone.now() - timedelta(hours=5)
+        finished = launched + timedelta(minutes=10)
+        AISTPipeline.objects.filter(pk=self.pipeline.pk).update(
+            created=launched, finished_at=finished, updated=launched + timedelta(hours=3),
+        )
+
+        detail = self._pipeline_event_detail()
+
+        self.assertEqual(detail["summary"]["duration_seconds"], 600)
+        self.assertEqual(datetime.fromisoformat(str(detail["end"])), finished)
 
     def test_calendar_event_detail_not_found(self):
         detail = self.client.get(self._detail_url("pipeline_started:not-found"))

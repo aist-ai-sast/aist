@@ -30,6 +30,13 @@ def _fast(name: str, *languages: str) -> dict:
     return {"name": name, "image": name, "language": list(languages), "time_class": "fast"}
 
 
+SLACK_ACTION = {
+    "trigger_status": AISTStatus.FINISHED,
+    "action_type": "PUSH_TO_SLACK",
+    "config": {"channels": ["#alerts"], "title": "Hi", "description": "Desc"},
+}
+
+
 class OneOffActionsTests(SyntheticAnalyzerCatalogMixin, TestCase):
     CATALOG = {
         "analyzers": [
@@ -87,25 +94,22 @@ class OneOffActionsTests(SyntheticAnalyzerCatalogMixin, TestCase):
             version="main",
         )
 
-    @override_settings(DB_KEY="test-secret")
-    def test_start_pipeline_persists_one_off_actions_in_launch_request(self):
-        url = reverse("aist:start_pipeline")
-        payload = {
+    def _start_form(self, **overrides) -> dict:
+        """A manual SAST start-page submission for the base project version, without one-off actions."""
+        return {
             "project": self.project.id,
             "project_version": self.pv.id,
             "log_level": "INFO",
             "time_class_level": "slow",
             "ai_mode": "MANUAL",
-            "one_off_actions": json.dumps(
-                [
-                    {
-                        "trigger_status": AISTStatus.FINISHED,
-                        "action_type": "PUSH_TO_SLACK",
-                        "config": {"channels": ["#alerts"], "title": "Hi", "description": "Desc"},
-                    },
-                ],
-            ),
+            "one_off_actions": "[]",
+            **overrides,
         }
+
+    @override_settings(DB_KEY="test-secret")
+    def test_start_pipeline_persists_one_off_actions_in_launch_request(self):
+        url = reverse("aist:start_pipeline")
+        payload = self._start_form(one_off_actions=json.dumps([SLACK_ACTION]))
 
         resp = self.client.post(url, data=payload)
         self.assertEqual(resp.status_code, 302)
@@ -119,18 +123,35 @@ class OneOffActionsTests(SyntheticAnalyzerCatalogMixin, TestCase):
         self.assertNotIn("secret_config", stored)
         self.assertFalse(AISTPipeline.objects.exists())
 
+    def test_start_pipeline_with_an_invalid_action_shows_the_error_and_queues_nothing(self):
+        payload = self._start_form(one_off_actions=json.dumps([{"action_type": "PUSH_TO_SLACK", "config": {}}]))
+
+        resp = self.client.post(reverse("aist:start_pipeline"), data=payload)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Invalid PUSH_TO_SLACK action: trigger_status: This field is required.")
+        self.assertNotContains(resp, "ErrorDetail")
+        self.assertFalse(PipelineLaunchRequest.objects.exists())
+
+    @override_settings(DB_KEY="test-secret")
+    def test_resubmitting_a_launch_with_an_action_queues_it_once(self):
+        url = reverse("aist:start_pipeline")
+        payload = self._start_form(
+            one_off_actions=json.dumps([SLACK_ACTION]), client_request_key="start-with-action-1",
+        )
+
+        first = self.client.post(url, data=payload)
+        second = self.client.post(url, data=payload)
+
+        launch_request = PipelineLaunchRequest.objects.get()
+        expected_location = f"{reverse('aist:launching_dashboard')}?queued_request={launch_request.pk}"
+        self.assertEqual(first.headers.get("Location"), expected_location)
+        self.assertEqual(second.headers.get("Location"), expected_location)
+
     @patch("celery.app.task.Task.apply_async")
     def test_repeated_start_click_is_idempotent_and_preserves_requester(self, mock_apply_async):
         url = reverse("aist:start_pipeline")
-        payload = {
-            "project": self.project.id,
-            "project_version": self.pv.id,
-            "log_level": "INFO",
-            "time_class_level": "slow",
-            "ai_mode": "MANUAL",
-            "one_off_actions": "[]",
-            "client_request_key": "classic-start-click-1",
-        }
+        payload = self._start_form(client_request_key="classic-start-click-1")
 
         first = self.client.post(url, data=payload)
         second = self.client.post(url, data=payload)
@@ -148,15 +169,7 @@ class OneOffActionsTests(SyntheticAnalyzerCatalogMixin, TestCase):
 
     def test_start_pipeline_keeps_explicit_analyzers_selection_in_request(self):
         url = reverse("aist:start_pipeline")
-        payload = {
-            "project": self.project.id,
-            "project_version": self.pv.id,
-            "log_level": "INFO",
-            "time_class_level": "slow",
-            "analyzers": ["bearer"],
-            "ai_mode": "MANUAL",
-            "one_off_actions": "[]",
-        }
+        payload = self._start_form(analyzers=["bearer"])
         resp = self.client.post(url, data=payload)
         self.assertEqual(resp.status_code, 302)
 

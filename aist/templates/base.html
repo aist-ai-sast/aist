@@ -32,20 +32,21 @@
         <script src="{% static "jquery-ui/dist/jquery-ui.min.js" %}"></script>
         <!-- Flatpickr (modern datepicker replacement) -->
         <script src="{% static "flatpickr/dist/flatpickr.min.js" %}"></script>
-        <!-- Bootstrap JS removed — replaced by shims in index.js -->
+        <!-- Bootstrap-compatible jQuery shims live in dojo/js/index.js -->
 
         <script src="{% static "chosen-js/chosen.jquery.min.js" %}"></script>
 
         {# Loaded with the widgets it drives: a page's own inline script may call into it while the body is still parsing. #}
         <script src="{% static "aist/js/platform-components.js" %}?v={% static_v "aist/js/platform-components.js" %}"></script>
 
+        {# Before Alpine: it registers its components on alpine:init. #}
+        <script src="{% static "aist/js/page-behaviours.js" %}?v={% static_v "aist/js/page-behaviours.js" %}"></script>
+
         <!-- Calendar -->
         <script src="{% static "moment/min/moment.min.js" %}"></script>
         <script src="{% static "fullcalendar/dist/fullcalendar.min.js" %}"></script>
         <!-- DataTables -->
-        <!-- Core DataTables only — the Bootstrap styling integrations were
-             dropped; markup is styled by datatables-dd.css against DataTables'
-             own dt-* classes. -->
+        <!-- Core DataTables; styled by datatables-dd.css against DataTables' dt-* classes. -->
         <script src="{% static 'datatables.net/js/dataTables.min.js' %}"></script>
         <script src="{% static 'datatables.net-buttons/js/dataTables.buttons.min.js' %}"></script>
         <script src="{% static 'datatables.net-buttons/js/buttons.html5.min.js' %}"></script>
@@ -63,7 +64,7 @@
         <!-- Alpine.js -->
         <script defer src="{% static "dojo/js/vendor/alpine.min.js" %}"></script>
 
-        <!-- Bootstrap CSS removed — all styles in tailwind-out.css + dojo.css -->
+        <!-- Styles: tailwind-out.css + dojo.css -->
 
         <!-- Font Awesome 6 -->
         <link href="{% static 'fontawesomefree/css/fontawesome.min.css' %}" rel="stylesheet" type="text/css">
@@ -529,7 +530,7 @@
                                     <i class="fa-solid fa-book fa-fw"></i> {% trans "API v2 Docs" %}
                                 </a>
                                 {% if V3_FEATURE_LOCATIONS %}
-                                    {# v3 mounts conditionally on this flag (D5) — an unguarded url tag would break every page when it is off #}
+                                    {# The v3 URLs are mounted only while this flag is on; an unguarded url tag would break every page. #}
                                     <a href="{% url 'api_v3:openapi-view' %}" target="_blank" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
                                         <i class="fa-solid fa-book fa-fw"></i> {% trans "Open API v3 alpha Docs (Swagger)" %}
                                     </a>

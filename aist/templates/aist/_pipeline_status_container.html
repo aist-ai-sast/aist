@@ -1,30 +1,15 @@
-{# aist/_pipeline_status_container.html #}
-<div id="pipeline-status-container" data-status="{{ pipeline.status }}">
-    {% if pipeline.status == "WAITING_DEDUPLICATION_TO_FINISH" %}
-        {% include "aist/_status_waiting_dedup.html" %}
-    {% elif pipeline.status == "FINDING_POSTPROCESSING" %}
-        {% include "aist/_status_finding_postprocessing.html" %}
-    {% elif pipeline.status == "WAITING_RESULT_FROM_AI" %}
-        {% include "aist/_status_waiting_ai.html" %}
-    {% elif pipeline.status == "FINISHED" or pipeline.status == "FINISHED_WITH_WARNINGS" %}
-        {% include "aist/_status_finished.html" %}
-    {% elif pipeline.status == "WAITING_CONFIRMATION_TO_PUSH_TO_AI" %}
-        {% include "aist/_confirm_push_to_ai.html" %}
-    {% elif pipeline.status == "ADMITTED" %}
-        <div class="alert alert-info" role="status">
-            <i class="fa-solid fa-clock"></i>
-            <strong>Admitted.</strong> Waiting for execution capacity.
-        </div>
-    {% elif pipeline.status == "EXECUTING" %}
-        <div class="alert alert-primary" role="status">
-            <i class="fa-solid fa-spinner fa-spin"></i>
-            <strong>Executing.</strong> The pipeline worker is running.
-        </div>
-    {% elif pipeline.status == "UPLOADING_RESULTS" %}
-    {% elif pipeline.status == "PUSH_TO_AI" %}
-    {% else %}
-        <div class="alert alert-secondary">
-            <i class="fa-solid fa-info-circle"></i> Unknown status: {{ pipeline.status }}
-        </div>
+{% load aist_extras %}
+{% pipeline_status_panel pipeline as panel %}
+{# The pipeline page's status panel; it re-requests itself each time the page signals a status change. #}
+<div id="pipeline-status-container"
+     data-status="{{ pipeline.status }}"
+     data-hydrator="{{ panel.hydrator|default:'' }}"
+     data-live-refresh
+     hx-get="{{ request.get_full_path }}"
+     hx-trigger="aist:status-changed"
+     hx-swap="outerHTML"
+     hx-sync="this:replace">
+    {% if panel.template %}
+        {% include panel.template %}
     {% endif %}
 </div>

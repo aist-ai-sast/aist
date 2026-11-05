@@ -18,9 +18,7 @@ class AISTAIViewsTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        self.user.is_superuser = True
-        self.user.save(update_fields=["is_superuser"])
-        self.client.force_login(self.user)
+        self.login_as_superuser()
         self.engagement = Engagement.objects.create(
             name="Engage",
             target_start=timezone.now(),

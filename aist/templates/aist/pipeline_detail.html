@@ -74,11 +74,15 @@
     <script>
         (function () {
             // ---------- DOM ----------
-            const container = document.getElementById("pipeline-status-container");
             const st = document.getElementById("pl-status");
             const logbox = document.getElementById("logbox");
 
             // ---------- helpers ----------
+            // The status panel is replaced on every refresh, so it is looked up each time it is needed.
+            function statusContainer() {
+                return document.getElementById("pipeline-status-container");
+            }
+
             function setStatusText(s) {
                 if (!st) return;
                 if (typeof s !== "string") return;
@@ -86,7 +90,7 @@
                 if (t) st.textContent = t;
             }
 
-            // ====== FINISHED hydrator (duration + JSON) ======
+            // ====== FINISHED hydrator (JSON) ======
 
             function jsonSyntaxHighlight(s) {
                 // экранируем спецсимволы
@@ -183,32 +187,6 @@
                 });
             }
 
-            function hydrateDuration(root = document) {
-                const durEl = root.querySelector?.('#aist-duration');
-                if (!durEl) return;
-                const humanEl = root.querySelector?.('#aist-duration-human');
-                const start = new Date(durEl.dataset.start || '');
-                const end = new Date(durEl.dataset.end || '');
-                if (isNaN(start) || isNaN(end)) return;
-                const s = Math.max(0, Math.floor((end - start) / 1000));
-                const hh = String(Math.floor(s / 3600)).padStart(2, '0');
-                const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-                const ss = String(s % 60).padStart(2, '0');
-                durEl.textContent = `${hh}:${mm}:${ss}`;
-                if (humanEl) {
-                    let txt;
-                    if (s < 60) txt = '(just now)';
-                    else if (s < 3600) {
-                        const m = Math.round(s / 60);
-                        txt = m === 1 ? '(~ 1 minute)' : `(~ ${m} minutes)`;
-                    } else {
-                        const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
-                        txt = m ? `(~ ${h} hours ${m} minutes)` : `(~ ${h} hours)`;
-                    }
-                    humanEl.textContent = txt;
-                }
-            }
-
             function wireJsonButtons(root = document) {
                 const view = root.querySelector?.('#aist-json-view');
                 const toggleBtn = root.querySelector?.('#aist-json-toggle');
@@ -242,7 +220,6 @@
             }
 
             function hydrateFinished(root = document) {
-                hydrateDuration(root);
                 hydrateAllJsonBlocks(root);
                 wireJsonButtons(root);
             }
@@ -292,7 +269,6 @@
 
             function hydrateWaitingDedup(root = document) {
                 stopDedupPolling();
-                // если блок ещё не отрисован — выходим
                 if (!root.querySelector?.('#overall-bar')) return;
 
                 const url = "{% url 'aist:deduplication_progress' pipeline.id %}";
@@ -307,7 +283,7 @@
                             renderRows(data.tests || [], root);
 
                             const s = (data.status || '').trim();
-                            if (s && s !== "WAITING_DEDUPLICATION_TO_FINISH" && s !== "WAITING_FOR_DEDUP") {
+                            if (s && s !== statusContainer()?.dataset.status) {
                                 stopDedupPolling();
                             }
                         })
@@ -483,35 +459,6 @@
                         boxList.appendChild(wrap);
                     }
 
-
-                    if (!boxList.children.length && list.length) {
-                        requestAnimationFrame(() => {
-                            if (!boxList.children.length) {
-                                let i = 0;
-                                for (const item of list) {
-                                    const value = (item && (item.key || item.slug || item.name)) || String(item);
-                                    const label = (item && (item.display || item.title || item.name || item.key)) || String(item);
-                                    if (!label || !label.trim()) continue;
-                                    const id = `aist-an-r${i++}`;
-                                    const wrap = document.createElement('div');
-                                    wrap.className = 'form-check';
-                                    const input = document.createElement('input');
-                                    input.type = 'checkbox';
-                                    input.className = 'form-check-input';
-                                    input.id = id;
-                                    input.value = value;
-                                    input.checked = true;
-                                    const lab = document.createElement('label');
-                                    lab.className = 'form-check-label';
-                                    lab.setAttribute('for', id);
-                                    lab.textContent = label;
-                                    wrap.appendChild(input);
-                                    wrap.appendChild(lab);
-                                    boxList.appendChild(wrap);
-                                }
-                            }
-                        });
-                    }
                 }
 
                 function selectedAnalyzers() {
@@ -642,24 +589,22 @@
                 })();
             }
 
+            // Keyed by the status panel's data-hydrator, which the pipeline_status_panel tag sets.
             const HYDRATORS = {
-                "FINISHED": hydrateFinished,
-                "FINISHED_WITH_WARNINGS": hydrateFinished,
-                "WAITING_DEDUPLICATION_TO_FINISH": hydrateWaitingDedup,
-                "FINDING_POSTPROCESSING": hydrateFindingPostprocessing,
-                "WAITING_CONFIRMATION_TO_PUSH_TO_AI": hydratePushToAI,
+                "finished": hydrateFinished,
+                "waiting-dedup": hydrateWaitingDedup,
+                "postprocessing": hydrateFindingPostprocessing,
+                "push-to-ai": hydratePushToAI,
             };
 
-            function runHydratorFor(status, root = container) {
+            function runHydrator(panel) {
                 stopDedupPolling();
                 stopEnrichSSE();
-                const fn = HYDRATORS[(status || "").trim()];
-                if (fn) fn(root);
+                const fn = panel && HYDRATORS[panel.dataset.hydrator];
+                if (fn) fn(panel);
             }
 
-
-            const initialStatus = (container?.getAttribute("data-status") || st?.textContent || "").trim();
-            if (initialStatus) runHydratorFor(initialStatus, document);
+            runHydrator(statusContainer());
 
             // ---------- Logs SSE ----------
             // Two independent byte offsets — one per source file. The server
@@ -730,14 +675,20 @@
             setInterval(pollNewLogs, fetchIntervalMs);
 
             // ---------- Status SSE ----------
+            // The stream says when the status changes; the panel then refreshes itself through htmx.
             const srcStatus = new EventSource("{% url 'aist:pipeline_status_stream' pipeline.id %}");
             let statusPollTimer = null;
             const statusPollIntervalMs = 5000;
 
+            function refreshStatusPanel() {
+                const panel = statusContainer();
+                if (panel) htmx.trigger(panel, "aist:status-changed");
+            }
+
             function startStatusPolling() {
                 if (statusPollTimer) return;
-                refreshStatusPartial();
-                statusPollTimer = setInterval(refreshStatusPartial, statusPollIntervalMs);
+                refreshStatusPanel();
+                statusPollTimer = setInterval(refreshStatusPanel, statusPollIntervalMs);
             }
 
             function stopStatusPolling() {
@@ -746,45 +697,26 @@
                 statusPollTimer = null;
             }
 
-            function refreshStatusPartial() {
-                fetch(window.location.href, {headers: {"X-Partial": "status"}})
-                    .then(r => r.text())
-                    .then(html => {
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(html, "text/html");
-                        const newContainer = doc.getElementById("pipeline-status-container");
-                        if (!newContainer || !container) return;
+            // A refresh replaces the panel, which closes every collapse in it; the ones the user had open reopen.
+            let openPanelIds = new Set();
+            document.addEventListener("htmx:beforeSwap", (evt) => {
+                if (evt.detail.elt !== statusContainer()) return;
+                openPanelIds = new Set(
+                    [...evt.detail.elt.querySelectorAll('.collapse.in')].map(el => el.id).filter(Boolean)
+                );
+            });
 
-                        // Snapshot currently-open collapse IDs before replacing the DOM.
-                        // An open panel is ".collapse.in"; innerHTML replacement wipes that class.
-                        const openIds = new Set(
-                            [...container.querySelectorAll('.collapse.in')]
-                                .map(el => el.id)
-                                .filter(Boolean)
-                        );
-
-                        container.innerHTML = newContainer.innerHTML;
-
-                        // Restore open state so the user's expanded panels stay visible.
-                        openIds.forEach(id => {
-                            const el = container.querySelector('#' + CSS.escape(id));
-                            if (!el) return;
-                            el.classList.add('in');
-                            const btn = container.querySelector(
-                                '[aria-controls="' + CSS.escape(id) + '"]'
-                            );
-                            if (btn) {
-                                btn.setAttribute('aria-expanded', 'true');
-                                btn.classList.remove('collapsed');
-                            }
-                        });
-
-                        const ds = newContainer.getAttribute("data-status");
-                        const s = (ds || st?.textContent || "").trim();
-                        if (s) runHydratorFor(s, container);
-                    })
-                    .catch(console.warn);
-            }
+            let shownPanel = statusContainer();
+            document.addEventListener("htmx:afterSettle", () => {
+                const panel = statusContainer();
+                if (!panel || panel === shownPanel) return;
+                shownPanel = panel;
+                openPanelIds.forEach(id => {
+                    const btn = panel.querySelector('[aria-controls="' + CSS.escape(id) + '"]');
+                    if (btn && panel.querySelector('#' + CSS.escape(id))) aistToggleCollapse(btn, id);
+                });
+                runHydrator(panel);
+            });
 
             srcStatus.onmessage = (evt) => {
                 if (evt?.data) setStatusText(evt.data);
@@ -793,16 +725,14 @@
             srcStatus.addEventListener("status", (evt) => {
                 if (evt?.data) setStatusText(evt.data);
                 stopStatusPolling();
-                refreshStatusPartial();
+                refreshStatusPanel();
             });
 
             srcStatus.addEventListener("done", (evt) => {
-                const s = (evt?.data || "FINISHED");
-                setStatusText(s);
-                runHydratorFor(s, document);
-                refreshStatusPartial();
-                setTimeout(refreshStatusPartial, 1500);
-                setTimeout(refreshStatusPartial, 4000);
+                setStatusText(evt?.data || "FINISHED");
+                refreshStatusPanel();
+                setTimeout(refreshStatusPanel, 1500);
+                setTimeout(refreshStatusPanel, 4000);
                 stopStatusPolling();
                 srcStatus.close();
             });
@@ -812,10 +742,8 @@
                 startStatusPolling();
             };
 
-            // Use event delegation on the outer container so the listener survives
-            // innerHTML replacement in refreshStatusPartial().
-            container.addEventListener('aist:collapse-shown', function (ev) {
-                hydrateAllJsonBlocks(ev.target);
+            document.addEventListener('aist:collapse-shown', function (ev) {
+                if (ev.target.closest('#pipeline-status-container')) hydrateAllJsonBlocks(ev.target);
             });
 
             const logsToggleBtn = document.getElementById("logsToggleBtn");
@@ -834,22 +762,10 @@
                     }
                 });
             }
-
-            var v = document.getElementById('aist-json-view-{{ r.id }}');
-            if (!v) return;
-            if (typeof window.jsonSyntaxHighlight === 'function') {
-                try {
-                    v.innerHTML = window.jsonSyntaxHighlight(v.textContent);
-                } catch (e) {
-                }
-            }
-
-            srcStatus.onerror = () => {
-            };
         })();
     </script>
 
 
-{# The 2.x base template dressed every select on every page; ours asks for its own. #}
+{# base.html dresses no selects; this page asks for its own. #}
 <script>aistDressSelectsOnReady();</script>
 {% endblock %}

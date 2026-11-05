@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import json
 import uuid
 
+import django_filters
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Q
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
+from django.views.decorators.vary import vary_on_headers
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Finding
 from dojo.utils import add_breadcrumb
@@ -23,12 +24,10 @@ from aist.ai_filter import (
     severity_ordering,
     validate_and_normalize_filter,
 )
-from aist.api.launch_configs import ACTION_CREATE_SERIALIZERS
 from aist.execution.enqueue import LaunchEnqueueError, LaunchPrincipal, enqueue_pipeline_launch
 from aist.forms import AISTPipelineRunForm, DastPipelineRunForm
 from aist.launch_data import PipelineLaunchData
 from aist.models import AISTLaunchConfigAction, AISTPipeline, AISTStatus, PipelineExecutionType
-from aist.pipeline_args import PipelineArguments
 from aist.queries import (
     get_authorized_aist_pipelines,
     get_authorized_aist_projects,
@@ -37,7 +36,7 @@ from aist.queries import (
 from aist.services.dast_queue import queue_is_addressable
 from aist.services.pipeline_lifecycle import PipelineTransitionError, transition_allowed
 from aist.tasks.ai import resolve_triage_type
-from aist.utils.http import _fmt_duration, _qs_without, page_of
+from aist.utils.http import _qs_without, page_of
 from aist.utils.pipeline import (
     get_terminal_pipeline_statuses,
     is_terminal_pipeline_status,
@@ -49,6 +48,9 @@ from aist.views._common import ERR_PIPELINE_NOT_FOUND
 FINDINGS_PAGE_SIZES = [25, 50, 100, 200]
 START_HISTORY_PAGE_SIZES = [8]
 PIPELINE_LIST_PAGE_SIZES = [10, 20, 50, 100]
+# Seconds between refreshes of the pipeline list: quick while a listed run can still change, slow otherwise.
+PIPELINE_LIST_POLL_ACTIVE_SECONDS = 5
+PIPELINE_LIST_POLL_IDLE_SECONDS = 30
 FINDINGS_SEVERITY_BADGES = {
     "Critical": "danger",
     "High": "danger",
@@ -252,6 +254,72 @@ def pipeline_set_status(request, pipeline_id: str):
     return redirect("aist:pipeline_detail", pipeline_id=pipeline_id)
 
 
+class PipelineListStatusFilter(models.TextChoices):
+    ALL = "ALL", "All statuses"
+    FINISHED = "FINISHED", "Finished only (incl warnings)"
+
+
+class PipelineHistoryFilter(django_filters.FilterSet):
+
+    """The filters a pipeline history page is opened with; a value that does not parse is ignored."""
+
+    project = django_filters.NumberFilter(field_name="project_id")
+    q = django_filters.CharFilter(method="filter_text")
+    status = django_filters.ChoiceFilter(choices=PipelineListStatusFilter.choices, method="filter_status")
+    created_from = django_filters.DateFilter(field_name="created", lookup_expr="date__gte")
+    created_to = django_filters.DateFilter(field_name="created", lookup_expr="date__lte")
+
+    class Meta:
+        model = AISTPipeline
+        fields = ()
+
+    def filter_text(self, queryset, name, value):
+        return queryset.filter(Q(id__icontains=value) | Q(project__product__name__icontains=value))
+
+    def filter_status(self, queryset, name, value):
+        if value == PipelineListStatusFilter.FINISHED:
+            return queryset.filter(status__in=get_terminal_pipeline_statuses())
+        return queryset
+
+    @property
+    def selected(self) -> dict:
+        """The valid filter values, for showing the form back as it was submitted."""
+        self.is_valid()
+        return self.form.cleaned_data
+
+
+def _pipeline_history(request: HttpRequest, pipelines) -> PipelineHistoryFilter:
+    return PipelineHistoryFilter(request.GET, queryset=pipelines.order_by("-updated"))
+
+
+def _manual_launch_form(execution_type, data, *, projects, client_request_key):
+    if execution_type == PipelineExecutionType.DAST:
+        return DastPipelineRunForm(data, project_queryset=projects, client_request_key=client_request_key)
+    form = AISTPipelineRunForm(data, client_request_key=client_request_key)
+    form.fields["project"].queryset = projects
+    return form
+
+
+def _enqueue_manual_launch(request: HttpRequest, form, client_request_key: str) -> HttpResponse | None:
+    """Queue the launch a valid start form describes; ``None`` with the refusal added to the form when it is refused."""
+    project = form.cleaned_data["project"]
+    require_product_permission(project.product, Permissions.Product_Edit, user=request.user)
+    launch_data = PipelineLaunchData({})
+    launch_data.one_off_actions = form.one_off_actions
+    launch_data.one_off_actions_done = []
+    try:
+        launch_request = enqueue_pipeline_launch(
+            arguments=form.get_arguments(),
+            principal=LaunchPrincipal.for_user(organization=project.organization, requester=request.user),
+            client_request_key=client_request_key,
+            initial_launch_data=launch_data.as_dict(),
+        ).request
+    except LaunchEnqueueError as exc:
+        form.add_error(None, str(exc))
+        return None
+    return redirect(f"{reverse('aist:launching_dashboard')}?queued_request={launch_request.pk}")
+
+
 @login_required
 def start_pipeline(request: HttpRequest) -> HttpResponse:
     """
@@ -260,195 +328,78 @@ def start_pipeline(request: HttpRequest) -> HttpResponse:
     Pipeline creation and Celery publication are owned by the generic
     dispatcher, so this user-facing view never bypasses queue policy.
     """
-    project_id = request.GET.get("project")
-    q = (request.GET.get("q") or "").strip()
-
-    history_qs = (
-        get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
-        .filter(status__in=get_terminal_pipeline_statuses())
-        .select_related("project__product")
-    )
-    if project_id:
-        history_qs = history_qs.filter(project_id=project_id)
-    if q:
-        history_qs = history_qs.filter(
-            Q(id__icontains=q) |
-            Q(project__product__name__icontains=q),
-        )
-
-    history_qs = history_qs.order_by("-updated")
-
-    page_obj = page_of(request, history_qs, sizes=START_HISTORY_PAGE_SIZES, default=START_HISTORY_PAGE_SIZES[0])
-
-    history_items = [{
-        "id": p.id,
-        "project_name": getattr(getattr(p.project, "product", None), "name", str(p.project_id)),
-        "updated": p.updated,
-        "status": p.status,
-        "execution_type": p.execution_type,
-        "duration": _fmt_duration(p.created, p.updated),
-    } for p in page_obj.object_list]
-
-    history_qs_str = _qs_without(request, "page")
-    add_breadcrumb(title="Start pipeline", top_level=True, request=request)
     client_request_key = (request.POST.get("client_request_key") or "").strip() or uuid.uuid4().hex
-    execution_type = (request.POST.get("execution_type") or request.GET.get("execution_type") or "SAST").upper()
-    if execution_type not in {PipelineExecutionType.SAST, PipelineExecutionType.DAST}:
-        execution_type = PipelineExecutionType.SAST
+    requested_type = (request.POST.get("execution_type") or request.GET.get("execution_type") or "").upper()
+    execution_type = (
+        PipelineExecutionType.DAST if requested_type == PipelineExecutionType.DAST else PipelineExecutionType.SAST
+    )
     authorized_projects = get_authorized_aist_projects(
         Permissions.Product_Edit,
         user=request.user,
     ).order_by("product__name")
+    form = _manual_launch_form(
+        execution_type,
+        request.POST if request.method == "POST" else None,
+        projects=authorized_projects,
+        client_request_key=client_request_key,
+    )
+    if request.method == "POST" and form.is_valid():
+        queued = _enqueue_manual_launch(request, form, client_request_key)
+        if queued is not None:
+            return queued
 
-    def render_start(form):
-        return render(
-            request,
-            "aist/start.html",
-            {
-                "form": form,
-                "history_page": page_obj,  # for pagination
-                "history_items": history_items,
-                "history_qs": history_qs_str,
-                "selected_project": project_id or "",
-                "search_query": q,
-                "page_sizes": [10, 20, 50, 100],
-                "aist_status_choices": AISTStatus.choices,
-                "aist_action_types": AISTLaunchConfigAction.ActionType.choices,
-                "ai_filter_reference": get_ai_filter_reference(),
-                "client_request_key": client_request_key,
-                "execution_type": execution_type,
-                "history_projects": authorized_projects,
-            },
-        )
-
-    if request.method == "POST":
-        if execution_type == PipelineExecutionType.DAST:
-            form = DastPipelineRunForm(request.POST, project_queryset=authorized_projects)
-        else:
-            form = AISTPipelineRunForm(request.POST)
-            form.fields["project"].queryset = authorized_projects
-        if form.is_valid():
-            project = form.cleaned_data["project"]
-            arguments = (
-                form.get_arguments()
-                if execution_type == PipelineExecutionType.DAST
-                else PipelineArguments.for_sast(project=project, raw_params=form.get_params())
-            )
-
-            raw_actions = request.POST.get("one_off_actions") or "[]"
-            try:
-                actions_payload = json.loads(raw_actions)
-            except json.JSONDecodeError:
-                form.add_error(None, "Invalid actions payload.")
-                return render_start(form)
-
-            if not isinstance(actions_payload, list):
-                form.add_error(None, "Actions payload must be a list.")
-                return render_start(form)
-
-            if execution_type == PipelineExecutionType.DAST and actions_payload:
-                form.add_error(None, "One-off actions are currently available only for SAST launches.")
-                return render_start(form)
-
-            one_off_actions = []
-            for index, item in enumerate(actions_payload):
-                if not isinstance(item, dict):
-                    form.add_error(None, "Invalid action payload.")
-                    return render_start(form)
-                action_type = item.get("action_type")
-                serializer_cls = ACTION_CREATE_SERIALIZERS.get(action_type)
-                if not serializer_cls:
-                    form.add_error(None, f"Unknown action type: {action_type}")
-                    return render_start(form)
-
-                serializer = serializer_cls(data=item)
-                if not serializer.is_valid():
-                    form.add_error(None, serializer.errors)
-                    return render_start(form)
-
-                data = serializer.validated_data
-                action_id = item.get("id") or uuid.uuid5(
-                    uuid.NAMESPACE_URL,
-                    f"aist-launch:{client_request_key}:{index}",
-                ).hex
-                one_off_actions.append({
-                    "id": action_id,
-                    "trigger_status": data["trigger_status"],
-                    "action_type": data["action_type"],
-                    "config": data.get("config") or {},
-                })
-
-            require_product_permission(
-                project.product,
-                Permissions.Product_Edit,
-                user=request.user,
-            )
-            launch_data = PipelineLaunchData({})
-            launch_data.one_off_actions = one_off_actions
-            launch_data.one_off_actions_done = []
-            try:
-                launch_request = enqueue_pipeline_launch(
-                    arguments=arguments,
-                    principal=LaunchPrincipal.for_user(
-                        organization=project.organization,
-                        requester=request.user,
-                    ),
-                    client_request_key=client_request_key,
-                    initial_launch_data=launch_data.as_dict(),
-                ).request
-            except LaunchEnqueueError as exc:
-                form.add_error(None, str(exc))
-                return render_start(form)
-            destination = reverse("aist:launching_dashboard")
-            return redirect(f"{destination}?queued_request={launch_request.pk}")
-    elif execution_type == PipelineExecutionType.DAST:
-        form = DastPipelineRunForm(project_queryset=authorized_projects)
-    else:
-        form = AISTPipelineRunForm()
-        form.fields["project"].queryset = authorized_projects
-    return render_start(form)
+    history = _pipeline_history(
+        request,
+        get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
+        .filter(status__in=get_terminal_pipeline_statuses())
+        .select_related("project__product"),
+    )
+    add_breadcrumb(title="Start pipeline", top_level=True, request=request)
+    return render(
+        request,
+        "aist/start.html",
+        {
+            "form": form,
+            "history_page": page_of(
+                request,
+                history.qs,
+                sizes=START_HISTORY_PAGE_SIZES,
+                default=START_HISTORY_PAGE_SIZES[0],
+            ),
+            "selected_project": history.selected.get("project") or "",
+            "search_query": history.selected.get("q") or "",
+            "aist_status_choices": AISTStatus.choices,
+            "aist_action_types": AISTLaunchConfigAction.ActionType.choices,
+            "ai_filter_reference": get_ai_filter_reference(),
+            "client_request_key": client_request_key,
+            "execution_type": execution_type,
+            "is_dast": execution_type == PipelineExecutionType.DAST,
+            "history_projects": authorized_projects,
+        },
+    )
 
 
 @login_required
+@vary_on_headers("HX-Request")
 def pipeline_list(request):
-    project_id = request.GET.get("project")
-    q = (request.GET.get("q") or "").strip()
-
-    status = (request.GET.get("status") or "ALL").upper()  # ALL | FINISHED
-
-    qs = (
+    history = _pipeline_history(
+        request,
         get_authorized_aist_pipelines(Permissions.Product_View, user=request.user)
-        .select_related("project__product", "project_version")
-        .order_by("-updated")
+        .select_related("project__product", "project_version"),
     )
-
-    if status == "FINISHED":
-        qs = qs.filter(status__in=get_terminal_pipeline_statuses())
-
-    if project_id:
-        qs = qs.filter(project_id=project_id)
-    if q:
-        qs = qs.filter(
-            Q(id__icontains=q) |
-            Q(project__product__name__icontains=q),
-        )
-
-    page_obj = page_of(request, qs, sizes=PIPELINE_LIST_PAGE_SIZES, default=20)
-
-    items = [{
-        "id": p.id,
-        "project_name": getattr(getattr(p.project, "product", None), "name", str(p.project_id)),
-        "project_version": getattr(p.project_version, "version", None),
-        "created": p.created,
-        "updated": p.updated,
-        "status": p.status,
-        "duration": _fmt_duration(p.created, p.updated),
-        # Active = anything that is not FINISHED
-        "is_active": not is_terminal_pipeline_status(p.status),
-    } for p in page_obj.object_list]
-
-    qs_str = _qs_without(request, "page")
-
+    page_obj = page_of(request, history.qs, sizes=PIPELINE_LIST_PAGE_SIZES, default=20)
+    listed = list(page_obj.object_list)
+    table_context = {
+        "page_obj": page_obj,
+        "pipelines": listed,
+        "poll_seconds": (
+            PIPELINE_LIST_POLL_ACTIVE_SECONDS
+            if any(not is_terminal_pipeline_status(p.status) for p in listed)
+            else PIPELINE_LIST_POLL_IDLE_SECONDS
+        ),
+    }
+    if request.htmx:
+        return render(request, "aist/_pipeline_list_table.html", table_context)
     projects = (
         get_authorized_aist_projects(Permissions.Product_View, user=request.user)
         .select_related("product")
@@ -459,12 +410,11 @@ def pipeline_list(request):
         request,
         "aist/pipeline_list.html",
         {
-            "page_obj": page_obj,
-            "items": items,
-            "qs": qs_str,
-            "selected_project": project_id or "",
-            "search_query": q,
-            "status": status,
+            **table_context,
+            "selected_project": history.selected.get("project") or "",
+            "search_query": history.selected.get("q") or "",
+            "status": history.selected.get("status") or PipelineListStatusFilter.ALL,
+            "status_choices": PipelineListStatusFilter.choices,
             "projects": projects,
             "page_sizes": PIPELINE_LIST_PAGE_SIZES,
         },
@@ -472,6 +422,7 @@ def pipeline_list(request):
 
 
 @login_required
+@vary_on_headers("HX-Request")
 def pipeline_detail(request, pipeline_id: str):
     """Display the status and logs for a pipeline. Adds actions (Stop/Delete) and connects SSE client to stream logs."""
     pipeline = get_object_or_404(
@@ -485,9 +436,8 @@ def pipeline_detail(request, pipeline_id: str):
         "ai_auto_triage": PipelineLaunchData(pipeline.launch_data).ai.pushes_automatically(resolve_triage_type(pipeline)),
         **_build_findings_context(request, pipeline),
     }
-    if request.headers.get("X-Partial") == "status":
+    if request.htmx:
         return render(request, "aist/_pipeline_status_container.html", status_context)
-
     add_breadcrumb(parent=pipeline, title="Pipeline Detail", top_level=False, request=request)
     return render(
         request,
@@ -504,7 +454,7 @@ def pipeline_detail(request, pipeline_id: str):
 @login_required
 @require_http_methods(["POST"])
 def stop_pipeline_view(request, pipeline_id: str):
-    """POST-only endpoint to stop a running pipeline (Celery revoke). Sets FINISHED regardless of current state to keep UI consistent."""
+    """POST-only: ask the pipeline's execution driver to stop it -- a cooperative stop request for DAST; task revoke, container cleanup and finish for the rest."""
     pipeline = get_object_or_404(
         get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
         id=pipeline_id,

@@ -474,6 +474,25 @@ ACTION_CREATE_SERIALIZERS = {
 }
 
 
+class UnsupportedActionTypeError(ValueError):
+
+    """An action payload names a type that no create serializer handles."""
+
+
+def validate_action_payload(payload) -> dict:
+    """
+    The validated data of one launch action payload, checked by its type's create serializer.
+
+    Raises UnsupportedActionTypeError for an unknown type and serializers.ValidationError for an invalid payload.
+    """
+    serializer_cls = ACTION_CREATE_SERIALIZERS.get(payload.get("action_type"))
+    if serializer_cls is None:
+        raise UnsupportedActionTypeError(payload.get("action_type"))
+    serializer = serializer_cls(data=payload)
+    serializer.is_valid(raise_exception=True)
+    return serializer.validated_data
+
+
 def create_launch_config_for_project(
     *,
     project: AISTProject,
@@ -828,18 +847,16 @@ class ProjectLaunchConfigActionListCreateAPI(AISTAPIView):
         cfg = self.resolve(id=config_id, project_id=project_id)
         action_type_serializer = BaseActionCreateSerializer(data=request.data)
         action_type_serializer.is_valid(raise_exception=True)
-        action_type = action_type_serializer.validated_data["action_type"]
-        serializer_cls = ACTION_CREATE_SERIALIZERS.get(action_type)
-        if serializer_cls is None:
+        try:
+            data = validate_action_payload(request.data)
+        except UnsupportedActionTypeError:
             return Response({"action_type": "Unsupported action_type"}, status=status.HTTP_400_BAD_REQUEST)
-        s = serializer_cls(data=request.data)
-        s.is_valid(raise_exception=True)
 
         obj = AISTLaunchConfigAction(
             launch_config=cfg,
-            trigger_status=s.validated_data["trigger_status"],
-            action_type=s.validated_data["action_type"],
-            config=s.validated_data.get("config") or {},
+            trigger_status=data["trigger_status"],
+            action_type=data["action_type"],
+            config=data.get("config") or {},
         )
         obj.save()
         return Response(LaunchConfigActionSerializer(obj).data, status=status.HTTP_201_CREATED)
@@ -877,22 +894,19 @@ class ProjectLaunchConfigActionDetailAPI(AISTAPIView):
         s.is_valid(raise_exception=True)
         data = s.validated_data
 
-        action_type = data.get("action_type") or obj.action_type
-        serializer_cls = ACTION_CREATE_SERIALIZERS.get(action_type)
-        if serializer_cls is None:
-            return Response({"action_type": "Unsupported action_type"}, status=status.HTTP_400_BAD_REQUEST)
-
         payload = {
             "trigger_status": data.get("trigger_status", obj.trigger_status),
-            "action_type": action_type,
+            "action_type": data.get("action_type") or obj.action_type,
             "config": data.get("config", obj.config),
         }
-        validator = serializer_cls(data=payload)
-        validator.is_valid(raise_exception=True)
+        try:
+            validated = validate_action_payload(payload)
+        except UnsupportedActionTypeError:
+            return Response({"action_type": "Unsupported action_type"}, status=status.HTTP_400_BAD_REQUEST)
 
-        obj.trigger_status = validator.validated_data["trigger_status"]
-        obj.action_type = validator.validated_data["action_type"]
-        obj.config = validator.validated_data.get("config") or {}
+        obj.trigger_status = validated["trigger_status"]
+        obj.action_type = validated["action_type"]
+        obj.config = validated.get("config") or {}
         obj.save()
 
         return Response(LaunchConfigActionSerializer(obj).data)

@@ -19,14 +19,7 @@ RETURN_LABEL = "Return to step"
 class ReturnToPushToAITests(AISTApiBase):
     def setUp(self):
         super().setUp()
-        self.user.is_superuser = True
-        self.user.save(update_fields=["is_superuser"])
-        self.client.force_login(self.user)
-
-    def _pipeline(self, pipeline_id: str, status: str) -> AISTPipeline:
-        return AISTPipeline.objects.create(
-            id=pipeline_id, project=self.project, project_version=self.pv, status=status,
-        )
+        self.login_as_superuser()
 
     def _detail(self, pipeline: AISTPipeline) -> str:
         response = self.client.get(
@@ -38,7 +31,7 @@ class ReturnToPushToAITests(AISTApiBase):
     def test_a_terminal_pipeline_does_not_offer_the_action(self):
         for status in (AISTStatus.FINISHED, AISTStatus.FINISHED_WITH_WARNINGS):
             with self.subTest(status=status):
-                pipeline = self._pipeline(f"pipe-terminal-{status}", status)
+                pipeline = self.make_pipeline(f"pipe-terminal-{status}", status=status)
                 self.assertNotIn(RETURN_LABEL, self._detail(pipeline))
 
     def test_no_status_offers_the_action_today(self):
@@ -49,12 +42,12 @@ class ReturnToPushToAITests(AISTApiBase):
         """
         for status in AISTStatus.values:
             with self.subTest(status=status):
-                pipeline = self._pipeline(f"pipe-{status.lower()}", status)
+                pipeline = self.make_pipeline(f"pipe-{status.lower()}", status=status)
                 self.assertNotIn(RETURN_LABEL, self._detail(pipeline))
 
     def test_a_forbidden_transition_is_refused_without_a_server_error(self):
         """A stale page can still post it, so the view must answer rather than raise."""
-        pipeline = self._pipeline("pipe-terminal-post", AISTStatus.FINISHED_WITH_WARNINGS)
+        pipeline = self.make_pipeline("pipe-terminal-post", status=AISTStatus.FINISHED_WITH_WARNINGS)
 
         response = self.client.post(
             reverse("aist:pipeline_set_status", kwargs={"pipeline_id": pipeline.id}),
@@ -65,7 +58,7 @@ class ReturnToPushToAITests(AISTApiBase):
         self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
 
     def test_a_permitted_transition_still_moves_the_pipeline(self):
-        pipeline = self._pipeline("pipe-postprocessing-post", AISTStatus.FINDING_POSTPROCESSING)
+        pipeline = self.make_pipeline("pipe-postprocessing-post", status=AISTStatus.FINDING_POSTPROCESSING)
 
         response = self.client.post(
             reverse("aist:pipeline_set_status", kwargs={"pipeline_id": pipeline.id}),

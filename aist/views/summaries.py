@@ -24,6 +24,7 @@ from aist.models import AISTAIFindingResponse, AISTPipeline, AISTStatus, WorkIte
 from aist.queries import get_authorized_aist_pipelines, get_authorized_aist_projects, get_authorized_findings
 from aist.services.dast_outcomes import public_dast_outcome_code
 from aist.services.dast_run_metadata import dast_run_summary
+from aist.services.pipeline_lifecycle import is_terminal_pipeline_status, pipeline_elapsed
 from aist.utils.cwe_lookup import fetch_cwe_meta, load_cwe_fixture_lookup, trim_text
 from aist.utils.project_version_refs import resolve_project_version_git_refs
 from aist.work_items.finding_state import (
@@ -322,24 +323,20 @@ def _build_triage_progress(findings_qs) -> dict[str, Any]:
 def _build_pipeline_performance_trend(pipelines_qs) -> list[dict[str, Any]]:
     now = timezone.now()
     start_week = _series_start_week(now)
-    rows = (
+    pipelines = (
         pipelines_qs.filter(created__gte=start_week)
         .annotate(week=TruncWeek("created"))
-        .values("week", "status", "created", "updated")
+        .only("status", "created", "updated", "finished_at")
     )
     grouped: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        week_dt = row["week"]
-        created = row["created"]
-        updated = row["updated"]
-        if not week_dt or not created or not updated:
-            continue
-        week = _week_key(week_dt)
+    for pipeline in pipelines:
+        week = _week_key(pipeline.week)
         bucket = grouped.setdefault(week, {"durations": [], "runs": 0, "warnings": 0})
-        duration_seconds = max(int((updated - created).total_seconds()), 0)
-        bucket["durations"].append(duration_seconds)
         bucket["runs"] += 1
-        if row["status"] == AISTStatus.FINISHED_WITH_WARNINGS:
+        # The median describes completed runs; one still going has no run time yet.
+        if is_terminal_pipeline_status(pipeline.status):
+            bucket["durations"].append(int(pipeline_elapsed(pipeline, now).total_seconds()))
+        if pipeline.finished_with_warnings:
             bucket["warnings"] += 1
 
     series: list[dict[str, Any]] = []

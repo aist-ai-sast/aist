@@ -46,6 +46,25 @@ from aist.models import (
 from aist.utils.ai_response import sync_ai_finding_responses
 from aist.utils.secrets import MASKED_VALUE
 
+_PIPELINE_TIMESTAMPS = frozenset({"created", "updated", "started", "finished_at"})
+
+
+def create_pipeline(pipeline_id: str, *, status: str, project_version, **fields) -> AISTPipeline:
+    """
+    A pipeline of ``project_version`` with the given status and other model ``fields``.
+
+    Timestamps among ``fields`` (created, updated, started, finished_at) are stored as given, past ``updated``'s
+    auto_now.
+    """
+    timestamps = {name: fields.pop(name) for name in _PIPELINE_TIMESTAMPS & fields.keys()}
+    pipeline = AISTPipeline.objects.create(
+        id=pipeline_id, project=project_version.project, project_version=project_version, status=status, **fields,
+    )
+    if timestamps:
+        AISTPipeline.objects.filter(pk=pipeline_id).update(**timestamps)
+        pipeline.refresh_from_db()
+    return pipeline
+
 
 class AISTApiBase(TestCase):
     def setUp(self):
@@ -106,6 +125,16 @@ class AISTApiBase(TestCase):
             version_type=VersionType.GIT_HASH,
             version="other",
         )
+
+    def login_as_superuser(self):
+        """Promote the base user to superuser and log the session client in, as the /aist-admin/ pages require."""
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+        self.client.force_login(self.user)
+
+    def make_pipeline(self, pipeline_id: str, *, status: str, project_version=None, **fields) -> AISTPipeline:
+        """A pipeline of ``project_version``, the base version by default; see ``create_pipeline``."""
+        return create_pipeline(pipeline_id, status=status, project_version=project_version or self.pv, **fields)
 
 
 class PipelineStartAPITests(AISTApiBase):

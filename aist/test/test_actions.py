@@ -392,6 +392,27 @@ class ActionsTests(TestCase):
         self.assertIn("Commit:* abcdef1234567890", message)
         self.assertNotIn("Duration:* 0s", message)
 
+    @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
+    def test_slack_summary_duration_runs_from_launch_to_finish_like_the_pipeline_pages(self, mock_post):
+        launched = timezone.now() - timedelta(days=1)
+        AISTPipeline.objects.filter(pk=self.pipeline.pk).update(
+            status=AISTStatus.FINISHED,
+            created=launched,
+            started=launched + timedelta(minutes=2),
+            finished_at=launched + timedelta(minutes=12, seconds=30),
+            updated=launched + timedelta(hours=3),
+        )
+        self.pipeline.refresh_from_db()
+        action = self._make_action(
+            AISTLaunchConfigAction.ActionType.PUSH_TO_SLACK,
+            {"channels": ["#alerts"], "include_common_summary": True},
+            {"slack_token": "xoxb-test"},
+        )
+
+        SlackAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
+
+        self.assertIn("Duration:* 12m 30s", mock_post.call_args.kwargs["message"])
+
     @patch("aist.actions.EmailMessage.attach")
     @patch("aist.actions.EmailMessage.send")
     @patch("aist.actions.EmailNotificationManger.send_mail_notification")

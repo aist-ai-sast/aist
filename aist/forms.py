@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import uuid
+from itertools import starmap
 
 from django import forms
+from rest_framework import serializers
 
 from aist.ai_filter import AIFilterError
+from aist.api.launch_configs import UnsupportedActionTypeError, validate_action_payload
 from aist.integrations.dast_readiness import check_dast_launch_readiness
 from aist.launch_data import AIMode, LaunchAISettings
 from aist.models import (
@@ -244,7 +248,78 @@ class _AISTPipelineArgsBaseForm(forms.Form):
         return PipelineArguments.normalize_params(project=project, raw_params=raw)
 
 
-class AISTPipelineRunForm(_AISTPipelineArgsBaseForm):
+def _error_text(detail) -> str:
+    """DRF error detail as plain text, e.g. "config: channels: channels is required"."""
+    if isinstance(detail, dict):
+        return "; ".join(f"{field}: {_error_text(errors)}" for field, errors in detail.items())
+    if isinstance(detail, list):
+        return " ".join(_error_text(error) for error in detail)
+    return str(detail)
+
+
+class _OneOffActionsMixin:
+
+    """
+    Validates the one-off actions a manual launch attaches: the ``one_off_actions`` JSON list the start page posts.
+
+    Each action without an id gets one derived from ``client_request_key``, so a resubmitted launch keeps its ids.
+    A launch kind that takes no one-off actions sets ``one_off_actions_allowed`` to False.
+    """
+
+    one_off_actions_allowed = True
+
+    def __init__(self, *args, client_request_key: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.client_request_key = client_request_key
+        self.one_off_actions: list[dict] = []
+
+    def clean(self):
+        cleaned = super().clean()
+        try:
+            self.one_off_actions = self._clean_one_off_actions(self.data.get("one_off_actions") or "[]")
+        except forms.ValidationError as exc:
+            self.add_error(None, exc)
+        return cleaned
+
+    def _clean_one_off_actions(self, raw: str) -> list[dict]:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            msg = "Invalid actions payload."
+            raise forms.ValidationError(msg) from exc
+        if not isinstance(payload, list):
+            msg = "Actions payload must be a list."
+            raise forms.ValidationError(msg)
+        if payload and not self.one_off_actions_allowed:
+            msg = "One-off actions are currently available only for SAST launches."
+            raise forms.ValidationError(msg)
+        return list(starmap(self._clean_one_off_action, enumerate(payload)))
+
+    def _clean_one_off_action(self, index: int, item) -> dict:
+        if not isinstance(item, dict):
+            msg = "Invalid action payload."
+            raise forms.ValidationError(msg)
+        action_type = item.get("action_type")
+        try:
+            data = validate_action_payload(item)
+        except UnsupportedActionTypeError as exc:
+            msg = f"Unknown action type: {action_type}"
+            raise forms.ValidationError(msg) from exc
+        except serializers.ValidationError as exc:
+            msg = f"Invalid {action_type} action: {_error_text(exc.detail)}"
+            raise forms.ValidationError(msg) from exc
+        return {
+            "id": item.get("id") or uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"aist-launch:{self.client_request_key}:{index}",
+            ).hex,
+            "trigger_status": data["trigger_status"],
+            "action_type": data["action_type"],
+            "config": data.get("config") or {},
+        }
+
+
+class AISTPipelineRunForm(_OneOffActionsMixin, _AISTPipelineArgsBaseForm):
     project = forms.ModelChoiceField(
         queryset=AISTProject.objects.all(),
         label="Project",
@@ -271,10 +346,9 @@ class AISTPipelineRunForm(_AISTPipelineArgsBaseForm):
 
         return cleaned
 
-    def get_params(self) -> dict:
-        proj: AISTProject = self.cleaned_data["project"]
-        # Use shared collector; this keeps PipelineArguments.normalize_params as SSOT
-        return self.get_params_payload(project=proj)
+    def get_arguments(self) -> PipelineArguments:
+        project: AISTProject = self.cleaned_data["project"]
+        return PipelineArguments.for_sast(project=project, raw_params=self.get_params_payload(project=project))
 
 
 class ProjectScopedSelect(forms.Select):
@@ -310,9 +384,11 @@ def dast_binding_label(binding: DastProjectBinding) -> str:
     return f"{target} — {binding.source_repo_key}"
 
 
-class DastPipelineRunForm(forms.Form):
+class DastPipelineRunForm(_OneOffActionsMixin, forms.Form):
 
     """Validate an ephemeral DAST launch without creating a saved preset."""
+
+    one_off_actions_allowed = False
 
     project = forms.ModelChoiceField(
         queryset=AISTProject.objects.none(),

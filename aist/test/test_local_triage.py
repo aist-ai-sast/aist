@@ -113,9 +113,7 @@ class LocalTriageCompleteAPITests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        self.user.is_superuser = True
-        self.user.save(update_fields=["is_superuser"])
-        self.client.force_login(self.user)
+        self.login_as_superuser()
 
     @patch("aist.api.ai.finish_pipeline")
     def test_rejects_ordinary_authenticated_user(self, mock_finish):
@@ -499,9 +497,7 @@ class SendRequestRoutingTests(AISTApiBase):
 
     def setUp(self):
         super().setUp()
-        self.user.is_superuser = True
-        self.user.save(update_fields=["is_superuser"])
-        self.client.force_login(self.user)
+        self.login_as_superuser()
         self.engagement = Engagement.objects.create(
             name="E", target_start=timezone.now(), target_end=timezone.now(),
             product=self.product,

@@ -21,14 +21,6 @@ AGENT_SECURITY_MISSING_RESULT = {
 
 
 class AnalyzerOutcomesPipelineTests(SastWorkerTestMixin, AISTApiBase):
-    def _make_pipeline(self, pipeline_id: str) -> AISTPipeline:
-        return AISTPipeline.objects.create(
-            id=pipeline_id,
-            project=self.project,
-            project_version=self.pv,
-            status=AISTStatus.FINISHED,
-        )
-
     def _run_with_common_patches(
         self,
         *,
@@ -56,7 +48,7 @@ class AnalyzerOutcomesPipelineTests(SastWorkerTestMixin, AISTApiBase):
         )
 
     def test_degraded_analyzer_outcome_is_persisted_before_finish(self):
-        pipeline = self._make_pipeline("pipe-agent-missing")
+        pipeline = self.make_pipeline("pipe-agent-missing", status=AISTStatus.FINISHED)
         with TemporaryDirectory() as tmp:
             output_dir = str(Path(tmp) / "out")
             Path(output_dir).mkdir()
@@ -76,7 +68,7 @@ class AnalyzerOutcomesPipelineTests(SastWorkerTestMixin, AISTApiBase):
         self.assertEqual(reasons[0]["code"], "missing_result")
 
     def test_degraded_analyzer_outcome_does_not_skip_postprocess_when_findings_exist(self):
-        pipeline = self._make_pipeline("pipe-agent-postprocess")
+        pipeline = self.make_pipeline("pipe-agent-postprocess", status=AISTStatus.FINISHED)
         dd_test, _finding = self.make_test_with_finding()
         result = ImportResult(analyzer_name="semgrep", test_id=dd_test.id)
         with TemporaryDirectory() as tmp:
@@ -98,7 +90,7 @@ class AnalyzerOutcomesPipelineTests(SastWorkerTestMixin, AISTApiBase):
         mock_postprocess.assert_called_once_with(pipeline.id, "INFO")
 
     def test_a_report_the_platform_fails_to_import_finishes_the_run_with_warnings(self):
-        pipeline = self._make_pipeline("pipe-import-failed")
+        pipeline = self.make_pipeline("pipe-import-failed", status=AISTStatus.FINISHED)
         failed = ImportResult(
             analyzer_name="semgrep", failure_code=ImportFailure.IMPORT_FAILED, failure_message="Report import failed: ValueError",
         )

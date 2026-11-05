@@ -33,6 +33,7 @@ from aist.models import (
     WorkItemLink,
     WorkItemStatusCategory,
 )
+from aist.test.test_api import create_pipeline
 
 
 class DashboardSummaryViewTests(TestCase):
@@ -356,6 +357,32 @@ class DashboardSummaryViewTests(TestCase):
         self.assertEqual(current_week["runs"], 2)
         self.assertEqual(current_week["median_duration_seconds"], 3000)
         self.assertAlmostEqual(current_week["warnings_rate"], 0.5)
+
+    def test_pipeline_performance_median_counts_finished_runs_until_they_finished(self):
+        now = timezone.now()
+        # Finished 20 minutes after launch, then touched again much later.
+        create_pipeline(
+            "dashboard-pipe-touched",
+            status=AISTStatus.FINISHED,
+            project_version=self.pv,
+            created=now - timedelta(minutes=90),
+            finished_at=now - timedelta(minutes=70),
+            updated=now - timedelta(minutes=5),
+        )
+        create_pipeline(
+            "dashboard-pipe-running",
+            status=AISTStatus.EXECUTING,
+            project_version=self.pv,
+            created=now - timedelta(minutes=60),
+        )
+
+        perf = self.client.get(self._url()).json()["pipeline_performance_trend"]
+
+        weeks_with_runs = [week for week in perf if week["runs"]]
+        # A running pipeline is a run of its week, but it has no run time for the median yet.
+        self.assertEqual(sum(week["runs"] for week in weeks_with_runs), 2)
+        medians = [week["median_duration_seconds"] for week in weeks_with_runs if week["median_duration_seconds"]]
+        self.assertEqual(medians, [20 * 60])
 
     def test_ai_verdict_analytics_groups_by_verdict_and_severity(self):
         pipeline = AISTPipeline.objects.create(

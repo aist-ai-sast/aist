@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from django.db import transaction
@@ -11,6 +12,7 @@ from aist.signals import pipeline_status_changed
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+    from datetime import datetime
 
 TERMINAL_PIPELINE_STATUSES = frozenset({
     AISTStatus.FINISHED,
@@ -68,7 +70,7 @@ PIPELINE_TRANSITIONS: Mapping[str, frozenset[str]] = {
 
 class PipelineTransitionError(ValueError):
 
-    """Raised when a caller attempts to bypass the pipeline lifecycle graph."""
+    """Raised for an unknown status, a move the lifecycle graph forbids, or a declared field update with no value."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +83,19 @@ class PipelineTransitionResult:
 
 def is_terminal_pipeline_status(status: str) -> bool:
     return status in TERMINAL_PIPELINE_STATUSES
+
+
+def pipeline_finished_at(pipeline: AISTPipeline) -> datetime | None:
+    """When a terminal pipeline finished, ``None`` while it is not terminal; without ``finished_at`` it is ``updated``."""
+    if not is_terminal_pipeline_status(pipeline.status):
+        return None
+    return pipeline.finished_at or pipeline.updated
+
+
+def pipeline_elapsed(pipeline: AISTPipeline, now: datetime) -> timedelta:
+    """A pipeline's run time: from launch to its finish, or to ``now`` while it is not terminal."""
+    end = pipeline_finished_at(pipeline) or now
+    return max(end - pipeline.created, timedelta(0))
 
 
 def transition_allowed(current_status: str, new_status: str) -> bool:

@@ -33,22 +33,14 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
             resolved_from_branch=self.branch_pv,
         )
 
-    def _make_pipeline(self, *, project_version, status, pipeline_id):
-        return AISTPipeline.objects.create(
-            id=pipeline_id,
-            project=self.project,
-            project_version=project_version,
-            status=status,
-        )
-
     def test_returns_prior_pipeline_commit_when_current_is_branch(self):
         # Prior FINISHED pipeline on the same branch via a GIT_HASH child.
-        self._make_pipeline(
+        self.make_pipeline(
             project_version=self.prior_hash_pv,
             status=AISTStatus.FINISHED,
             pipeline_id="pipe-prior",
         )
-        current = self._make_pipeline(
+        current = self.make_pipeline(
             project_version=self.branch_pv,
             status=AISTStatus.EXECUTING,
             pipeline_id="pipe-current-branch",
@@ -58,7 +50,7 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
     def test_returns_prior_pipeline_commit_when_current_is_git_hash(self):
         # Current pipeline already resolved to a GIT_HASH; prior pipeline still
         # on the same parent branch must be located via resolved_from_branch.
-        self._make_pipeline(
+        self.make_pipeline(
             project_version=self.prior_hash_pv,
             status=AISTStatus.FINISHED_WITH_WARNINGS,
             pipeline_id="pipe-prior-2",
@@ -70,7 +62,7 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
             last_resolved_commit="def5678901def5678901def5678901def5678901",
             resolved_from_branch=self.branch_pv,
         )
-        current = self._make_pipeline(
+        current = self.make_pipeline(
             project_version=current_hash_pv,
             status=AISTStatus.EXECUTING,
             pipeline_id="pipe-current-hash",
@@ -78,7 +70,7 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
         self.assertEqual(get_prior_successful_commit(current), self.prior_hash_pv.last_resolved_commit)
 
     def test_returns_none_when_no_prior_pipeline(self):
-        current = self._make_pipeline(
+        current = self.make_pipeline(
             project_version=self.branch_pv,
             status=AISTStatus.EXECUTING,
             pipeline_id="pipe-no-prior",
@@ -87,12 +79,12 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
 
     def test_skips_non_terminal_pipelines(self):
         # A pipeline still running on the same branch must not be picked.
-        self._make_pipeline(
+        self.make_pipeline(
             project_version=self.prior_hash_pv,
             status=AISTStatus.EXECUTING,
             pipeline_id="pipe-running",
         )
-        current = self._make_pipeline(
+        current = self.make_pipeline(
             project_version=self.branch_pv,
             status=AISTStatus.EXECUTING,
             pipeline_id="pipe-current-only",
@@ -119,7 +111,7 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
             project_version=other_hash,
             status=AISTStatus.FINISHED,
         )
-        current = self._make_pipeline(
+        current = self.make_pipeline(
             project_version=self.branch_pv,
             status=AISTStatus.EXECUTING,
             pipeline_id="pipe-iso",
@@ -132,7 +124,7 @@ class GetPriorSuccessfulCommitTests(AISTApiBase):
             version_type=VersionType.FILE_HASH,
             version="archive.zip",
         )
-        current = self._make_pipeline(
+        current = self.make_pipeline(
             project_version=file_pv,
             status=AISTStatus.EXECUTING,
             pipeline_id="pipe-file-hash",

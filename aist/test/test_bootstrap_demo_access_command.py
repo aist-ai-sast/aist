@@ -23,6 +23,7 @@ from aist.models import (
     AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectVersion,
+    AISTStatus,
     DastProjectBinding,
     DastQueueSnapshot,
     DastRunMetadata,
@@ -35,6 +36,8 @@ from aist.models import (
     PipelineLaunchRequestState,
 )
 from aist.services.dast_queue import queue_is_addressable
+from aist.services.pipeline_lifecycle import TERMINAL_PIPELINE_STATUSES
+from aist.utils.pipeline import has_unfinished_pipeline
 
 
 class BootstrapDemoAccessCommandTests(TestCase):
@@ -69,7 +72,8 @@ class BootstrapDemoAccessCommandTests(TestCase):
             organization = Organization.objects.get(name=spec.organization_name)
             self.assertEqual(project.organization_id, organization.id)
             self.assertEqual(project.product.prod_type_id, organization.product_type_id)
-            self.assertEqual(project.versions.count(), 2)
+            # main and release-v1, plus the commit of the running pipeline where the project has one.
+            self.assertEqual(project.versions.count(), 3 if spec.has_running_pipeline else 2)
 
             findings_qs = Finding.objects.filter(
                 test__engagement__product=project.product,
@@ -254,6 +258,20 @@ class BootstrapDemoAccessCommandTests(TestCase):
                 "findings": Finding.objects.count(),
             },
         )
+
+    def test_one_demo_pipeline_is_still_running_without_blocking_launches_on_the_project_versions(self):
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
+
+        running = AISTPipeline.objects.filter(id__startswith="demo-").exclude(status__in=TERMINAL_PIPELINE_STATUSES)
+        self.assertEqual(running.count(), 1)
+        pipeline = running.get()
+        self.assertEqual(pipeline.status, AISTStatus.EXECUTING)
+        self.assertIsNone(pipeline.finished_at)
+        self.assertGreater(timezone.now() - pipeline.created, timedelta(days=7))
+        for name in ("main", "release-v1"):
+            with self.subTest(version=name):
+                version = AISTProjectVersion.objects.get(project=pipeline.project, version=name)
+                self.assertFalse(has_unfinished_pipeline(version))
 
     def test_demo_projects_carry_tags_and_their_findings_inherit_them(self):
         """

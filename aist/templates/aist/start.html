@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% load i18n %}
+{% load i18n aist_extras navigation_tags %}
 {% block content %}
     <div class="container mt-3 pb-5">
         <div class="row g-4">
@@ -10,12 +10,12 @@
                 <div class="card shadow-sm mb-5">
                     <div class="card-body pb-4">
                         <div class="btn-group mb-4" role="group" aria-label="Execution type">
-                            <a class="btn {% if execution_type == 'SAST' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+                            <a class="btn {% if is_dast %}btn-outline-primary{% else %}btn-primary{% endif %}"
                                href="?execution_type=SAST">SAST</a>
-                            <a class="btn {% if execution_type == 'DAST' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+                            <a class="btn {% if is_dast %}btn-primary{% else %}btn-outline-primary{% endif %}"
                                href="?execution_type=DAST">DAST</a>
                         </div>
-                        {% if execution_type == 'DAST' %}
+                        {% if is_dast %}
                             {% include "aist/_dast_pipeline_run_form.html" %}
                         {% else %}
                             {% include "aist/_pipeline_run_form.html" with scope="start" %}
@@ -65,48 +65,33 @@
                         <input type="hidden" name="page_size" value="8">
                     </form>
 
-                    {% if history_items %}
+                    {% if history_page.object_list %}
                         <div class="list-group list-group-flush mt-2">
-                            {% for run in history_items %}
+                            {% for run in history_page.object_list %}
                                 <a href="{% url 'aist:pipeline_detail' pipeline_id=run.id %}"
                                    class="list-group-item list-group-item-action">
                                     <div class="d-flex justify-content-between">
                                         <div class="me-2">
                                             <div class="font-semibold text-truncate"
-                                                 title="{{ run.project_name }}">{{ run.project_name }}</div>
+                                                 title="{{ run.project }}">{{ run.project }}</div>
                                             <div class="text-muted small">#{{ run.id }}
                                                 · {{ run.execution_type }} · {{ run.updated|date:"Y-m-d H:i" }}</div>
                                         </div>
                                         <div class="text-end">
-                                            <span class="badge bg-green-600">{{ run.status }}</span>
-                                            {% if run.duration %}
-                                                <div class="small mt-1">⏱ {{ run.duration }}</div>
-                                            {% endif %}
+                                            {% pipeline_status_badge run %}
+                                            <div class="small mt-1">⏱ {% pipeline_duration run %}</div>
                                         </div>
                                     </div>
                                 </a>
                             {% endfor %}
                         </div>
 
-                        <div class="card-footer d-flex align-items-center justify-content-between">
-                            <div class="btn-group">
-                                {% if history_page.has_previous %}
-                                    <a class="btn btn-sm btn-outline-secondary"
-                                       href="?{{ history_qs }}&page={{ history_page.previous_page_number }}">‹ Prev</a>
-                                {% else %}
-                                    <button class="btn btn-sm btn-outline-secondary" disabled>‹ Prev</button>
-                                {% endif %}
-                                {% if history_page.has_next %}
-                                    <a class="btn btn-sm btn-outline-secondary"
-                                       href="?{{ history_qs }}&page={{ history_page.next_page_number }}">Next ›</a>
-                                {% else %}
-                                    <button class="btn btn-sm btn-outline-secondary" disabled>Next ›</button>
-                                {% endif %}
+                        <div class="card-footer">
+                            <div class="clearfix">
+                                {% include "dojo/paging_snippet.html" with page=history_page %}
                             </div>
-                            <div class="small text-muted">Page {{ history_page.number }}
-                                / {{ history_page.paginator.num_pages }}</div>
-                            <a class="btn btn-sm btn-outline-primary"
-                               href="{% url 'aist:pipeline_list' %}?{{ history_qs }}">View all</a>
+                            <a class="btn btn-sm btn-outline-primary mt-2"
+                               href="{% url 'aist:pipeline_list' %}?{% url_replace request 'page' 1 %}">View all</a>
                         </div>
                     {% else %}
                         <div class="card-body text-muted">No finished runs yet.</div>
@@ -120,6 +105,6 @@
 
     {% include "aist/_pipeline_run_js.html" %}
 
-{# The 2.x base template dressed every select on every page; ours asks for its own. #}
+{# base.html dresses no selects; this page asks for its own. #}
 <script>aistDressSelectsOnReady();</script>
 {% endblock %}

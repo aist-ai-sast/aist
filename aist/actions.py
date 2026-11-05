@@ -16,6 +16,7 @@ from aist.integrations.resolver import resolve_integration
 from aist.logging_transport import install_pipeline_logging
 from aist.models import AISTLaunchConfigAction, AISTPipeline, OrgIntegrationType
 from aist.notifications import AISTSlackNotificationManager
+from aist.services.pipeline_lifecycle import pipeline_elapsed
 from aist.utils.export import build_ai_export_csv_text
 from aist.utils.project_version_refs import resolve_project_version_git_refs
 from aist.utils.urls import get_public_base_url
@@ -124,20 +125,7 @@ class BaseAction:
 
     @staticmethod
     def _pipeline_duration(pipeline: AISTPipeline) -> str:
-        end = pipeline.finished_at or pipeline.updated or timezone.now()
-        start = pipeline.started or pipeline.created
-        if not start:
-            return "unknown"
-        if (
-            pipeline.created
-            and pipeline.created < end
-            and (start >= end or (end - start).total_seconds() < 1)
-        ):
-            start = pipeline.created
-        if end < start and pipeline.created:
-            start = pipeline.created
-        end = max(end, start)
-        seconds = int((end - start).total_seconds())
+        seconds = int(pipeline_elapsed(pipeline, timezone.now()).total_seconds())
         hours, rem = divmod(seconds, 3600)
         minutes, secs = divmod(rem, 60)
         if hours:

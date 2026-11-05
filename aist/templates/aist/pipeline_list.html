@@ -56,8 +56,9 @@
           <div class="col-sm-6 col-lg-2">
             <label class="form-label small mb-1">Status</label>
             <select class="form-control form-control" name="status">
-              <option value="ALL" {% if status == "ALL" %}selected{% endif %}>All statuses</option>
-              <option value="FINISHED" {% if status == "FINISHED" %}selected{% endif %}>Finished only (incl warnings)</option>
+              {% for value, label in status_choices %}
+                <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
             </select>
           </div>
 
@@ -87,135 +88,12 @@
     </div>
   </div>
 
-  <div class="card shadow-sm">
-    <div class="table-responsive">
-      <table class="table text-sm table-hover align-middle mb-0">
-        <thead class="bg-gray-50">
-          <tr>
-            <th style="width: 16%;">Pipeline ID</th>
-            <th style="width: 24%;">Project</th>
-            <th style="width: 16%;">Project version</th>
-            <th style="width: 14%;">Created</th>
-            <th style="width: 14%;">Updated</th>
-            <th style="width: 8%;">Duration</th>
-            <th style="width: 8%;">Status</th>
-            <th style="width: 6%;">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in items %}
-            <tr class="table-row-link {% if r.is_active %}table-warning{% endif %}"
-                data-href="{% url 'aist:pipeline_detail' pipeline_id=r.id %}"
-                style="cursor:pointer;">
-              <td class="font-mono">
-                #{{ r.id }}
-              </td>
-              <td>
-                {{ r.project_name }}
-              </td>
-              <td>
-                {% if r.project_version %}
-                  <code>{{ r.project_version }}</code>
-                {% else %}
-                  <span class="text-muted">&mdash;</span>
-                {% endif %}
-              </td>
-              <td>
-                {{ r.created|date:"Y-m-d H:i" }}
-              </td>
-              <td>
-                {{ r.updated|date:"Y-m-d H:i" }}
-              </td>
-              <td>
-                {% if r.duration %}
-                  {{ r.duration }}
-                {% else %}
-                  &mdash;
-                {% endif %}
-              </td>
-              <td>
-                {% if r.status == "FINISHED" %}
-                  <span class="badge bg-green-600">FINISHED</span>
-                {% elif r.status == "FINISHED_WITH_WARNINGS" %}
-                  <span class="badge bg-amber-500 text-dark">FINISHED_WITH_WARNINGS</span>
-                {% else %}
-                  <span class="badge bg-gray-500">{{ r.status }}</span>
-                {% endif %}
-              </td>
-              <td>
-                <a class="btn btn-link text-danger btn-sm"
-                   href="{% url 'aist:pipeline_delete' r.id %}">
-                  <i class="fa-solid fa-trash" aria-hidden="true"></i>
-                </a>
-              </td>
-            </tr>
-          {% empty %}
-            <tr>
-              <td colspan="8" class="text-muted text-center py-4">
-                No pipelines found.
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="card-footer d-flex justify-content-between align-items-center">
-      <div class="small text-muted">
-        Page {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} ·
-        Total {{ page_obj.paginator.count }}
-      </div>
-      <nav>
-        <ul class="pagination mb-0">
-          {% if page_obj.has_previous %}
-            <li>
-              <a
-                 href="?{{ qs }}&page={{ page_obj.previous_page_number }}">‹ Prev</a>
-            </li>
-          {% else %}
-            <li class="disabled">
-              <span>‹ Prev</span>
-            </li>
-          {% endif %}
-
-          <li class="disabled">
-            <span>
-              {{ page_obj.number }}
-            </span>
-          </li>
-
-          {% if page_obj.has_next %}
-            <li>
-              <a
-                 href="?{{ qs }}&page={{ page_obj.next_page_number }}">Next ›</a>
-            </li>
-          {% else %}
-            <li class="disabled">
-              <span>Next ›</span>
-            </li>
-          {% endif %}
-        </ul>
-      </nav>
-    </div>
-  </div>
+  {% include "aist/_pipeline_list_table.html" %}
 </div>
 
 <script>
   (function () {
     "use strict";
-
-    var tableRows = document.querySelectorAll("tr.table-row-link");
-    Array.prototype.forEach.call(tableRows, function (tr) {
-      tr.addEventListener("click", function (e) {
-        if (e.target.closest("a, button, input, select, textarea")) {
-          return;
-        }
-        var href = tr.getAttribute("data-href");
-        if (href) {
-          window.location.href = href;
-        }
-      });
-    });
 
     var form = document.getElementById("pipeline-filters-form");
     if (!form) {
@@ -230,12 +108,10 @@
       }
     }
 
-    // Auto-submit on select changes and page_size change
     form.querySelectorAll("select").forEach(function (el) {
       el.addEventListener("change", submitForm);
     });
 
-    // Debounced auto-submit on search input
     var searchInput = form.querySelector('input[name="q"]');
     if (searchInput) {
       var timeoutId = null;
@@ -248,6 +124,6 @@
     }
   })();
 </script>
-{# The 2.x base template dressed every select on every page; ours asks for its own. #}
+{# base.html dresses no selects; this page asks for its own. #}
 <script>aistDressSelectsOnReady();</script>
 {% endblock %}

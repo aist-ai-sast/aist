@@ -1,0 +1,75 @@
+{% load aist_extras %}
+{# The pipeline table; it re-requests itself while the tab is visible, at the interval the server chose for it. #}
+<div id="pipeline-table"
+     class="card shadow-sm"
+     data-live-refresh
+     hx-get="{{ request.get_full_path }}"
+     hx-trigger="every {{ poll_seconds }}s [document.visibilityState === 'visible'], visibilitychange[document.visibilityState === 'visible'] from:document"
+     hx-swap="outerHTML"
+     hx-sync="this:replace">
+  <div class="table-responsive">
+    <table class="table text-sm table-hover align-middle mb-0">
+      <thead class="bg-gray-50">
+        <tr>
+          <th style="width: 16%;">Pipeline ID</th>
+          <th style="width: 24%;">Project</th>
+          <th style="width: 16%;">Project version</th>
+          <th style="width: 14%;">Created</th>
+          <th style="width: 14%;">Updated</th>
+          <th style="width: 8%;">Duration</th>
+          <th style="width: 8%;">Status</th>
+          <th style="width: 6%;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in pipelines %}
+          <tr class="{% if p|pipeline_is_active %}table-warning{% endif %}"
+              data-href="{% url 'aist:pipeline_detail' pipeline_id=p.id %}"
+              style="cursor:pointer;">
+            <td class="font-mono">
+              #{{ p.id }}
+            </td>
+            <td>
+              {{ p.project }}
+            </td>
+            <td>
+              {% if p.project_version %}
+                <code>{{ p.project_version.version }}</code>
+              {% else %}
+                <span class="text-muted">&mdash;</span>
+              {% endif %}
+            </td>
+            <td>
+              {{ p.created|date:"Y-m-d H:i" }}
+            </td>
+            <td>
+              {{ p.updated|date:"Y-m-d H:i" }}
+            </td>
+            <td>
+              {% pipeline_duration p %}
+            </td>
+            <td>
+              {% pipeline_status_badge p %}
+            </td>
+            <td>
+              <a class="btn btn-link text-danger btn-sm"
+                 href="{% url 'aist:pipeline_delete' p.id %}">
+                <i class="fa-solid fa-trash" aria-hidden="true"></i>
+              </a>
+            </td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="8" class="text-muted text-center py-4">
+              No pipelines found.
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card-footer clearfix">
+    {% include "dojo/paging_snippet.html" with page=page_obj %}
+  </div>
+</div>

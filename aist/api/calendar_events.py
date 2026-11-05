@@ -29,6 +29,7 @@ from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy, queryset_for_action
 from aist.launch_data import PipelineLaunchData
 from aist.models import AISTPipeline, AISTProject, LaunchSchedule
+from aist.services.pipeline_lifecycle import pipeline_elapsed, pipeline_finished_at
 from aist.utils.project_version_refs import resolve_project_version_git_refs
 
 if TYPE_CHECKING:
@@ -106,7 +107,7 @@ class CalendarEventFactory:
 
     def pipeline_started(self, pipeline, findings_count: int) -> CalendarEventData:
         started = self._to_local(pipeline.created)
-        finished = self._to_local(pipeline.updated)
+        finished_at = pipeline_finished_at(pipeline)
         is_future = self._is_future(started)
         refs = resolve_project_version_git_refs(pipeline.project_version)
         action_runs = PipelineLaunchData(pipeline.launch_data).action_runs
@@ -119,7 +120,7 @@ class CalendarEventFactory:
             }
             for run in action_runs
         ]
-        duration_seconds = max(int((pipeline.updated - pipeline.created).total_seconds()), 0)
+        duration_seconds = int(pipeline_elapsed(pipeline, timezone.now()).total_seconds())
         link = self._pipelines_ui_link(
             {
                 "project": pipeline.project_id,
@@ -132,7 +133,7 @@ class CalendarEventFactory:
             event_type="pipeline_started",
             title=f"Pipeline started: {pipeline.id}",
             start=started,
-            end=finished if finished > started else None,
+            end=self._to_local(finished_at) if finished_at and finished_at > pipeline.created else None,
             is_all_day=False,
             is_aggregated=False,
             count=1,
