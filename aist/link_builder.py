@@ -1,10 +1,9 @@
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import unquote, urlparse
 
 from django.urls import Resolver404, resolve, reverse
 from dojo.models import DojoMeta
 
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
-from aist.utils.urls import get_public_base_url
 
 _import_sast_pipeline_package()
 
@@ -24,9 +23,7 @@ class LinkBuilder:
 
     @staticmethod
     def build_project_version_file_blob(project_version_id: int, subpath: str) -> str:
-        base = get_public_base_url()
-        path = reverse(_FILE_BLOB_VIEW_NAME, kwargs={"project_version_id": project_version_id, "subpath": subpath})
-        return urljoin(base + "/", path.lstrip("/"))
+        return reverse(_FILE_BLOB_VIEW_NAME, kwargs={"project_version_id": project_version_id, "subpath": subpath})
 
     @staticmethod
     def parse(link: str) -> tuple[int, str] | None:

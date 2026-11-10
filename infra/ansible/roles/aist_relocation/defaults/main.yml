@@ -1,0 +1,4 @@
+---
+relocation_images: []
+relocation_files: "{{ ['database.dump', 'media.tar.gz', 'workspace.tar.gz', 'configuration.tar.gz', 'state.json'] + (['runtime-images.tar.gz'] if relocation_images | length else []) }}"
+relocation_psql: ['exec', '-T', 'postgres', 'sh', '-c', 'exec psql -X -v ON_ERROR_STOP=1 -At -U "$POSTGRES_USER" -d "$POSTGRES_DB"']

@@ -1,0 +1,321 @@
+---
+- name: Validate the selected relocation
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Require one source, one different target and explicit operator inputs
+      ansible.builtin.assert:
+        that:
+          - groups['aist_source'] | length == 1
+          - groups['aist_prod'] | length == 1
+          - hostvars[groups['aist_source'][0]].ansible_host != hostvars[groups['aist_prod'][0]].ansible_host
+          - migration_revision is match('^[0-9a-f]{40}$')
+          - migration_id is match('^[a-zA-Z0-9_-]+$')
+          - migration_local_dir is match('^/')
+          - migration_source_dir is match('^/')
+          - migration_target_env is match('^/')
+
+    - name: Create private controller backup storage
+      ansible.builtin.file:
+        path: "{{ migration_local_dir }}"
+        state: directory
+        mode: '0700'
+
+- name: Supply the target checkout and selected environment
+  hosts: aist_prod
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create checkout directory owned by the SSH user
+      ansible.builtin.file:
+        path: "{{ project_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        mode: '0750'
+
+    - name: Obtain the exact application revision and submodules
+      ansible.builtin.git:
+        repo: "{{ migration_repository }}"
+        dest: "{{ project_dir }}"
+        version: "{{ migration_revision }}"
+        recursive: true
+      become: false
+
+    - name: Install the prepared environment without displaying secrets
+      ansible.builtin.copy:
+        src: "{{ migration_target_env }}"
+        dest: "{{ project_dir }}/.env"
+        mode: '0600'
+      no_log: true
+
+- name: Prepare target runtime, storage and persistent TLS
+  ansible.builtin.import_playbook: provision_aist.yml
+  vars:
+    deployment_phase: prepare
+
+- name: Freeze the source and take the final snapshot
+  hosts: aist_source
+  gather_facts: false
+  vars:
+    relocation_snapshot_dir: "{{ migration_source_dir }}/{{ migration_id }}"
+    relocation_checkout_dir: "{{ project_dir }}"
+    relocation_compose: [python3, "{{ relocation_snapshot_dir }}/deployment_config.py", --project-dir, "{{ project_dir }}", --compose]
+    relocation_images: "{{ migration_images | default([]) }}"
+  tasks:
+    - name: Create private source backup storage
+      ansible.builtin.file:
+        path: "{{ relocation_snapshot_dir }}"
+        state: directory
+        mode: '0700'
+
+    - name: Reuse the Compose environment helper without changing the old checkout
+      ansible.builtin.copy:
+        src: ../../../scripts/deployment_config.py
+        dest: "{{ relocation_snapshot_dir }}/deployment_config.py"
+        mode: '0600'
+
+    - name: Resolve actual source mounts
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['config', '--format', 'json'] }}"
+      register: source_config_command
+      changed_when: false
+      no_log: true
+
+    - name: Retain source configuration privately
+      ansible.builtin.set_fact:
+        source_config: "{{ source_config_command.stdout | from_json }}"
+      no_log: true
+
+    - name: Locate the media volume on the source host
+      ansible.builtin.command:
+        argv: [docker, volume, inspect, "{{ source_config.volumes.defectdojo_media.name }}", --format, "{{ '{{.Mountpoint}}' }}"]
+      register: source_media
+      changed_when: false
+
+    - name: Select actual media and workspace paths
+      ansible.builtin.set_fact:
+        relocation_media_dir: "{{ source_media.stdout }}"
+        relocation_workspace_dir: "{{ (source_config.services.celeryworker.volumes | selectattr('target', 'equalto', '/tmp/aist') | first).source }}"
+
+    - name: Inspect running source services
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['ps', '--status', 'running', '--services'] }}"
+      register: source_running
+      changed_when: false
+
+    - name: Inspect existing snapshot
+      ansible.builtin.stat:
+        path: "{{ relocation_snapshot_dir }}/SHA256SUMS"
+      register: source_snapshot
+
+    - name: Refuse a stale snapshot if source writers were restarted
+      ansible.builtin.assert:
+        that: not source_snapshot.stat.exists or source_running.stdout_lines | difference(['postgres', 'valkey']) | length == 0
+
+    - name: Stop ingress and launch producers
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['stop', 'nginx', 'celerybeat'] }}"
+      changed_when: true
+
+    - name: Require drained workers and broker before stopping consumers
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['exec', '-T', 'celeryworker', 'python3', 'manage.py', 'shell', '--no-imports', '-c', lookup('ansible.builtin.file', '../roles/aist_relocation/files/check_quiescent.py')] }}"
+      when: "'celeryworker' in source_running.stdout_lines"
+      changed_when: false
+
+    - name: Stop every application writer
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['stop', 'celeryworker', 'claude-bridge', 'uwsgi'] }}"
+      changed_when: true
+
+    - name: Preserve the deployed revision and local fixes
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          git rev-parse HEAD > {{ (relocation_snapshot_dir ~ '/source-revision.txt') | quote }}
+          git submodule status --recursive >> {{ (relocation_snapshot_dir ~ '/source-revision.txt') | quote }}
+          git diff HEAD --binary > {{ (relocation_snapshot_dir ~ '/source-changes.patch') | quote }}
+          git -C sast-combinator diff HEAD --binary > {{ (relocation_snapshot_dir ~ '/submodule-changes.patch') | quote }}
+          git ls-files --others --exclude-standard -z | tar --null -T - -czf {{ (relocation_snapshot_dir ~ '/untracked-files.tar.gz') | quote }}
+        chdir: "{{ project_dir }}"
+        executable: /bin/bash
+      when: not source_snapshot.stat.exists
+      changed_when: true
+
+    - name: Back up the quiescent source
+      ansible.builtin.include_role:
+        name: aist_relocation
+        tasks_from: backup
+        public: true
+
+    - name: Stop the remaining old services
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['stop'] }}"
+      changed_when: true
+
+    - name: Fetch verified snapshot and rollback records to the controller
+      ansible.builtin.fetch:
+        src: "{{ relocation_snapshot_dir }}/{{ item }}"
+        dest: "{{ migration_local_dir }}/{{ item }}"
+        flat: true
+        validate_checksum: true
+      loop: "{{ relocation_files + ['SHA256SUMS', 'source-revision.txt', 'source-changes.patch', 'submodule-changes.patch', 'untracked-files.tar.gz'] }}"
+
+- name: Restore the snapshot on the target with application services stopped
+  hosts: aist_prod
+  become: true
+  gather_facts: false
+  vars:
+    relocation_compose: [python3, "{{ project_dir }}/scripts/deployment_config.py", --project-dir, "{{ project_dir }}", --compose]
+    relocation_images: "{{ migration_images | default([]) }}"
+  tasks:
+    - name: Select target snapshot storage
+      ansible.builtin.set_fact:
+        relocation_snapshot_dir: "{{ deployment.backup_dir }}/{{ migration_id }}"
+
+    - name: Create private target snapshot storage
+      ansible.builtin.file:
+        path: "{{ relocation_snapshot_dir }}"
+        state: directory
+        mode: '0700'
+
+    - name: Copy the complete snapshot from the controller
+      ansible.builtin.copy:
+        src: "{{ migration_local_dir }}/"
+        dest: "{{ relocation_snapshot_dir }}/"
+        mode: '0600'
+        directory_mode: '0700'
+
+    - name: Resolve target volume names and workspace
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['config', '--format', 'json'] }}"
+      register: target_config_command
+      changed_when: false
+      no_log: true
+
+    - name: Retain target configuration privately
+      ansible.builtin.set_fact:
+        target_config: "{{ target_config_command.stdout | from_json }}"
+      no_log: true
+
+    - name: Refuse restoration while target application writers are running
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['ps', '--status', 'running', '--services'] }}"
+      register: target_running
+      changed_when: false
+      failed_when: target_running.rc != 0 or target_running.stdout_lines | difference(['postgres', 'valkey']) | length > 0
+
+    - name: Start only target PostgreSQL
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['up', '-d', 'postgres'] }}"
+      changed_when: true
+
+    - name: Wait for target PostgreSQL
+      ansible.builtin.command:
+        argv: >-
+          {{ relocation_compose + ['exec', '-T', 'postgres', 'sh', '-c', 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'] }}
+      register: target_postgres
+      until: target_postgres.rc == 0
+      retries: 30
+      delay: 2
+      changed_when: false
+
+    - name: Create the target media volume
+      ansible.builtin.command:
+        argv: [docker, volume, create, --label, "com.docker.compose.project={{ target_config.name }}", --label, com.docker.compose.volume=defectdojo_media, "{{ target_config.volumes.defectdojo_media.name }}"]
+      changed_when: true
+
+    - name: Locate target media storage
+      ansible.builtin.command:
+        argv: [docker, volume, inspect, "{{ target_config.volumes.defectdojo_media.name }}", --format, "{{ '{{.Mountpoint}}' }}"]
+      register: target_media
+      changed_when: false
+
+    - name: Select target media and workspace paths
+      ansible.builtin.set_fact:
+        relocation_media_dir: "{{ target_media.stdout }}"
+        relocation_workspace_dir: "{{ (target_config.services.celeryworker.volumes | selectattr('target', 'equalto', '/tmp/aist') | first).source }}"
+
+    - name: Create the target workspace
+      ansible.builtin.file:
+        path: "{{ relocation_workspace_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Restore and verify data before enabling application writers
+      ansible.builtin.include_role:
+        name: aist_relocation
+        tasks_from: restore
+        public: true
+
+    - name: Restore additional application settings without replacing the new env file
+      ansible.builtin.unarchive:
+        src: "{{ relocation_snapshot_dir }}/configuration.tar.gz"
+        dest: "{{ project_dir }}"
+        remote_src: true
+        include: [docker/extra_settings]
+
+    - name: Remove obsolete DAST VPN routing when explicitly selected for this move
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + relocation_psql }}"
+        stdin: "UPDATE aist_orgintegration SET vpn_integration_id = NULL WHERE integration_type = 'DAST' AND vpn_integration_id IS NOT NULL;"
+      when: migration_disable_dast_vpn | default(false) | bool
+      changed_when: true
+
+- name: Start the verified installation through the existing deployment playbook
+  ansible.builtin.import_playbook: provision_aist.yml
+  vars:
+    deployment_phase: start
+    backup_run_immediately: true
+
+- name: Verify the new origin, source links and DAST connection
+  hosts: aist_prod
+  become: true
+  gather_facts: false
+  vars:
+    relocation_compose: [python3, "{{ project_dir }}/scripts/deployment_config.py", --project-dir, "{{ project_dir }}", --compose]
+  tasks:
+    - name: Verify HTTPS with the persistent certificate
+      ansible.builtin.uri:
+        url: "{{ deployment.origin }}/"
+        ca_path: "{{ deployment.tls_dir }}/nginx.crt"
+        validate_certs: true
+        status_code: 200
+
+    - name: Verify canonical source links after migration
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['exec', '-T', 'uwsgi', 'python3', 'manage.py', 'shell', '--no-imports', '-c', source_link_check] }}"
+      vars:
+        source_link_check: |
+          from dojo.models import DojoMeta
+          invalid = DojoMeta.objects.filter(name="sourcefile_link").exclude(value__startswith="/api/v2/aist/projects_version/").count()
+          if invalid:
+              raise RuntimeError(f"Noncanonical source links remain: {invalid}")
+          print("All source links use the canonical relative format")
+      changed_when: false
+
+    - name: Validate DAST and synchronize capabilities through existing services
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + ['exec', '-T', 'celeryworker', 'python3', 'manage.py', 'shell', '--no-imports', '-c', dast_check] }}"
+      vars:
+        dast_check: |
+          from aist.integrations.dast_capability_sync import prepare_dast_capability_sync, run_dast_capability_sync
+          from aist.integrations.dast_validation import prepare_dast_validation, run_dast_validation
+          from aist.models import OrgIntegration
+          for integration in OrgIntegration.objects.filter(integration_type="DAST", is_active=True):
+              run_dast_validation(prepare_dast_validation(integration))
+              integration.refresh_from_db()
+              if integration.dast_state.validation_state != "READY":
+                  raise RuntimeError(f"DAST integration {integration.pk} validation failed")
+              run_dast_capability_sync(prepare_dast_capability_sync(integration))
+              integration.refresh_from_db()
+              if integration.dast_state.sync_status != "SUCCEEDED":
+                  raise RuntimeError(f"DAST integration {integration.pk} capability sync failed")
+              print(f"DAST integration {integration.pk}: ready and synchronized")
+      changed_when: true
+
+    - name: Fetch the public certificate for user trust distribution
+      ansible.builtin.fetch:
+        src: "{{ deployment.tls_dir }}/nginx.crt"
+        dest: "{{ migration_local_dir }}/target-certificate.crt"
+        flat: true

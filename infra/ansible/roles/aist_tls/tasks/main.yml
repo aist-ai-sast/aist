@@ -1,0 +1,100 @@
+---
+- name: Inspect persistent certificate and key
+  ansible.builtin.stat:
+    path: "{{ deployment.tls_dir }}/{{ item }}"
+  loop: [nginx.crt, nginx.key]
+  register: tls_files
+
+- name: Refuse partial TLS state or a missing externally supplied pair
+  ansible.builtin.assert:
+    that:
+      - tls_files.results[0].stat.exists == tls_files.results[1].stat.exists
+      - deployment.tls_mode == 'selfsigned' or tls_files.results[0].stat.exists
+    fail_msg: "Supply a complete certificate/key pair, or use selfsigned mode with an empty TLS directory."
+
+- name: Create a certificate only for a new installation
+  when: not tls_files.results[0].stat.exists
+  block:
+    - name: Generate private key
+      community.crypto.openssl_privatekey:
+        path: "{{ deployment.tls_dir }}/nginx.key"
+        type: RSA
+        size: 4096
+        mode: '0640'
+
+    - name: Prepare certificate request with hostname SAN
+      community.crypto.openssl_csr_pipe:
+        privatekey_path: "{{ deployment.tls_dir }}/nginx.key"
+        common_name: "{{ deployment.domain }}"
+        subject_alt_name:
+          - "DNS:{{ deployment.domain }}"
+        extended_key_usage: [serverAuth]
+      register: certificate_request
+
+    - name: Generate persistent self-signed certificate
+      community.crypto.x509_certificate:
+        path: "{{ deployment.tls_dir }}/nginx.crt"
+        privatekey_path: "{{ deployment.tls_dir }}/nginx.key"
+        csr_content: "{{ certificate_request.csr }}"
+        provider: selfsigned
+        selfsigned_not_after: "+{{ deployment.tls_valid_days }}d"
+        mode: '0644'
+
+- name: Make certificate readable by nginx and protect its key
+  ansible.builtin.file:
+    path: "{{ deployment.tls_dir }}/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {name: nginx.crt, mode: '0644'}
+    - {name: nginx.key, mode: '0640'}
+
+- name: Verify certificate hostname
+  ansible.builtin.command:
+    argv: [openssl, x509, -in, "{{ deployment.tls_dir }}/nginx.crt", -noout, -checkhost, "{{ deployment.domain }}"]
+  changed_when: false
+
+- name: Inspect persistent certificate
+  community.crypto.x509_certificate_info:
+    path: "{{ deployment.tls_dir }}/nginx.crt"
+    valid_at:
+      now: '+0s'
+      tomorrow: '+1d'
+  register: certificate_info
+
+- name: Read signing key public half
+  community.crypto.openssl_privatekey_info:
+    path: "{{ deployment.tls_dir }}/nginx.key"
+  register: signing_key_info
+  no_log: true
+
+- name: Verify certificate belongs to signing key
+  ansible.builtin.assert:
+    that: certificate_info.public_key == signing_key_info.public_key
+    fail_msg: "The persistent certificate and signing key do not match."
+
+- name: Require validity and DNS SAN without silently replacing client trust
+  ansible.builtin.assert:
+    that:
+      - certificate_info.valid_at.now
+      - certificate_info.valid_at.tomorrow
+      - certificate_info.subject_alt_name | default([], true) | select('match', '^DNS:') | list | length > 0
+    fail_msg: "The persistent certificate needs a DNS SAN and at least one day of validity. Renew it explicitly."
+
+- name: Create a public-only certificate directory for runtime clients
+  ansible.builtin.file:
+    path: "{{ deployment.tls_dir }}/trusted"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Publish the validated certificate without exposing its private key
+  ansible.builtin.copy:
+    src: "{{ deployment.tls_dir }}/nginx.crt"
+    dest: "{{ deployment.tls_dir }}/trusted/aist.crt"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'

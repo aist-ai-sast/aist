@@ -19,6 +19,16 @@ used only after that version is selected. A caller cannot choose a VPN tunnel,
 repository binding, or organization by request parameter. The backfill reads
 the version and path recorded in each finding's stored source link.
 
+Source links are root-relative AIST API paths containing a project-version ID
+and an encoded file path. The browser opens them on the current AIST origin, so
+moving the installation does not send source requests back to its former host.
+The deployment migration converts previously stored absolute links to this
+format; there is no browser fallback to an old origin.
+
+The standalone DefectDojo upload/enrichment command writes SCM links for external
+DefectDojo installations. It refuses an AIST `/aist-admin` destination; AIST
+imports must use the platform import flow so source metadata follows this contract.
+
 ## Refuse a path outside the source
 
 Before any source is read, the reader refuses a path that is empty, absolute,

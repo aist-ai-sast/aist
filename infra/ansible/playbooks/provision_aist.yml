@@ -1,114 +1,106 @@
 ---
-- name: Provision AIST production host
+- name: Prepare or start an AIST host
   hosts: aist_prod
   become: true
   vars_files:
     - ../group_vars/prod.yml
 
   pre_tasks:
-    - name: Validate project directory exists
-      ansible.builtin.stat:
-        path: "{{ project_dir }}"
-      register: project_dir_stat
-
-    - name: Fail when project directory is missing
+    - name: Validate explicit checkout and phase
       ansible.builtin.assert:
         that:
-          - project_dir_stat.stat.exists
-          - project_dir_stat.stat.isdir
-        fail_msg: "project_dir={{ project_dir }} is missing"
+          - project_dir is defined
+          - project_dir is match('^/')
+          - deployment_phase in ['prepare', 'start']
 
-    - name: Validate docker compose file exists
+    - name: Check selected environment file
       ansible.builtin.stat:
-        path: "{{ project_dir }}/{{ compose_file }}"
-      register: compose_file_stat
+        path: "{{ compose_env_file if compose_env_file is match('^/') else project_dir ~ '/' ~ compose_env_file }}"
+      register: env_file
+      no_log: true
 
-    - name: Fail when docker compose file is missing
+    - name: Require a private environment file on the host
       ansible.builtin.assert:
         that:
-          - compose_file_stat.stat.exists
-          - compose_file_stat.stat.isreg
-        fail_msg: "Compose file not found: {{ project_dir }}/{{ compose_file }}"
+          - env_file.stat.isreg | default(false)
+          - env_file.stat.mode in ['0600', '0400']
+        fail_msg: "Provision the selected .env on the target with mode 0600 before running Ansible."
 
-  roles:
-    - role: base
-    - role: firewall
+    - name: Install container runtime
+      ansible.builtin.include_role:
+        name: base
+
+    - name: Resolve deployment configuration with Compose
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ project_dir }}/scripts/deployment_config.py"
+          - --project-dir
+          - "{{ project_dir }}"
+          - --env-file
+          - "{{ compose_env_file }}"
+          - --compose-file
+          - "{{ compose_file }}"
+      register: deployment_config
+      changed_when: false
+      no_log: true
+
+    - name: Use resolved operational settings
+      ansible.builtin.set_fact:
+        deployment: "{{ deployment_config.stdout | from_json }}"
+      no_log: true
+
+    - name: Bind role inputs to deployment configuration
+      ansible.builtin.set_fact:
+        backup_dir: "{{ deployment.backup_dir }}"
+        backup_retention_days: "{{ deployment.backup_retention_days }}"
+        backup_on_calendar: "{{ deployment.backup_on_calendar }}"
+        firewall_manage: "{{ deployment.firewall_manage | bool }}"
 
   tasks:
-    - name: Ensure ACME webroot exists
-      ansible.builtin.file:
-        path: "{{ acme_webroot_host }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
+    - name: Configure host firewall when explicitly enabled
+      ansible.builtin.include_role:
+        name: firewall
 
-    - name: Ensure nginx SSL directory exists
+    - name: Set configured timezone
+      ansible.builtin.command:
+        argv: [timedatectl, set-timezone, "{{ deployment.timezone }}"]
+      changed_when: false
+
+    - name: Prepare persistent directories without initializing a database
       ansible.builtin.file:
-        path: "{{ nginx_ssl_host_dir }}"
+        path: "{{ item }}"
         state: directory
         owner: root
         group: root
         mode: "0750"
+      loop:
+        - "{{ deployment.tls_dir }}"
+        - "{{ deployment.acme_webroot }}"
+        - "{{ deployment.backup_dir }}"
 
-    - name: Check if nginx certificate exists
-      ansible.builtin.stat:
-        path: "{{ nginx_ssl_host_dir }}/nginx.crt"
-      register: nginx_crt_stat
+    - name: Prepare PostgreSQL parent without changing restored cluster ownership
+      ansible.builtin.file:
+        path: "{{ deployment.data_dir }}"
+        state: directory
+        mode: "0755"
 
-    - name: Check if nginx private key exists
-      ansible.builtin.stat:
-        path: "{{ nginx_ssl_host_dir }}/nginx.key"
-      register: nginx_key_stat
+    - name: Prepare persistent TLS certificate
+      ansible.builtin.include_role:
+        name: aist_tls
 
-    - name: Generate temporary self-signed cert for first boot
+    - name: Start application after data restoration
       ansible.builtin.command:
-        argv:
-          - openssl
-          - req
-          - -x509
-          - -nodes
-          - -newkey
-          - rsa:4096
-          - -days
-          - "2"
-          - -subj
-          - "/CN={{ domain }}"
-          - -keyout
-          - "{{ nginx_ssl_host_dir }}/nginx.key"
-          - -out
-          - "{{ nginx_ssl_host_dir }}/nginx.crt"
-      when: not nginx_crt_stat.stat.exists or not nginx_key_stat.stat.exists
+        argv: [bash, "{{ project_dir }}/scripts/deploy-prod.sh"]
+        chdir: "{{ project_dir }}"
+      environment:
+        PROJECT_DIR: "{{ project_dir }}"
+        COMPOSE_ENV_FILE: "{{ compose_env_file }}"
+        COMPOSE_FILE: "{{ compose_file }}"
+      when: deployment_phase == 'start'
       changed_when: true
 
-    - name: Restrict permissions for nginx private key
-      ansible.builtin.file:
-        path: "{{ nginx_ssl_host_dir }}/nginx.key"
-        owner: root
-        group: root
-        mode: "0640"
-
-    - name: Start docker compose stack
-      ansible.builtin.command:
-        argv:
-          - docker
-          - compose
-          - --env-file
-          - "{{ compose_env_file }}"
-          - up
-          - -d
-      args:
-        chdir: "{{ project_dir }}"
-      register: compose_up_result
-      changed_when: >-
-        'Created' in compose_up_result.stdout
-        or 'Recreated' in compose_up_result.stdout
-        or 'Started' in compose_up_result.stdout
-
-    - name: Ensure certbot and LE certificate are configured
-      ansible.builtin.include_role:
-        name: certbot
-
-    - name: Ensure DB backup automation is configured
+    - name: Install backup automation only after the database is running
       ansible.builtin.include_role:
         name: aist_backup
+      when: deployment_phase == 'start'

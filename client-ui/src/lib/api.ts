@@ -262,6 +262,9 @@ export function isSourceWarmingError(error: unknown): error is SourceWarmingErro
 export async function fetchFileContent(projectVersionIdOrUrl: number | string, filePath?: string) {
   let url: string;
   if (typeof projectVersionIdOrUrl === "string") {
+    if (!projectVersionIdOrUrl.startsWith("/") || projectVersionIdOrUrl.startsWith("//") || /[\\\r\n\t]/.test(projectVersionIdOrUrl)) {
+      throw new Error("Source link must be a root-relative path");
+    }
     url = projectVersionIdOrUrl;
   } else {
     const encodedPath = (filePath ?? "").split("/").map(encodeURIComponent).join("/");

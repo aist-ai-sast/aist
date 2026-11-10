@@ -15,7 +15,7 @@ from io import StringIO
 from unittest.mock import MagicMock, patch
 
 import requests
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
 from dojo.models import DojoMeta, Finding
 
@@ -39,6 +39,13 @@ SOURCE_FILES = {"app/views.py": SOURCE, "README.md": "# widgets\n"}
 
 
 class SourceLinkParseTests(SimpleTestCase):
+
+    @override_settings(PUBLIC_BASE_URL="https://old-installation.example")
+    def test_source_link_is_independent_of_the_deployment_origin(self):
+        self.assertEqual(
+            LinkBuilder(42).build("src/sub dir/naïve.py"),
+            "/api/v2/aist/projects_version/42/files/blob/src/sub%20dir/na%C3%AFve.py",
+        )
 
     def test_source_link_built_for_a_finding(self):
         self.assertEqual(LinkBuilder.parse(LinkBuilder(42).build("src/views.py")), (42, "src/views.py"))

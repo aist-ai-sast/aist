@@ -102,10 +102,11 @@ AIST_VPN_SIDECAR_IMAGE = env("AIST_VPN_SIDECAR_IMAGE", default="aist-vpn-sidecar
 # their report format, while this setting bounds the upload payload size.
 PIPELINE_IMPORT_MAX_SIZE_BYTES = env.int("AIST_PIPELINE_IMPORT_MAX_SIZE_BYTES", default=15 * 1024 * 1024)  # noqa: F405
 
-PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="https://aist.itsec-europe.com/")  # noqa: F405
+AIST_DAST_ALLOWED_PRIVATE_NETWORKS = env.list("AIST_DAST_ALLOWED_PRIVATE_NETWORKS", default=[])  # noqa: F405
+PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default=SITE_URL)  # noqa: F405
 AIST_AI_TRIAGE_WEBHOOK_URL = env(  # noqa: F405
     "AIST_AI_TRIAGE_WEBHOOK_URL",
-    default="https://flaming.app.n8n.cloud/webhook/triage-sast",
+    default="",
 )
 AIST_AI_TRIAGE_SECRET = ""
 
@@ -123,8 +124,8 @@ AIST_WORKING_DIR = env("AIST_WORKING_DIR", default="/app/aist")  # noqa: F405
 # string falls back to MEDIA_ROOT/aist_logs.
 AIST_LOG_DIR = env("AIST_LOG_DIR", default="")  # noqa: F405
 
-# Limits for the claude-diff-security analyzer. Values larger than the diff
-# being analyzed force the skill into the "truncated" code path which marks
+# Diffs exceeding either claude-diff-security limit enter the "truncated"
+# code path, which marks
 # the pipeline FINISHED_WITH_WARNINGS instead of analyzing partial data.
 CLAUDE_DIFF_MAX_FILES = int(env("CLAUDE_DIFF_MAX_FILES", default="200"))  # noqa: F405
 CLAUDE_DIFF_MAX_BYTES = int(env("CLAUDE_DIFF_MAX_BYTES", default="1000000"))  # noqa: F405

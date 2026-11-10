@@ -1,9 +1,8 @@
-from pathlib import Path
 
 import yaml
 from django.test import SimpleTestCase
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from aist.test import PROJECT_ROOT
 
 
 class RuntimeComposeConfigurationTests(SimpleTestCase):

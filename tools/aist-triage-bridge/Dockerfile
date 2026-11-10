@@ -34,5 +34,9 @@ RUN chmod +x /entrypoint.sh && \
     chown -R claude:claude /app/bridge && \
     mkdir -p /run/claude-bridge && chown claude:claude /run/claude-bridge
 
+# Use the system trust store, including certificates provisioned for this deployment.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV REQUESTS_CA_BUNDLE=${SSL_CERT_FILE} NODE_EXTRA_CA_CERTS=${SSL_CERT_FILE}
+
 # Entrypoint runs as root to fix docker socket perms, then drops to claude
 ENTRYPOINT ["/entrypoint.sh"]

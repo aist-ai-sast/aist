@@ -5,9 +5,9 @@ from django.core.checks import run_checks
 from django.test import SimpleTestCase, override_settings
 
 from aist.checks import AIST_EXECUTION_CHECK_TAG
+from aist.test import PROJECT_ROOT
 from aist.test.analyzer_catalog import write_analyzers_config
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PIPELINE_ROOT = PROJECT_ROOT / "sast-combinator" / "sast-pipeline"
 
 

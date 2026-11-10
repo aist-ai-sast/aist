@@ -1,12 +1,12 @@
 import re
-from pathlib import Path
 from urllib.parse import unquote
 
 import yaml
 from defusedxml import ElementTree
 from django.test import SimpleTestCase
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from aist.test import PROJECT_ROOT
+
 DOCUMENTS = tuple(
     path
     for path in sorted((PROJECT_ROOT / "docs").rglob("*.md"))

@@ -52,7 +52,9 @@ services:
     environment:
       POSTGRES_DB: ${DD_TEST_DATABASE_NAME:-test_defectdojo}
     volumes:
-      - defectdojo_postgres_unit_tests:/var/lib/postgresql/data
+      - type: volume
+        source: defectdojo_postgres_unit_tests
+        target: /var/lib/postgresql
   valkey: !reset
   "webhook.endpoint":
     image: mccutchen/go-httpbin:2.18.3@sha256:3992f3763e9ce5a4307eae0a869a78b4df3931dc8feba74ab823dd2444af6a6b

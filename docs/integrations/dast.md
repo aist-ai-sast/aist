@@ -20,7 +20,8 @@ selected on the DAST integration.
 ## Configure the integration
 
 1. Import the provider-generated onboarding bundle into the organization.
-2. Select an organization VPN when the gateway is on a private network.
+2. Select an organization VPN only when reaching the gateway requires that tunnel.
+   A gateway reachable on the same private network uses a direct connection.
 3. Validate gateway connectivity and credentials.
 4. Wait for the provider's targets and capabilities to synchronize. A
    successful validation starts this automatically; see
@@ -87,7 +88,10 @@ catalog change.
 
 A launch is ready only when the integration is healthy, synchronized
 capabilities are current, the project binding is enabled, the parameter set is
-valid, and a private gateway has its explicit DAST VPN route.
+valid, and any selected VPN route is active and belongs to the same organization.
+A private gateway address does not itself require a VPN. Direct access uses the
+private CIDRs configured by the deployment operator, as described under
+[Network and credentials](#network-and-credentials).
 
 Readiness answers whether this binding can launch at all; it carries no separate
 permission to launch without an operator. A binding an operator can start is a
@@ -182,10 +186,9 @@ gateway's own `/integrations/v2/` prefix.
 
 ### The page never reaches the gateway
 
-The route to a gateway runs through the integration's VPN sidecar and the
-container control that only a background worker has; the process that serves the
-page has neither. A read therefore renders the last queue a worker stored for
-this pipeline, and a command is handed to a worker to send. That stored queue
+Gateway requests run in background workers, using a direct connection or the
+integration's selected VPN sidecar. The page renders the last queue a worker
+stored for this pipeline, and a command is handed to a worker to send. That stored queue
 belongs to the pipeline, so it stays readable as the record of a finished run
 even once the gateway no longer serves it.
 
@@ -428,8 +431,19 @@ report.
 
 ## Network and credentials
 
-Private DAST traffic uses only the VPN attached directly to the DAST
-integration; project and SCM VPN configuration does not substitute for it.
+A gateway reachable from AIST uses a direct connection. If a tunnel is needed,
+select the VPN attached to the DAST integration; project and SCM VPN configuration
+does not substitute for it.
+
+Set `AIST_DAST_ALLOWED_PRIVATE_NETWORKS` in the deployment `.env` to a
+comma-separated list of CIDRs covering the gateway addresses. Prefer the
+smallest required subnets, or individual `/32` and `/128` addresses. There are
+no default private networks: an empty value denies direct private destinations.
+Compose passes this setting to AIST, and the worker passes the same value to
+the connector. Standalone DAST execution reads the same environment variable.
+An invalid CIDR is a configuration error. Public unicast destinations remain
+available; loopback, link-local, multicast, unspecified and reserved addresses
+remain forbidden even if included in a configured CIDR.
 
 Every gateway URL must be an absolute HTTPS URL with no credentials, query, or
 fragment, on port 443 or 8443. Configuration validation and the connector
@@ -438,11 +452,11 @@ and launches consistently. How far the destination address can be checked
 depends on which side resolves it for the connection that follows:
 
 - An address literal needs no lookup, so the address checked is the address used.
-  It must be public, or — when the integration has an active VPN route — a
-  standard private address. Loopback, link-local, and other special-purpose
+  It must be public or belong to a configured private CIDR. Loopback, link-local, and other special-purpose
   addresses are never accepted.
-- A name on a direct connection is resolved by the platform and must be public,
-  because that lookup is the one the connection uses.
+- A name on a direct connection must resolve entirely to permitted addresses.
+  The client pins the connection to an approved address while retaining the
+  gateway hostname for TLS verification and HTTP authority.
 - A name on a VPN-routed connection is resolved inside the tunnel, by the proxy
   that opens the connection. The platform cannot confirm that address from
   outside the tunnel: a VPN-internal name usually has no answer there, and an

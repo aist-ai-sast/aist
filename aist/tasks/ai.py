@@ -68,7 +68,7 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
     webhook_url = getattr(
         settings,
         "AIST_AI_TRIAGE_WEBHOOK_URL",
-        "https://flaming.app.n8n.cloud/webhook-test/triage-sast",
+        "",
     )
     webhook_timeout = getattr(settings, "AIST_AI_TRIAGE_REQUEST_TIMEOUT", 10)
     triage_secret = getattr(settings, "AIST_AI_TRIAGE_SECRET", None)
@@ -81,6 +81,11 @@ def push_request_to_ai(self, pipeline_id: str, finding_ids, filters, log_level="
         return
 
     if not status_ok:
+        finish_pipeline(pipeline_id, degraded=True)
+        return
+
+    if not webhook_url:
+        log.error("Remote AI triage requires AIST_AI_TRIAGE_WEBHOOK_URL")
         finish_pipeline(pipeline_id, degraded=True)
         return
 

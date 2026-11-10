@@ -1,0 +1,11 @@
+---
+- name: Read exact database counts and finding hashes
+  ansible.builtin.command:
+    argv: "{{ relocation_compose + relocation_psql }}"
+    stdin: "{{ lookup('ansible.builtin.file', role_path ~ '/files/state.sql') }}"
+  register: relocation_state_command
+  changed_when: false
+
+- name: Retain database state for comparison
+  ansible.builtin.set_fact:
+    relocation_state: "{{ relocation_state_command.stdout | from_json }}"

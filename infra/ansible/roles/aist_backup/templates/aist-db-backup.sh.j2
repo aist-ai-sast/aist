@@ -1,29 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
-PROJECT_DIR="{{ project_dir }}"
-COMPOSE_ENV_FILE="{{ compose_env_file }}"
-BACKUP_DIR="{{ backup_dir }}"
-LOG_FILE="{{ backup_log_file }}"
-RETENTION_DAYS="{{ backup_retention_days }}"
+PROJECT_DIR={{ project_dir | quote }}
+COMPOSE_ENV_FILE={{ compose_env_file | quote }}
+COMPOSE_FILE={{ compose_file | quote }}
+BACKUP_DIR={{ backup_dir | quote }}
+RETENTION_DAYS={{ backup_retention_days | string | quote }}
+REMOTE={{ deployment.backup_remote | quote }}
 
-mkdir -p "${BACKUP_DIR}" "$(dirname "${LOG_FILE}")"
-exec > >(tee -a "${LOG_FILE}") 2>&1
-
+mkdir -p "${BACKUP_DIR}"
+exec 9>"${BACKUP_DIR}/.backup.lock"
+flock -n 9 || exit 0
 STAMP="$(date -u +%Y%m%d_%H%M%S)"
-OUT_FILE="${BACKUP_DIR}/defectdojo_${STAMP}.sql.gz"
-TMP_FILE="${OUT_FILE}.tmp"
+OUT_FILE="${BACKUP_DIR}/aist_${STAMP}.dump"
+TMP_FILE="${OUT_FILE}.partial"
 
 cd "${PROJECT_DIR}"
-docker compose --env-file "${COMPOSE_ENV_FILE}" exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip -9 > "${TMP_FILE}"
-
-if [ ! -s "${TMP_FILE}" ]; then
-  rm -f "${TMP_FILE}"
-  echo "Backup failed: empty dump" >&2
-  exit 1
+compose=(python3 "$PROJECT_DIR/scripts/deployment_config.py" --project-dir "$PROJECT_DIR"
+  --env-file "$COMPOSE_ENV_FILE" --compose-file "$COMPOSE_FILE" --compose)
+"${compose[@]}" exec -T postgres sh -c 'pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > "${TMP_FILE}"
+test -s "${TMP_FILE}"
+"${compose[@]}" exec -T postgres pg_restore --list < "${TMP_FILE}" > /dev/null
+mv "${TMP_FILE}" "${OUT_FILE}"
+(
+  cd "${BACKUP_DIR}"
+  sha256sum "$(basename "${OUT_FILE}")" > "${OUT_FILE}.sha256"
+)
+if [[ -n "${REMOTE}" ]]; then
+  rclone copyto "${OUT_FILE}" "${REMOTE%/}/$(basename "${OUT_FILE}")"
+  rclone copyto "${OUT_FILE}.sha256" "${REMOTE%/}/$(basename "${OUT_FILE}").sha256"
 fi
-
-mv -f "${TMP_FILE}" "${OUT_FILE}"
-find "${BACKUP_DIR}" -type f -name '*.sql.gz' -mtime "+${RETENTION_DAYS}" -delete
-
-echo "Backup created: ${OUT_FILE}"
+# Retention runs only after dump validation and successful off-host upload when configured.
+find "${BACKUP_DIR}" -maxdepth 1 -type f \( -name 'aist_*.dump' -o -name 'aist_*.dump.sha256' \) -mtime "+${RETENTION_DAYS}" -delete
+printf 'Backup completed: %s\n' "${OUT_FILE}"

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from celery.exceptions import CPendingDeprecationWarning
 from django.http import JsonResponse
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 from dojo.models import Engagement, Finding, Test, Test_Type
 from fakeredis import FakeRedis
@@ -328,6 +328,7 @@ class WatchDeduplicationTests(TestCase):
 # ---- push_request_to_ai -----------------------------------------------------
 
 
+@override_settings(AIST_AI_TRIAGE_WEBHOOK_URL="https://triage.example.test/hook")
 class PushRequestToAITests(TestCase):
     def test_does_not_push_when_not_ready(self):
         with patch("aist.tasks.ai.requests.post") as mock_post, \
@@ -343,6 +344,18 @@ class PushRequestToAITests(TestCase):
 
             mock_post.assert_not_called()
             mock_finish.assert_called_once_with(pipeline.id, degraded=True)
+
+    @override_settings(AIST_AI_TRIAGE_WEBHOOK_URL="")
+    def test_unconfigured_remote_triage_finishes_without_outbound_request(self):
+        with (
+            patch("aist.tasks.ai.requests.post") as post,
+            patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()),
+            patch("aist.tasks.ai.finish_pipeline") as finish,
+            patch("aist.tasks.ai._gather_ai_push_payload", return_value=(True, None, "fixture", "python", "https://aist.internal/callback")),
+        ):
+            _push_request_to_ai.run(pipeline_id="pipeline-123", finding_ids=[1], filters={})
+        post.assert_not_called()
+        finish.assert_called_once_with("pipeline-123", degraded=True)
 
     def test_push_success_transitions_to_waiting_result(self):
         with patch("aist.tasks.ai.requests.post") as mock_post, \
@@ -364,6 +377,7 @@ class PushRequestToAITests(TestCase):
                 log_level="INFO",
             )
 
+            self.assertEqual(mock_post.call_args.args[0], "https://triage.example.test/hook")
             self.assertEqual(pipeline.status, "WAITING_RESULT_FROM_AI")
             pipeline.save.assert_any_call(update_fields=["status", "updated"])
 

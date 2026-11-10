@@ -8,7 +8,6 @@ from aist.integrations.dast_config import DastTargetSnapshot
 from aist.integrations.dast_readiness import DastReadinessCode, check_dast_binding_readiness
 from aist.models import (
     AISTProject,
-    DastIntegrationState,
     DastIntegrationValidationState,
     DastProjectBinding,
     Organization,
@@ -16,7 +15,7 @@ from aist.models import (
     OrgIntegrationType,
     OrgIntegrationVPNSecret,
 )
-from aist.services.dast_targets import refresh_dast_targets
+from aist.test.dast_fixtures import create_dast_binding, create_dast_integration, create_dast_target
 
 
 def _integration_config(gateway_url: str = "https://gateway.example") -> dict:
@@ -57,39 +56,18 @@ class DastReadinessTests(TestCase):
         self.organization = Organization.objects.create(name="DAST readiness org", product_type=self.product_type)
         self.product = Product.objects.create(
             name="DAST readiness product",
-            description="",
+            description="DAST readiness test product",
             prod_type=self.product_type,
             sla_configuration=SLA_Configuration.objects.create(name="DAST readiness SLA"),
         )
         self.project = AISTProject.objects.create(product=self.product)
-        self.integration = OrgIntegration.objects.create(
-            organization=self.organization,
-            integration_type=OrgIntegrationType.DAST,
-            name="DAST readiness",
-            config=_integration_config(),
-            secret="one-time-token-exchanged-for-runtime-token",  # noqa: S106 -- test fixture
-            is_active=True,
+        self.integration, self.state = create_dast_integration(
+            organization=self.organization, public_id="readiness-public-id", name="DAST readiness", now=self.now,
         )
-        self.state = DastIntegrationState.objects.create(
-            integration=self.integration,
-            validation_state=DastIntegrationValidationState.READY,
-            validated_at=self.now,
-            contract_version="2.0",
-            capabilities_etag="catalog-1",
-            capabilities_synced_at=self.now,
+        self.target = create_dast_target(
+            integration=self.integration, wire=_target_snapshot().to_snapshot(), seen_at=self.now,
         )
-        self.target = refresh_dast_targets(
-            self.integration,
-            (_target_snapshot(),),
-            seen_at=self.now,
-        )[0]
-        self.binding = DastProjectBinding.objects.create(
-            project=self.project,
-            target=self.target,
-            source_repo_key="source",
-            enabled=True,
-            parameter_snapshot={},
-        )
+        self.binding = create_dast_binding(project=self.project, target=self.target, parameters={})
 
     def _fresh_binding(self) -> DastProjectBinding:
         return DastProjectBinding.objects.select_related(
@@ -228,12 +206,12 @@ class DastReadinessTests(TestCase):
                 finally:
                     setattr(subject, field, original)
 
-    def test_vpn_and_private_gateway_prerequisites_are_table_driven(self):
+    def test_private_gateway_needs_no_vpn_but_selected_vpn_must_be_valid(self):
         binding = self._fresh_binding()
         integration = binding.target.integration
         integration.config = _integration_config("https://10.23.4.5")
         initial = check_dast_binding_readiness(binding, now=self.now)
-        self.assertIn(DastReadinessCode.PRIVATE_GATEWAY_REQUIRES_VPN, {issue.code for issue in initial.issues})
+        self.assertTrue(initial.ready, initial.issues)
 
         vpn = OrgIntegration.objects.create(
             organization=self.organization,
@@ -287,6 +265,5 @@ class DastReadinessTests(TestCase):
                     result = check_dast_binding_readiness(binding, now=self.now)
                     codes = {issue.code for issue in result.issues}
                     self.assertIn(code, codes)
-                    self.assertIn(DastReadinessCode.PRIVATE_GATEWAY_REQUIRES_VPN, codes)
                 finally:
                     setattr(subject, field, original)

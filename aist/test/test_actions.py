@@ -230,7 +230,7 @@ class ActionsTests(TestCase):
 
         self.assertIn("<https://runbook.example.test|Runbook>", mock_post.call_args.kwargs["message"])
 
-    @override_settings(SITE_URL="https://aist.itsec-europe.com")
+    @override_settings(SITE_URL="https://aist.internal", PUBLIC_BASE_URL="https://aist.internal")
     @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
     def test_slack_action_default_message_includes_project_commit_and_findings_url(self, mock_post):
         branch = AISTProjectVersion.objects.create(
@@ -259,7 +259,7 @@ class ActionsTests(TestCase):
         self.assertIn("Branch: main", message)
         self.assertIn("Commit: abc123def", message)
         # Slack decodes &amp; back to & when it renders, so the link arrives intact.
-        expected = f"https://aist.itsec-europe.com{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}"
+        expected = f"https://aist.internal{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}"
         self.assertIn(expected.replace("&", "&amp;"), message)
 
     @patch("aist.actions.AISTSlackNotificationManager.post_message_with_token")
@@ -445,7 +445,7 @@ class ActionsTests(TestCase):
         with self.assertRaises(RuntimeError):
             EmailAction(action).run(pipeline=self.pipeline, new_status=AISTStatus.FINISHED)
 
-    @override_settings(SITE_URL="https://aist.itsec-europe.com")
+    @override_settings(SITE_URL="https://aist.internal", PUBLIC_BASE_URL="https://aist.internal")
     @patch("aist.actions.EmailNotificationManger.send_mail_notification")
     def test_email_action_default_message_includes_project_commit_and_findings_url(self, mock_send):
         branch = AISTProjectVersion.objects.create(
@@ -474,7 +474,7 @@ class ActionsTests(TestCase):
         self.assertIn("Branch: main", kwargs["description"])
         self.assertIn("Commit: abc123def", kwargs["description"])
         self.assertIn(
-            f"https://aist.itsec-europe.com{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}",
+            f"https://aist.internal{reverse('findings')}?{urlencode({'product': self.product.id, 'pipeline': self.pipeline.id})}",
             kwargs["description"],
         )
 

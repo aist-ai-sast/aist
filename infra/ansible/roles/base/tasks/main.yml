@@ -9,7 +9,11 @@
       - gnupg
       - openssl
       - docker.io
-      - docker-compose-plugin
+      - docker-compose-v2
+      - docker-buildx
+      - python3
+      - python3-cryptography
+      - rclone
     state: present
 
 - name: Ensure docker service is enabled and running
@@ -17,22 +21,3 @@
     name: docker
     enabled: true
     state: started
-
-- name: Read current timezone
-  ansible.builtin.command:
-    argv:
-      - timedatectl
-      - show
-      - --property=Timezone
-      - --value
-  register: timezone_current
-  changed_when: false
-
-- name: Set timezone
-  ansible.builtin.command:
-    argv:
-      - timedatectl
-      - set-timezone
-      - "{{ timezone }}"
-  when: timezone_current.stdout != timezone
-  changed_when: true

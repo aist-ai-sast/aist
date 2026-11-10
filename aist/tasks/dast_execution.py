@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from celery.utils.time import get_exponential_backoff_interval
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -277,6 +278,7 @@ def _execute_dast_pipeline(pipeline_id: str, logger=None):
                 token_file=token_file,
                 ca_file=ca_file,
                 vpn_container_name=vpn_container,
+                allowed_private_networks=tuple(settings.AIST_DAST_ALLOWED_PRIVATE_NETWORKS),
                 recovery=runtime.recovery,
                 stop_requested=runtime.stop_requested,
                 on_progress=functools.partial(_record_dast_progress, pipeline_id),

@@ -1,0 +1,75 @@
+---
+- name: Verify received snapshot before touching target data
+  ansible.builtin.command:
+    argv: [sha256sum, --check, SHA256SUMS]
+    chdir: "{{ relocation_snapshot_dir }}"
+  changed_when: false
+
+- name: Inspect completed restore marker
+  ansible.builtin.stat:
+    path: "{{ relocation_snapshot_dir }}/RESTORED"
+  register: relocation_restored
+
+- name: Restore into an empty installation
+  when: not relocation_restored.stat.exists
+  block:
+    - name: Inspect target database before restoring
+      ansible.builtin.command:
+        argv: "{{ relocation_compose + relocation_psql }}"
+        stdin: "SELECT count(*) FROM pg_tables WHERE schemaname = 'public';"
+      register: relocation_target_tables
+      changed_when: false
+
+    - name: Refuse to overwrite an existing database
+      ansible.builtin.assert:
+        that: relocation_target_tables.stdout | int == 0
+        fail_msg: "Target database is not empty. Preserve it and select a fresh target; relocation never drops existing data."
+
+    - name: Require empty target media and workspace
+      ansible.builtin.command:
+        argv: [find, "{{ item }}", -mindepth, '1', -maxdepth, '1', -print, -quit]
+      loop: ["{{ relocation_media_dir }}", "{{ relocation_workspace_dir }}"]
+      register: relocation_target_files
+      changed_when: false
+      failed_when: relocation_target_files.rc != 0 or relocation_target_files.stdout | length > 0
+
+    - name: Restore the database with PostgreSQL error checking
+      ansible.builtin.shell:
+        cmd: >-
+          {{ (relocation_compose + ['exec', '-T', 'postgres', 'sh', '-c', 'exec pg_restore --exit-on-error --no-owner -U "$POSTGRES_USER" -d "$POSTGRES_DB"']) | map('quote') | join(' ') }}
+          < {{ (relocation_snapshot_dir ~ '/database.dump') | quote }}
+      changed_when: true
+
+    - name: Restore media and retained workspace with original ownership
+      ansible.builtin.unarchive:
+        src: "{{ relocation_snapshot_dir }}/{{ item.archive }}"
+        dest: "{{ item.directory }}"
+        remote_src: true
+        extra_opts: [--numeric-owner]
+      loop:
+        - {archive: media.tar.gz, directory: "{{ relocation_media_dir }}"}
+        - {archive: workspace.tar.gz, directory: "{{ relocation_workspace_dir }}"}
+
+    - name: Load retained analyzer images
+      ansible.builtin.command:
+        argv: [docker, image, load, --input, "{{ relocation_snapshot_dir }}/runtime-images.tar.gz"]
+      when: relocation_images | length > 0
+      changed_when: true
+
+    - name: Read restored database state
+      ansible.builtin.include_tasks: state.yml
+
+    - name: Read source database baseline
+      ansible.builtin.slurp:
+        src: "{{ relocation_snapshot_dir }}/state.json"
+      register: relocation_source_state
+
+    - name: Require exact record counts and finding hashes before application starts
+      ansible.builtin.assert:
+        that: relocation_state == (relocation_source_state.content | b64decode | from_json)
+
+    - name: Mark a verified restore
+      ansible.builtin.copy:
+        content: "Verified database and retained files restored.\n"
+        dest: "{{ relocation_snapshot_dir }}/RESTORED"
+        mode: '0600'

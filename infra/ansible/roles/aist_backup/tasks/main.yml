@@ -7,14 +7,6 @@
     group: root
     mode: "0750"
 
-- name: Ensure backup log directory exists
-  ansible.builtin.file:
-    path: "{{ backup_log_file | dirname }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
 - name: Install DB backup script
   ansible.builtin.template:
     src: aist-db-backup.sh.j2

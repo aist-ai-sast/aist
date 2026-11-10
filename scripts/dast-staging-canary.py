@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# ruff: noqa: EM101, EM102, S310, T201, TRY003
+# ruff: noqa: EM101, EM102, N999, S310, T201, TRY003
+# The hyphenated filename is a public CLI entrypoint.
 """Run the credential-safe portions of the real AIST/DAST staging canary."""
 
 from __future__ import annotations

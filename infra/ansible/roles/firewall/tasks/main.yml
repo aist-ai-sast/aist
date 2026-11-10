@@ -8,18 +8,18 @@
 - name: Allow SSH
   ansible.builtin.command:
     argv: ["ufw", "allow", "OpenSSH"]
-  when: firewall_manage and firewall_allow_ssh
+  when: firewall_manage
   changed_when: false
 
 - name: Allow HTTP for ACME challenge and redirect
   ansible.builtin.command:
-    argv: ["ufw", "allow", "80/tcp"]
+    argv: ["ufw", "allow", "{{ deployment.http_port }}/tcp"]
   when: firewall_manage
   changed_when: false
 
 - name: Allow HTTPS
   ansible.builtin.command:
-    argv: ["ufw", "allow", "443/tcp"]
+    argv: ["ufw", "allow", "{{ deployment.tls_port }}/tcp"]
   when: firewall_manage
   changed_when: false
 

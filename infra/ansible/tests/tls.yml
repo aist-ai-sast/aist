@@ -1,0 +1,113 @@
+---
+# Run inside a disposable container: ansible-playbook -i localhost, -c local infra/ansible/tests/tls.yml
+- name: Exercise persistent TLS across preparation runs
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create isolated TLS directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: tls_test_dir
+
+    - name: Configure internal hostname fixture
+      ansible.builtin.set_fact:
+        deployment:
+          tls_dir: "{{ tls_test_dir.path }}"
+          domain: aist.internal
+          tls_mode: selfsigned
+          tls_valid_days: 365
+
+    - name: First preparation
+      ansible.builtin.include_role:
+        name: aist_tls
+
+    - name: Record certificate fingerprint
+      ansible.builtin.stat:
+        path: "{{ tls_test_dir.path }}/nginx.crt"
+        checksum_algorithm: sha256
+      register: first_certificate
+
+    - name: Repeated preparation
+      ansible.builtin.include_role:
+        name: aist_tls
+
+    - name: Read certificate after repetition
+      ansible.builtin.stat:
+        path: "{{ tls_test_dir.path }}/nginx.crt"
+        checksum_algorithm: sha256
+      register: repeated_certificate
+
+    - name: Assert client trust remains unchanged
+      ansible.builtin.assert:
+        that: first_certificate.stat.checksum == repeated_certificate.stat.checksum
+
+    - name: Inspect the public certificate mounted into runtime clients
+      ansible.builtin.stat:
+        path: "{{ tls_test_dir.path }}/trusted/aist.crt"
+        checksum_algorithm: sha256
+      register: public_certificate
+
+    - name: Inspect contents of the public trust directory
+      ansible.builtin.find:
+        paths: "{{ tls_test_dir.path }}/trusted"
+        hidden: true
+      register: public_trust_files
+
+    - name: Require the same certificate and no private key in the client mount
+      ansible.builtin.assert:
+        that:
+          - public_certificate.stat.checksum == first_certificate.stat.checksum
+          - public_certificate.stat.mode == '0644'
+          - public_trust_files.matched == 1
+
+    - name: Verify trusted certificate and hostname with OpenSSL
+      ansible.builtin.command:
+        argv: [openssl, verify, -CAfile, "{{ tls_test_dir.path }}/nginx.crt", -verify_hostname, aist.internal, "{{ tls_test_dir.path }}/nginx.crt"]
+      changed_when: false
+
+    - name: Use the supplied certificate mode
+      ansible.builtin.set_fact:
+        deployment: "{{ deployment | combine({'tls_mode': 'existing'}) }}"
+
+    - name: Validate the supplied certificate
+      ansible.builtin.include_role:
+        name: aist_tls
+
+    - name: Change configured hostname without changing certificate
+      ansible.builtin.set_fact:
+        deployment: "{{ deployment | combine({'domain': 'different.internal'}) }}"
+
+    - name: Check stale hostname blocks preparation
+      block:
+        - name: Attempt preparation with wrong hostname
+          ansible.builtin.include_role:
+            name: aist_tls
+        - name: Fail if mismatched hostname was accepted
+          ansible.builtin.fail:
+            msg: "TEST: mismatched hostname was accepted"
+      rescue:
+        - name: Assert the hostname verification rejected this certificate
+          ansible.builtin.assert:
+            that: ansible_failed_task.name == 'Verify certificate hostname'
+
+    - name: Restore configured hostname
+      ansible.builtin.set_fact:
+        deployment: "{{ deployment | combine({'domain': 'aist.internal'}) }}"
+
+    - name: Simulate a supplied key from a different certificate
+      community.crypto.openssl_privatekey:
+        path: "{{ tls_test_dir.path }}/nginx.key"
+        force: true
+
+    - name: Check mismatched key blocks preparation
+      block:
+        - name: Attempt preparation with mismatched key
+          ansible.builtin.include_role:
+            name: aist_tls
+        - name: Fail if mismatched key was accepted
+          ansible.builtin.fail:
+            msg: "TEST: mismatched key was accepted"
+      rescue:
+        - name: Assert certificate and key validation failed
+          ansible.builtin.assert:
+            that: ansible_failed_task.name == 'Verify certificate belongs to signing key'

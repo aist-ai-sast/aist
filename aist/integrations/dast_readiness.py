@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import ipaddress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
-from urllib.parse import urlsplit
 
 from django.utils import timezone
 
@@ -25,12 +23,6 @@ _import_sast_pipeline_package()
 from pipeline.dast.contracts import CONTRACT_MAJOR  # type: ignore[import-not-found]  # noqa: E402
 
 DAST_CATALOG_MAX_AGE = timedelta(hours=24)
-_TRUSTED_PRIVATE_NETWORKS = (
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("fc00::/7"),
-)
 
 
 class DastReadinessCode(StrEnum):
@@ -54,7 +46,6 @@ class DastReadinessCode(StrEnum):
     VPN_INACTIVE = "VPN_INACTIVE"
     VPN_CREDENTIALS_MISSING = "VPN_CREDENTIALS_MISSING"
     VPN_USER_PASSWORD_INCOMPLETE = "VPN_USER_PASSWORD_INCOMPLETE"  # noqa: S105 -- reason code
-    PRIVATE_GATEWAY_REQUIRES_VPN = "PRIVATE_GATEWAY_REQUIRES_VPN"
     SOURCE_VERSION_INVALID = "SOURCE_VERSION_INVALID"
     LAUNCH_PARAMETERS_INVALID = "LAUNCH_PARAMETERS_INVALID"
     CAPABILITY_SNAPSHOT_STALE = "CAPABILITY_SNAPSHOT_STALE"
@@ -118,9 +109,8 @@ def check_dast_binding_readiness(
     if not integration.secret:
         add(DastReadinessCode.INTEGRATION_TOKEN_MISSING, "The DAST integration has no API token.")
 
-    config = None
     try:
-        config = integration.get_dast_config()
+        integration.get_dast_config()
     except DastConfigError:
         add(DastReadinessCode.INTEGRATION_CONFIG_INVALID, "The stored DAST integration configuration is invalid.")
 
@@ -175,31 +165,21 @@ def check_dast_binding_readiness(
                 DastReadinessCode.SOURCE_REPOSITORY_UNAVAILABLE,
                 "The selected source repository is not advertised by the DAST target.",
             )
-    vpn_ready = integration.vpn_integration_id is not None
     if integration.vpn_integration_id is not None:
         vpn = integration.vpn_integration
         for violation in vpn_link_violations(vpn, organization_id=integration.organization_id):
-            vpn_ready = False
             add(_VPN_LINK_ISSUES[violation], violation.label)
         try:
             vpn_secret = vpn.vpn_secret
         except OrgIntegrationVPNSecret.DoesNotExist:
             vpn_secret = None
         if vpn_secret is None or not vpn_secret.ovpn_content:
-            vpn_ready = False
             add(DastReadinessCode.VPN_CREDENTIALS_MISSING, "The selected VPN has no OpenVPN credentials.")
         elif bool(vpn_secret.vpn_username) != bool(vpn_secret.vpn_password):
-            vpn_ready = False
             add(
                 DastReadinessCode.VPN_USER_PASSWORD_INCOMPLETE,
                 "The selected VPN must provide both username and password or neither.",
             )
-
-    if config is not None and _is_trusted_private_literal(config.gateway_url) and not vpn_ready:
-        add(
-            DastReadinessCode.PRIVATE_GATEWAY_REQUIRES_VPN,
-            "A private DAST gateway requires an active same-organization VPN with credentials.",
-        )
 
     return DastReadinessResult(ready=not issues, issues=tuple(issues), checked_at=checked_at)
 
@@ -245,16 +225,3 @@ def _contract_major(version: str) -> int | None:
         return int(version.split(".", maxsplit=1)[0])
     except (AttributeError, TypeError, ValueError):
         return None
-
-
-def _is_trusted_private_literal(gateway_url: str) -> bool:
-    hostname = urlsplit(gateway_url).hostname
-    if not hostname:
-        return False
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
-        return False
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
-        address = address.ipv4_mapped
-    return any(address in network for network in _TRUSTED_PRIVATE_NETWORKS if network.version == address.version)

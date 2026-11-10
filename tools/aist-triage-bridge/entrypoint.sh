@@ -3,6 +3,9 @@ set -euo pipefail
 
 SOCKET_PATH="${AIST_LOCAL_TRIAGE_BRIDGE_SOCKET:-/run/claude-bridge/bridge.sock}"
 
+# Import mounted public certificates before dropping privileges. Public roots stay installed.
+update-ca-certificates
+
 # ── Run as root: fix permissions ──────────────────────────────────────────
 # Give claude user access to docker socket (needed for `docker compose exec`)
 if [ -S /var/run/docker.sock ]; then

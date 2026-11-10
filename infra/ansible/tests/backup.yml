@@ -1,0 +1,149 @@
+---
+# Run in a disposable container. Fake executables exercise failure ordering without a live database or remote.
+- name: Exercise backup failure and retention ordering
+  hosts: all
+  gather_facts: false
+  environment:
+    PUBLIC_BASE_URL: https://stale-shell.example
+    DOCKER_HOST: unix:///fixture.sock
+  tasks:
+    - name: Create isolated backup fixture
+      ansible.builtin.tempfile:
+        state: directory
+      register: fixture
+
+    - name: Create private fixture directories
+      ansible.builtin.file:
+        path: "{{ fixture.path }}/{{ item }}"
+        state: directory
+        mode: '0700'
+      loop: [bin, backups, scripts]
+
+    - name: Use the deployment Compose entry point
+      ansible.builtin.copy:
+        src: ../../../scripts/deployment_config.py
+        dest: "{{ fixture.path }}/scripts/deployment_config.py"
+        mode: '0600'
+
+    - name: Supply database command fixture
+      ansible.builtin.copy:
+        dest: "{{ fixture.path }}/bin/docker"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          test -z "${PUBLIC_BASE_URL+x}"
+          test "$DOCKER_HOST" = unix:///fixture.sock
+          test "$1 $2 $3 $4 $5 $6" = 'compose --env-file selected.env -f docker-compose.yml exec'
+          case "$*" in
+            *pg_dump*) test ! -f {{ (fixture.path ~ '/dump.fail') | quote }}; printf 'fixture custom dump\n';;
+            *pg_restore*) test "$(cat)" = 'fixture custom dump';;
+            *) exit 3;;
+          esac
+
+    - name: Supply off-host upload fixture
+      ansible.builtin.copy:
+        dest: "{{ fixture.path }}/bin/rclone"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          test ! -f {{ (fixture.path ~ '/upload.fail') | quote }}
+
+    - name: Render actual backup script
+      ansible.builtin.template:
+        src: ../roles/aist_backup/templates/aist-db-backup.sh.j2
+        dest: "{{ fixture.path }}/backup.sh"
+        mode: '0700'
+      vars:
+        project_dir: "{{ fixture.path }}"
+        compose_env_file: selected.env
+        compose_file: docker-compose.yml
+        backup_dir: "{{ fixture.path }}/backups"
+        backup_retention_days: 1
+        deployment:
+          backup_remote: fixture:backups
+
+    - name: Seed a previous recovery point
+      ansible.builtin.copy:
+        dest: "{{ fixture.path }}/backups/aist_previous.dump"
+        content: previous recovery point
+        mode: '0600'
+
+    - name: Make previous recovery point eligible for retention
+      ansible.builtin.file:
+        path: "{{ fixture.path }}/backups/aist_previous.dump"
+        modification_time: '200001010000.00'
+
+    - name: Simulate failed database dump
+      ansible.builtin.file:
+        path: "{{ fixture.path }}/dump.fail"
+        state: touch
+        mode: '0600'
+
+    - name: Attempt failing backup
+      ansible.builtin.command:
+        argv: [bash, "{{ fixture.path }}/backup.sh"]
+      environment:
+        PATH: "{{ fixture.path }}/bin:/usr/local/bin:/usr/bin:/bin"
+      register: failed_dump
+      changed_when: false
+      failed_when: false
+
+    - name: Check previous backup after failed dump
+      ansible.builtin.stat:
+        path: "{{ fixture.path }}/backups/aist_previous.dump"
+      register: previous_after_dump
+
+    - name: Require failure without discarding previous recovery point
+      ansible.builtin.assert:
+        that:
+          - failed_dump.rc != 0
+          - previous_after_dump.stat.exists
+          - "'Backup completed' not in failed_dump.stdout"
+
+    - name: Permit database dump for next attempt
+      ansible.builtin.command:
+        argv: [mv, "{{ fixture.path }}/dump.fail", "{{ fixture.path }}/upload.fail"]
+      changed_when: true
+
+    - name: Attempt backup with off-host failure
+      ansible.builtin.command:
+        argv: [bash, "{{ fixture.path }}/backup.sh"]
+      environment:
+        PATH: "{{ fixture.path }}/bin:/usr/local/bin:/usr/bin:/bin"
+      register: failed_upload
+      changed_when: false
+      failed_when: false
+
+    - name: Check previous backup after upload failure
+      ansible.builtin.stat:
+        path: "{{ fixture.path }}/backups/aist_previous.dump"
+      register: previous_after_upload
+
+    - name: Require upload failure before retention or success reporting
+      ansible.builtin.assert:
+        that:
+          - failed_upload.rc != 0
+          - previous_after_upload.stat.exists
+          - "'Backup completed' not in failed_upload.stdout"
+
+    - name: Permit upload for final attempt
+      ansible.builtin.command:
+        argv: [mv, "{{ fixture.path }}/upload.fail", "{{ fixture.path }}/failure.disabled"]
+      changed_when: true
+
+    - name: Complete backup successfully
+      ansible.builtin.command:
+        argv: [bash, "{{ fixture.path }}/backup.sh"]
+      environment:
+        PATH: "{{ fixture.path }}/bin:/usr/local/bin:/usr/bin:/bin"
+      changed_when: true
+
+    - name: Check retention after successful upload
+      ansible.builtin.stat:
+        path: "{{ fixture.path }}/backups/aist_previous.dump"
+      register: previous_after_success
+
+    - name: Require retention only after successful backup
+      ansible.builtin.assert:
+        that: not previous_after_success.stat.exists

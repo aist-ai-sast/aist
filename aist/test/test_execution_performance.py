@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import yaml
 from django.db import connection
@@ -17,9 +16,8 @@ from aist.models import (
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
+from aist.test import PROJECT_ROOT
 from aist.test.test_api import AISTApiBase
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _compose_default(value: str) -> int:

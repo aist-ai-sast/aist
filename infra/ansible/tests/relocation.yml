@@ -1,0 +1,192 @@
+---
+# Run in a disposable Docker container with Docker CLI and the Docker socket mounted.
+- name: Restore real PostgreSQL data and retained files through the relocation role
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create isolated relocation fixture
+      ansible.builtin.tempfile:
+        state: directory
+      register: fixture
+
+    - name: Name the isolated Compose projects
+      ansible.builtin.set_fact:
+        fixture_project: "migration-test-{{ fixture.path | basename | lower | replace('.', '-') }}"
+
+    - name: Create fixture directories
+      ansible.builtin.file:
+        path: "{{ fixture.path }}/{{ item }}"
+        state: directory
+        mode: '0700'
+      loop: [source, target, source/media, source/workspace/output, source/workspace/projects, source/docker/extra_settings, target/media, target/workspace, snapshot]
+
+    - name: Configure isolated PostgreSQL projects
+      ansible.builtin.copy:
+        dest: "{{ fixture.path }}/{{ item }}/compose.yml"
+        mode: '0600'
+        content: |
+          services:
+            postgres:
+              image: postgres:18.1-alpine@sha256:b40d931bd0e7ce6eecc59a5a6ac3b3c04a01e559750e73e7086b6dbd7f8bf545
+              environment:
+                POSTGRES_USER: postgres
+                POSTGRES_DB: postgres
+                POSTGRES_PASSWORD: fixture-only
+              volumes:
+                - data:/var/lib/postgresql
+          volumes:
+            data: {}
+      loop: [source, target]
+
+    - name: Write retained and disposable fixture files
+      ansible.builtin.copy:
+        dest: "{{ fixture.path }}/source/{{ item }}"
+        content: "retained fixture {{ item }}"
+        mode: '0600'
+      loop: [media/report.json, workspace/output/report.json, workspace/projects/disposable.txt, .env]
+
+    - name: Start isolated PostgreSQL containers
+      ansible.builtin.command:
+        argv: [docker, compose, -p, "{{ fixture_project }}-{{ item }}", -f, "{{ fixture.path }}/{{ item }}/compose.yml", up, -d]
+      loop: [source, target]
+      changed_when: true
+
+    - name: Wait for isolated databases
+      ansible.builtin.command:
+        argv: [docker, compose, -p, "{{ fixture_project }}-{{ item }}", -f, "{{ fixture.path }}/{{ item }}/compose.yml", exec, -T, postgres, pg_isready, -U, postgres]
+      loop: [source, target]
+      register: database_ready
+      until: database_ready.rc == 0
+      retries: 30
+      delay: 2
+      changed_when: false
+
+    - name: Seed application records in the source database
+      ansible.builtin.command:
+        argv: [docker, compose, -p, "{{ fixture_project }}-source", -f, "{{ fixture.path }}/source/compose.yml", exec, -T, postgres, psql, -U, postgres, -v, ON_ERROR_STOP=1]
+        stdin: |
+          CREATE TABLE dojo_finding (id integer, hash_code text, title text);
+          INSERT INTO dojo_finding VALUES (7, 'stable-hash', 'Source snippet: café');
+          CREATE TABLE dojo_dojometa (name text, value text);
+          INSERT INTO dojo_dojometa VALUES ('sourcefile_link', 'https://old.example/api/v2/aist/projects_version/1/files/blob/src/main.py');
+          CREATE TABLE aist_aistpipeline (status text);
+          INSERT INTO aist_aistpipeline VALUES ('FINISHED');
+          CREATE TABLE aist_pipelineexecutionlease (released_at timestamptz);
+          CREATE TABLE aist_aistaifindingresponse (id integer);
+          CREATE TABLE aist_aistproject (id integer);
+          CREATE TABLE aist_aistprojectversion (id integer);
+      changed_when: true
+
+    - name: Back up the source with the production tasks
+      ansible.builtin.import_role:
+        name: aist_relocation
+        tasks_from: backup
+      vars:
+        relocation_compose: [docker, compose, -p, "{{ fixture_project }}-source", -f, "{{ fixture.path }}/source/compose.yml"]
+        relocation_snapshot_dir: "{{ fixture.path }}/snapshot"
+        relocation_media_dir: "{{ fixture.path }}/source/media"
+        relocation_workspace_dir: "{{ fixture.path }}/source/workspace"
+        relocation_checkout_dir: "{{ fixture.path }}/source"
+
+    - name: Preserve the valid checksum manifest
+      ansible.builtin.slurp:
+        src: "{{ fixture.path }}/snapshot/SHA256SUMS"
+      register: valid_manifest
+
+    - name: Simulate corrupted snapshot checksum
+      ansible.builtin.copy:
+        content: "{{ valid_manifest.content | b64decode | regex_replace('^[0-9a-f]{64}', '0' * 64) }}"
+        dest: "{{ fixture.path }}/snapshot/SHA256SUMS"
+        mode: '0600'
+
+    - name: Require checksum rejection before any database write
+      block:
+        - name: Attempt restore with corrupted checksum
+          ansible.builtin.include_role:
+            name: aist_relocation
+            tasks_from: restore
+        - name: Fail if corrupted snapshot was accepted
+          ansible.builtin.fail:
+            msg: Corrupted snapshot accepted
+      rescue:
+        - name: Require checksum failure
+          ansible.builtin.assert:
+            that: ansible_failed_task.name == 'Verify received snapshot before touching target data'
+      vars:
+        relocation_compose: [docker, compose, -p, "{{ fixture_project }}-target", -f, "{{ fixture.path }}/target/compose.yml"]
+        relocation_snapshot_dir: "{{ fixture.path }}/snapshot"
+        relocation_media_dir: "{{ fixture.path }}/target/media"
+        relocation_workspace_dir: "{{ fixture.path }}/target/workspace"
+
+    - name: Restore the valid manifest
+      ansible.builtin.copy:
+        content: "{{ valid_manifest.content | b64decode }}"
+        dest: "{{ fixture.path }}/snapshot/SHA256SUMS"
+        mode: '0600'
+
+    - name: Seed existing target data that must survive a refused restore
+      ansible.builtin.command:
+        argv: [docker, compose, -p, "{{ fixture_project }}-target", -f, "{{ fixture.path }}/target/compose.yml", exec, -T, postgres, psql, -U, postgres, -v, ON_ERROR_STOP=1, -c, "CREATE TABLE protected_fixture (value text); INSERT INTO protected_fixture VALUES ('preserved');"]
+      changed_when: true
+
+    - name: Require refusal to overwrite existing target data
+      block:
+        - name: Attempt restore into populated database
+          ansible.builtin.include_role:
+            name: aist_relocation
+            tasks_from: restore
+        - name: Fail if populated database was accepted
+          ansible.builtin.fail:
+            msg: Populated database accepted
+      rescue:
+        - name: Require the empty database guard
+          ansible.builtin.assert:
+            that: ansible_failed_task.name == 'Refuse to overwrite an existing database'
+      vars:
+        relocation_compose: [docker, compose, -p, "{{ fixture_project }}-target", -f, "{{ fixture.path }}/target/compose.yml"]
+        relocation_snapshot_dir: "{{ fixture.path }}/snapshot"
+        relocation_media_dir: "{{ fixture.path }}/target/media"
+        relocation_workspace_dir: "{{ fixture.path }}/target/workspace"
+
+    - name: Verify the fixture row survived and clear only this test table
+      ansible.builtin.command:
+        argv: [docker, compose, -p, "{{ fixture_project }}-target", -f, "{{ fixture.path }}/target/compose.yml", exec, -T, postgres, psql, -U, postgres, -At, -v, ON_ERROR_STOP=1, -c, "SELECT value FROM protected_fixture; DROP TABLE protected_fixture;"]
+      register: protected_row
+      failed_when: protected_row.rc != 0 or 'preserved' not in protected_row.stdout_lines
+      changed_when: true
+
+    - name: Restore with the production tasks
+      ansible.builtin.import_role:
+        name: aist_relocation
+        tasks_from: restore
+      vars:
+        relocation_compose: [docker, compose, -p, "{{ fixture_project }}-target", -f, "{{ fixture.path }}/target/compose.yml"]
+        relocation_snapshot_dir: "{{ fixture.path }}/snapshot"
+        relocation_media_dir: "{{ fixture.path }}/target/media"
+        relocation_workspace_dir: "{{ fixture.path }}/target/workspace"
+
+    - name: Read restored finding content
+      ansible.builtin.command:
+        argv: [docker, compose, -p, "{{ fixture_project }}-target", -f, "{{ fixture.path }}/target/compose.yml", exec, -T, postgres, psql, -U, postgres, -Atc, "SELECT title FROM dojo_finding WHERE id=7"]
+      register: restored_finding
+      changed_when: false
+
+    - name: Check restored files
+      ansible.builtin.stat:
+        path: "{{ fixture.path }}/target/{{ item }}"
+      loop: [media/report.json, workspace/output/report.json, workspace/projects/disposable.txt]
+      register: restored_files
+
+    - name: Require real data restoration with disposable checkouts excluded
+      ansible.builtin.assert:
+        that:
+          - "restored_finding.stdout == 'Source snippet: café'"
+          - restored_files.results[0].stat.exists
+          - restored_files.results[1].stat.exists
+          - not restored_files.results[2].stat.exists
+
+    - name: Stop isolated test containers while retaining their evidence
+      ansible.builtin.command:
+        argv: [docker, compose, -p, "{{ fixture_project }}-{{ item }}", -f, "{{ fixture.path }}/{{ item }}/compose.yml", stop]
+      loop: [source, target]
+      changed_when: true

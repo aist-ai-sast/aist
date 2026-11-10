@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import quote, urlencode, urlsplit
 
 import requests
+from django.conf import settings
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -28,6 +29,7 @@ from aist.integrations.dast_endpoint_policy import (
     DastEndpointPolicy,
     DastEndpointPolicyError,
 )
+from aist.integrations.dast_http_adapter import PinnedGatewayAdapter
 from aist.integrations.dast_queue_contract import GATEWAY_API_PREFIX
 
 if TYPE_CHECKING:
@@ -145,9 +147,13 @@ class DastGatewayClient:
         self._config = config
         self._token = token
         self._verify = verify
-        self._endpoint_policy = DastEndpointPolicy(trusted_vpn=trusted_vpn, resolver=resolver)
         try:
-            self._endpoint_policy.validate(config.gateway_url)
+            self._endpoint_policy = DastEndpointPolicy(
+                trusted_vpn=trusted_vpn,
+                resolver=resolver,
+                allowed_private_networks=settings.AIST_DAST_ALLOWED_PRIVATE_NETWORKS,
+            )
+            endpoint = self._endpoint_policy.validate(config.gateway_url)
         except DastEndpointPolicyError as exc:
             raise _client_error(DastGatewayErrorCode.ENDPOINT_POLICY_REJECTED) from exc
         self._session.trust_env = False
@@ -162,7 +168,8 @@ class DastGatewayClient:
             respect_retry_after_header=True,
             raise_on_status=False,
         )
-        self._session.mount("https://", HTTPAdapter(max_retries=retry))
+        adapter = HTTPAdapter(max_retries=retry) if trusted_vpn else PinnedGatewayAdapter(endpoint, max_retries=retry)
+        self._session.mount("https://", adapter)
 
     def ping(self) -> DastGatewayPing:
         started = time.monotonic()

@@ -2,7 +2,7 @@
 import type { InternalAxiosRequestConfig } from "axios";
 import { describe, expect, it, vi } from "vitest";
 
-import { apiClient, ApiError, postFormData, toUserMessage } from "./api";
+import { apiClient, ApiError, fetchFileContent, postFormData, toUserMessage } from "./api";
 
 describe("toUserMessage", () => {
   it("joins DRF field-level validation errors into a readable message", () => {
@@ -152,4 +152,28 @@ describe("postFormData", () => {
       apiClient.defaults.adapter = originalAdapter;
     }
   });
+});
+
+
+describe("finding source links", () => {
+  it("loads a root-relative source path on the current deployment without re-encoding it", async () => {
+    const path = "/api/v2/aist/projects_version/42/files/blob/src/sub%20dir/%5Bslug%5D.ts";
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => ({
+      data: "const value = 1;", status: 200, statusText: "OK", headers: {}, config,
+    }));
+    const originalAdapter = apiClient.defaults.adapter;
+    apiClient.defaults.adapter = adapter;
+    try {
+      expect(await fetchFileContent(path)).toBe("const value = 1;");
+      expect(adapter.mock.calls[0][0].url).toBe(path);
+    } finally {
+      apiClient.defaults.adapter = originalAdapter;
+    }
+  });
+
+  it.each(["https://old.example/source.py", "//old.example/source.py", "\\old.example/source.py", "source.py"])(
+    "refuses a non-canonical source link %s before making a request", async (link) => {
+      await expect(fetchFileContent(link)).rejects.toThrow("Source link must be a root-relative path");
+    },
+  );
 });

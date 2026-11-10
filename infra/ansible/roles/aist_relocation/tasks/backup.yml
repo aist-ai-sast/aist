@@ -1,0 +1,81 @@
+---
+- name: Create restricted snapshot directory
+  ansible.builtin.file:
+    path: "{{ relocation_snapshot_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: Inspect snapshot completion manifest
+  ansible.builtin.stat:
+    path: "{{ relocation_snapshot_dir }}/SHA256SUMS"
+  register: relocation_completed_snapshot
+
+- name: Create the final snapshot once
+  when: not relocation_completed_snapshot.stat.exists
+  block:
+    - name: Read quiescent source database state
+      ansible.builtin.include_tasks: state.yml
+
+    - name: Require completed pipelines and released execution leases
+      ansible.builtin.assert:
+        that:
+          - relocation_state.nonterminal_pipelines == 0
+          - relocation_state.execution_leases == 0
+        fail_msg: "Finish pipelines through their supported lifecycle before relocation."
+
+    - name: Save database baseline
+      ansible.builtin.copy:
+        content: "{{ relocation_state | to_nice_json }}\n"
+        dest: "{{ relocation_snapshot_dir }}/state.json"
+        mode: '0600'
+
+    - name: Take a consistent custom-format database dump
+      ansible.builtin.shell:
+        cmd: >-
+          {{ (relocation_compose + ['exec', '-T', 'postgres', 'sh', '-c', 'exec pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"']) | map('quote') | join(' ') }}
+          > {{ (relocation_snapshot_dir ~ '/database.dump') | quote }}
+      changed_when: true
+
+    - name: Archive media, retained workspace and deployment configuration
+      ansible.builtin.command:
+        argv: "{{ ['tar', '--numeric-owner', '-czf', relocation_snapshot_dir ~ '/' ~ item.archive] + item.options + ['-C', item.directory] + item.files }}"
+      loop:
+        - {archive: media.tar.gz, directory: "{{ relocation_media_dir }}", options: [], files: ['.']}
+        - {archive: workspace.tar.gz, directory: "{{ relocation_workspace_dir }}", options: ['--exclude=./projects'], files: ['.']}
+        - {archive: configuration.tar.gz, directory: "{{ relocation_checkout_dir }}", options: [], files: ['.env', 'docker/extra_settings']}
+      changed_when: true
+
+    - name: Preserve selected locally built analyzer images
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          docker image save {{ relocation_images | map('quote') | join(' ') }} |
+          gzip -1 > {{ (relocation_snapshot_dir ~ '/runtime-images.tar.gz') | quote }}
+        executable: /bin/bash
+      when: relocation_images | length > 0
+      changed_when: true
+
+    - name: Restrict completed snapshot files
+      ansible.builtin.file:
+        path: "{{ relocation_snapshot_dir }}/{{ item }}"
+        mode: '0600'
+      loop: "{{ relocation_files }}"
+
+    - name: Calculate snapshot checksums
+      ansible.builtin.command:
+        argv: "{{ ['sha256sum'] + relocation_files }}"
+        chdir: "{{ relocation_snapshot_dir }}"
+      register: relocation_checksums
+      changed_when: false
+
+    - name: Mark complete snapshot with checksum manifest
+      ansible.builtin.copy:
+        content: "{{ relocation_checksums.stdout }}\n"
+        dest: "{{ relocation_snapshot_dir }}/SHA256SUMS"
+        mode: '0600'
+
+- name: Verify complete snapshot before transfer
+  ansible.builtin.command:
+    argv: [sha256sum, --check, SHA256SUMS]
+    chdir: "{{ relocation_snapshot_dir }}"
+  changed_when: false
