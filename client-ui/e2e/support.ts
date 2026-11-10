@@ -36,14 +36,14 @@ export async function loginByApi(page: Page, credentials = credentialsFor("admin
     cachedAuthCookies.delete(credentialsKey);
   }
 
-  await page.request.get("/auth/login/");
+  const loginPage = await page.request.get("/auth/login/");
   const csrfToken = (await page.context().cookies()).find((cookie) => cookie.name === "csrftoken")?.value;
   expect(csrfToken).toBeTruthy();
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const response = await page.request.post("/api/v2/aist/auth/login/", {
       data: { username, password },
-      headers: { "X-CSRFToken": csrfToken as string },
+      headers: { "X-CSRFToken": csrfToken as string, Origin: new URL(loginPage.url()).origin },
     });
     const body = await response.text();
     if (response.status() === 204) {

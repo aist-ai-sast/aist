@@ -4,6 +4,7 @@ import { loginByApi } from "./support";
 // Seeded by `bootstrap_demo_access --demo`: one pipeline left EXECUTING, and finished runs of the same project.
 const RUNNING_PIPELINE = "demo-ledger-worker-running";
 const FINISHED_PIPELINE = "demo-ledger-worker-run-01"; // finished 30 minutes after launch
+const DAST_PIPELINE = "demo-ledger-worker-dast-run-03";
 const LIST_PATH = "/aist-admin/aist/pipelines/";
 const LIST_URL = `${LIST_PATH}?q=${RUNNING_PIPELINE}`;
 
@@ -19,7 +20,10 @@ function isTableRefresh(request: Request): boolean {
 /** Waits until the next htmx refresh of `selector` has been sent and its answer swapped into the page. */
 async function nextRefresh(page: Page, selector: string): Promise<Request> {
   const before = await page.locator(selector).elementHandle();
-  const request = page.waitForRequest((r) => r.headers()["hx-request"] === "true", { timeout: 10_000 });
+  const request = page.waitForRequest(
+    (r) => r.headers()["hx-request"] === "true" && r.headers()["hx-target"] === selector.slice(1),
+    { timeout: 10_000 },
+  );
   await page.waitForFunction(
     ([old, sel]) => !(old as Element).isConnected && document.querySelector(sel as string) !== null,
     [before, selector] as const,
@@ -115,18 +119,85 @@ test("a finished pipeline's page shows its run time in clock and in words", asyn
   await expect(page.locator("#aist-duration-human")).toHaveText(/~ 30\s+minutes/);
 });
 
-test("a status change refreshes the pipeline page's status panel in place", async ({ page }) => {
+test("the status panel refreshes automatically when the event stream is unavailable", async ({ page }) => {
+  await page.route(`**/pipeline/${RUNNING_PIPELINE}/status/stream/`, (route) => route.abort());
   await page.goto(`${LIST_PATH}${RUNNING_PIPELINE}/`);
   await expect(page.locator("#pipeline-status-container")).toHaveAttribute("data-status", "EXECUTING");
 
-  const refreshed = nextRefresh(page, "#pipeline-status-container");
-  await page.evaluate(() => {
-    const panel = document.getElementById("pipeline-status-container");
-    if (panel) (window as unknown as { htmx: { trigger: (el: Element, name: string) => void } }).htmx.trigger(panel, "aist:status-changed");
-  });
-  const request = await refreshed;
+  const request = await nextRefresh(page, "#pipeline-status-container");
 
   expect(new URL(request.url()).pathname).toBe(`${LIST_PATH}${RUNNING_PIPELINE}/`);
   await expect(page.locator("#pipeline-status-container")).toContainText("The pipeline worker is running");
   await expect(page.locator("#logbox")).toHaveCount(1);
+});
+
+test("a queue still being fetched is read again without reloading the pipeline page", async ({ page }) => {
+  let reads = 0;
+  let releaseFirst!: () => void;
+  const firstResponse = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  await page.route(`**/api/v2/aist/pipelines/${DAST_PIPELINE}/dast-queue/**`, async (route) => {
+    reads += 1;
+    if (reads === 1) {
+      await firstResponse;
+      await route.fulfill({
+        status: 200,
+        json: { available: false, reading: true, stale: true },
+      });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await page.goto(`${LIST_PATH}${DAST_PIPELINE}/`);
+  await expect.poll(() => reads).toBe(1);
+  await page.locator("#dq-refresh").click();
+  await page.waitForTimeout(2_100);
+  expect(reads).toBe(1);
+  releaseFirst();
+  await expect(page.locator("#dq-fresh")).toContainText("reading the queue");
+  await expect(page.locator("#dq-fresh")).not.toContainText("finished, not re-read");
+  await expect.poll(() => reads, { timeout: 12_000 }).toBeGreaterThan(1);
+  await expect(page.locator("#dq-revision")).not.toBeEmpty();
+  await expect(page.locator("#dq-fresh")).not.toContainText("reading the queue");
+});
+
+test("an active queue updates automatically and stops polling after completion", async ({ page }) => {
+  let reads = 0;
+  await page.route(`**/api/v2/aist/pipelines/${DAST_PIPELINE}/dast-queue/**`, async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    reads += 1;
+    payload.reading = false;
+    payload.stale = false;
+    payload.descriptor.client_hints.poll_interval_seconds = 1;
+    payload.page.revision = reads;
+    payload.page.mutations_frozen = reads >= 2;
+    payload.page.run_state = reads >= 2 ? "finished" : "running";
+    await route.fulfill({ response, json: payload });
+  });
+
+  await page.goto(`${LIST_PATH}${DAST_PIPELINE}/`);
+  const documentRoot = await page.locator("html").elementHandle();
+  await expect(page.locator("#dq-revision")).toHaveText("revision 2");
+  await expect(page.locator("#dq-fresh")).toContainText("finished, not re-read");
+  await page.waitForTimeout(3_000);
+  expect(reads).toBe(2);
+  expect(await documentRoot!.evaluate((element) => element.isConnected)).toBe(true);
+});
+
+test("a failed first queue read does not retry every second and can be refreshed", async ({ page }) => {
+  let reads = 0;
+  await page.route(`**/api/v2/aist/pipelines/${DAST_PIPELINE}/dast-queue/**`, async (route) => {
+    reads += 1;
+    if (reads === 1) await route.abort();
+    else await route.continue();
+  });
+
+  await page.goto(`${LIST_PATH}${DAST_PIPELINE}/`);
+  await expect(page.locator("#dq-state")).toHaveText("unavailable");
+  await page.waitForTimeout(2_100);
+  expect(reads).toBe(1);
+  await page.locator("#dq-refresh").click();
+  await expect(page.locator("#dq-revision")).not.toBeEmpty();
+  await expect(page.locator("#dq-state")).not.toHaveText("unavailable");
 });

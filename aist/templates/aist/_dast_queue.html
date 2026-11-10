@@ -135,7 +135,7 @@ Adding a status or an editable field on the DAST side changes nothing here.
     var state = {
         descriptor: null, page: null, fetchedAt: "", lastRead: 0, pending: null,
         statuses: [], search: "", phase: "", includePlanned: true, deferred: false,
-        pollSeconds: 60, unavailable: null, reading: false, stale: false,
+        pollSeconds: 60, unavailable: null, reading: false, stale: false, readInFlight: false,
         //: Consecutive reads that asked for a fresh gateway read and got the same one back.
         //: A worker that cannot reach the gateway leaves the snapshot untouched, which a page
         //: cannot tell apart from a quiet queue unless it counts.
@@ -171,7 +171,7 @@ Adding a status or an editable field on the DAST side changes nothing here.
         var held = (state.descriptor && state.descriptor.capabilities) || [];
         return held.indexOf(name) !== -1;
     }
-    function frozen() { return !state.page || state.page.mutations_frozen; }
+    function frozen() { return Boolean(state.page && state.page.mutations_frozen); }
     function claimStatuses() {
         return ((state.descriptor && state.descriptor.execution) || {}).claim_statuses || [];
     }
@@ -201,6 +201,7 @@ Adding a status or an editable field on the DAST side changes nothing here.
      * the follow-up budget rather than granting a fresh one.
      */
     function read(manual, followingUp) {
+        if (state.readInFlight) { return; }
         if (!manual && (state.pending || document.querySelector("dialog.modal[open]"))) {
             state.deferred = true;
             renderFreshness();
@@ -215,6 +216,8 @@ Adding a status or an editable field on the DAST side changes nothing here.
         // The whole queue arrives in one snapshot, so a filter change costs nothing and never
         // waits on a gateway. `force` asks a worker to read again now.
         var query = manual ? "?force=true" : "";
+        state.readInFlight = true;
+        state.lastRead = Date.now();
         fetch(QUEUE_URL + query, { credentials: "same-origin", cache: "no-store" })
             .then(function (response) { return response.json(); })
             .then(function (payload) {
@@ -268,6 +271,9 @@ Adding a status or an editable field on the DAST side changes nothing here.
             .catch(function () {
                 state.unavailable = { code: "GATEWAY_UNREACHABLE", detail: "AIST could not read the queue." };
                 render();
+            })
+            .finally(function () {
+                state.readInFlight = false;
             });
     }
 
