@@ -3,9 +3,13 @@ from importlib import import_module
 
 from django.db import connection, transaction
 from django.db.migrations.exceptions import IrreversibleError
-from django.utils import timezone
 
-from aist.test.migration_state import HistoricalMigrationTestCase
+from aist.test.migration_state import (
+    HistoricalMigrationTestCase,
+    seed_historical_finding,
+    seed_historical_scan_owner,
+    seed_historical_test,
+)
 
 
 class RelativeSourceLinksMigrationTests(HistoricalMigrationTestCase):
@@ -13,19 +17,10 @@ class RelativeSourceLinksMigrationTests(HistoricalMigrationTestCase):
     migrate_to = [("aist", "0061_relative_source_links")]
 
     def prepare(self, old_apps):
-        user = old_apps.get_model("auth", "User").objects.create(username="source-migration")
-        product_type = old_apps.get_model("dojo", "Product_Type").objects.create(name="Source links")
-        product = old_apps.get_model("dojo", "Product").objects.create(name="Sources", prod_type=product_type)
-        engagement = old_apps.get_model("dojo", "Engagement").objects.create(
-            name="scan", product=product, target_start=timezone.now(), target_end=timezone.now(),
-        )
-        test_type = old_apps.get_model("dojo", "Test_Type").objects.create(name="Source scan")
-        test = old_apps.get_model("dojo", "Test").objects.create(
-            engagement=engagement, test_type=test_type, target_start=timezone.now(), target_end=timezone.now(),
-        )
-        finding = old_apps.get_model("dojo", "Finding").objects.create(
-            test=test, title="Source finding", severity="Medium", numerical_severity="S2",
-            date=timezone.now().date(), reporter=user, hash_code="unchanged-hash", file_path="src/[slug]/naïve.py",
+        owner = seed_historical_scan_owner(old_apps, "source-migration", test_type="Source scan")
+        finding = seed_historical_finding(
+            old_apps, seed_historical_test(old_apps, owner), owner.user,
+            title="Source finding", hash_code="unchanged-hash", file_path="src/[slug]/naïve.py",
         )
         self.finding_id = finding.pk
         self.path = "/api/v2/aist/projects_version/42/files/blob/src/%5Bslug%5D/na%C3%AFve.py"

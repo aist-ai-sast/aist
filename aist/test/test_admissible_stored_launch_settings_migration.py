@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from aist.profile import ProjectProfile
-from aist.test.migration_state import HistoricalMigrationTestCase
+from aist.test.migration_state import HistoricalMigrationTestCase, seed_historical_organization, seed_historical_project
 
 STORED_PROFILES = {
     "seeded labels": {"team": "Platform", "environment": "staging"},
@@ -24,25 +24,15 @@ class AdmissibleStoredLaunchSettingsMigrationTests(HistoricalMigrationTestCase):
     migrate_to = [("aist", "0059_admissible_stored_launch_settings")]
 
     def prepare(self, old_apps):
-        ProductType = old_apps.get_model("dojo", "Product_Type")
-        Product = old_apps.get_model("dojo", "Product")
-        SLAConfiguration = old_apps.get_model("dojo", "SLA_Configuration")
-        Organization = old_apps.get_model("aist", "Organization")
-        AISTProject = old_apps.get_model("aist", "AISTProject")
         AISTProjectLaunchConfig = old_apps.get_model("aist", "AISTProjectLaunchConfig")
 
-        product_type = ProductType.objects.create(name="Stored settings PT")
-        Organization.objects.create(name="Stored settings org", product_type=product_type)
-        sla = SLAConfiguration.objects.create(name="Stored settings SLA")
-        self.project_ids = {}
-        for index, (label, profile) in enumerate(STORED_PROFILES.items()):
-            product = Product.objects.create(
-                name=f"Stored settings product {index}",
-                description="",
-                prod_type=product_type,
-                sla_configuration=sla,
-            )
-            self.project_ids[label] = AISTProject.objects.create(product=product, profile=profile).id
+        organization = seed_historical_organization(old_apps, "Stored settings")
+        self.project_ids = {
+            label: seed_historical_project(
+                old_apps, f"Stored settings {index}", product_type=organization.product_type, profile=profile,
+            ).id
+            for index, (label, profile) in enumerate(STORED_PROFILES.items())
+        }
         project_id = self.project_ids["already valid"]
         self.legacy_config_id = AISTProjectLaunchConfig.objects.create(
             project_id=project_id,

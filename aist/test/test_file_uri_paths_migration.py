@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit, urlunsplit
 
-from django.utils import timezone
-
 from aist.link_builder import SOURCEFILE_LINK_META_NAME, LinkBuilder
-from aist.test.migration_state import HistoricalMigrationTestCase
+from aist.test.migration_state import (
+    HistoricalMigrationTestCase,
+    seed_historical_finding,
+    seed_historical_scan_owner,
+    seed_historical_test,
+)
 
 CHECKOUT_ROOT = "/workspace/storefront"
 # The host the enrichment worker's PUBLIC_BASE_URL named, unlike the one migrate runs with.
@@ -18,30 +21,14 @@ class FileUriPathsMigrationTests(HistoricalMigrationTestCase):
     migrate_to = [("aist", "0060_checkout_relative_file_uri_paths")]
 
     def prepare(self, old_apps):
-        user = old_apps.get_model("auth", "User").objects.create(username="file-uri-migration")
-        product_type = old_apps.get_model("dojo", "Product_Type").objects.create(name="File URI migration PT")
-        sla = old_apps.get_model("dojo", "SLA_Configuration").objects.create(name="File URI migration SLA")
-        product = old_apps.get_model("dojo", "Product").objects.create(
-            name="File URI migration product", description="", prod_type=product_type, sla_configuration=sla,
-        )
-        project = old_apps.get_model("aist", "AISTProject").objects.create(product=product)
-        version = old_apps.get_model("aist", "AISTProjectVersion").objects.create(
-            project=project, version="main", version_type="GIT_BRANCH",
-        )
+        owner = seed_historical_scan_owner(old_apps, "file-uri-migration", test_type="ESLint Scan (SARIF)")
+        project, version = owner.project, owner.version
         self.version_id = version.pk
-        engagement = old_apps.get_model("dojo", "Engagement").objects.create(
-            name="eslint_security", product=product, target_start=timezone.now(), target_end=timezone.now(),
-        )
-        test_type = old_apps.get_model("dojo", "Test_Type").objects.create(name="ESLint Scan (SARIF)")
-        test_model = old_apps.get_model("dojo", "Test")
         pipeline_model = old_apps.get_model("aist", "AISTPipeline")
-        finding_model = old_apps.get_model("dojo", "Finding")
         dojo_meta_model = old_apps.get_model("dojo", "DojoMeta")
 
         def scan(*launch_data):
-            test = test_model.objects.create(
-                engagement=engagement, test_type=test_type, target_start=timezone.now(), target_end=timezone.now(),
-            )
+            test = seed_historical_test(old_apps, owner)
             for index, data in enumerate(launch_data):
                 pipeline = pipeline_model.objects.create(
                     id=f"scan-{test.pk}-{index}", project=project, project_version=version, status="FINISHED",
@@ -51,9 +38,9 @@ class FileUriPathsMigrationTests(HistoricalMigrationTestCase):
             return test
 
         def finding(test, file_path, *, linked_subpath=None):
-            pk = finding_model.objects.create(
-                test=test, title="Generic Object Injection Sink", severity="Medium", numerical_severity="S2",
-                date=timezone.now().date(), reporter_id=user.pk, file_path=file_path, hash_code="import-time-hash",
+            pk = seed_historical_finding(
+                old_apps, test, owner.user,
+                title="Generic Object Injection Sink", hash_code="import-time-hash", file_path=file_path,
             ).pk
             if linked_subpath is not None:
                 dojo_meta_model.objects.create(

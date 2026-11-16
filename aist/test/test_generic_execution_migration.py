@@ -1,5 +1,10 @@
 
-from aist.test.migration_state import HistoricalMigrationTestCase
+from aist.test.migration_state import (
+    HistoricalMigrationTestCase,
+    seed_historical_organization,
+    seed_historical_project,
+    seed_historical_version,
+)
 
 
 class GenericExecutionForwardMigrationTests(HistoricalMigrationTestCase):
@@ -7,31 +12,17 @@ class GenericExecutionForwardMigrationTests(HistoricalMigrationTestCase):
     migrate_to = [("aist", "0042_dast_generic_execution")]
 
     def prepare(self, old_apps):
-        ProductType = old_apps.get_model("dojo", "Product_Type")
-        Product = old_apps.get_model("dojo", "Product")
-        SLAConfiguration = old_apps.get_model("dojo", "SLA_Configuration")
-        Organization = old_apps.get_model("aist", "Organization")
-        AISTProject = old_apps.get_model("aist", "AISTProject")
-        AISTProjectVersion = old_apps.get_model("aist", "AISTProjectVersion")
         AISTPipeline = old_apps.get_model("aist", "AISTPipeline")
         AISTProjectLaunchConfig = old_apps.get_model("aist", "AISTProjectLaunchConfig")
         LaunchSchedule = old_apps.get_model("aist", "LaunchSchedule")
         PipelineLaunchQueue = old_apps.get_model("aist", "PipelineLaunchQueue")
 
-        product_type = ProductType.objects.create(name="Generic execution migration PT")
-        Organization.objects.create(name="Generic execution migration org", product_type=product_type)
-        sla = SLAConfiguration.objects.create(name="Generic execution migration SLA")
-        product = Product.objects.create(
-            name="Generic execution migration product",
-            description="",
-            prod_type=product_type,
-            sla_configuration=sla,
+        organization = seed_historical_organization(old_apps, "Generic execution migration")
+        project = seed_historical_project(
+            old_apps, "Generic execution migration", product_type=organization.product_type,
         )
-        project = AISTProject.objects.create(product=product)
-        version = AISTProjectVersion.objects.create(
-            project=project,
-            version="0123456789abcdef0123456789abcdef01234567",
-            version_type="GIT_HASH",
+        version = seed_historical_version(
+            old_apps, project, version="0123456789abcdef0123456789abcdef01234567", version_type="GIT_HASH",
         )
         AISTPipeline.objects.create(
             id="pre-generic-sast",

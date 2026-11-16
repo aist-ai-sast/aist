@@ -1,6 +1,11 @@
 from django.db import connection
 
-from aist.test.migration_state import HistoricalMigrationTestCase
+from aist.test.migration_state import (
+    HistoricalMigrationTestCase,
+    seed_historical_organization,
+    seed_historical_project,
+    seed_historical_version,
+)
 
 
 class DastLaunchRecoveryMigrationTests(HistoricalMigrationTestCase):
@@ -8,39 +13,20 @@ class DastLaunchRecoveryMigrationTests(HistoricalMigrationTestCase):
     migrate_to = [("aist", "0043_pipeline_lifecycle_states")]
 
     def prepare(self, old_apps):
-        ProductType = old_apps.get_model("dojo", "Product_Type")
-        Product = old_apps.get_model("dojo", "Product")
-        SLAConfiguration = old_apps.get_model("dojo", "SLA_Configuration")
-        Organization = old_apps.get_model("aist", "Organization")
         OrgIntegration = old_apps.get_model("aist", "OrgIntegration")
         DastTarget = old_apps.get_model("aist", "DastTarget")
         DastProjectBinding = old_apps.get_model("aist", "DastProjectBinding")
-        AISTProject = old_apps.get_model("aist", "AISTProject")
-        AISTProjectVersion = old_apps.get_model("aist", "AISTProjectVersion")
         AISTProjectLaunchConfig = old_apps.get_model("aist", "AISTProjectLaunchConfig")
         AISTLaunchConfigAction = old_apps.get_model("aist", "AISTLaunchConfigAction")
         AISTPipeline = old_apps.get_model("aist", "AISTPipeline")
         LaunchSchedule = old_apps.get_model("aist", "LaunchSchedule")
         PipelineLaunchRequest = old_apps.get_model("aist", "PipelineLaunchRequest")
 
-        product_type = ProductType.objects.create(name="DAST recovery migration PT")
-        organization = Organization.objects.create(
-            name="DAST recovery migration org",
-            product_type=product_type,
+        organization = seed_historical_organization(old_apps, "DAST recovery migration")
+        project = seed_historical_project(
+            old_apps, "DAST recovery migration", product_type=organization.product_type,
         )
-        sla = SLAConfiguration.objects.create(name="DAST recovery migration SLA")
-        product = Product.objects.create(
-            name="DAST recovery migration product",
-            description="",
-            prod_type=product_type,
-            sla_configuration=sla,
-        )
-        project = AISTProject.objects.create(product=product)
-        version = AISTProjectVersion.objects.create(
-            project=project,
-            version="main",
-            version_type="GIT_BRANCH",
-        )
+        version = seed_historical_version(old_apps, project)
         integration = OrgIntegration.objects.create(
             organization=organization,
             integration_type="DAST",

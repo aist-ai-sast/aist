@@ -1,5 +1,5 @@
 
-from aist.test.migration_state import HistoricalMigrationTestCase
+from aist.test.migration_state import HistoricalMigrationTestCase, seed_historical_project
 
 
 class PipelineLaunchRequestMigrationTests(HistoricalMigrationTestCase):
@@ -7,23 +7,11 @@ class PipelineLaunchRequestMigrationTests(HistoricalMigrationTestCase):
     migrate_to = [("aist", "0042_dast_generic_execution")]
 
     def prepare(self, old_apps):
-        ProductType = old_apps.get_model("dojo", "Product_Type")
-        Product = old_apps.get_model("dojo", "Product")
-        SLAConfiguration = old_apps.get_model("dojo", "SLA_Configuration")
-        AISTProject = old_apps.get_model("aist", "AISTProject")
         AISTProjectLaunchConfig = old_apps.get_model("aist", "AISTProjectLaunchConfig")
         LaunchSchedule = old_apps.get_model("aist", "LaunchSchedule")
         PipelineLaunchQueue = old_apps.get_model("aist", "PipelineLaunchQueue")
 
-        product_type = ProductType.objects.create(name="Launch request migration PT")
-        sla = SLAConfiguration.objects.create(name="Launch request migration SLA")
-        product = Product.objects.create(
-            name="Launch request migration Product",
-            description="",
-            prod_type=product_type,
-            sla_configuration=sla,
-        )
-        project = AISTProject.objects.create(product=product)
+        project = seed_historical_project(old_apps, "Launch request migration")
         launch_config = AISTProjectLaunchConfig.objects.create(
             project=project,
             name="Legacy SAST config",

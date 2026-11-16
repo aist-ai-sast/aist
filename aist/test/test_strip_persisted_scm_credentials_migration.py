@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from django.db import DatabaseError, transaction
 
-from aist.test.migration_state import HistoricalMigrationTestCase
+from aist.test.migration_state import (
+    HistoricalMigrationTestCase,
+    seed_historical_organization,
+    seed_historical_project,
+    seed_historical_version,
+)
 
 CLONE_URL = "https://oauth2:{}@gitlab.example.com/group/repo.git".format(
     "xglpat-migration1234567890".removeprefix("x"),
@@ -15,30 +20,12 @@ class StripPersistedScmCredentialsMigrationTests(HistoricalMigrationTestCase):
     migrate_to = [("aist", "0053_strip_persisted_scm_credentials")]
 
     def prepare(self, old_apps):
-        ProductType = old_apps.get_model("dojo", "Product_Type")
-        Product = old_apps.get_model("dojo", "Product")
-        SLAConfiguration = old_apps.get_model("dojo", "SLA_Configuration")
-        Organization = old_apps.get_model("aist", "Organization")
-        AISTProject = old_apps.get_model("aist", "AISTProject")
-        AISTProjectVersion = old_apps.get_model("aist", "AISTProjectVersion")
         AISTProjectLaunchConfig = old_apps.get_model("aist", "AISTProjectLaunchConfig")
         PipelineLaunchRequest = old_apps.get_model("aist", "PipelineLaunchRequest")
 
-        product_type = ProductType.objects.create(name="Scrub credentials PT")
-        Organization.objects.create(name="Scrub credentials org", product_type=product_type)
-        sla = SLAConfiguration.objects.create(name="Scrub credentials SLA")
-        product = Product.objects.create(
-            name="Scrub credentials product",
-            description="",
-            prod_type=product_type,
-            sla_configuration=sla,
-        )
-        project = AISTProject.objects.create(product=product)
-        version = AISTProjectVersion.objects.create(
-            project=project,
-            version="main",
-            version_type="GIT_BRANCH",
-        )
+        organization = seed_historical_organization(old_apps, "Scrub credentials")
+        project = seed_historical_project(old_apps, "Scrub credentials", product_type=organization.product_type)
+        version = seed_historical_version(old_apps, project)
 
         # Several credentialed rows, so the batching loop runs with more than one pending
         # instance, plus one row that is already clean and must not be rewritten.
