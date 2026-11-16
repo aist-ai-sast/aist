@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING
 
 from aist.profile import ProjectProfile
 
-from .diff_baseline import _positive_int_setting, get_prior_successful_commit
+from .diff_baseline import get_prior_successful_commit
+from .settings_values import positive_int_setting
 
 if TYPE_CHECKING:
     from aist.models import AISTPipeline
@@ -37,27 +38,27 @@ def build_agent_runtime_env(pipeline: AISTPipeline) -> dict[str, str]:
         # --- Shared / diff-skill keys (claude-diff-security) --- #
         "BASE_COMMIT": get_prior_successful_commit(pipeline) or "",
         "EXCLUDED_PATHS_JSON": json.dumps(excluded),
-        "CLAUDE_DIFF_MAX_FILES": str(_positive_int_setting("CLAUDE_DIFF_MAX_FILES")),
-        "CLAUDE_DIFF_MAX_BYTES": str(_positive_int_setting("CLAUDE_DIFF_MAX_BYTES")),
+        "CLAUDE_DIFF_MAX_FILES": str(positive_int_setting("CLAUDE_DIFF_MAX_FILES")),
+        "CLAUDE_DIFF_MAX_BYTES": str(positive_int_setting("CLAUDE_DIFF_MAX_BYTES")),
         # --- Full-skill keys (claude-full-security) --- #
         "AGENT_FULL_MAX_FILES": str(
             full_limits.max_files
             if full_limits.max_files is not None
-            else _positive_int_setting("AGENT_FULL_MAX_FILES"),
+            else positive_int_setting("AGENT_FULL_MAX_FILES"),
         ),
         "AGENT_FULL_MAX_BYTES": str(
             full_limits.max_bytes
             if full_limits.max_bytes is not None
-            else _positive_int_setting("AGENT_FULL_MAX_BYTES"),
+            else positive_int_setting("AGENT_FULL_MAX_BYTES"),
         ),
         "AGENT_FULL_MAX_FILE_BYTES": str(
             full_limits.max_file_bytes
             if full_limits.max_file_bytes is not None
-            else _positive_int_setting("AGENT_FULL_MAX_FILE_BYTES"),
+            else positive_int_setting("AGENT_FULL_MAX_FILE_BYTES"),
         ),
         "AGENT_FULL_MAX_FINDINGS": str(
             full_limits.max_findings
             if full_limits.max_findings is not None
-            else _positive_int_setting("AGENT_FULL_MAX_FINDINGS"),
+            else positive_int_setting("AGENT_FULL_MAX_FINDINGS"),
         ),
     }

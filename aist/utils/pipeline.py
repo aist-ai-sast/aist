@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import TYPE_CHECKING
 
 from celery import states
 from celery.result import AsyncResult
@@ -23,14 +24,19 @@ from aist.models import (
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
+from aist.services.local_triage import cancel_open_batches
 from aist.services.pipeline_lifecycle import (
     TERMINAL_PIPELINE_STATUSES,
     is_terminal_pipeline_status,
+    lock_existing_pipeline,
     transition_pipeline_status,
 )
 from aist.signals import pipeline_finished
 from aist.utils.pipeline_imports import cleanup_pipeline_containers
 from aist.utils.reconciliation import reconcile_pipeline_orphans
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _logger = logging.getLogger(__name__)
 
@@ -67,6 +73,15 @@ def set_pipeline_status(
     return result.changed
 
 
+def send_or_finish_degraded(pipeline_id: str, send: Callable[[], object], log) -> None:
+    """Call ``send``, which queues the pipeline's next task; when the broker refuses it, finish with warnings."""
+    try:
+        send()
+    except Exception:
+        log.exception("The next task of pipeline %s could not be queued", pipeline_id)
+        finish_pipeline(pipeline_id, degraded=True)
+
+
 def finish_pipeline(pipeline_id: str, *, degraded: bool = False) -> None:
     """
     Repair the pipeline's links, then set FINISHED, or FINISHED_WITH_WARNINGS when `degraded` or links stay broken;
@@ -88,7 +103,7 @@ def finish_pipeline(pipeline_id: str, *, degraded: bool = False) -> None:
 
 def _finalize_pipeline_status(pipeline_id: str, *, degraded: bool, remaining_violations: int) -> None:
     with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        pipeline = lock_existing_pipeline(pipeline_id)
         if is_terminal_pipeline_status(pipeline.status):
             # Already finished - skip to avoid overwriting a terminal status
             # (e.g. FINISHED -> FINISHED_WITH_WARNINGS on a stale degraded=True call).
@@ -147,10 +162,10 @@ def _revoke_task(task_id: str | None, *, terminate: bool = True) -> None:
 
 def stop_pipeline(pipeline: AISTPipeline) -> None:
     """
-    Stop all Celery tasks associated with an AISTPipeline.
+    Stop the pipeline.
 
-    Revokes both the run and deduplication watcher tasks (if present),
-    tears down any related containers.
+    A cooperatively cancelled (DAST) run is asked to stop. Any other has its run and dedup-watcher tasks revoked,
+    its containers torn down, its terminal status set and its open local triage batches cancelled.
     """
     driver = execution_driver_registry.resolve(pipeline.execution_type)
     if driver.cancellation_mode == ExecutionCancellationMode.COOPERATIVE:
@@ -168,6 +183,8 @@ def stop_pipeline(pipeline: AISTPipeline) -> None:
         pipeline.run_task_id = None
         pipeline.watch_dedup_task_id = None
     finish_pipeline(pipeline.id)
+    # The terminal transition cancels open batches; a pipeline finished already, e.g. one being retriaged, has none.
+    cancel_open_batches(pipeline.id)
 
 
 def _signal_execution_containers(pipeline_id: str) -> None:
@@ -194,7 +211,7 @@ def _request_dast_pipeline_stop(pipeline_id: str) -> None:
             .filter(pipeline_id=pipeline_id)
             .first()
         )
-        pipeline = AISTPipeline.objects.select_for_update().get(pk=pipeline_id)
+        pipeline = lock_existing_pipeline(pipeline_id)
         if is_terminal_pipeline_status(pipeline.status):
             return
         execution_state = DastExecutionState.objects.select_for_update().get(pipeline=pipeline)

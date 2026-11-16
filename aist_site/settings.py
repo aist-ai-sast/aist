@@ -89,10 +89,9 @@ LOGIN_URL = "/aist-admin/login/"
 LOGIN_REDIRECT_URL = "/aist-admin/"
 
 AIST_PROJECTS_BUILD_DIR = env("AIST_PROJECTS_BUILD_DIR", default="/tmp/aist/projects")  # noqa: F405,S108
-# Per-pipeline directory where the local triage skill writes its completion
-# marker file. Bridge ``_watch_result_file`` polls this path so a clean
-# triage run wakes the bridge up immediately instead of waiting for
-# ``AIST_LOCAL_TRIAGE_TIMEOUT`` (default 3h).
+# Root of the local triage completion markers, one directory per pipeline and batch beneath it. The bridge's
+# ``_watch_result_file`` polls the marker, so a finished session ends without waiting for
+# ``AIST_LOCAL_TRIAGE_TIMEOUT``.
 AIST_TRIAGE_OUTPUT_DIR = env("AIST_TRIAGE_OUTPUT_DIR", default="/tmp/aist/triage-output")  # noqa: F405,S108
 # Tagged, not :latest — the image is built only when absent, so a changed readiness contract needs
 # a new tag or an existing deployment keeps the old entrypoint.
@@ -116,6 +115,17 @@ AIST_LOCAL_TRIAGE_BRIDGE_SOCKET = env(  # noqa: F405
     default="/run/claude-bridge/bridge.sock",
 )
 AIST_LOCAL_TRIAGE_TIMEOUT = int(env("AIST_LOCAL_TRIAGE_TIMEOUT", default="1800"))  # noqa: F405
+# Findings per local triage session. A pipeline's findings are triaged in batches of this size, one bridge
+# session at a time, so a large pipeline gets the same per-finding analysis as a small one.
+AIST_LOCAL_TRIAGE_BATCH_SIZE = env.int("AIST_LOCAL_TRIAGE_BATCH_SIZE", default=10)  # noqa: F405
+# A local triage batch task acknowledges its message only when it ends, so the broker must not hand an
+# unacknowledged message to another worker before a session's timeout has passed. A visibility_timeout in
+# DD_CELERY_BROKER_TRANSPORT_OPTIONS overrides this default; check aist.E010 refuses one that is too short.
+# The timeout applies to every task: any message a lost worker held is redelivered only after it.
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "visibility_timeout": AIST_LOCAL_TRIAGE_TIMEOUT + 600,
+    **globals().get("CELERY_BROKER_TRANSPORT_OPTIONS", {}),
+}
 AIST_WORKING_DIR = env("AIST_WORKING_DIR", default="/app/aist")  # noqa: F405
 
 # Directory where per-pipeline `<id>.log` (celeryworker) and

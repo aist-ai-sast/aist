@@ -7,15 +7,19 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
 from dojo.models import Finding, Product_Type_Member, Role, System_Settings
+from rest_framework.test import APIClient
 
 from aist.integrations.dast_queue_contract import normalise_descriptor, normalise_page
+from aist.launch_data import AIMode, AITriageType
 from aist.management.commands.bootstrap_demo_access import (
     DAST_DEMO_COVERAGE,
     DAST_DEMO_RUN_COUNT,
     DEMO_PROJECTS,
     DEMO_USERS,
+    LIVE_SCAN_PROJECT,
     ORG_NAMES,
 )
 from aist.models import (
@@ -35,6 +39,7 @@ from aist.models import (
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
+from aist.profile import ProjectProfile
 from aist.services.dast_queue import queue_is_addressable
 from aist.services.pipeline_lifecycle import TERMINAL_PIPELINE_STATUSES
 from aist.utils.pipeline import has_unfinished_pipeline
@@ -345,6 +350,35 @@ class BootstrapDemoAccessCommandTests(TestCase):
                 expected_org.product_type_id,
                 f"{spec.username} should be in '{spec.organization_name}' only",
             )
+
+    def test_an_org_maintainer_can_launch_a_real_scan_of_the_live_scan_project(self):
+        """The live scan project is the one a development stand can run end to end, local AI triage included."""
+        call_command("bootstrap_demo_access", "--demo", "--skip-admin", "--password", self.password)
+
+        project = AISTProject.objects.get(product__name=LIVE_SCAN_PROJECT.product_name)
+        self.assertEqual(project.organization.name, LIVE_SCAN_PROJECT.organization_name)
+        self.assertEqual(project.repository.clone_url, "https://github.com/we45/Vulnerable-Flask-App.git")
+        self.assertEqual(ProjectProfile.from_dict(project.profile).ai_triage.type, AITriageType.LOCAL)
+        branch = AISTProjectVersion.objects.get(project=project, version=LIVE_SCAN_PROJECT.branch)
+        self.assertIsNotNone(branch.script, "the branch is seeded as an import seeds it, with the project script")
+        config = AISTProjectLaunchConfig.objects.get(project=project, name=LIVE_SCAN_PROJECT.launch_config_name)
+        maintainer = next(
+            spec.username for spec in DEMO_USERS
+            if spec.organization_name == LIVE_SCAN_PROJECT.organization_name and spec.role_name == "Maintainer"
+        )
+        client = APIClient()
+        client.force_authenticate(get_user_model().objects.get(username=maintainer))
+
+        response = client.post(
+            reverse("aist_api:project_launch_config_start", kwargs={"project_id": project.id, "config_id": config.id}),
+            data={}, format="json",
+        )
+
+        self.assertEqual(response.status_code, 202, response.data)
+        params = PipelineLaunchRequest.objects.get(pk=response.data["id"]).params_snapshot
+        self.assertEqual(params["project_version"]["version"], LIVE_SCAN_PROJECT.branch)
+        self.assertEqual(params["analyzers"], ["semgrep"])
+        self.assertEqual(params["ai_mode"], AIMode.AUTO_DEFAULT)
 
 
 class BootstrapDemoAccessDastRunMetadataTests(BootstrapDemoAccessCommandTests):

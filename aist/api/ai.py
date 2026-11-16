@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from django.db import transaction
 from django.http import JsonResponse
 from django_filters import rest_framework as django_filters
@@ -12,85 +10,48 @@ from rest_framework.response import Response
 
 from aist.api.schema import AISTApiTag
 from aist.authz import INTERNAL_SERVICE, Action, AISTAPIView, ResourcePolicy, queryset_for_action
-from aist.logging_transport import install_pipeline_logging
+from aist.logging_transport import install_pipeline_logging, scoped_pipeline_logging
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline, AISTStatus
-from aist.tasks.ai import push_to_triage, resolve_triage_type
+from aist.services.ai_triage import PushGuard, push_guard
+from aist.services.pipeline_lifecycle import lock_existing_pipeline, lock_pipeline
+from aist.tasks.ai import confirm_triage_push
 from aist.utils.ai_response import sync_ai_finding_responses
-from aist.utils.pipeline import finish_pipeline, set_pipeline_status
+from aist.utils.pipeline import finish_pipeline
 
 
-def send_request_to_ai_for_pipeline(
-    request=None,
-    pipeline: AISTPipeline | None = None,
-    *,
-    finding_ids: list[int] | None = None,
-    filters: dict | None = None,
-) -> JsonResponse:
-    if finding_ids is None:
-        payload = {}
-        if request is not None:
-            if hasattr(request, "data"):
-                payload = request.data
-            else:
-                try:
-                    payload = json.loads(request.body.decode("utf-8") or "{}")
-                except Exception:
-                    payload = {}
-        serializer = AISendRequestSerializer(data=payload)
-        if not serializer.is_valid():
-            return JsonResponse(serializer.errors, status=400)
-        finding_ids = serializer.validated_data["finding_ids"]
-        filters = serializer.validated_data.get("filters") or {}
-
-    if pipeline is None:
-        return JsonResponse({"detail": "pipeline is required"}, status=400)
-
-    ids_int = [int(value) for value in finding_ids]
-    product = pipeline.project.product
-
-    allowed_qs = Finding.objects.filter(
-        id__in=ids_int,
-        test__engagement__product=product,
-    ).select_related("test__test_type")
-    found_ids = list(allowed_qs.values_list("id", flat=True))
-
+def send_request_to_ai_for_pipeline(pipeline: AISTPipeline, user, finding_ids: list[int], filters: dict) -> JsonResponse:
+    """Push the findings of ``finding_ids`` that ``user`` may edit in the pipeline's product to AI triage."""
+    found_ids = list(
+        queryset_for_action(resource=Finding, action=Action.FINDING_EDIT, user=user)
+        .filter(id__in=finding_ids, test__engagement__product=pipeline.project.product)
+        .values_list("id", flat=True),
+    )
     if not found_ids:
         return JsonResponse({"detail": "No valid findings for this pipeline/product"}, status=400)
-
-    try:
-        early_response = _push_pipeline_to_ai(pipeline, ids_int, filters)
-    except Exception as exc:
-        return JsonResponse({"ok": False, "error": str(exc)}, status=500)
+    early_response = _push_pipeline_to_ai(pipeline, found_ids, filters)
     if early_response is not None:
         return early_response
-
     return JsonResponse({"ok": True, "count": len(found_ids)})
 
 
-def _push_pipeline_to_ai(pipeline: AISTPipeline, ids_int: list[int], filters: dict) -> JsonResponse | None:
-    """Push confirmed findings to AI triage; returns an early-exit response, or None to continue."""
-    logger = install_pipeline_logging(pipeline.id)
-    status_ok = True
-    with transaction.atomic():
-        locked = (
-            AISTPipeline.objects
-            .select_for_update()
-            .get(id=pipeline.id)
-        )
-        if locked.status != AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI:
-            logger.error("Attempt to push to AI before receiving confirmation")
-            status_ok = False
-        else:
-            set_pipeline_status(locked, AISTStatus.PUSH_TO_AI)
+_PUSH_REFUSALS = {
+    PushGuard.UNEXPECTED_STATUS: (400, "The pipeline is not waiting for confirmation to push to AI triage"),
+    PushGuard.ALREADY_PUSHED: (409, "The findings of this pipeline were already pushed to AI triage"),
+    PushGuard.FINISHED: (409, "The pipeline has finished; it takes no AI triage push"),
+    PushGuard.NOT_FOUND: (404, "The pipeline does not exist"),
+}
 
-    if not status_ok:
-        finish_pipeline(pipeline.id, degraded=True)
-        return JsonResponse(
-            {"error": "Attempt to push to AI before receiving confirmation"},
-            status=400,
-        )
-    push_to_triage(resolve_triage_type(locked), pipeline.id, ids_int, filters)
-    return None
+
+def _push_pipeline_to_ai(pipeline: AISTPipeline, finding_ids: list[int], filters: dict) -> JsonResponse | None:
+    """Confirm the push of a pipeline waiting for confirmation; a refusal leaves the pipeline as it is."""
+    with scoped_pipeline_logging(pipeline.id) as log, transaction.atomic():
+        locked = lock_pipeline(pipeline.id)
+        guard = push_guard(locked, pipeline.id, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI, log)
+        if guard is PushGuard.READY:
+            confirm_triage_push(locked, finding_ids, filters, log)
+            return None
+    status_code, message = _PUSH_REFUSALS[guard]
+    return JsonResponse({"error": message}, status=status_code)
 
 
 def delete_ai_response_for_pipeline(pipeline: AISTPipeline, response_id: int) -> None:
@@ -121,9 +82,10 @@ class AISendRequestAPI(AISTAPIView):
         serializer = AISendRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         return send_request_to_ai_for_pipeline(
-            pipeline=pipeline,
-            finding_ids=serializer.validated_data["finding_ids"],
-            filters=serializer.validated_data["filters"],
+            pipeline,
+            request.user,
+            serializer.validated_data["finding_ids"],
+            serializer.validated_data["filters"],
         )
 
 
@@ -167,11 +129,7 @@ class AIPipelineCallbackAPI(AISTAPIView):
             logger.error(errors)
 
         with transaction.atomic():
-            locked = (
-                AISTPipeline.objects
-                .select_for_update()
-                .get(id=pipeline_id)
-            )
+            locked = lock_existing_pipeline(pipeline_id)
             ai_response = AISTAIResponse.objects.create(pipeline=locked, payload=response_from_ai)
             locked.response_from_ai = response_from_ai
             locked.save(update_fields=["response_from_ai", "updated"])
@@ -187,67 +145,6 @@ class AIPipelineCallbackAPI(AISTAPIView):
                 )
 
         finish_pipeline(pipeline_id, degraded=has_errors)
-        return Response({"ok": True})
-
-
-class LocalTriageCompleteSerializer(serializers.Serializer):
-    status = serializers.ChoiceField(choices=["success", "error"], required=True)
-    detail = serializers.CharField(required=False, allow_blank=True, default="")
-
-
-class LocalTriageCompleteAPI(AISTAPIView):
-
-    """
-    Callback endpoint for the local triage bridge.
-
-    Unlike ``AIPipelineCallbackAPI``, this does NOT run ``sync_ai_finding_responses``
-    because the Claude skill writes ``AISTAIFindingResponse`` records directly to the DB.
-    This endpoint only calls ``finish_pipeline()``.
-    """
-
-    authz = INTERNAL_SERVICE
-
-    @extend_schema(
-        request=LocalTriageCompleteSerializer,
-        responses={200: OpenApiResponse(description="Pipeline finished")},
-        tags=[AISTApiTag.AI.value],
-    )
-    def post(self, request, pipeline_id: str):
-        pipeline = queryset_for_action(
-            resource=AISTPipeline,
-            action=Action.PRODUCT_READ,
-            user=request.user,
-        ).filter(id=pipeline_id).first()
-        if pipeline is None:
-            return Response({"detail": "Pipeline not found"}, status=404)
-        serializer = LocalTriageCompleteSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        logger = install_pipeline_logging(pipeline_id)
-        status = serializer.validated_data["status"]
-        detail = serializer.validated_data.get("detail", "")
-        bridge_failed = status == "error"
-
-        degraded = bridge_failed
-        if bridge_failed:
-            has_responses = AISTAIFindingResponse.objects.filter(pipeline_id=pipeline_id).exists()
-            if has_responses:
-                # Triage facts are already persisted — the bridge just failed
-                # to observe completion (e.g. claude -p lingered past its
-                # result event and timed out). Don't mask successful work as
-                # degraded; log the bridge error separately for diagnostics.
-                logger.error(
-                    "Local triage bridge reported error but AI responses exist for pipeline %s; "
-                    "finishing as non-degraded. Bridge detail: %s",
-                    pipeline_id, detail or "<empty>",
-                )
-                degraded = False
-            elif detail:
-                logger.error("Local triage bridge reported error: %s", detail)
-            else:
-                logger.error("Local triage bridge reported error with no detail")
-
-        finish_pipeline(pipeline_id, degraded=degraded)
         return Response({"ok": True})
 
 

@@ -51,6 +51,16 @@ change any of these dispositions through the normal finding controls.
 
 If no findings are selected, the pipeline completes without a triage request.
 If the selected local mode has no active credential, or the request cannot be
-accepted, AIST finishes the pipeline with warnings. A local completion callback
-that reports an error still completes without warnings when finding-level
-verdicts were already retained.
+accepted, AIST finishes the pipeline with warnings. The local bridge triages a
+pipeline's findings in small batches, one session at a time. A session that
+reports an error does not by itself add warnings when every finding of its
+batch has a verdict; a finding left without a verdict, whatever the session
+reported, finishes the pipeline with warnings.
+
+Local triage judges only findings of the pipeline itself. A manual selection
+may include findings of the product from earlier pipelines; those are left out
+and counted in the pipeline log. A selection with none of the pipeline's own
+findings finishes with warnings, and one whose findings all already have a
+verdict or are closed finishes without triage. A push is accepted only while the
+pipeline waits for confirmation: a repeated push, or a push to a finished
+pipeline, is refused and leaves the pipeline as it is.

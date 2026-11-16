@@ -45,6 +45,7 @@ from aist.services.dast_outcomes import (
     classify_dast_execution_result,
     record_dast_pipeline_outcome,
 )
+from aist.services.pipeline_lifecycle import lock_existing_pipeline
 from aist.utils.pipeline import (
     finish_pipeline,
 )
@@ -103,18 +104,18 @@ class _DastRuntimeSpec:
 
 def _prepare_dast_runtime(pipeline_id: str) -> _DastRuntimeSpec:
     with transaction.atomic():
-        pipeline = (
-            AISTPipeline.objects
-            .select_for_update(of=("self",))
-            .select_related(
+        pipeline = lock_existing_pipeline(
+            pipeline_id,
+            related=(
                 "project__product__prod_type",
                 "trigger_project_version",
                 "dast_execution_state",
                 "launch_request__dast_binding__target__integration__vpn_integration",
                 "launch_request__requester",
-            )
-            .get(pk=pipeline_id, execution_type=PipelineExecutionType.DAST)
+            ),
         )
+        if pipeline.execution_type != PipelineExecutionType.DAST:
+            raise AISTPipeline.DoesNotExist(pipeline_id)
         launch_request = pipeline.launch_request
         execution_state = pipeline.dast_execution_state
         binding = launch_request.dast_binding
@@ -238,7 +239,7 @@ def _persist_dast_execution_result(pipeline_id: str, result) -> None:
         DastConnectorOutcomeState.UNREACHABLE: DastExecutionOutcome.UNREACHABLE,
     }
     with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(pk=pipeline_id)
+        pipeline = lock_existing_pipeline(pipeline_id)
         execution_state = DastExecutionState.objects.select_for_update().get(pipeline=pipeline)
         if result.recovery.correlation_id != pipeline.id:
             raise ValueError(_ERR_DAST_RUNTIME)

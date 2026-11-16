@@ -11,7 +11,7 @@ from dojo.authorization.roles_permissions import Permissions
 from dojo.models import Test
 
 from aist.ai_filter import get_ai_filter_reference, severity_ordering, validate_and_normalize_filter
-from aist.api.ai import delete_ai_response_for_pipeline, send_request_to_ai_for_pipeline
+from aist.api.ai import AISendRequestSerializer, delete_ai_response_for_pipeline, send_request_to_ai_for_pipeline
 from aist.models import AISTPipeline
 from aist.queries import (
     get_authorized_aist_pipelines,
@@ -149,17 +149,10 @@ def search_findings_json(request):
 @require_POST
 def send_request_to_ai(request, pipeline_id: str):
     """
-    Extend/implement the endpoint to accept a curated list of finding IDs.
+    Push a curated selection of findings of a pipeline waiting for confirmation to AI triage.
 
-    Expected JSON body:
-    {
-      "pipeline_id": "<uuid|string>",
-      "finding_ids": [1,2,3],
-      "filters": {...}  # optional, for audit/debug
-    }
-
-    Security: we verify that all findings belong to the same Product as the pipeline's project.
-    Then delegate to your internal sender (if you already had one).
+    Expected JSON body: ``{"finding_ids": [1, 2, 3], "filters": {...}}``, where ``filters`` is optional.
+    Only findings of the pipeline's product that the user may edit are pushed.
     """
     try:
         pipeline = get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user).select_related(
@@ -168,7 +161,16 @@ def send_request_to_ai(request, pipeline_id: str):
     except AISTPipeline.DoesNotExist:
         return HttpResponseBadRequest("Unknown pipeline")
     require_product_permission(pipeline.project.product, Permissions.Product_Edit, user=request.user)
-    return send_request_to_ai_for_pipeline(request, pipeline)
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except ValueError:
+        body = {}
+    serializer = AISendRequestSerializer(data=body)
+    if not serializer.is_valid():
+        return JsonResponse(serializer.errors, status=400)
+    return send_request_to_ai_for_pipeline(
+        pipeline, request.user, serializer.validated_data["finding_ids"], serializer.validated_data["filters"],
+    )
 
 
 @login_required

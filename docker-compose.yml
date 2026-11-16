@@ -191,6 +191,7 @@ services:
       # Off: the platform otherwise fetches a promo banner from its own bucket on render.
       DD_OS_MESSAGE_ENABLED: "${DD_OS_MESSAGE_ENABLED:-False}"
       AIST_LOCAL_TRIAGE_TIMEOUT: "${AIST_LOCAL_TRIAGE_TIMEOUT:-10800}"
+      AIST_LOCAL_TRIAGE_BATCH_SIZE: "${AIST_LOCAL_TRIAGE_BATCH_SIZE:-10}"
       AIST_LOCAL_TRIAGE_BRIDGE_SOCKET: /run/claude-bridge/bridge.sock
       CLAUDE_DIFF_MAX_FILES: "${CLAUDE_DIFF_MAX_FILES:-1500}"
       CLAUDE_DIFF_MAX_BYTES: "${CLAUDE_DIFF_MAX_BYTES:-6000000}"

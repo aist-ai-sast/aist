@@ -43,6 +43,7 @@ from aist.models import (
     PipelineLaunchRequestState,
     VersionType,
 )
+from aist.test.pipeline_execution_helpers import make_ai_finding_response
 from aist.utils.ai_response import sync_ai_finding_responses
 from aist.utils.secrets import MASKED_VALUE
 
@@ -1315,6 +1316,31 @@ class AISTFindingAIFilterTests(AISTApiBase):
                 ids = [row["id"] for row in resp.data["results"]]
                 self.assertEqual(ids, expected_ids)
                 self.assertEqual(resp.data["count"], expected_count)
+
+    def test_finding_list_ai_status_counts_only_the_responses_of_the_requested_pipeline(self):
+        other_pipeline = self.make_pipeline("pipe-ai-other", status=AISTStatus.FINISHED)
+        other_pipeline.tests.add(self.test)
+        make_ai_finding_response(
+            other_pipeline,
+            self.finding_without_ai,
+            verdict=AISTAIFindingResponse.Verdict.UNCERTAIN,
+            source_response=AISTAIResponse.objects.create(pipeline=other_pipeline, payload={"results": {}}),
+            title="Uncertain elsewhere",
+        )
+        cases = (
+            (self.pipeline.id, "has_ai", [self.finding_with_ai.id]),
+            (self.pipeline.id, "ai_u", []),
+            (other_pipeline.id, "ai_u", [self.finding_without_ai.id]),
+            (other_pipeline.id, "no_ai", [self.finding_with_ai.id]),
+        )
+        for pipeline_id, ai_status, expected_ids in cases:
+            with self.subTest(pipeline_id=pipeline_id, ai_status=ai_status):
+                resp = self.client.get(
+                    reverse("aist_api:finding_list"),
+                    data={"pipeline_id": pipeline_id, "ai_status": ai_status},
+                )
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual([row["id"] for row in resp.data["results"]], expected_ids)
 
 
 class AISTFindingTagsTests(AISTApiBase):

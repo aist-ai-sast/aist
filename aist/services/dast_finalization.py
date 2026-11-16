@@ -31,7 +31,7 @@ from aist.models import (
 from aist.services.dast_import_receipt import DastImportReceipt
 from aist.services.dast_report_routing import check_dast_route_permissions, resolve_dast_report_routes
 from aist.services.dast_result_versions import resolve_dast_result_version
-from aist.services.pipeline_lifecycle import transition_pipeline_status
+from aist.services.pipeline_lifecycle import lock_existing_pipeline, transition_pipeline_status
 from aist.services.pipeline_results import (
     attach_findings_to_project_version,
     finish_or_schedule_pipeline_results,
@@ -195,16 +195,9 @@ def finalize_dast_report(
         if persisted_binding is None:
             msg = "The DAST launch binding changed while its report was being finalized."
             raise DastFinalizationError(msg)
-        pipeline = (
-            AISTPipeline.objects
-            .select_for_update(of=("self",))
-            .select_related(
-                "project__repository",
-                "trigger_project_version",
-                "dast_execution_state",
-                "launch_request",
-            )
-            .get(pk=pipeline_id)
+        pipeline = lock_existing_pipeline(
+            pipeline_id,
+            related=("project__repository", "trigger_project_version", "dast_execution_state", "launch_request"),
         )
         _verify_pipeline_binding(
             pipeline=pipeline,

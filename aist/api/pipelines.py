@@ -48,6 +48,7 @@ from aist.pipeline_args import PipelineArguments
 from aist.progress import EnrichProgress, progress_percent
 from aist.services.dast_outcomes import public_dast_outcome_code
 from aist.services.dast_run_metadata import dast_run_detail
+from aist.services.pipeline_lifecycle import delete_released_pipeline, pipelines_with_released_sources
 from aist.utils.export import _build_ai_export_rows
 from aist.utils.pipeline import (
     is_terminal_pipeline_status,
@@ -317,17 +318,16 @@ class PipelineAPI(AISTAPIView):
 
     @extend_schema(
         responses={204: OpenApiResponse(description="Pipeline deleted"),
-                   400: OpenApiResponse(description="Cannot delete pipeline"),
+                   400: OpenApiResponse(description="The pipeline has not finished, or its local triage has not ended"),
                    404: OpenApiResponse(description="Not found")},
         tags=[AISTApiTag.PIPELINES.value],
         summary="Delete pipeline",
-        description="Deletes the specified AISTPipeline by id.",
+        description="Deletes a finished pipeline whose local triage has ended.",
     )
     def delete(self, request, pipeline_id: str, *args, **kwargs) -> Response:
         p = self.resolve(id=pipeline_id)
-        if not is_terminal_pipeline_status(p.status):
+        if not delete_released_pipeline(p.pk):
             return Response(status=status.HTTP_400_BAD_REQUEST)
-        p.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -1064,7 +1064,8 @@ class PipelineSourceInfoAPI(AISTAPIView):
         tags=[AISTApiTag.PIPELINES.value],
         summary="Get pipeline source info (internal)",
         description=(
-            "Returns the on-disk source path for a running pipeline. "
+            "Returns the on-disk source path for a running pipeline, or for a finished one "
+            "while its local triage batches are pending or running. "
             "Used by context-extractor and filesystem MCP servers."
         ),
     )
@@ -1078,7 +1079,7 @@ class PipelineSourceInfoAPI(AISTAPIView):
         if pipeline is None:
             return Response({"detail": "Pipeline not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        if is_terminal_pipeline_status(pipeline.status):
+        if pipelines_with_released_sources().filter(pk=pipeline.pk).exists():
             return Response(
                 {"detail": "Pipeline is in terminal status, sources no longer available"},
                 status=status.HTTP_409_CONFLICT,

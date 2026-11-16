@@ -14,10 +14,10 @@ from aist.integrations.dast_report import validate_dast_report_bytes
 from aist.internal_upload import ensure_engagement, import_scan_via_default_importer
 from aist.launch_data import PipelineLaunchData
 from aist.logging_transport import install_pipeline_logging, uninstall_pipeline_file_logging
-from aist.models import AISTPipeline, AISTStatus, DastProjectBinding
+from aist.models import AISTStatus, DastProjectBinding
 from aist.parser_overrides import DAST_SCAN_TYPE
 from aist.services.dast_finalization import finalize_dast_report
-from aist.services.pipeline_lifecycle import transition_pipeline_status
+from aist.services.pipeline_lifecycle import lock_existing_pipeline, transition_pipeline_status
 from aist.services.pipeline_results import attach_findings_and_finish, record_imported_tests
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
@@ -40,12 +40,7 @@ def _resolve_version_and_mark_uploading(
 ):
     """Lock the pipeline, resolve its GIT_HASH version, and persist it."""
     with transaction.atomic():
-        pipeline = (
-            AISTPipeline.objects
-            .select_for_update(of=("self",))
-            .select_related("project", "project__repository")
-            .get(id=pipeline_id)
-        )
+        pipeline = lock_existing_pipeline(pipeline_id, related=("project", "project__repository"))
         project = pipeline.project
         if project.id != project_id:
             msg = f"Pipeline {pipeline_id} project mismatch: expected {project_id}, got {project.id}"
@@ -92,7 +87,7 @@ def _record_provenance(
     pipeline_id: str, test_obj, scan_type: str, uploader_id: int, filename: str, sha256: str,
 ) -> None:
     with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        pipeline = lock_existing_pipeline(pipeline_id)
         ld = PipelineLaunchData(pipeline.launch_data)
         record_imported_tests(pipeline, ld, [test_obj])
         ld.merge({

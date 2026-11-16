@@ -5,7 +5,6 @@ import os
 import shutil
 import subprocess
 
-import httpx
 from celery import shared_task
 from django.conf import settings
 
@@ -13,48 +12,10 @@ from aist.integrations.claude import claude_subprocess_env
 from aist.integrations.egress import resolve_source_vpn
 from aist.models import AISTProject, VersionType
 from aist.pipeline_args import PipelineArguments
+from aist.utils.bridge_client_factory import BridgeError, build_bridge_client_from_settings, format_extra_args
 from aist.utils.vpn import vpn_sidecar_context
 
 logger = logging.getLogger("aist.tasks.claude")
-
-
-def _send_to_bridge(
-    *,
-    skill_name: str,
-    project_id: int | str,
-    source_path: str,
-    subprocess_env: dict[str, str] | None = None,
-    extra_args: str = "",
-) -> bool:
-    """
-    Send an analyze request to the claude-bridge via Unix domain socket.
-
-    Returns True on success (202 accepted), False on failure.
-
-    ``subprocess_env`` is the per-request env overlay the bridge merges
-    into the ``claude -p`` subprocess environment. Callers resolve
-    project-scoped credentials via ``aist.integrations.claude.claude_subprocess_env``
-    and pass the result here as a plain ``dict[str, str]``.
-    """
-    socket_path = getattr(settings, "AIST_LOCAL_TRIAGE_BRIDGE_SOCKET", "/run/claude-bridge/bridge.sock")
-    payload = {
-        "skill_name": skill_name,
-        "project_id": str(project_id),
-        "source_path": source_path,
-        "callback_url": "",  # analyze skills persist directly; no callback needed
-        "subprocess_env": dict(subprocess_env or {}),
-        "extra_args": extra_args,
-    }
-    try:
-        transport = httpx.HTTPTransport(uds=socket_path)
-        with httpx.Client(transport=transport, timeout=10) as client:
-            resp = client.post("http://localhost/analyze", json=payload)
-            resp.raise_for_status()
-        logger.info("Bridge accepted %s for project %s", skill_name, project_id)
-    except Exception:
-        logger.exception("Bridge request failed for %s (project %s)", skill_name, project_id)
-        return False
-    return True
 
 
 def _clone_project_via_vpn(
@@ -176,16 +137,16 @@ def analyze_project_after_import(self, project_id: int, project_version_id: int,
     # NOTE: clone_dir is NOT cleaned up here because bridge runs async (202).
     # Claude Code needs the clone dir to still exist when it starts working.
     # Cleanup happens inside the bridge after skill completion.
-    _send_to_bridge(
-        skill_name="aist-init-script-generator",
-        project_id=project_id,
-        source_path=clone_dir,
-        subprocess_env=auth_env,
-        extra_args=f"project_version_id={version.id}",
-    )
-    _send_to_bridge(
-        skill_name="aist-project-profile-analyzer",
-        project_id=project_id,
-        source_path=clone_dir,
-        subprocess_env=auth_env,
-    )
+    bridge = build_bridge_client_from_settings(auth_env=auth_env)
+    for skill_name, extra_args in (
+        ("aist-init-script-generator", format_extra_args({"project_version_id": version.id})),
+        ("aist-project-profile-analyzer", ""),
+    ):
+        try:
+            bridge.analyze_async(
+                skill_name=skill_name, project_id=str(project_id), source_path=clone_dir, extra_args=extra_args,
+            )
+        except BridgeError:
+            logger.exception("Bridge request failed for %s (project %s)", skill_name, project_id)
+        else:
+            logger.info("Bridge accepted %s for project %s", skill_name, project_id)

@@ -10,7 +10,7 @@ from django.utils import timezone
 from dojo.models import Engagement, Finding, Test, Test_Type
 
 from aist.celery_signals import record_action_run
-from aist.logging_transport import get_pipeline_log_path, install_pipeline_logging, uninstall_pipeline_file_logging
+from aist.logging_transport import get_pipeline_log_path, scoped_pipeline_logging
 from aist.models import AISTPipeline, AISTStatus, Organization, OrgIntegration, OrgIntegrationType
 from aist.test.test_api import AISTApiBase
 from aist.utils.secrets import MASKED_VALUE, mask_sensitive_data, mask_sensitive_text
@@ -178,10 +178,9 @@ class PipelineLogsMaskingAPITests(AISTApiBase):
 
     def test_pipeline_logs_full_masks_secrets(self):
         get_pipeline_log_path(self.pipeline.id).write_text("", encoding="utf-8")
-        logger = install_pipeline_logging(self.pipeline.id)
-        logger.info("clone https://oauth2:glpat-abcdef12345678@gitlab.example.com/group/repo.git")
-        logger.info("PRIVATE-TOKEN: glpat-abcdef12345678")
-        uninstall_pipeline_file_logging(self.pipeline.id)
+        with scoped_pipeline_logging(self.pipeline.id) as logger:
+            logger.info("clone https://oauth2:glpat-abcdef12345678@gitlab.example.com/group/repo.git")
+            logger.info("PRIVATE-TOKEN: glpat-abcdef12345678")
 
         resp = self.client.get(reverse("aist_api:pipeline_logs_full", kwargs={"pipeline_id": self.pipeline.id}))
 
@@ -193,9 +192,8 @@ class PipelineLogsMaskingAPITests(AISTApiBase):
 
     def test_pipeline_logs_progressive_masks_secrets(self):
         get_pipeline_log_path(self.pipeline.id).write_text("", encoding="utf-8")
-        logger = install_pipeline_logging(self.pipeline.id)
-        logger.info("token=glpat-abcdef12345678")
-        uninstall_pipeline_file_logging(self.pipeline.id)
+        with scoped_pipeline_logging(self.pipeline.id) as logger:
+            logger.info("token=glpat-abcdef12345678")
 
         resp = self.client.get(
             reverse("aist_api:pipeline_logs_progressive", kwargs={"pipeline_id": self.pipeline.id}),
@@ -229,9 +227,8 @@ class PipelineLogsMaskingAPITests(AISTApiBase):
 
     def test_logging_transport_masks_secrets_before_write(self):
         get_pipeline_log_path(self.pipeline.id).write_text("", encoding="utf-8")
-        logger = install_pipeline_logging(self.pipeline.id)
-        logger.info("clone https://oauth2:glpat-abcdef12345678@gitlab.example.com/group/repo.git")
-        uninstall_pipeline_file_logging(self.pipeline.id)
+        with scoped_pipeline_logging(self.pipeline.id) as logger:
+            logger.info("clone https://oauth2:glpat-abcdef12345678@gitlab.example.com/group/repo.git")
 
         content = get_pipeline_log_path(self.pipeline.id).read_text(encoding="utf-8")
         self.assertNotIn("glpat-abcdef12345678", content)
@@ -339,9 +336,8 @@ class PipelineLogsMaskingViewsTests(AISTApiBase):
 
     def test_pipeline_logs_full_view_masks_secrets(self):
         get_pipeline_log_path(self.pipeline.id).write_text("", encoding="utf-8")
-        logger = install_pipeline_logging(self.pipeline.id)
-        logger.info("PRIVATE-TOKEN: secret-value")
-        uninstall_pipeline_file_logging(self.pipeline.id)
+        with scoped_pipeline_logging(self.pipeline.id) as logger:
+            logger.info("PRIVATE-TOKEN: secret-value")
 
         resp = self.client.get(reverse("aist:pipeline_logs_full", kwargs={"pipeline_id": self.pipeline.id}))
 

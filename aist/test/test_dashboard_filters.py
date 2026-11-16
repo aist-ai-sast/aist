@@ -42,6 +42,7 @@ from aist.models import (
     WorkItemLink,
     WorkItemStatusCategory,
 )
+from aist.test.pipeline_execution_helpers import make_ai_finding_response
 
 User = get_user_model()
 
@@ -154,9 +155,7 @@ class DashboardFilterBase(TestCase):
         )
 
     def _ai(self, pipeline, finding, verdict):
-        AISTAIFindingResponse.objects.create(
-            pipeline=pipeline, finding=finding, verdict=verdict, uncertainty_level=0.2,
-        )
+        make_ai_finding_response(pipeline, finding, verdict=verdict, uncertainty_level=0.2)
 
     # -- helpers ---------------------------------------------------------
 

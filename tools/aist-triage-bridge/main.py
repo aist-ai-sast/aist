@@ -1532,11 +1532,7 @@ async def analyze(req: AnalyzeRequest):
     if not req.skill_name or not req.source_path:
         raise HTTPException(status_code=400, detail="skill_name and source_path are required")
     if req.callback_url and not AIST_SERVICE_TOKEN:
-        # Without the service token AIST's LocalTriageCompleteAPI (which
-        # has ``IsAuthenticated``) returns 401 to our callback, the
-        # bridge logs the failure but the pipeline stays in
-        # WAITING_RESULT_FROM_AI forever. Fail loudly at request time
-        # so the caller can either set the token or omit callback_url.
+        # A callback without the service token fails authentication at the receiver; refuse it at request time.
         raise HTTPException(
             status_code=503,
             detail=(
@@ -1554,9 +1550,8 @@ async def analyze_sync(req: AnalyzeRequest):
     """
     Run the skill and block until it produces a result.
 
-    Used by the SAST pipeline's analyzer_runner when it needs the skill's
-    output file on disk before continuing the pipeline (e.g.
-    claude-diff-security writing its Generic Findings Import JSON).
+    Used when the caller needs the session finished before it continues: SAST
+    analyzers and AIST local triage batches.
     """
     if not req.skill_name or not req.source_path:
         raise HTTPException(status_code=400, detail="skill_name and source_path are required")

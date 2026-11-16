@@ -11,11 +11,11 @@ from aist.models import (
     AISTProject,
     AISTProjectVersion,
     Organization,
-    OrgIntegration,
     RepositoryInfo,
     ScmType,
     VersionType,
 )
+from aist.test.pipeline_execution_helpers import make_claude_integration
 from aist.test.test_api import AISTApiBase
 
 
@@ -45,13 +45,7 @@ class AISTProjectRegenerateAnalysisAPITests(AISTApiBase):
         return reverse("aist_api:project_regenerate_analysis", kwargs={"project_id": project_id})
 
     def _make_active_claude_integration(self):
-        return OrgIntegration.objects.create(
-            organization=self.org,
-            integration_type="CLAUDE_CODE",
-            name="Claude",
-            is_active=True,
-            secret="sk-ant-oat01-" + "a" * 24,
-        )
+        return make_claude_integration(self.org, name="Claude", secret="sk-ant-oat01-" + "a" * 24)
 
     @patch("aist.tasks.claude.analyze_project_after_import.delay")
     def test_regenerate_queues_task_when_preconditions_met(self, mock_delay):

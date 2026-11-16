@@ -7,7 +7,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import models, transaction
 from django.db.models import Q
-from django.http import Http404, HttpRequest, HttpResponse
+from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
@@ -33,9 +33,9 @@ from aist.queries import (
     get_authorized_aist_projects,
     require_product_permission,
 )
+from aist.services.ai_triage import resolve_triage_type
 from aist.services.dast_queue import queue_is_addressable
-from aist.services.pipeline_lifecycle import PipelineTransitionError, transition_allowed
-from aist.tasks.ai import resolve_triage_type
+from aist.services.pipeline_lifecycle import PipelineTransitionError, delete_released_pipeline, transition_allowed
 from aist.utils.http import _qs_without, page_of
 from aist.utils.pipeline import (
     get_terminal_pipeline_statuses,
@@ -467,14 +467,15 @@ def stop_pipeline_view(request, pipeline_id: str):
 @login_required
 @require_http_methods(["GET", "POST"])
 def delete_pipeline_view(request, pipeline_id: str):
-    """Delete a pipeline after confirmation (POST). GET returns a confirm view."""
+    """Delete a finished pipeline whose local triage has ended, after confirmation (POST). GET returns a confirm view."""
     pipeline = get_object_or_404(
         get_authorized_aist_pipelines(Permissions.Product_Edit, user=request.user),
         id=pipeline_id,
     )
     require_product_permission(pipeline.project.product, Permissions.Product_Edit, user=request.user)
     if request.method == "POST":
-        pipeline.delete()
+        if not delete_released_pipeline(pipeline.id):
+            return HttpResponseBadRequest("A pipeline is deleted only once it has finished and its local triage has ended.")
         return redirect("aist:pipeline_list")
     add_breadcrumb(parent=pipeline, title="Delete pipeline", top_level=False, request=request)
     return render(request, "aist/confirm_delete.html", {"pipeline": pipeline})

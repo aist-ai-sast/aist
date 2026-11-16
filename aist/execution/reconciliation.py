@@ -22,6 +22,7 @@ from aist.models import (
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
 )
+from aist.services.pipeline_lifecycle import lock_pipeline
 from aist.utils.pipeline import is_terminal_pipeline_status, set_pipeline_status
 
 if TYPE_CHECKING:
@@ -194,7 +195,7 @@ def _reconcile_locked_request(
     )
     pipeline = None
     if request.pipeline_id is not None:
-        pipeline = AISTPipeline.objects.select_for_update().filter(pk=request.pipeline_id).first()
+        pipeline = lock_pipeline(request.pipeline_id)
 
     if request.state in _REQUEST_TERMINAL_STATES:
         stats.released_leases += _release_leases(leases, now=now)

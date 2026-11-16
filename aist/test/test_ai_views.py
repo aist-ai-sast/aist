@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.urls import reverse
@@ -106,10 +105,8 @@ class AISTAIViewsTests(AISTApiBase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["id"], f1.id)
 
-    @patch("aist.api.ai.install_pipeline_logging")
     @patch("aist.tasks.ai.push_request_to_ai")
-    def test_send_request_to_ai_happy_path(self, mock_push, mock_log):
-        mock_log.return_value = SimpleNamespace(error=lambda *_a, **_k: None)
+    def test_send_request_to_ai_happy_path(self, mock_push):
         pipeline = AISTPipeline.objects.create(
             id="pipe-1",
             project=self.project,
@@ -125,11 +122,12 @@ class AISTAIViewsTests(AISTApiBase):
         )
 
         url = reverse("aist:send_request_to_ai", kwargs={"pipeline_id": pipeline.id})
-        resp = self.client.post(
-            url,
-            data=json.dumps({"finding_ids": [f1.id], "filters": {"limit": 1}}),
-            content_type="application/json",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(
+                url,
+                data=json.dumps({"finding_ids": [f1.id], "filters": {"limit": 1}}),
+                content_type="application/json",
+            )
 
         self.assertEqual(resp.status_code, 200)
         pipeline.refresh_from_db()

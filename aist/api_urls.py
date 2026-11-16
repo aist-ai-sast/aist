@@ -97,7 +97,6 @@ from aist.api.ai import (
     AIFindingResponseListAPI,
     AIPipelineCallbackAPI,
     AISendRequestAPI,
-    LocalTriageCompleteAPI,
 )
 from aist.api.gerrit_integration import ImportProjectFromGerritAPI
 from aist.api.gitea_integration import ImportProjectFromGiteaAPI
@@ -182,7 +181,6 @@ urlpatterns = [
     path("pipelines/<str:pipeline_id>/source-info/", PipelineSourceInfoAPI.as_view(), name="pipeline_source_info"),
     path("pipelines/<str:pipeline_id>/send-request-to-ai/", AISendRequestAPI.as_view(), name="pipeline_send_request"),
     path("pipelines/<str:pipeline_id>/callback/", AIPipelineCallbackAPI.as_view(), name="pipeline_callback"),
-    path("pipelines/<str:pipeline_id>/local-triage-complete/", LocalTriageCompleteAPI.as_view(), name="pipeline_local_triage_complete"),
     path("ai-finding-responses/", AIFindingResponseListAPI.as_view(), name="ai_finding_responses"),
     path(
         "pipelines/<str:pipeline_id>/ai-response/<int:response_id>/",

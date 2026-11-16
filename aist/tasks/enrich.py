@@ -14,6 +14,7 @@ from aist.link_builder import LinkBuilder, store_source_link
 from aist.logging_transport import get_redis, install_pipeline_logging
 from aist.models import AISTPipeline, AISTStatus
 from aist.progress import EnrichProgress
+from aist.services.pipeline_lifecycle import lock_existing_pipeline
 from aist.utils.archive import safe_join
 from aist.utils.pipeline import set_pipeline_status
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
@@ -59,14 +60,15 @@ def after_upload_enrich_and_watch(results: list[int],
                                   log_level,
                                   async_user_id=None) -> None:
     from aist.dedupe.evolution import run_evolution_dedup  # noqa: PLC0415
-    from aist.tasks.ai import auto_push_to_ai_if_configured, resolve_triage_type  # noqa: PLC0415
+    from aist.services.ai_triage import resolve_triage_type  # noqa: PLC0415
+    from aist.tasks.ai import auto_push_to_ai_if_configured  # noqa: PLC0415
     from aist.tasks.regression import detect_regressions_for_pipeline  # noqa: PLC0415
 
     logger = install_pipeline_logging(pipeline_id, log_level)
     enriched = sum(int(v or 0) for v in results)
 
     with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        pipeline = lock_existing_pipeline(pipeline_id)
         set_pipeline_status(pipeline, AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
 
     logger.info("Enrichment finished: %s findings enriched.", enriched)

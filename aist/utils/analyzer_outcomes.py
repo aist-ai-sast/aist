@@ -8,6 +8,7 @@ from django.db import transaction
 
 from aist.launch_data import PipelineLaunchData
 from aist.models import AISTAIResponse, AISTPipeline
+from aist.services.pipeline_lifecycle import lock_existing_pipeline
 from aist.utils.ai_response_artifact import apply_ai_response_artifact
 
 log = logging.getLogger(__name__)
@@ -101,7 +102,7 @@ def consume_analyzer_outcomes(
     reasons = _normalize_degraded_reasons(outcomes or []) + _import_failure_reasons(import_results)
     if reasons:
         with transaction.atomic():
-            pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+            pipeline = lock_existing_pipeline(pipeline_id)
             launch_data = PipelineLaunchData(pipeline.launch_data)
             launch_data.add_analyzer_degraded_reasons(reasons)
             pipeline.launch_data = launch_data.as_dict()

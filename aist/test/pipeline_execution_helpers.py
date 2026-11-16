@@ -8,7 +8,14 @@ from django.utils import timezone
 from dojo.models import Engagement, Finding, Test, Test_Type
 
 from aist.execution.dispatching import LaunchAcceptance
-from aist.models import AISTStatus, PipelineLaunchRequest, PipelineLaunchRequestState
+from aist.models import (
+    AISTAIFindingResponse,
+    AISTStatus,
+    OrgIntegration,
+    OrgIntegrationType,
+    PipelineLaunchRequest,
+    PipelineLaunchRequestState,
+)
 from aist.pipeline_args import PipelineArguments
 from aist.tasks.pipeline import run_pipeline_execution
 
@@ -154,3 +161,33 @@ def make_test_with_finding(
         line=line,
     )
     return dd_test, finding
+
+
+def make_claude_integration(
+    organization,
+    *,
+    secret: str,
+    name: str = "primary",
+    is_active: bool = True,
+    config: dict | None = None,
+) -> OrgIntegration:
+    """A Claude Code integration of ``organization``, OAuth unless ``config`` says otherwise."""
+    return OrgIntegration.objects.create(
+        organization=organization,
+        integration_type=OrgIntegrationType.CLAUDE_CODE,
+        name=name,
+        secret=secret,
+        is_active=is_active,
+        config={"auth_mode": "oauth"} if config is None else config,
+    )
+
+
+def make_ai_finding_response(
+    pipeline,
+    finding,
+    *,
+    verdict: str = AISTAIFindingResponse.Verdict.TRUE_POSITIVE,
+    **fields,
+) -> AISTAIFindingResponse:
+    """The AI verdict the pipeline holds for ``finding``, with any other model ``fields``."""
+    return AISTAIFindingResponse.objects.create(pipeline=pipeline, finding=finding, verdict=verdict, **fields)

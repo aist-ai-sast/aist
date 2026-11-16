@@ -23,6 +23,7 @@ from aist.models import (
     OrgIntegrationType,
     ProjectIntegrationOverride,
 )
+from aist.test.pipeline_execution_helpers import make_claude_integration
 
 
 class ClaudeAuthEnvTests(TestCase):
@@ -50,13 +51,11 @@ class ClaudeAuthEnvTests(TestCase):
     def _make_integration(self, *, secret: str = "sk-ant-oat01-" + "x" * 30,
                           is_active: bool = True, config: dict | None = None,
                           ) -> OrgIntegration:
-        return OrgIntegration.objects.create(
-            organization=self.org,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
-            name="primary",
+        return make_claude_integration(
+            self.org,
             secret=secret,
             is_active=is_active,
-            config=config or {"auth_mode": "oauth"},
+            config=config,
         )
 
     def test_no_integration_returns_empty_dict(self):
@@ -122,13 +121,10 @@ class ClaudeAuthEnvTests(TestCase):
             name="Other Org",
             product_type=Product_Type.objects.create(name="Other PT"),
         )
-        alien = OrgIntegration.objects.create(
-            organization=other_org,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
+        alien = make_claude_integration(
+            other_org,
             name="alien",
             secret="sk-ant-oat01-alien-secret-value-zzzz",  # noqa: S106
-            is_active=True,
-            config={"auth_mode": "oauth"},
         )
         with self.assertRaises(IntegrityError), transaction.atomic():
             ProjectIntegrationOverride.objects.create(

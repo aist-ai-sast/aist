@@ -14,7 +14,8 @@ from django.test import TestCase
 from django.urls import reverse
 from dojo.models import Product_Type
 
-from aist.models import Organization, OrgIntegration, OrgIntegrationType
+from aist.models import Organization, OrgIntegration
+from aist.test.pipeline_execution_helpers import make_claude_integration
 
 
 class OrgIntegrationAdminTests(TestCase):
@@ -33,13 +34,9 @@ class OrgIntegrationAdminTests(TestCase):
         self.assertIn(OrgIntegration, admin_site._registry)
 
     def test_admin_changelist_renders_for_claude_integration(self):
-        OrgIntegration.objects.create(
-            organization=self.org,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
-            name="primary",
+        make_claude_integration(
+            self.org,
             secret="sk-ant-oat01-admin-test-token-12345",  # noqa: S106
-            is_active=True,
-            config={"auth_mode": "oauth"},
         )
         url = reverse("admin:aist_orgintegration_changelist")
         resp = self.client.get(url)
@@ -50,13 +47,9 @@ class OrgIntegrationAdminTests(TestCase):
         self.assertNotContains(resp, "sk-ant-oat01-admin-test-token-12345")
 
     def test_admin_change_form_does_not_leak_secret_value(self):
-        integration = OrgIntegration.objects.create(
-            organization=self.org,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
-            name="primary",
+        integration = make_claude_integration(
+            self.org,
             secret="sk-ant-oat01-admin-test-token-67890",  # noqa: S106
-            is_active=True,
-            config={"auth_mode": "oauth"},
         )
         url = reverse("admin:aist_orgintegration_change", args=[integration.pk])
         resp = self.client.get(url)

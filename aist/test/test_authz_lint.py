@@ -85,7 +85,6 @@ KNOWN_TENANT_AUTHZ_CONSTRUCTS = {
     ("organizations.py", "authz=PUBLIC"),
     ("tokens.py", "authz=PUBLIC"),
     # Re-lock of an object the view already resolved through the scoped getter.
-    ("ai.py", "AISTPipeline.objects.select_for_update().get("),
     ("launch_configs.py", "AISTProject.objects.select_for_update().only().get("),
     ("projects.py", "AISTProject.objects.select_for_update().only().get("),
     ("project_versions.py", "AISTProjectVersion.objects.select_related().get("),

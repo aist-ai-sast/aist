@@ -1,4 +1,4 @@
-from aist.tasks.ai import push_request_to_ai, push_request_to_local_triage
+from aist.tasks.ai import push_request_to_ai
 from aist.tasks.claude import analyze_project_after_import
 from aist.tasks.dast_queue import apply_dast_queue_command, refresh_dast_queue
 from aist.tasks.dedup import reconcile_deduplication, watch_deduplication
@@ -10,6 +10,7 @@ from aist.tasks.enrich import (
     report_enrich_done,
 )
 from aist.tasks.launch_schedule import process_launch_schedules
+from aist.tasks.local_triage import finish_local_triage, push_request_to_local_triage, triage_local_batch
 from aist.tasks.logs import flush_logs_once
 from aist.tasks.pipeline import run_pipeline_execution, stop_pipeline_execution
 from aist.tasks.pipeline_dispatcher import dispatch_queued_pipelines
@@ -29,6 +30,7 @@ __all__ = [
     "dispatch_queued_pipelines",
     "enrich_finding_batch",
     "enrich_finding_task",
+    "finish_local_triage",
     "flush_logs_once",
     "prewarm_egress",
     "process_launch_schedules",
@@ -46,6 +48,7 @@ __all__ = [
     "sync_all_work_item_providers",
     "sync_dast_capabilities",
     "sync_work_item_provider",
+    "triage_local_batch",
     "validate_dast_integration",
     "validate_integration",
     "watch_deduplication",

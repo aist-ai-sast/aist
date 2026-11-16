@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 from aist.integrations.dast_config import DastBindingParameters
 from aist.launch_data import LaunchAISettings
 from aist.models import (
-    AISTPipeline,
     AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectScript,
@@ -30,7 +29,7 @@ from aist.models import (
     VersionType,
 )
 from aist.profile import ProjectProfile
-from aist.services.pipeline_lifecycle import TERMINAL_PIPELINE_STATUSES
+from aist.services.pipeline_lifecycle import pipelines_with_released_sources
 from aist.utils.pipeline_imports import _import_sast_pipeline_package, _load_analyzers_config
 
 _import_sast_pipeline_package()
@@ -294,8 +293,9 @@ class SastPipelineArguments:
         return env
 
     @property
-    def project_name(self) -> str:
-        return self.project.product.name
+    def builder_image_name(self) -> str:
+        """The project's builder image; named by project id, since a product name need not be a valid image name."""
+        return f"project-{self.project.id}-builder"
 
     @property
     def output_version(self) -> str:
@@ -479,15 +479,11 @@ class PipelineArguments:
         return resolved
 
     def _cleanup_terminal_workspaces(self, *, keep_pipeline_id: str) -> None:
-        with transaction.atomic():
-            terminal_pipeline_ids = list(
-                AISTPipeline.objects.select_for_update(skip_locked=True)
-                .filter(project_id=self.project.pk, status__in=TERMINAL_PIPELINE_STATUSES)
-                .exclude(id=keep_pipeline_id)
-                .values_list("id", flat=True),
-            )
-        for pipeline_id in terminal_pipeline_ids:
-            self.cleanup_workspace(pipeline_id)
+        released = pipelines_with_released_sources().filter(project_id=self.project.pk).exclude(id=keep_pipeline_id)
+        for pipeline_id in list(released.values_list("id", flat=True)):
+            with transaction.atomic():
+                if released.select_for_update(skip_locked=True).filter(pk=pipeline_id).exists():
+                    self.cleanup_workspace(pipeline_id)
 
     @property
     def sast(self) -> SastPipelineArguments:

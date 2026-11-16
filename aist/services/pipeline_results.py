@@ -11,6 +11,7 @@ from django.db import transaction
 from dojo.models import Finding
 
 from aist.models import AISTPipeline, AISTProjectVersion, AISTStatus, VersionType
+from aist.services.pipeline_lifecycle import lock_existing_pipeline
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 from aist.utils.reconciliation import safe_attach_findings_to_version
 
@@ -64,7 +65,7 @@ def schedule_pipeline_postprocessing(pipeline_id: str, log_level: str) -> None:
     """Persist the deduplication hand-off and publish it only after commit."""
     task_id = uuid.uuid4().hex
     with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        pipeline = lock_existing_pipeline(pipeline_id)
         pipeline.watch_dedup_task_id = task_id
         # Execution is over; the rest is async work owned by watch_dedup_task_id.
         pipeline.run_task_id = None

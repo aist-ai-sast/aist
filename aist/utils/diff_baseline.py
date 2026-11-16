@@ -10,24 +10,10 @@ The runtime env shape is built by ``aist.utils.agent_runtime``.
 """
 from __future__ import annotations
 
-from django.conf import settings
 from django.db.models import Q
 
 from aist.models import AISTPipeline, VersionType
 from aist.services.pipeline_lifecycle import SUCCESSFUL_PIPELINE_STATUSES
-
-
-def _positive_int_setting(name: str) -> int:
-    value = getattr(settings, name)
-    try:
-        value = int(value)
-    except (TypeError, ValueError) as exc:
-        msg = f"{name} must be a positive integer"
-        raise ValueError(msg) from exc
-    if value <= 0:
-        msg = f"{name} must be a positive integer"
-        raise ValueError(msg)
-    return value
 
 
 def _branch_pv_id_for(pipeline: AISTPipeline) -> int | None:

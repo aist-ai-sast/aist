@@ -23,9 +23,10 @@ The long-lived deployment contains:
 | Celery Beat and workers | Recurring production and asynchronous execution |
 | Local AI bridge | Unix-socket API that runs local AI CLI sessions in its own container |
 
-The bridge has the repository and workspace mounts it needs to launch the CLI,
-but it does not write AI verdicts directly into browser responses; completion
-returns through the application boundary. The CLI runs inside the bridge
+The bridge has the repository and workspace mounts it needs to launch the CLI.
+A skill writes its results through the platform's Django shell, which it reaches
+as a Docker-daemon client; a triage session's completion returns to the worker
+that waits on the socket call. The CLI runs inside the bridge
 container as a non-root user that is also a Docker-daemon client, and reads the
 repository mount through the checkout's owning group. The bridge refuses to
 start when that user cannot open the checkout directory or its `.env`.
@@ -85,7 +86,11 @@ durable state.
 Web and worker replicas may share PostgreSQL and Valkey, but every replica must
 use the same application configuration and database schema. Capacity for
 long-running execution must leave workers available for dispatch, cancellation,
-cleanup, and unrelated pipelines.
+cleanup, and unrelated pipelines. A pipeline in local AI triage holds one worker
+process for all its batch sessions, each up to `AIST_LOCAL_TRIAGE_TIMEOUT`, so
+worker concurrency is sized for scans and triage together. The broker's
+visibility timeout exceeds that session timeout; it is also how long any message
+a lost worker held waits before it is delivered again.
 
 The Docker socket is a privileged host boundary: workers and the local AI
 bridge can control containers on that host. Production deployments should

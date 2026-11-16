@@ -243,7 +243,7 @@ A script that was never run is not done.
    project-specific command is guarded.
 2. Dynamic: run the script exactly as the builder does — `set -e`, then
    `source` it — inside the project's builder image
-   (`project-<product name>-builder:latest`) when it exists, otherwise
+   (`project-<project_id>-builder:latest`) when it exists, otherwise
    `ubuntu:22.04`, with `REPO_URL`, `PROJECT_NAME`, `PROJECT_VERSION` set,
    a fresh empty directory mounted at `/workspace`, and the entrypoint
    replaced by a marker instead of the analyzer launch. Check that it reaches

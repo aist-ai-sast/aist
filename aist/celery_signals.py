@@ -24,6 +24,7 @@ from aist.models import (
     TestDeduplicationProgress,
     VersionType,
 )
+from aist.services.pipeline_lifecycle import lock_pipeline
 from aist.signals import finding_deduplicated, pipeline_status_changed
 from aist.utils.secrets import mask_sensitive_text
 
@@ -210,7 +211,7 @@ def record_action_run(
 ) -> None:
     """Record the state of one pipeline action run under ``key``, replacing any earlier record of it."""
     with transaction.atomic():
-        locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
+        locked = lock_pipeline(pipeline_id)
         if not locked:
             return
         ld = PipelineLaunchData(locked.launch_data)
@@ -248,7 +249,7 @@ def _claim_action_run(
 ) -> bool:
     """Atomically claim one action attempt; an existing key is never run again."""
     with transaction.atomic():
-        locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
+        locked = lock_pipeline(pipeline_id)
         if not locked:
             return False
         ld = PipelineLaunchData(locked.launch_data)
@@ -299,7 +300,7 @@ def _launch_config_action_payloads(
 
 def _mark_one_off_done(pipeline_id: str, action_id: str) -> None:
     with transaction.atomic():
-        locked = AISTPipeline.objects.select_for_update().filter(id=pipeline_id).first()
+        locked = lock_pipeline(pipeline_id)
         if not locked:
             return
         ld = PipelineLaunchData(locked.launch_data)

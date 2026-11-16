@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.conf import settings
 
 from aist.test.test_api import AISTApiBase
-from aist.utils.diff_baseline import _positive_int_setting
+from aist.utils.settings_values import positive_int_setting
 
 FULL_SCAN_SETTINGS: tuple[str, ...] = (
     "AGENT_FULL_MAX_FILES",
@@ -30,7 +30,7 @@ class FullSecuritySettingsTests(AISTApiBase):
 
     def test_all_defaults_are_positive_integers(self):
         for name in FULL_SCAN_SETTINGS:
-            value = _positive_int_setting(name)
+            value = positive_int_setting(name)
             self.assertIsInstance(value, int)
             self.assertGreater(value, 0, msg=f"{name} must be > 0")
 
@@ -45,18 +45,18 @@ class FullSecuritySettingsTests(AISTApiBase):
             AGENT_FULL_MAX_FILE_BYTES=200000,
             AGENT_FULL_MAX_FINDINGS=50,
         ):
-            self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_FILES"), 1500)
-            self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_BYTES"), 8000000)
-            self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_FILE_BYTES"), 200000)
-            self.assertEqual(_positive_int_setting("AGENT_FULL_MAX_FINDINGS"), 50)
+            self.assertEqual(positive_int_setting("AGENT_FULL_MAX_FILES"), 1500)
+            self.assertEqual(positive_int_setting("AGENT_FULL_MAX_BYTES"), 8000000)
+            self.assertEqual(positive_int_setting("AGENT_FULL_MAX_FILE_BYTES"), 200000)
+            self.assertEqual(positive_int_setting("AGENT_FULL_MAX_FINDINGS"), 50)
 
     def test_zero_or_negative_setting_is_rejected(self):
         for name in FULL_SCAN_SETTINGS:
             for bad in (0, -1):
                 with self.settings(**{name: bad}), self.assertRaises(ValueError, msg=f"{name}={bad}"):
-                    _positive_int_setting(name)
+                    positive_int_setting(name)
 
     def test_non_integer_setting_is_rejected(self):
         for name in FULL_SCAN_SETTINGS:
             with self.settings(**{name: "not-a-number"}), self.assertRaises(ValueError, msg=name):
-                _positive_int_setting(name)
+                positive_int_setting(name)

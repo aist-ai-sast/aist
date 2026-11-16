@@ -46,5 +46,5 @@
   <path d="M535 528L260 600" class="boundary"/>
   <path d="M558 528L580 600" class="boundary"/>
   <path d="M603 528L900 600" class="boundary"/>
-  <text x="70" y="700" class="detail">Execution services return reports or verdicts through platform boundaries; PostgreSQL remains authoritative.</text>
+  <text x="70" y="700" class="detail">Results reach PostgreSQL through platform boundaries: imports, the AI callback, or the bridge skills' Django shell.</text>
 </svg>

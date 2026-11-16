@@ -18,6 +18,7 @@ from dojo.authorization.roles_permissions import Roles
 from dojo.models import Role
 
 from aist.models import OrgIntegration, OrgIntegrationType
+from aist.test.pipeline_execution_helpers import make_claude_integration
 from aist.test.test_api import AISTApiBase
 
 _VALID_OAUTH = "sk-ant-oat01-" + "A" * 30
@@ -84,13 +85,10 @@ class ClaudeIntegrationCreateAPITests(AISTApiBase):
         self.assertEqual(resp.status_code, 400, resp.data)
 
     def test_create_duplicate_active_rejected_with_400(self):
-        OrgIntegration.objects.create(
-            organization=self.org,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
+        make_claude_integration(
+            self.org,
             name="existing",
             secret=_VALID_OAUTH,
-            is_active=True,
-            config={"auth_mode": "oauth"},
         )
         resp = self.client.post(self.url, self._payload(name="second"), format="json")
         # App-level guard must turn the DB constraint into a clean 400.
@@ -99,13 +97,11 @@ class ClaudeIntegrationCreateAPITests(AISTApiBase):
         self.assertIn("active", str(resp.data).lower())
 
     def test_create_duplicate_inactive_allowed(self):
-        OrgIntegration.objects.create(
-            organization=self.org,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
+        make_claude_integration(
+            self.org,
             name="legacy",
             secret=_VALID_OAUTH,
             is_active=False,
-            config={"auth_mode": "oauth"},
         )
         resp = self.client.post(self.url, self._payload(name="current"), format="json")
         self.assertEqual(resp.status_code, 201, resp.data)
@@ -129,13 +125,9 @@ class ClaudeIntegrationProbeTests(AISTApiBase):
 
         self.org_prod_type = Product_Type.objects.create(name="Claude Probe PT")
         self.org = Organization.objects.create(name="Claude Probe Org", product_type=self.org_prod_type)
-        self.integration = OrgIntegration.objects.create(
-            organization=self.org,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
-            name="primary",
+        self.integration = make_claude_integration(
+            self.org,
             secret=_VALID_OAUTH,
-            is_active=True,
-            config={"auth_mode": "oauth"},
         )
 
     def _mock_response(self, status_code: int) -> MagicMock:

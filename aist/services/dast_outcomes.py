@@ -9,6 +9,7 @@ from django.db import transaction
 from aist.execution.contracts import DastPipelineOutcomeCode
 from aist.launch_data import PipelineLaunchData
 from aist.models import AISTPipeline, PipelineExecutionType
+from aist.services.pipeline_lifecycle import lock_existing_pipeline
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
 
 _import_sast_pipeline_package()
@@ -81,7 +82,7 @@ def record_dast_pipeline_outcome(pipeline_id: str, code: DastPipelineOutcomeCode
     """Persist one normalized outcome on exactly one standalone DAST pipeline."""
     code = DastPipelineOutcomeCode(code)
     with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(pk=pipeline_id)
+        pipeline = lock_existing_pipeline(pipeline_id)
         if pipeline.execution_type != PipelineExecutionType.DAST:
             msg = "DAST outcomes can be recorded only on standalone DAST pipelines."
             raise ValueError(msg)

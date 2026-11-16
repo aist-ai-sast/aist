@@ -1,9 +1,8 @@
 """
 Construct a ``BridgeClient`` instance from Django settings.
 
-Keeps Django settings access in ONE place: AIST callers
-(``aist/tasks/ai.py``, ``aist/tasks/sast_execution.py``) call
-``build_bridge_client_from_settings()`` and pass the result to
+Keeps Django settings access in ONE place: AIST code that talks to the bridge calls
+``build_bridge_client_from_settings()`` and passes the result to
 ``pipeline.bridge_client``-using code, which itself is Django-agnostic.
 
 Architectural invariant I4 — this module is a thin settings-only
@@ -25,7 +24,27 @@ from aist.utils.pipeline_imports import _import_sast_pipeline_package
 
 _import_sast_pipeline_package()
 
-from pipeline.bridge_client import BridgeClient  # noqa: E402  # imports require pipeline package
+from pipeline.bridge_client import (  # noqa: E402  # imports require pipeline package
+    BridgeClient,
+    BridgeError,
+    BridgeSessionResult,
+    format_extra_args,
+    prepare_bridge_output_dir,
+)
+
+__all__ = [
+    "BridgeError",
+    "BridgeSessionResult",
+    "bridge_sync_timeout_seconds",
+    "build_bridge_client_from_settings",
+    "format_extra_args",
+    "prepare_bridge_output_dir",
+]
+
+
+def bridge_sync_timeout_seconds() -> int:
+    """How long a client waits for one ``/analyze-sync`` session: past the bridge's own session timeout."""
+    return int(settings.AIST_LOCAL_TRIAGE_TIMEOUT) + 60
 
 
 def build_bridge_client_from_settings(
@@ -49,7 +68,7 @@ def build_bridge_client_from_settings(
     """
     return BridgeClient(
         socket_path=settings.AIST_LOCAL_TRIAGE_BRIDGE_SOCKET,
-        sync_timeout_seconds=int(settings.AIST_LOCAL_TRIAGE_TIMEOUT) + 60,
+        sync_timeout_seconds=bridge_sync_timeout_seconds(),
         async_timeout_seconds=10,
         auth_env=auth_env,
     )

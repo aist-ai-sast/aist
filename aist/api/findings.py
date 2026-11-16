@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from django import forms
 from django.db import OperationalError, transaction
-from django.db.models import Count
+from django.db.models import Count, TextChoices
 from django.http import HttpResponse
 from django.utils import timezone
 from django_filters import rest_framework as django_filters
@@ -38,6 +38,7 @@ from aist.findings_bulk_lock import (
     release_bulk_locks,
 )
 from aist.models import AISTAIFindingResponse, AISTPipeline, VersionType
+from aist.utils.ai_response import ai_answered_finding_ids
 from aist.work_items.finding_state import (
     LINKED_AT_FIELD,
     NO_WORK_ITEM,
@@ -55,12 +56,26 @@ class FindingApiChoices:
     ordering: list[str]
 
 
+class AIStatusFilter(TextChoices):
+    HAS_AI = "has_ai"
+    NO_AI = "no_ai"
+    AI_TP = "ai_tp"
+    AI_FP = "ai_fp"
+    AI_U = "ai_u"
+
+
 FINDING_API_CHOICES = FindingApiChoices(
-    ai_status=["has_ai", "no_ai", "ai_tp", "ai_fp", "ai_u"],
+    ai_status=list(AIStatusFilter.values),
     severity=list(API_SEVERITY_VALUES),
     export_format=["csv", "xlsx"],
     ordering=list(getattr(ApiFindingFilter.base_filters.get("o"), "param_map", {}).keys()),
 )
+
+_AI_STATUS_VERDICTS = {
+    AIStatusFilter.AI_TP: AISTAIFindingResponse.Verdict.TRUE_POSITIVE,
+    AIStatusFilter.AI_FP: AISTAIFindingResponse.Verdict.FALSE_POSITIVE,
+    AIStatusFilter.AI_U: AISTAIFindingResponse.Verdict.UNCERTAIN,
+}
 
 
 def _normalize_external_reference(raw: str) -> str:
@@ -365,21 +380,13 @@ class AISTFindingFilter(ApiFindingFilter):
         if not status_value:
             return queryset
 
-        ai_qs = AISTAIFindingResponse.objects.all()
-        pipeline_id = (self.data.get("pipeline_id") or "").strip()
-        if pipeline_id:
-            ai_qs = ai_qs.filter(pipeline_id=pipeline_id)
-        if status_value == "ai_tp":
-            ai_qs = ai_qs.filter(verdict=AISTAIFindingResponse.Verdict.TRUE_POSITIVE)
-        elif status_value == "ai_fp":
-            ai_qs = ai_qs.filter(verdict=AISTAIFindingResponse.Verdict.FALSE_POSITIVE)
-        elif status_value == "ai_u":
-            ai_qs = ai_qs.filter(verdict=AISTAIFindingResponse.Verdict.UNCERTAIN)
-
-        ai_finding_ids = ai_qs.values_list("finding_id", flat=True)
-        if status_value in {"has_ai", "ai_tp", "ai_fp", "ai_u"}:
-            return queryset.filter(id__in=ai_finding_ids)
-        return queryset.exclude(id__in=ai_finding_ids)
+        ai_finding_ids = ai_answered_finding_ids(
+            pipeline_id=(self.data.get("pipeline_id") or "").strip() or None,
+            verdict=_AI_STATUS_VERDICTS.get(status_value),
+        )
+        if status_value == AIStatusFilter.NO_AI:
+            return queryset.exclude(id__in=ai_finding_ids)
+        return queryset.filter(id__in=ai_finding_ids)
 
 
 class AISTFindingListAPI(AISTAPIView):

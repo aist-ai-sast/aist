@@ -68,11 +68,11 @@ def _set_status(pipeline, status, **_kwargs):
 def _call_after_upload_enrich(*, enriched_count_list, pipeline, test_ids, log_level="INFO"):
     with patch("aist.tasks.enrich.install_pipeline_logging", return_value=DummyLogger()), \
          patch("aist.tasks.enrich.AISTPipeline") as mock_model, \
+         patch("aist.tasks.enrich.lock_existing_pipeline", return_value=pipeline), \
          patch("aist.tasks.enrich.set_pipeline_status", side_effect=_set_status), \
          patch("aist.tasks.ai.auto_push_to_ai_if_configured") as mock_auto_push, \
          patch("aist.tasks.regression.detect_regressions_for_pipeline") as mock_regression:
 
-        mock_model.objects.select_for_update().get.return_value = pipeline
         mock_model.objects.get.return_value = pipeline
 
         _after_upload_enrich_and_watch(
@@ -121,13 +121,13 @@ def _call_watch_dedup(*, pipeline, progress_qs=None, remaining_counts=None, dupl
     mock_chord_sig = MagicMock()
     with patch("aist.tasks.dedup.install_pipeline_logging", return_value=DummyLogger()), \
          patch("aist.tasks.dedup.AISTPipeline") as mock_model, \
+         patch("aist.tasks.dedup.lock_existing_pipeline", return_value=pipeline), \
          patch("aist.tasks.dedup.TestDeduplicationProgress") as mock_progress, \
          patch("aist.tasks.dedup.AISTTestMeta") as mock_meta, \
          patch("aist.tasks.dedup.Finding") as mock_finding, \
          patch("aist.tasks.dedup.set_pipeline_status", side_effect=_set_status), \
          patch("aist.tasks.enrich.make_enrich_chord", return_value=mock_chord_sig):
         mock_model.objects.get.return_value = pipeline
-        mock_model.objects.select_for_update.return_value.get.return_value = pipeline
         if progress_qs is None:
             progress_qs = MagicMock()
             progress_qs.filter.return_value = progress_qs
@@ -329,78 +329,64 @@ class WatchDeduplicationTests(TestCase):
 
 
 @override_settings(AIST_AI_TRIAGE_WEBHOOK_URL="https://triage.example.test/hook")
-class PushRequestToAITests(TestCase):
+class PushRequestToAITests(AISTApiBase):
+    def setUp(self):
+        super().setUp()
+        self.enterContext(patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()))
+        self.post = self.enterContext(patch("aist.tasks.ai.requests.post"))
+
+    @staticmethod
+    def _status(pipeline) -> str:
+        pipeline.refresh_from_db()
+        return pipeline.status
+
     def test_does_not_push_when_not_ready(self):
-        with patch("aist.tasks.ai.requests.post") as mock_post, \
-             patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()), \
-             patch("aist.tasks.ai.finish_pipeline") as mock_finish, \
-             patch("aist.tasks.ai.AISTPipeline") as mock_model:
-            pipeline = _mk_pipeline(status="WAITING_CONFIRMATION_TO_PUSH_TO_AI")
-            sfu = mock_model.objects.select_for_update.return_value
-            sfu.select_related.return_value.get.return_value = pipeline
-            sfu.get.return_value = pipeline
+        pipeline = self.make_pipeline("n8n-not-ready", status=AISTStatus.WAITING_CONFIRMATION_TO_PUSH_TO_AI)
 
-            _push_request_to_ai.run(pipeline_id=pipeline.id, finding_ids=[1, 2], filters={}, log_level="INFO")
+        _push_request_to_ai.run(pipeline_id=pipeline.id, finding_ids=[1, 2], filters={}, log_level="INFO")
 
-            mock_post.assert_not_called()
-            mock_finish.assert_called_once_with(pipeline.id, degraded=True)
+        self.post.assert_not_called()
+        self.assertEqual(self._status(pipeline), AISTStatus.FINISHED_WITH_WARNINGS)
+
+    def test_a_repeated_push_of_a_pipeline_already_waiting_for_ai_changes_nothing(self):
+        pipeline = self.make_pipeline("n8n-repeat", status=AISTStatus.WAITING_RESULT_FROM_AI)
+
+        _push_request_to_ai.run(pipeline_id=pipeline.id, finding_ids=[1], filters={}, log_level="INFO")
+
+        self.post.assert_not_called()
+        self.assertEqual(self._status(pipeline), AISTStatus.WAITING_RESULT_FROM_AI)
 
     @override_settings(AIST_AI_TRIAGE_WEBHOOK_URL="")
     def test_unconfigured_remote_triage_finishes_without_outbound_request(self):
-        with (
-            patch("aist.tasks.ai.requests.post") as post,
-            patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()),
-            patch("aist.tasks.ai.finish_pipeline") as finish,
-            patch("aist.tasks.ai._gather_ai_push_payload", return_value=(True, None, "fixture", "python", "https://aist.internal/callback")),
-        ):
-            _push_request_to_ai.run(pipeline_id="pipeline-123", finding_ids=[1], filters={})
-        post.assert_not_called()
-        finish.assert_called_once_with("pipeline-123", degraded=True)
+        pipeline = self.make_pipeline("n8n-unconfigured", status=AISTStatus.PUSH_TO_AI)
+
+        _push_request_to_ai.run(pipeline_id=pipeline.id, finding_ids=[1], filters={})
+
+        self.post.assert_not_called()
+        self.assertEqual(self._status(pipeline), AISTStatus.FINISHED_WITH_WARNINGS)
 
     def test_push_success_transitions_to_waiting_result(self):
-        with patch("aist.tasks.ai.requests.post") as mock_post, \
-             patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()), \
-             patch("aist.tasks.ai.set_pipeline_status", side_effect=_set_status), \
-             patch("aist.tasks.ai.AISTPipeline") as mock_model:
-            pipeline = _mk_pipeline(status="PUSH_TO_AI")
-            sfu = mock_model.objects.select_for_update.return_value
-            sfu.select_related.return_value.get.return_value = pipeline
-            sfu.get.return_value = pipeline
+        pipeline = self.make_pipeline("n8n-ok", status=AISTStatus.PUSH_TO_AI)
+        self.post.return_value = SimpleNamespace(status_code=202, text="ok", raise_for_status=lambda: None)
 
-            ok_resp = SimpleNamespace(status_code=202, text="ok", raise_for_status=lambda: None)
-            mock_post.return_value = ok_resp
+        _push_request_to_ai.run(
+            pipeline_id=pipeline.id,
+            finding_ids=[11, 22],
+            filters={"analyzers": ["a"]},
+            log_level="INFO",
+        )
 
-            _push_request_to_ai.run(
-                pipeline_id=pipeline.id,
-                finding_ids=[11, 22],
-                filters={"analyzers": ["a"]},
-                log_level="INFO",
-            )
+        self.assertEqual(self.post.call_args.args[0], "https://triage.example.test/hook")
+        pipeline.refresh_from_db()
+        self.assertEqual(pipeline.status, AISTStatus.WAITING_RESULT_FROM_AI)
 
-            self.assertEqual(mock_post.call_args.args[0], "https://triage.example.test/hook")
-            self.assertEqual(pipeline.status, "WAITING_RESULT_FROM_AI")
-            pipeline.save.assert_any_call(update_fields=["status", "updated"])
+    def test_a_webhook_that_fails_finishes_the_pipeline_with_warnings(self):
+        pipeline = self.make_pipeline("n8n-http-fail", status=AISTStatus.PUSH_TO_AI)
+        self.post.side_effect = ConnectionError("timeout")
 
-    def test_http_failure_calls_finish_pipeline(self):
-        with patch("aist.tasks.ai.requests.post") as mock_post, \
-             patch("aist.tasks.ai.install_pipeline_logging", return_value=DummyLogger()), \
-             patch("aist.tasks.ai.finish_pipeline") as mock_finish, \
-             patch("aist.tasks.ai.AISTPipeline") as mock_model:
-            pipeline = _mk_pipeline(status="PUSH_TO_AI")
-            sfu = mock_model.objects.select_for_update.return_value
-            sfu.select_related.return_value.get.return_value = pipeline
-            sfu.get.return_value = pipeline
+        _push_request_to_ai.run(pipeline_id=pipeline.id, finding_ids=[1], filters={}, log_level="INFO")
 
-            mock_post.side_effect = ConnectionError("timeout")
-
-            _push_request_to_ai.run(
-                pipeline_id=pipeline.id,
-                finding_ids=[1],
-                filters={},
-                log_level="INFO",
-            )
-
-            mock_finish.assert_called_once_with(pipeline.id, degraded=True)
+        self.assertEqual(self._status(pipeline), AISTStatus.FINISHED_WITH_WARNINGS)
 
 # ---- send_request_to_ai (view) ----------------------------------------------
 
@@ -427,7 +413,7 @@ class SendRequestToAITests(TestCase):
 
             self.assertEqual(resp.status_code, 200)
             mock_perm_check.assert_called_once()
-            mock_delegate.assert_called_once_with(req, pipeline)
+            mock_delegate.assert_called_once_with(pipeline, req.user, [1, 2, 3], {"analyzers": ["X"]})
 
 # ---- make_enrich_chord progress ---------------------------------------------
 
@@ -522,9 +508,8 @@ class FinishPipelineTests(TestCase):
     def test_absorbs_status_save_exception_without_propagating(self):
         """finish_pipeline must not raise even if the status save fails."""
         with patch("aist.utils.pipeline.reconcile_pipeline_orphans", return_value=ReconciliationStats(pipeline_id="pipe-x", dry_run=False)), \
-             patch("aist.utils.pipeline.AISTPipeline") as mock_model, \
+             patch("aist.utils.pipeline.lock_existing_pipeline", side_effect=RuntimeError("db error")), \
              patch("aist.utils.pipeline.uninstall_pipeline_file_logging"):
-            mock_model.objects.select_for_update.return_value.get.side_effect = RuntimeError("db error")
             # Should not raise
             finish_pipeline("pipe-x", degraded=False)
 

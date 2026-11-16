@@ -7,7 +7,8 @@ description: Analyze new AIST pipeline findings from docker-compose data sources
 
 - `pipeline_id` (required): AIST pipeline id (UUID-like string).
 - `source_path` (required): Absolute path to source code on host.
-- `severity` (optional): Defaults to `any`.
+- `finding_ids` (required): comma-separated ids of the findings to triage in this session. The platform
+  sends a pipeline's findings in small batches, one session per batch; triage exactly these ids, no others.
 - `output_path` (required): Absolute path to a directory the skill MUST write
   the completion marker into. The bridge polls this directory; the marker
   file appearing is the only reliable completion signal — without it the
@@ -19,7 +20,7 @@ description: Analyze new AIST pipeline findings from docker-compose data sources
 # Rules
 
 1. Use `docker compose` only when querying project data. Do not address containers directly.
-2. Analyze only new findings for the specified pipeline and severity scope.
+2. Analyze exactly the findings listed in `finding_ids`, and every one of them.
 3. Decide only `TP` or `FP` for each analyzed finding.
 4. The skill must persist triage results in the project database.
 5. For each analyzed finding, directly create or update `AISTAIFindingResponse`; do not stop at generating a chat response.
@@ -29,20 +30,28 @@ description: Analyze new AIST pipeline findings from docker-compose data sources
 9. Never mention scanner/tool vendor names.
 10. Ensure the response has `pipeline_id` equal to the provided input.
 11. Format `reasoning` as structured Markdown (headings + lists), not plain paragraph text.
+12. Judge each finding on its own. Before writing its verdict, open the finding's file at its line in
+    `source_path` and trace where the flagged value comes from. Its evidence must quote or cite that code
+    and the data flow you followed for that finding.
+13. Never produce verdicts in bulk: no loop, script or template that assigns verdicts or reasoning by rule
+    name, title, file pattern or any other grouping. Persist responses one finding at a time, each with
+    evidence written for that finding. A batch size is never a reason to shorten the analysis of a finding.
 
 # Workflow
 
-1. Validate inputs (`pipeline_id`, `source_path`) and confirm `source_path` exists.
-2. Retrieve findings for the target pipeline and severity.
+1. Validate inputs (`pipeline_id`, `source_path`, `finding_ids`) and confirm `source_path` exists.
+2. Retrieve the findings listed in `finding_ids` for the target pipeline.
 3. For each finding, map claim to concrete code/data flow evidence in `source_path`.
 4. Assess exploitability, impact, and uncertainty from observed evidence.
 5. Persist one `AISTAIFindingResponse` per finding directly in the database.
 6. Apply the corresponding `Finding` status change, including the normal false-positive transition when verdict is `FP`.
-7. **Write the completion marker** as the very last action: create an empty
+7. **Write the completion marker** as the very last action, once every id in
+   `finding_ids` has a persisted `AISTAIFindingResponse`: create an empty
    file at `{output_path}/{result_filename}` (e.g. via the `Write` tool with
    empty content, or `bash`: `touch "$output_path/$result_filename"`). This
    signal is what wakes the bridge up; skipping it leaves the pipeline
-   stuck for hours.
+   stuck for hours. The platform checks every id of the batch for a response
+   and reports the ones without.
 8. Return a concise human summary of what was written to the database
    (after step 7 — the marker MUST exist on disk before the summary).
 
@@ -64,14 +73,9 @@ pipeline = AISTPipeline.objects.get(id=pipeline_id)
 findings_qs = Finding.objects.filter(test__aist_pipelines=pipeline)
 # equivalent: Finding.objects.filter(test__aist_pipelines__id=pipeline_id)
 
-# 3. New (not yet triaged) findings for this pipeline.
-new_findings_qs = findings_qs.exclude(
-    aist_ai_responses__pipeline=pipeline,   # related_name on AISTAIFindingResponse.finding
-)
-
-# 4. Filter by severity (optional).
-if severity and severity.lower() != "any":
-    new_findings_qs = new_findings_qs.filter(severity__iexact=severity)
+# 3. The findings of this session: exactly the ids in `finding_ids`.
+batch_ids = [int(value) for value in finding_ids.split(",")]
+batch_qs = findings_qs.filter(id__in=batch_ids)
 
 # 5. Create or update one AISTAIFindingResponse per finding (idempotent).
 AISTAIFindingResponse.objects.update_or_create(

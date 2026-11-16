@@ -30,7 +30,7 @@ from aist.integrations.dast_report import (
     DastTokenUsage,
     ValidatedDastRunMetadata,
 )
-from aist.launch_data import AIMode
+from aist.launch_data import AIMode, AITriageType
 from aist.models import (
     AISTAIFindingResponse,
     AISTAIResponse,
@@ -56,8 +56,12 @@ from aist.models import (
     PipelineLaunchOrigin,
     PipelineLaunchRequest,
     PipelineLaunchRequestState,
+    RepositoryInfo,
+    ScmType,
     VersionType,
 )
+from aist.profile import AiTriageConfig, ProjectProfile
+from aist.scm_import import seed_imported_project
 from aist.services.dast_queue_demo import demo_descriptor, demo_page
 from aist.utils.pipeline_imports import _import_sast_pipeline_package
 
@@ -95,6 +99,20 @@ class DemoProjectSpec:
     queue_day_offsets: tuple[int, ...]
     # One pipeline of this project stays EXECUTING, so the pages that follow a running pipeline have one to show.
     has_running_pipeline: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class LiveScanProjectSpec:
+
+    """A demo project bound to a real public repository, so a development stand can run a pipeline on it."""
+
+    organization_name: str
+    product_name: str
+    repository_owner: str
+    repository_name: str
+    branch: str
+    supported_languages: tuple[str, ...]
+    launch_config_name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +238,17 @@ DEMO_USERS = [
 
 DEMO_RUNNING_PIPELINE_COMMIT = "5e1f0c2a9b7d4e6f8a1c3b5d7e9f0a2c4b6d8e0f"
 DEMO_RUNNING_PIPELINE_AGE = timedelta(days=40)
+
+# A deliberately vulnerable application, so semgrep reports findings for the local AI triage to judge.
+LIVE_SCAN_PROJECT = LiveScanProjectSpec(
+    organization_name="Helios Core",
+    product_name="Demo AIST Live Scan",
+    repository_owner="we45",
+    repository_name="Vulnerable-Flask-App",
+    branch="master",
+    supported_languages=("python",),
+    launch_config_name="Semgrep with local AI triage",
+)
 
 DEMO_PROJECTS = [
     DemoProjectSpec(
@@ -561,7 +590,8 @@ class Command(BaseCommand):
     help = (
         "Bootstrap demo admin username, organizations and users. "
         "Creates organizations/users, binds organization roles via ProductType membership, "
-        "and prepares demo AIST projects with findings, launch configs, schedules and queue history."
+        "and prepares demo AIST projects with findings, launch configs, schedules and queue history, plus a "
+        "project bound to a public repository that a development stand can scan for real."
     )
 
     def add_arguments(self, parser):
@@ -609,6 +639,7 @@ class Command(BaseCommand):
 
         self._bind_roles_via_product_type(organizations=organizations, users_by_username=users_by_username)
         self._ensure_demo_projects(organizations=organizations, users_by_username=users_by_username)
+        self._ensure_live_scan_project(organizations=organizations)
 
         self.stdout.write(f"Demo users password: {password}")
         self.stdout.write(f"Organizations: {', '.join(org.name for org in organizations)}")
@@ -910,8 +941,16 @@ class Command(BaseCommand):
         )
 
         for spec in DEMO_PROJECTS:
-            product = self._ensure_demo_product(spec, organizations_by_name[spec.organization_name], sla_config)
-            project = self._ensure_demo_project(spec, product)
+            product = self._ensure_demo_product(
+                organizations_by_name[spec.organization_name],
+                sla_config,
+                name=spec.product_name,
+                description=f"Demo product for {spec.slug}",
+                tags=spec.tags,
+            )
+            project = self._ensure_demo_project(
+                product, supported_languages=spec.supported_languages, compilable=spec.compilable,
+            )
             project_created_at = now - timedelta(days=spec.project_age_days)
             AISTProject.objects.filter(pk=project.pk).update(created=project_created_at)
             main_version, release_version = self._ensure_demo_versions(project)
@@ -922,7 +961,12 @@ class Command(BaseCommand):
                 trigger_version=main_version,
                 targets=dast_targets_by_organization[spec.organization_name],
             )
-            launch_config = self._ensure_demo_launch_config(spec, project)
+            launch_config = self._ensure_demo_launch_config(
+                project,
+                name=spec.launch_config_name,
+                description=f"Demo launch config for {spec.slug}",
+                analyzers=("semgrep", "snyk"),
+            )
             schedule = self._ensure_demo_schedule(spec, launch_config, now)
             engagement, dojo_test = self._ensure_demo_scan(spec, product, test_type, project_created_at, now, today)
 
@@ -972,6 +1016,41 @@ class Command(BaseCommand):
             if spec.has_running_pipeline:
                 self._ensure_running_pipeline(spec=spec, project=project, now=now)
 
+    def _ensure_live_scan_project(self, *, organizations: list[Organization]) -> AISTProjectLaunchConfig:
+        """
+        The live scan project, seeded as an import seeds one, with a launch config that triages its findings locally.
+
+        Local triage also needs the organization's Claude integration, which ``migrate_claude_env_to_integration``
+        creates from a token the operator supplies.
+        """
+        spec = LIVE_SCAN_PROJECT
+        organization = next(org for org in organizations if org.name == spec.organization_name)
+        sla_config, _ = SLA_Configuration.objects.get_or_create(name="Demo SLA")
+        product = self._ensure_demo_product(
+            organization,
+            sla_config,
+            name=spec.product_name,
+            description=f"Demo product scanning {spec.repository_owner}/{spec.repository_name}",
+            tags=(),
+        )
+        repository, _ = RepositoryInfo.objects.get_or_create(
+            type=ScmType.GITHUB, repo_owner=spec.repository_owner, repo_name=spec.repository_name,
+        )
+        project = self._ensure_demo_project(
+            product,
+            supported_languages=spec.supported_languages,
+            compilable=False,
+            repository=repository,
+            profile=ProjectProfile(ai_triage=AiTriageConfig(type=AITriageType.LOCAL)).as_dict(),
+        )
+        seed_imported_project(project, spec.branch)
+        return self._ensure_demo_launch_config(
+            project,
+            name=spec.launch_config_name,
+            description="Scans the repository with semgrep and triages its findings with the local AI bridge",
+            analyzers=("semgrep",),
+        )
+
     def _ensure_running_pipeline(self, *, spec: DemoProjectSpec, project: AISTProject, now) -> None:
         """
         A SAST pipeline left EXECUTING on a commit of its own.
@@ -999,31 +1078,40 @@ class Command(BaseCommand):
         )
 
     @staticmethod
-    def _ensure_demo_product(spec: DemoProjectSpec, organization: Organization, sla_config) -> Product:
+    def _ensure_demo_product(
+        organization: Organization, sla_config, *, name: str, description: str, tags: tuple[str, ...],
+    ) -> Product:
         product, _ = Product.objects.update_or_create(
-            name=spec.product_name,
+            name=name,
             defaults={
-                "description": f"Demo product for {spec.slug}",
+                "description": description,
                 "prod_type": organization.ensure_product_type(),
                 "sla_configuration": sla_config,
             },
         )
         # Must precede the findings, which inherit these on save.
-        desired_tags = sorted(spec.tags)
+        desired_tags = sorted(tags)
         if sorted(tag.name for tag in product.tags.all()) != desired_tags:
             product.tags.set(desired_tags)
         return product
 
     @staticmethod
-    def _ensure_demo_project(spec: DemoProjectSpec, product: Product) -> AISTProject:
+    def _ensure_demo_project(
+        product: Product,
+        *,
+        supported_languages: tuple[str, ...],
+        compilable: bool,
+        repository: RepositoryInfo | None = None,
+        profile: dict | None = None,
+    ) -> AISTProject:
+        """Upsert the product's project; ``profile`` is set only when the project is created."""
+        defaults = {"supported_languages": list(supported_languages), "compilable": compilable}
+        if repository is not None:
+            defaults["repository"] = repository
         project, _ = AISTProject.objects.update_or_create(
             product=product,
-            defaults={"supported_languages": list(spec.supported_languages), "compilable": spec.compilable},
-            create_defaults={
-                "supported_languages": list(spec.supported_languages),
-                "compilable": spec.compilable,
-                "profile": {},
-            },
+            defaults=defaults,
+            create_defaults={**defaults, "profile": profile or {}},
         )
         return project
 
@@ -1044,17 +1132,20 @@ class Command(BaseCommand):
         return main_version, release_version
 
     @staticmethod
-    def _ensure_demo_launch_config(spec: DemoProjectSpec, project: AISTProject) -> AISTProjectLaunchConfig:
+    def _ensure_demo_launch_config(
+        project: AISTProject, *, name: str, description: str, analyzers: tuple[str, ...],
+    ) -> AISTProjectLaunchConfig:
+        """The project's default SAST launch config, triaging the demo AI filter's findings automatically."""
         launch_config, _ = AISTProjectLaunchConfig.objects.update_or_create(
             project=project,
-            name=spec.launch_config_name,
+            name=name,
             defaults={
                 "execution_type": PipelineExecutionType.SAST,
                 "dast_binding": None,
                 "trigger_project_version": None,
-                "description": f"Demo launch config for {spec.slug}",
+                "description": description,
                 "params": {
-                    "analyzers": ["semgrep", "snyk"],
+                    "analyzers": list(analyzers),
                     "time_class_level": TimeClass.SLOW,
                     "log_level": "INFO",
                     "ai_mode": AIMode.AUTO_DEFAULT,

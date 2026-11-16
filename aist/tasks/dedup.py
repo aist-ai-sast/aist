@@ -21,6 +21,7 @@ from aist.models import (
     ProcessedFinding,
     TestDeduplicationProgress,
 )
+from aist.services.pipeline_lifecycle import lock_existing_pipeline
 from aist.utils.pipeline import finish_pipeline, set_pipeline_status
 
 logger = logging.getLogger(__name__)
@@ -104,7 +105,7 @@ def _release_pipeline_after_dedup(pipeline_id: str) -> None:
     from aist.tasks.enrich import make_enrich_chord  # noqa: PLC0415
 
     with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        pipeline = lock_existing_pipeline(pipeline_id)
         if pipeline.status != AISTStatus.WAITING_DEDUPLICATION_TO_FINISH:
             logger.debug(
                 "Pipeline %s already past dedup status (%s); skipping release.",

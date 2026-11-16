@@ -23,11 +23,38 @@ pipeline identity, and a callback address to the configured n8n webhook. The
 accepted callback persists the resulting AI responses. A failed request leaves
 the pipeline with a visible degraded outcome.
 
-Local mode resolves the project's Claude integration and source path, then asks
-the local AI bridge to run a CLI session inside its container through the shared
-Unix socket. Missing credentials or a rejected bridge request becomes a visible
-degraded outcome with diagnostic context rather than an unauthenticated
-fallback.
+Local mode splits the selected findings of the pipeline into batches of
+`AIST_LOCAL_TRIAGE_BATCH_SIZE`; only findings of the pipeline itself enter a
+batch, and the pipeline log counts the selected findings of other pipelines that
+are left out. A selection with none of the pipeline's findings finishes with
+warnings; one whose findings all have a verdict or are closed finishes without
+triage. A Celery chain
+then triages the batches one after another: each task asks the local AI bridge,
+through the shared Unix socket, to run one CLI session for its batch and waits
+for it to end, so a session handles at most one batch whatever the size of the
+pipeline. Each session is given the identifiers of its own findings. The last
+task of the chain finishes the pipeline, with a visible degraded outcome when
+any finding sent to a session has no AI response for the pipeline, whatever the
+sessions reported. A batch without credentials or with a failed session is
+still completed, so its findings count as untriaged rather than stopping the
+chain. When the push or the chain cannot be queued, the batches are cancelled
+and the pipeline finishes with warnings.
+
+Stopping the pipeline cancels its pending batches, which the chain then skips. A
+batch whose session is running is cancelling until the session ends, and only
+then cancelled: until then the pipeline keeps its sources and cannot be
+deleted. A batch task delivered a second time, after its batch has ended, runs
+no session and ends its copy of the chain.
+
+An operator can triage the findings of a finished, locally triaged pipeline that
+hold no AI response for it with the `retriage_pipeline` management command, run
+in the worker container that holds the sources. It takes every active finding
+without an analyzer-produced verdict, regardless of the launch's selection
+rules, and sends it through the same batches. The pipeline keeps its sources
+until those batches end and keeps its status; the outcome, including findings
+still without a response, is reported in the pipeline log. A retriage that
+cannot be queued cancels its batches and reports the error, so it can be run
+again.
 
 ## Persist the verdict
 

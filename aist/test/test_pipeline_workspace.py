@@ -11,7 +11,7 @@ import stat
 import tempfile
 from pathlib import Path
 
-from aist.models import AISTPipeline, AISTStatus
+from aist.models import AISTPipeline, AISTStatus, LocalTriageBatch, LocalTriageBatchState
 from aist.pipeline_args import BUILD_DIR_WARNING, PipelineArguments, SastPipelineArguments
 from aist.test.test_api import AISTApiBase
 
@@ -153,6 +153,23 @@ class PipelineExecutionPathTests(AISTApiBase):
             self.assertTrue((runs / "pipe-keep-current").exists())
             self.assertTrue((runs / "pipe-keep-active").exists())
             self.assertFalse((runs / "pipe-drop-finished").exists())
+
+    def test_a_finished_pipeline_whose_findings_are_being_retriaged_keeps_its_workspace(self):
+        with tempfile.TemporaryDirectory() as base:
+            runs = Path(base) / self.product.name / self.pv.version / "runs"
+            for pipeline_id in ("pipe-retriaged", "pipe-retriage-done"):
+                (runs / pipeline_id).mkdir(parents=True, exist_ok=True)
+                self.make_pipeline(pipeline_id, status=AISTStatus.FINISHED_WITH_WARNINGS)
+            LocalTriageBatch.objects.create(pipeline_id="pipe-retriaged", sequence=1, finding_ids=[1])
+            LocalTriageBatch.objects.create(
+                pipeline_id="pipe-retriage-done", sequence=1, finding_ids=[1], state=LocalTriageBatchState.COMPLETED,
+            )
+
+            with self.settings(AIST_PROJECTS_BUILD_DIR=base):
+                self._arguments().prepare_execution("pipe-next")
+
+            self.assertTrue((runs / "pipe-retriaged").exists())
+            self.assertFalse((runs / "pipe-retriage-done").exists())
 
     def test_concurrent_calls_do_not_raise(self):
         """

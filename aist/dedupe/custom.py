@@ -29,7 +29,7 @@ from aist.dedupe.canonical import (
     location_strength,
     score_signatures,
 )
-from aist.logging_transport import install_pipeline_logging, uninstall_pipeline_file_logging
+from aist.logging_transport import scoped_pipeline_logging
 from aist.models import AISTPipeline, DastTestBinding
 from aist.parser_overrides import (
     BEARER_SCAN_TYPE,
@@ -190,53 +190,49 @@ def _log_pipeline_dedupe_result(
         for finding in Finding.objects.filter(id__in=missing_root_ids).only("id", "title")
     })
     for pipeline_id in pipeline_ids:
-        pipeline_logger = None
         try:
-            pipeline_logger = install_pipeline_logging(pipeline_id, "INFO")
-            pipeline_logger.info(
-                "AIST dedupe: processed=%s exact=%s canonical_auto=%s candidates=%s no_match=%s "
-                "applied=%s conflicts=%s",
-                summary.processed,
-                summary.exact_duplicates,
-                summary.auto_duplicates - summary.exact_duplicates,
-                summary.candidates,
-                summary.unchanged,
-                summary.applied_duplicates,
-                summary.conflicts,
-            )
-            for finding in sorted(target_findings, key=lambda item: item.id):
-                decision = result.decisions.get(finding.id)
-                if decision is None or decision.verdict == MatchVerdict.NO_MATCH:
-                    continue
-                identity = (
-                    decision.source
-                    if decision.source == DedupeDecisionSource.UNIQUE_ID_FROM_TOOL
-                    else ",".join(decision.identity_kinds) or "similarity"
-                )
-                root = findings_by_id.get(decision.root_id) if decision.root_id else None
-                root_ids = decision.conflicting_root_ids or (() if decision.root_id is None else (decision.root_id,))
+            with scoped_pipeline_logging(pipeline_id, "INFO") as pipeline_logger:
                 pipeline_logger.info(
-                    "AIST dedupe %s: finding=%s test=%s title=%r roots=%s root_title=%r "
-                    "source=%s identity=%s score=%s reason=%s",
-                    decision.verdict.upper(),
-                    finding.id,
-                    finding.test_id,
-                    _log_title(finding.title),
-                    ",".join(str(root_id) for root_id in root_ids) or "none",
-                    _log_title(root.title) if root is not None else "",
-                    decision.source,
-                    identity,
-                    decision.score,
-                    decision.fallback_reason or "score",
+                    "AIST dedupe: processed=%s exact=%s canonical_auto=%s candidates=%s no_match=%s "
+                    "applied=%s conflicts=%s",
+                    summary.processed,
+                    summary.exact_duplicates,
+                    summary.auto_duplicates - summary.exact_duplicates,
+                    summary.candidates,
+                    summary.unchanged,
+                    summary.applied_duplicates,
+                    summary.conflicts,
                 )
+                for finding in sorted(target_findings, key=lambda item: item.id):
+                    decision = result.decisions.get(finding.id)
+                    if decision is None or decision.verdict == MatchVerdict.NO_MATCH:
+                        continue
+                    identity = (
+                        decision.source
+                        if decision.source == DedupeDecisionSource.UNIQUE_ID_FROM_TOOL
+                        else ",".join(decision.identity_kinds) or "similarity"
+                    )
+                    root = findings_by_id.get(decision.root_id) if decision.root_id else None
+                    root_ids = decision.conflicting_root_ids or (() if decision.root_id is None else (decision.root_id,))
+                    pipeline_logger.info(
+                        "AIST dedupe %s: finding=%s test=%s title=%r roots=%s root_title=%r "
+                        "source=%s identity=%s score=%s reason=%s",
+                        decision.verdict.upper(),
+                        finding.id,
+                        finding.test_id,
+                        _log_title(finding.title),
+                        ",".join(str(root_id) for root_id in root_ids) or "none",
+                        _log_title(root.title) if root is not None else "",
+                        decision.source,
+                        identity,
+                        decision.score,
+                        decision.fallback_reason or "score",
+                    )
         except Exception:
             logger.exception(
                 "Could not write canonical dedupe diagnostics (pipeline_id=%s)",
                 pipeline_id,
             )
-        finally:
-            if pipeline_logger is not None:
-                uninstall_pipeline_file_logging(pipeline_id)
 
 
 # ---------------------------------------------------------------------------

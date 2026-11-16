@@ -8,7 +8,7 @@ from django.urls import reverse
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
-from aist.models import AISTPipeline, AISTStatus
+from aist.models import AISTPipeline, AISTStatus, LocalTriageBatch, LocalTriageBatchState
 from aist.test.test_api import AISTApiBase
 
 _PROJ_PATH = "/tmp/aist/projects/testproj/main/runs"  # noqa: S108
@@ -85,6 +85,22 @@ class PipelineSourceInfoAPITests(AISTApiBase):
 
         self.assertEqual(resp.status_code, 409)
         self.assertIn("terminal", resp.json()["detail"])
+
+    def test_a_finished_pipeline_keeps_its_sources_while_its_findings_are_retriaged(self):
+        """A retriage session reads code through these sources, so they must outlive the pipeline's finish."""
+        project_path = f"{_STUB_PATH}/pipe-src-retriage"
+        pipeline = self.make_pipeline(
+            "pipe-src-retriage", status=AISTStatus.FINISHED_WITH_WARNINGS, launch_data={"project_path": project_path},
+        )
+        batch = LocalTriageBatch.objects.create(pipeline=pipeline, sequence=1, finding_ids=[1])
+
+        resp = self.token_client.get(self._url(pipeline.id))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["project_path"], project_path)
+
+        LocalTriageBatch.objects.filter(pk=batch.pk).update(state=LocalTriageBatchState.COMPLETED)
+        self.assertEqual(self.token_client.get(self._url(pipeline.id)).status_code, 409)
 
     def test_returns_409_when_project_path_not_yet_available(self):
         AISTPipeline.objects.create(

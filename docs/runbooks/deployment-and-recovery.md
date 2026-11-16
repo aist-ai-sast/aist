@@ -175,7 +175,10 @@ The following sequence describes its data boundaries and the acceptance checks
 that follow it.
 
 1. Stop user writes, Beat and other launch producers; finish or cancel all
-   pipelines through supported lifecycle operations. Check active execution
+   pipelines through supported lifecycle operations, and wait until no local
+   triage batch is open: pending, running or cancelling (see
+   [Retriage a finished pipeline](#retriage-a-finished-pipeline)), since a
+   finished pipeline being retriaged still reads its checkout. Check active execution
    leases, active/reserved/scheduled Celery tasks and broker queues. Keep a
    record of counts and the exact application, submodule and image revisions.
 2. Stop workers, the AI bridge and web ingress. Preserve the existing `.env`,
@@ -192,7 +195,8 @@ that follow it.
    and Beat stopped until data and media are ready.
 5. Restore the media volume and `/tmp/aist/output` at their existing container
    paths. Keep the `/tmp/aist` mount: its `projects` child contains disposable
-   per-run checkouts and can start empty once every pipeline is terminal.
+   per-run checkouts and can start empty once every pipeline is terminal and
+   no local triage batch is open.
    New Git runs clone their sources; uploaded archives remain in media. Preserve
    any triage output needed for audit. Do not remove the whole workspace root
    or assume all children are rebuildable.
@@ -248,6 +252,43 @@ of a named task:
 docker compose --env-file .env exec -T valkey valkey-cli llen celery
 docker compose --env-file .env exec -T celeryworker \
   celery --app=dojo inspect reserved
+```
+
+When the release notes say that a release changes how a local triage session
+reports its end, a session started by the previous release cannot finish its
+pipeline afterwards. Before deploying, stop every pipeline in
+`WAITING_RESULT_FROM_AI` that is triaged locally, and after deploying run
+`retriage_pipeline` for each of them.
+
+## Retriage a finished pipeline
+
+A finished pipeline whose local triage left findings without an AI response can
+be triaged again in the worker container, which holds the pipeline sources:
+
+```bash
+docker compose --env-file .env exec -T celeryworker \
+  python3 manage.py retriage_pipeline <pipeline-id>
+```
+
+The command refuses a pipeline that is not finished, is not triaged locally, has
+batches still open, or whose sources are gone. A finished pipeline's sources are
+removed when its project's next run starts, so a retriage is possible only until
+then. It takes every active finding of the pipeline without an AI response and
+without an analyzer verdict, regardless of the launch's AI filter, so it can
+send more findings than the run left unanswered; each batch holds one worker
+for its session. It does not change the pipeline's status; the pipeline log
+reports each batch and the findings still without a response. The pipeline
+keeps its sources, and cannot be deleted, until its batches end. A pipeline
+stopped during its triage is recovered the same way once its running session
+has ended. To list pipelines with open batches, for example before a
+relocation:
+
+```bash
+docker compose --env-file .env exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL'
+SELECT pipeline_id, state, count(*) FROM aist_localtriagebatch
+WHERE state IN ('PENDING', 'RUNNING', 'CANCELLING') GROUP BY 1, 2;
+SQL
 ```
 
 ## Validate the deployment

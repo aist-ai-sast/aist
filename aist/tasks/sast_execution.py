@@ -21,6 +21,7 @@ from aist.models import (
 )
 from aist.pipeline_args import PipelineArguments
 from aist.profile import ProjectProfile
+from aist.services.pipeline_lifecycle import lock_existing_pipeline
 from aist.services.pipeline_results import attach_findings_and_finish, record_imported_tests
 from aist.utils.agent_runtime import build_agent_runtime_env
 from aist.utils.analyzer_outcomes import consume_analyzer_outcomes
@@ -109,7 +110,7 @@ def _execute_sast_pipeline(run: _SastRun, params: dict) -> None:
 def _accept_sast_start(run: _SastRun, params: dict) -> PipelineArguments | None:
     """Return the launch's arguments, or None when the pipeline is not the one worker acceptance moved to EXECUTING."""
     with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(id=run.pipeline_id)
+        pipeline = lock_existing_pipeline(run.pipeline_id)
         # Worker acceptance is the only transition into EXECUTING. Any other
         # state is either a duplicate delivery or an invalid lifecycle entry.
         if pipeline.status != AISTStatus.EXECUTING:
@@ -147,7 +148,6 @@ def _prepare_sast_runtime(run: _SastRun, pipeline: AISTPipeline, arguments: Pipe
 
 def _run_sast(run: _SastRun, sast, runtime: _SastRuntime) -> PipelineLaunchData:
     pipeline_id = run.pipeline_id
-    project_name = sast.project_name
     run.logger.info("Starting configure_project_run_analyses")
     with vpn_sidecar_context(runtime.vpn, execution_id=pipeline_id) as (vpn_container, _vpn_proxy):
         if vpn_container:
@@ -171,7 +171,7 @@ def _run_sast(run: _SastRun, sast, runtime: _SastRuntime) -> PipelineLaunchData:
                         "analyzer_config": AnalyzersConfigHelper(),
                         "dockerfile_path": sast.dockerfile_path,
                         "context_dir": sast.pipeline_src_path,
-                        "image_name": f"project-{project_name}-builder" if project_name else "project-builder",
+                        "image_name": sast.builder_image_name,
                         "project_path": runtime.project_build_path,
                         "force_rebuild": False,
                         "rebuild_images": sast.rebuild_images,
@@ -197,7 +197,7 @@ def _persist_sast_launch_data(run: _SastRun, sast, ld: PipelineLaunchData) -> Pi
         ld.launch_config_id = run.launch_config_id
 
     with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(id=run.pipeline_id)
+        pipeline = lock_existing_pipeline(run.pipeline_id)
         extra_fields: list[str] = ["launch_data"]
 
         if ld.resolved_commit and pipeline.project_version_id:
@@ -233,7 +233,7 @@ def _import_sast_results(run: _SastRun, sast, ld: PipelineLaunchData, runtime: _
         Finding.objects.filter(test_id__in=test_ids).values_list("id", flat=True),
     )
     with transaction.atomic():
-        pipeline = AISTPipeline.objects.select_for_update().get(id=pipeline_id)
+        pipeline = lock_existing_pipeline(pipeline_id)
         ld = PipelineLaunchData(pipeline.launch_data)
         record_imported_tests(pipeline, ld, tests)
         pipeline.launch_data = ld.as_dict()

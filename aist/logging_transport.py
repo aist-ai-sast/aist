@@ -2,7 +2,8 @@
 
 import logging
 import os
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -144,3 +145,12 @@ def uninstall_pipeline_file_logging(pipeline_id: str):
                 logger.removeHandler(h)
                 with suppress(Exception):
                     h.close()
+
+
+@contextmanager
+def scoped_pipeline_logging(pipeline_id: str, level=logging.INFO) -> Iterator[logging.Logger]:
+    """The pipeline's logger for the duration of the block; its file handlers are removed afterwards."""
+    try:
+        yield install_pipeline_logging(pipeline_id, level)
+    finally:
+        uninstall_pipeline_file_logging(pipeline_id)

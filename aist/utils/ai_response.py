@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from django.utils import timezone
@@ -9,9 +10,25 @@ from dojo.models import Finding
 
 from aist.models import AISTAIFindingResponse, AISTAIResponse, AISTPipeline
 
+if TYPE_CHECKING:
+    from django.db.models import QuerySet
+
 _VALID_FIX_TYPES: frozenset[str] = frozenset(
     choice[0] for choice in AISTAIFindingResponse.FixType.choices
 )
+
+
+def ai_answered_finding_ids(
+    *, pipeline_id: str | None = None, verdict: AISTAIFindingResponse.Verdict | None = None,
+) -> QuerySet:
+    """Ids of the findings holding an AI response, limited to ``pipeline_id`` and ``verdict`` when given."""
+    responses = AISTAIFindingResponse.objects.all()
+    if pipeline_id:
+        responses = responses.filter(pipeline_id=pipeline_id)
+    if verdict:
+        responses = responses.filter(verdict=verdict)
+    return responses.values_list("finding_id", flat=True)
+
 
 VERDICT_KEYS: dict[str, tuple[str, ...]] = {
     AISTAIFindingResponse.Verdict.TRUE_POSITIVE: ("true_positives",),

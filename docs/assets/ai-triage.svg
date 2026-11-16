@@ -54,5 +54,5 @@
 
  <text x="50" y="455" class="s">No findings selected: the pipeline completes without a triage request.</text>
  <text x="50" y="477" class="s">No active local credential, or the request is rejected: the pipeline finishes with warnings.</text>
- <text x="50" y="499" class="s">A local completion error still finishes without warnings once finding-level verdicts are already retained.</text>
+ <text x="50" y="499" class="s">Local CLI triages one small batch per session; any finding left without a verdict means warnings.</text>
 </svg>

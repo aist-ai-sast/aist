@@ -18,6 +18,18 @@ class ExecutionSystemCheckTests(SimpleTestCase):
 
         self.assertEqual(errors, [])
 
+    @override_settings(AIST_LOCAL_TRIAGE_BATCH_SIZE=0)
+    def test_a_local_triage_batch_size_below_one_stops_startup(self):
+        errors = run_checks(tags=[AIST_EXECUTION_CHECK_TAG])
+
+        self.assertEqual([error.id for error in errors], ["aist.E009"])
+
+    @override_settings(AIST_LOCAL_TRIAGE_TIMEOUT=1800, CELERY_BROKER_TRANSPORT_OPTIONS={"visibility_timeout": 900})
+    def test_a_broker_that_would_redeliver_a_running_triage_session_stops_startup(self):
+        errors = run_checks(tags=[AIST_EXECUTION_CHECK_TAG])
+
+        self.assertEqual([error.id for error in errors], ["aist.E010"])
+
     def test_missing_runtime_fails_closed(self):
         with TemporaryDirectory() as temporary_directory, override_settings(
             AIST_PIPELINE_CODE_PATH=temporary_directory,

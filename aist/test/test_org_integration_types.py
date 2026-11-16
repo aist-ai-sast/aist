@@ -10,6 +10,7 @@ from django.test import TestCase
 from dojo.models import Product_Type
 
 from aist.models import Organization, OrgIntegration, OrgIntegrationType, ScmType
+from aist.test.pipeline_execution_helpers import make_claude_integration
 
 
 class OrgIntegrationTypeEnumTests(TestCase):
@@ -57,9 +58,8 @@ class OrgIntegrationSingleActiveClaudeConstraintTests(TestCase):
         )
 
     def _create_claude(self, *, name: str, is_active: bool) -> OrgIntegration:
-        return OrgIntegration.objects.create(
-            organization=self.org,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
+        return make_claude_integration(
+            self.org,
             name=name,
             secret="sk-ant-oat01-" + "x" * 30,
             is_active=is_active,

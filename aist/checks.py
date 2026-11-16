@@ -14,6 +14,8 @@ from aist.execution.contracts import PipelineExecutionKind
 from aist.execution.leases import DEFAULT_EXECUTION_LEASE_POLICY
 from aist.execution.registry import execution_driver_registry
 from aist.models import PipelineExecutionLease
+from aist.utils.bridge_client_factory import bridge_sync_timeout_seconds
+from aist.utils.settings_values import positive_int_setting
 
 AIST_EXECUTION_CHECK_TAG = "aist_execution"
 
@@ -41,6 +43,33 @@ def forbid_non_superuser_global_roles(app_configs, **kwargs):
             id="aist.E001",
         ),
     ]
+
+
+# Kombu's Redis transport hands an unacknowledged message to another worker after this long by default.
+_KOMBU_DEFAULT_VISIBILITY_TIMEOUT = 3600
+
+
+@register(AIST_EXECUTION_CHECK_TAG)
+def validate_local_triage_settings(app_configs, **kwargs):
+    """
+    Refuse to start with a local triage batch size that cannot split findings into sessions, or with a broker that
+    would hand a batch whose session still runs to a second worker.
+    """
+    errors = []
+    try:
+        positive_int_setting("AIST_LOCAL_TRIAGE_BATCH_SIZE")
+    except ValueError as exc:
+        errors.append(Error(str(exc), id="aist.E009"))
+    transport_options = getattr(settings, "CELERY_BROKER_TRANSPORT_OPTIONS", None) or {}
+    visibility_timeout = transport_options.get("visibility_timeout", _KOMBU_DEFAULT_VISIBILITY_TIMEOUT)
+    if visibility_timeout <= bridge_sync_timeout_seconds():
+        errors.append(Error(
+            f"The broker visibility_timeout ({visibility_timeout}s) does not exceed a local triage session "
+            f"({bridge_sync_timeout_seconds()}s), so a batch still being triaged would be triaged again.",
+            hint="Raise visibility_timeout in DD_CELERY_BROKER_TRANSPORT_OPTIONS, or remove it to use AIST's default.",
+            id="aist.E010",
+        ))
+    return errors
 
 
 @register(AIST_EXECUTION_CHECK_TAG, deploy=True)

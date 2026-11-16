@@ -19,7 +19,7 @@ the concrete Compose services, see [runtime deployment](runtime-deployment.md).
 | Celery workers | Delayed operations, retries, orchestration, and persistence of outcomes | Browser/API request handling |
 | SAST runtime | Workspace preparation, build, analyzer fan-out, and report production | Tenant admission or finding review |
 | Provider connector | One standalone provider execution, such as DAST | SAST analyzer fan-out |
-| Local AI bridge | Local AI CLI sessions run inside the bridge container, requested through a Unix socket | AI verdict persistence or tenant authorization |
+| Local AI bridge | Local AI CLI sessions run inside the bridge container, requested through a Unix socket; their skills write results through the platform's Django shell | Tenant authorization or pipeline status |
 
 ## Request and state path
 
@@ -57,13 +57,17 @@ The dashed arrows leave ordinary application processing:
 The execution package runs inside the worker rather than as a long-lived
 service. Its operation containers do not decide who may access a project. They
 receive a pipeline identity that has already passed admission, and their results
-become product state only through the platform import or callback boundary.
+become product state only through the platform import, the AI callback, or the
+platform's Django shell, which the skills of the local AI bridge reach through
+the Docker socket and which applies no API authorization.
 
 ## Follow one operation
 
 For a manual SAST run, follow React → Django → PostgreSQL/Valkey → worker → SAST
 runtime → PostgreSQL. For local AI triage, continue worker → local AI bridge →
-callback → PostgreSQL. This is why the diagram keeps coordination blocks
+CLI session, which writes verdicts to PostgreSQL through the platform's Django
+shell, → worker, which finishes the pipeline once the last batch's session has
+ended. This is why the diagram keeps coordination blocks
 separate from execution blocks even when they run on the same host.
 
 The sequence inside one pipeline is described in

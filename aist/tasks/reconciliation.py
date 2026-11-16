@@ -12,6 +12,7 @@ from django.utils import timezone
 from aist.execution.leases import report_stale_execution_leases
 from aist.execution.reconciliation import reconcile_launch_requests
 from aist.models import AISTPipeline, AISTStatus
+from aist.services.pipeline_lifecycle import lock_existing_pipeline
 from aist.utils.reconciliation import reconcile_pipeline_orphans, reconcile_recent_pipelines
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ def _recover_one_stuck_dedup_pipeline(pipeline, watch_deduplication) -> bool:
     """Returns True if recovered, False if the pipeline's status changed before we could lock it."""
     new_task_id = uuid.uuid4().hex
     with transaction.atomic():
-        p = AISTPipeline.objects.select_for_update().get(id=pipeline.id)
+        p = lock_existing_pipeline(pipeline.id)
         if p.status != AISTStatus.WAITING_DEDUPLICATION_TO_FINISH:
             return False
         p.watch_dedup_task_id = new_task_id
@@ -129,7 +130,7 @@ def _recover_stuck_enrich_pipelines(*, dry_run: bool = False) -> int:
 
 def _recover_one_stuck_enrich_pipeline(pipeline, make_enrich_chord) -> bool:
     with transaction.atomic():
-        p = AISTPipeline.objects.select_for_update().get(id=pipeline.id)
+        p = lock_existing_pipeline(pipeline.id)
         if p.status != AISTStatus.FINDING_POSTPROCESSING:
             return False
         transaction.on_commit(

@@ -378,3 +378,38 @@ class AISTAIFindingResponse(models.Model):
 
     def __str__(self):
         return f"AIFindingResponse[pipeline={self.pipeline_id}, finding={self.finding_id}]"
+
+
+class LocalTriageBatchState(models.TextChoices):
+    PENDING = "PENDING", "Pending"
+    RUNNING = "RUNNING", "Running"
+    # Stopped while its session runs; it still reads the pipeline's sources until the session ends.
+    CANCELLING = "CANCELLING", "Cancelling"
+    COMPLETED = "COMPLETED", "Completed"
+    CANCELLED = "CANCELLED", "Cancelled"
+
+
+class LocalTriageBatch(models.Model):
+
+    """A bounded set of a pipeline's findings that one local triage session analyses."""
+
+    pipeline = models.ForeignKey(AISTPipeline, on_delete=models.CASCADE, related_name="local_triage_batches")
+    sequence = models.PositiveIntegerField()
+    finding_ids = models.JSONField(default=list)
+    state = models.CharField(max_length=16, choices=LocalTriageBatchState.choices, default=LocalTriageBatchState.PENDING)
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("pipeline", "sequence")
+        constraints = [
+            models.UniqueConstraint(fields=["pipeline", "sequence"], name="uniq_local_triage_batch_sequence"),
+            models.UniqueConstraint(
+                fields=["pipeline"],
+                condition=models.Q(state__in=[LocalTriageBatchState.RUNNING, LocalTriageBatchState.CANCELLING]),
+                name="one_running_local_triage_batch",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"LocalTriageBatch[pipeline={self.pipeline_id}, #{self.sequence}, {self.state}]"

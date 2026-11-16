@@ -21,11 +21,9 @@ from aist.models import (
     AISTPipeline,
     AISTProjectVersion,
     Organization,
-    OrgIntegration,
-    OrgIntegrationType,
     VersionType,
 )
-from aist.test.pipeline_execution_helpers import SastWorkerTestMixin
+from aist.test.pipeline_execution_helpers import SastWorkerTestMixin, make_claude_integration
 from aist.test.test_api import AISTApiBase
 
 
@@ -59,13 +57,9 @@ class PipelineClaudeAuthEnvTests(SastWorkerTestMixin, AISTApiBase):
             return mock_factory
 
     def test_factory_called_with_claude_oauth_token_when_integration_configured(self):
-        OrgIntegration.objects.create(
-            organization=self.org,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
-            name="primary",
+        make_claude_integration(
+            self.org,
             secret="sk-ant-oat01-pipeline-test-value-1234567890",  # noqa: S106
-            is_active=True,
-            config={"auth_mode": "oauth"},
         )
 
         mock_factory = self._run_with_mocks()
@@ -90,13 +84,11 @@ class PipelineClaudeAuthEnvTests(SastWorkerTestMixin, AISTApiBase):
         self.assertEqual(auth_env, {})
 
     def test_factory_called_with_empty_auth_env_when_integration_inactive(self):
-        OrgIntegration.objects.create(
-            organization=self.org,
-            integration_type=OrgIntegrationType.CLAUDE_CODE,
+        make_claude_integration(
+            self.org,
             name="disabled",
             secret="sk-ant-oat01-inactive-token-should-be-ignored",  # noqa: S106
             is_active=False,
-            config={"auth_mode": "oauth"},
         )
 
         mock_factory = self._run_with_mocks()
