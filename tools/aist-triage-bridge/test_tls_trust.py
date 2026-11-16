@@ -1,15 +1,14 @@
 """Run inside the bridge image as root; exercise its real startup and HTTPS trust."""
-import os
 import ssl
 import subprocess
 import threading
-import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import httpx
+from bridge_startup import start_bridge, wait_until_serving
 
 
 class RuntimeCertificateTrustTests(unittest.TestCase):
@@ -50,21 +49,13 @@ class RuntimeCertificateTrustTests(unittest.TestCase):
             trust_dir.mkdir(parents=True, exist_ok=True)
             (trust_dir / "aist.crt").write_bytes(certificate.read_bytes())
             socket_path = "/run/claude-bridge/tls-test.sock"
-            bridge = subprocess.Popen(
-                ["/entrypoint.sh"],
-                env={**os.environ, "AIST_LOCAL_TRIAGE_BRIDGE_SOCKET": socket_path},
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            bridge = start_bridge(socket_path)
             try:
-                deadline = time.monotonic() + 30
-                while not Path(socket_path).exists() and bridge.poll() is None and time.monotonic() < deadline:
-                    time.sleep(0.1)
-                self.assertIsNone(bridge.poll(), "Bridge startup failed")
-                self.assertTrue(Path(socket_path).exists(), "Bridge did not start")
+                self.assertTrue(wait_until_serving(bridge, socket_path), "Bridge did not start")
                 self.assertEqual(httpx.get(url).status_code, 204)
                 self.assertGreaterEqual(ssl.create_default_context().cert_store_stats()["x509_ca"], original_roots)
                 with self.assertRaises(httpx.ConnectError):
                     httpx.get(f"https://127.0.0.1:{server.server_port}/")
             finally:
                 bridge.terminate()
-                bridge.wait(timeout=10)
+                bridge.communicate(timeout=10)

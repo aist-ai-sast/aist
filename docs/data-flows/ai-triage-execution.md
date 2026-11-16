@@ -24,8 +24,8 @@ accepted callback persists the resulting AI responses. A failed request leaves
 the pipeline with a visible degraded outcome.
 
 Local mode resolves the project's Claude integration and source path, then asks
-the local AI bridge to start an isolated CLI operation through the shared Unix
-socket. Missing credentials or a rejected bridge request becomes a visible
+the local AI bridge to run a CLI session inside its container through the shared
+Unix socket. Missing credentials or a rejected bridge request becomes a visible
 degraded outcome with diagnostic context rather than an unauthenticated
 fallback.
 

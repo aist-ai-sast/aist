@@ -26,11 +26,26 @@
   become: true
   gather_facts: false
   tasks:
-    - name: Create checkout directory owned by the SSH user
+    - name: Resolve the SSH user's primary group
+      ansible.builtin.command:
+        argv: [id, -gn, "{{ ansible_user }}"]
+      register: checkout_group
+      changed_when: false
+
+    # The AI bridge reads the checkout and its env file through this group, so it cannot be root.
+    - name: Require a non-root owner for the checkout
+      ansible.builtin.assert:
+        that:
+          - ansible_user != 'root'
+          - checkout_group.stdout == ansible_user
+        fail_msg: "Relocate as a non-root SSH user whose primary group is that user's own private group; the AI bridge reads the checkout through it."
+
+    - name: Create checkout directory owned by the SSH user and its group
       ansible.builtin.file:
         path: "{{ project_dir }}"
         state: directory
         owner: "{{ ansible_user }}"
+        group: "{{ checkout_group.stdout }}"
         mode: '0750'
 
     - name: Obtain the exact application revision and submodules
@@ -45,7 +60,9 @@
       ansible.builtin.copy:
         src: "{{ migration_target_env }}"
         dest: "{{ project_dir }}/.env"
-        mode: '0600'
+        owner: "{{ ansible_user }}"
+        group: "{{ checkout_group.stdout }}"
+        mode: '0640'
       no_log: true
 
 - name: Prepare target runtime, storage and persistent TLS

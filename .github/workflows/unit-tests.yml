@@ -38,9 +38,8 @@ jobs:
   test-triage-bridge:
     name: Triage bridge
     runs-on: ubuntu-latest
-    # The bridge ships in its own container and is not picked up by any other job here, which
-    # is how its suite drifted six failures behind the module it tests without anything
-    # saying so. One architecture is enough: these are pure-python tests over a FastAPI app.
+    # The bridge ships in its own container and no other job here runs its tests. One architecture is
+    # enough: the unit tests run over the FastAPI app, and the startup tests over the image's own entrypoint.
     steps:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -54,6 +53,22 @@ jobs:
           -v "$PWD:/bridge:ro" -w /bridge
           python:3.12-slim
           sh -c "pip install --no-cache-dir -q -r requirements.txt && python -m unittest test_main -v"
+
+      - name: Build bridge image
+        working-directory: tools/aist-triage-bridge
+        run: docker build -t aist-claude-bridge:ci .
+
+      # Certificate trust and checkout access are decided by the entrypoint as root before it drops to
+      # the claude user, so these run the real entrypoint inside the image.
+      - name: Run bridge startup tests in the image
+        working-directory: tools/aist-triage-bridge
+        run: >-
+          docker run --rm --user root --entrypoint python
+          -v "$PWD/bridge_startup.py:/app/bridge/bridge_startup.py:ro"
+          -v "$PWD/test_tls_trust.py:/app/bridge/test_tls_trust.py:ro"
+          -v "$PWD/test_checkout_access.py:/app/bridge/test_checkout_access.py:ro"
+          aist-claude-bridge:ci
+          -m unittest test_tls_trust test_checkout_access -v
 
   test-dast-connector:
     name: DAST connector (${{ matrix.platform }})

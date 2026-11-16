@@ -1134,12 +1134,7 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
     prompt = _build_skill_prompt(req.skill_name, req.project_id, req.source_path, req.extra_args)
 
     # Parse result file location from extra_args — our own protocol set by agent_bridge_runner.
-    parsed_args = _parse_extra_args(req.extra_args)
-    output_path = parsed_args.get("output_path", "")
-    result_filename = parsed_args.get("result_filename", "")
-    result_file_path = (
-        Path(output_path) / result_filename if output_path and result_filename else None
-    )
+    result_file_path = _declared_result_file(req)
 
     # Per-run CLAUDE_CONFIG_DIR with a UUID suffix so concurrent invocations
     # for the same ``project_id`` (retry storms, upstream races) do not
@@ -1436,6 +1431,29 @@ async def _execute_claude_skill(req: AnalyzeRequest) -> CallbackPayload:
     )
 
 
+def _declared_result_file(req: AnalyzeRequest) -> Path | None:
+    """The file the skill must leave on disk as its last action, when the request names one."""
+    parsed_args = _parse_extra_args(req.extra_args)
+    output_path = parsed_args.get("output_path", "")
+    result_filename = parsed_args.get("result_filename", "")
+    return Path(output_path) / result_filename if output_path and result_filename else None
+
+
+def _require_declared_result_file(req: AnalyzeRequest, result: CallbackPayload) -> CallbackPayload:
+    """A callback run that declared a result file succeeded only if the skill left that file on disk."""
+    path = _declared_result_file(req)
+    if result.status != "success" or path is None or path.exists():
+        return result
+    logger.error(
+        "%s reported success without producing its result file %s; reporting error",
+        _task_label(req), path,
+    )
+    return CallbackPayload(
+        status="error",
+        detail=f"skill finished without producing its result file {path.name}",
+    )
+
+
 async def _run_claude_skill(req: AnalyzeRequest) -> None:
     """
     Execute the skill and POST the result to ``req.callback_url`` (if set).
@@ -1445,7 +1463,11 @@ async def _run_claude_skill(req: AnalyzeRequest) -> None:
     use ``_execute_claude_skill`` directly instead.
     """
     task_label = _task_label(req)
-    result = await _execute_claude_skill(req)
+    try:
+        result = _require_declared_result_file(req, await _execute_claude_skill(req))
+    except Exception as exc:
+        logger.exception("Skill run failed before completion for %s", task_label)
+        result = CallbackPayload(status="error", detail=f"bridge could not run the skill: {type(exc).__name__}")
 
     if req.callback_url:
         headers = {"Content-Type": "application/json"}

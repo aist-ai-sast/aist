@@ -19,12 +19,28 @@
       register: env_file
       no_log: true
 
-    - name: Require a private environment file on the host
+    - name: Check the checkout's environment file
+      ansible.builtin.stat:
+        path: "{{ project_dir }}/.env"
+      register: checkout_env_file
+      no_log: true
+
+    - name: Require a private selected environment file on the host
       ansible.builtin.assert:
         that:
           - env_file.stat.isreg | default(false)
-          - env_file.stat.mode in ['0600', '0400']
-        fail_msg: "Provision the selected .env on the target with mode 0600 before running Ansible."
+          - env_file.stat.path == checkout_env_file.stat.path or env_file.stat.mode in ['0600', '0400']
+        fail_msg: "Provision the selected env file on the target with mode 0600 before running Ansible."
+
+    # The AI bridge reads the checkout's .env through its owner's private group.
+    - name: Require the checkout's environment file to be readable only by its owner and the owner's own group
+      ansible.builtin.assert:
+        that:
+          - checkout_env_file.stat.mode in ['0640', '0440']
+          - checkout_env_file.stat.gid != 0
+          - checkout_env_file.stat.gr_name == checkout_env_file.stat.pw_name
+        fail_msg: "Give the checkout's .env mode 0640, owned by the SSH user and that user's own private group, before running Ansible."
+      when: checkout_env_file.stat.exists
 
     - name: Install container runtime
       ansible.builtin.include_role:

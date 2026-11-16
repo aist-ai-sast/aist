@@ -19,7 +19,7 @@ the concrete Compose services, see [runtime deployment](runtime-deployment.md).
 | Celery workers | Delayed operations, retries, orchestration, and persistence of outcomes | Browser/API request handling |
 | SAST runtime | Workspace preparation, build, analyzer fan-out, and report production | Tenant admission or finding review |
 | Provider connector | One standalone provider execution, such as DAST | SAST analyzer fan-out |
-| Local AI bridge | Isolated local CLI invocation through a Unix socket | AI verdict persistence or tenant authorization |
+| Local AI bridge | Local AI CLI sessions run inside the bridge container, requested through a Unix socket | AI verdict persistence or tenant authorization |
 
 ## Request and state path
 
@@ -52,7 +52,7 @@ The dashed arrows leave ordinary application processing:
 - a SAST run creates its workspace, builder, and analyzer containers;
 - a standalone run creates a connector that communicates with its external
   provider;
-- the local AI bridge creates an isolated CLI operation.
+- the local AI bridge runs a CLI session inside its own container.
 
 The execution package runs inside the worker rather than as a long-lived
 service. Its operation containers do not decide who may access a project. They

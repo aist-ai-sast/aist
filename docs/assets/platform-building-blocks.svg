@@ -42,7 +42,7 @@
   <rect x="470" y="600" width="220" height="70" class="box" fill="#fff0f0"/>
   <text x="492" y="627" class="name">Provider connector</text><text x="492" y="648" class="detail">standalone execution, for example DAST</text>
   <rect x="790" y="600" width="220" height="70" class="box" fill="#fff0f0"/>
-  <text x="812" y="627" class="name">Local AI bridge</text><text x="812" y="648" class="detail">Unix socket · isolated CLI run</text>
+  <text x="812" y="627" class="name">Local AI bridge</text><text x="812" y="648" class="detail">Unix socket · CLI in bridge</text>
   <path d="M535 528L260 600" class="boundary"/>
   <path d="M558 528L580 600" class="boundary"/>
   <path d="M603 528L900 600" class="boundary"/>

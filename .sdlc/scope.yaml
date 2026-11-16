@@ -315,6 +315,15 @@ rules:
       files inside, which this repository does not track, so an edit there still names its reviewers. This
       part does not route to `reuse`, which keeps `vendor/` out of the read set.
 
+  - part: triage-bridge
+    criticality: [sensitive]
+    reviewers: [security, code]
+    paths:
+      - tools/aist-triage-bridge/**
+    note: >
+      The local AI bridge runs in production with the Docker socket, the checkout and its env file, and
+      per-request agent credentials; it is not development tooling.
+
   - part: tooling
     criticality: [support]
     reviewers: [code]

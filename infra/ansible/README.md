@@ -11,8 +11,11 @@ host. Add the host, SSH user and absolute `project_dir` to an inventory in the
 `aist_prod` group. Verify the SSH host key before connecting. The sample inventory
 is a placeholder, not a deployment destination.
 
-Copy the deployment `.env` securely to that checkout and set its permissions to
-`0600`. Preserve the database credentials, encryption keys, internal service token
+Copy the deployment `.env` securely to that checkout. Keep the checkout and the
+`.env` owned by a non-root SSH user and that user's own private group, with modes
+`0750` and `0640`. The AI bridge container reads both through that group, so it
+must have no other members and cannot be root. A separately selected env file
+stays at `0600`. Preserve the database credentials, encryption keys, internal service token
 and SMTP configuration when relocating an existing installation. The bootstrap
 variables `project_dir`, `compose_env_file`, `compose_file` and `deployment_phase`
 select the checkout, configuration and operation; application and operational
@@ -155,12 +158,15 @@ resulting system bundle, retaining public roots and hostname verification.
 The certificate's private key must remain on the host with mode `0640`,
 readable by nginx's group 0. No public DNS, ACME challenge or certbot is needed.
 
-The bridge certificate regression test runs inside its disposable image as root:
+The bridge startup regression tests, for certificate trust and checkout access,
+run inside its disposable image as root:
 
 ```bash
-docker run --rm --entrypoint python \
+docker run --rm --user root --entrypoint python \
+  -v "$PWD/tools/aist-triage-bridge/bridge_startup.py:/app/bridge/bridge_startup.py:ro" \
   -v "$PWD/tools/aist-triage-bridge/test_tls_trust.py:/app/bridge/test_tls_trust.py:ro" \
-  aist-claude-bridge:latest -m unittest test_tls_trust -v
+  -v "$PWD/tools/aist-triage-bridge/test_checkout_access.py:/app/bridge/test_checkout_access.py:ro" \
+  aist-claude-bridge:latest -m unittest test_tls_trust test_checkout_access -v
 ```
 
 ## Verify and restore backups

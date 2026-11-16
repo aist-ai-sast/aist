@@ -775,6 +775,80 @@ class RunClaudeSkillTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(signal.SIGKILL, fake.signals)
 
 
+class TriageCallbackOutcomeTests(unittest.IsolatedAsyncioTestCase):
+
+    """What the platform is told when a local triage run ends: the callback is its only signal."""
+
+    async def asyncSetUp(self):
+        self._orig_timeout = main.TRIAGE_TIMEOUT
+        self._orig_grace = main.POST_RESULT_GRACE
+        main.TRIAGE_TIMEOUT = 2
+        main.POST_RESULT_GRACE = 1
+        self.output_dir = Path(tempfile.mkdtemp(prefix="bridge-triage-output-"))
+        self.addCleanup(shutil.rmtree, self.output_dir, ignore_errors=True)
+
+    async def asyncTearDown(self):
+        main.TRIAGE_TIMEOUT = self._orig_timeout
+        main.POST_RESULT_GRACE = self._orig_grace
+
+    def _req(self):
+        return AnalyzeRequest(
+            skill_name="aist-finding-triage",
+            project_id="pipe-1",
+            source_path="/tmp/proj",  # noqa: S108 — test-only path
+            callback_url="https://aist.test/api/v2/aist/pipelines/pipe-1/local-triage-complete/",
+            extra_args=f"output_path={self.output_dir} result_filename=triage_done.flag",
+        )
+
+    async def _callback_after(self, fake_proc, *, prompt=None):
+        client = AsyncMock()
+        client.post.return_value.raise_for_status = lambda: None
+        client_cm = AsyncMock()
+        client_cm.__aenter__.return_value = client
+        prompt_patch = (
+            patch("main._build_skill_prompt", side_effect=prompt)
+            if prompt else patch("main._build_skill_prompt", return_value="prompt")
+        )
+        with prompt_patch, \
+             patch("main.asyncio.create_subprocess_exec", AsyncMock(return_value=fake_proc)), \
+             patch("main._signal_pgroup", side_effect=_fake_signal_pgroup(fake_proc)), \
+             patch("main.httpx.AsyncClient", return_value=client_cm):
+            await main._run_claude_skill(self._req())
+        client.post.assert_awaited_once()
+        return client.post.await_args.kwargs["json"]
+
+    async def test_skill_that_stops_without_its_completion_marker_is_reported_failed(self):
+        """The agent ends its session normally but stops before triaging, so it never writes the marker."""
+        fake = FakeProcess(
+            stdout_lines=[b'{"type":"result","subtype":"success","result":"I could not triage anything."}\n'],
+        )
+
+        payload = await self._callback_after(fake)
+
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("triage_done.flag", payload["detail"])
+
+    async def test_skill_that_writes_its_completion_marker_is_reported_successful(self):
+        (self.output_dir / "triage_done.flag").touch()
+        fake = FakeProcess(
+            stdout_lines=[b'{"type":"result","subtype":"success","result":"Triaged 4 findings."}\n'],
+        )
+
+        payload = await self._callback_after(fake)
+
+        self.assertEqual(payload["status"], "success")
+
+    async def test_unreadable_skill_still_answers_the_callback_with_an_error(self):
+        """Without a callback the pipeline waits for a result that never comes."""
+        fake = FakeProcess(stdout_lines=[])
+        unreadable = PermissionError(13, "Permission denied", "/app/aist/.codex/skills/aist-finding-triage/SKILL.md")
+
+        payload = await self._callback_after(fake, prompt=unreadable)
+
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("PermissionError", payload["detail"])
+
+
 class AnalyzeSyncEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     """The /analyze-sync endpoint blocks until _execute_claude_skill returns."""

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1160" height="720" viewBox="0 0 1160 720" role="img" aria-labelledby="title desc">
   <title id="title">AIST Docker Compose runtime deployment</title>
-  <desc id="desc">Long-lived Nginx, Django, PostgreSQL, Valkey, Celery, and local AI bridge services share the Compose deployment. Workers and the bridge use the Docker daemon to create per-operation containers.</desc>
+  <desc id="desc">Long-lived Nginx, Django, PostgreSQL, Valkey, Celery, and local AI bridge services share the Compose deployment. Workers use the Docker daemon to create per-operation containers; the AI CLI the bridge runs uses it to reach the application containers.</desc>
   <defs>
     <style>text{font-family:Arial,sans-serif;fill:#17212b}.title{font-size:22px;font-weight:700}.group{font-size:17px;font-weight:700}.name{font-size:14px;font-weight:700}.detail{font-size:12px;fill:#52616b}.host{fill:#f7f9fb;stroke:#9aa8b5;stroke-width:1.6;rx:18}.box{stroke:#52616b;stroke-width:1.5;rx:11}.net{fill:none;stroke:#596a78;stroke-width:2;marker-end:url(#arrow)}.local{fill:none;stroke:#7d69aa;stroke-width:2;stroke-dasharray:7 5;marker-end:url(#arrow)}</style>
     <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#596a78"/></marker>
@@ -24,12 +24,12 @@
   <path d="M690 275V250H490V275" class="net"/><path d="M490 340V370H890V340" class="net"/><path d="M850 340V385H275V340" class="net"/>
 
   <rect x="485" y="430" width="200" height="82" class="box" fill="#fff0f0"/>
-  <text x="508" y="458" class="name">Local AI bridge</text><text x="508" y="480" class="detail">shared Unix socket</text><text x="508" y="499" class="detail">starts isolated CLI</text>
+  <text x="508" y="458" class="name">Local AI bridge</text><text x="508" y="480" class="detail">shared Unix socket</text><text x="508" y="499" class="detail">runs AI CLI sessions</text>
   <rect x="750" y="425" width="220" height="92" class="box" fill="#fff0f0"/>
-  <text x="773" y="454" class="name">Per-operation containers</text><text x="773" y="476" class="detail">SAST · connector · VPN</text><text x="773" y="496" class="detail">isolated AI CLI</text>
+  <text x="773" y="454" class="name">Per-operation containers</text><text x="773" y="476" class="detail">SAST · connector · VPN</text>
+  <path d="M598 430V225" class="local"/><text x="590" y="420" class="detail" text-anchor="end">docker compose exec</text>
   <path d="M850 340L650 430" class="local"/><text x="685" y="390" class="detail">Unix socket</text>
   <path d="M900 340L860 425" class="local"/><text x="900" y="390" class="detail">Docker</text>
-  <path d="M685 470H750" class="local"/><text x="690" y="458" class="detail">Docker</text>
 
   <rect x="1020" y="410" width="125" height="105" class="box" fill="#fff"/>
   <text x="1042" y="438" class="name">External</text><text x="1042" y="460" class="detail">SCM · tickets</text><text x="1042" y="480" class="detail">webhooks · DAST</text><text x="1042" y="500" class="detail">notifications</text>

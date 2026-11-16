@@ -7,11 +7,38 @@ SOCKET_PATH="${AIST_LOCAL_TRIAGE_BRIDGE_SOCKET:-/run/claude-bridge/bridge.sock}"
 update-ca-certificates
 
 # ── Run as root: fix permissions ──────────────────────────────────────────
+# Add claude to the group that has gid $1, creating it as "$2-<gid>" when the image has none.
+join_group_by_gid() {
+    local gid="$1" group
+    if group=$(getent group "$gid"); then
+        group="${group%%:*}"
+    else
+        group="$2-$gid"
+        groupadd -g "$gid" "$group"
+    fi
+    usermod -aG "$group" claude
+}
+
 # Give claude user access to docker socket (needed for `docker compose exec`)
 if [ -S /var/run/docker.sock ]; then
-    DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
-    groupadd -g "$DOCKER_GID" -o docker-host 2>/dev/null || true
-    usermod -aG docker-host claude 2>/dev/null || true
+    join_group_by_gid "$(stat -c '%g' /var/run/docker.sock)" docker-host
+fi
+
+# The checkout is bind-mounted from the host and owned by the deploying user, whose uid is not
+# claude's. claude reads it through the owning group: the checkout directory and its .env must
+# be group-readable, and the group must not be root.
+WORKING_DIR="${AIST_WORKING_DIR:-/app/aist}"
+if [ -d "$WORKING_DIR" ]; then
+    CHECKOUT_GID=$(stat -c '%g' "$WORKING_DIR")
+    if [ "$CHECKOUT_GID" != "0" ]; then
+        join_group_by_gid "$CHECKOUT_GID" aist-checkout
+    fi
+    if ! gosu claude test -r "$WORKING_DIR" -a -x "$WORKING_DIR" \
+        || { [ -e "$WORKING_DIR/.env" ] && ! gosu claude test -r "$WORKING_DIR/.env"; }; then
+        echo "claude (uid $(id -u claude)) cannot read $WORKING_DIR or its .env (owner gid $CHECKOUT_GID);" \
+             "make the checkout group-readable by a non-root group" >&2
+        exit 1
+    fi
 fi
 
 # Ensure socket directory is writable by claude

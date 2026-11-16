@@ -21,11 +21,14 @@ The long-lived deployment contains:
 | Nginx and uWSGI/Django | Browser/API ingress, authorization, and control-plane workflow |
 | PostgreSQL and Valkey | Durable product state and Celery delivery |
 | Celery Beat and workers | Recurring production and asynchronous execution |
-| Local AI bridge | Unix-socket API that creates isolated local AI CLI runs |
+| Local AI bridge | Unix-socket API that runs local AI CLI sessions in its own container |
 
 The bridge has the repository and workspace mounts it needs to launch the CLI,
 but it does not write AI verdicts directly into browser responses; completion
-returns through the application boundary.
+returns through the application boundary. The CLI runs inside the bridge
+container as a non-root user that is also a Docker-daemon client, and reads the
+repository mount through the checkout's owning group. The bridge refuses to
+start when that user cannot open the checkout directory or its `.env`.
 
 ## State and queued work
 
@@ -49,8 +52,9 @@ look for elsewhere, never product state.
 ## Per-operation containers
 
 Celery workers have Docker-daemon access for SAST, connector, and VPN
-containers. The local AI bridge also has Docker-daemon access because it starts
-the isolated CLI container. The web process does not have that socket. Work that
+containers. The local AI bridge also has Docker-daemon access: the CLI it runs
+reaches the application containers through Docker Compose. The web process does
+not have that socket. Work that
 needs it — starting an operation's containers, signalling them when an operator
 stops a run, or any call that must leave through an integration's VPN sidecar —
 is therefore dispatched to a worker instead of being performed in the request
