@@ -39,7 +39,8 @@ services:
       - defectdojo_media_integration_tests:${DD_MEDIA_ROOT:-/app/media}
     environment:
       PYTHONWARNINGS: error  # We are strict about Warnings during testing
-      DD_DEBUG: 'True'
+      # Debug mode forces one uWSGI thread, so an SSE stream blocks other test requests.
+      DD_DEBUG: 'False'
       DD_DATABASE_URL: ${DD_TEST_DATABASE_URL:-postgresql://defectdojo:defectdojo@postgres:5432/test_defectdojo}
       DD_SECURE_CROSS_ORIGIN_OPENER_POLICY: 'None'
       DD_SECRET_KEY: "${DD_SECRET_KEY:-.}"
