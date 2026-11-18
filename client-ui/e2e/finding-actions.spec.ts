@@ -42,14 +42,14 @@ test("changing severity via the UI persists through the AIST finding-detail endp
   await page.getByRole("option", { name: nextSeverity, exact: true }).click();
 
   await expect(page.getByText("Severity updated.")).toBeVisible({ timeout: 30_000 });
-  expect((await fetchFinding(page, finding.id)).severity).toBe(nextSeverity);
+  await expect.poll(async () => (await fetchFinding(page, finding.id)).severity).toBe(nextSeverity);
 
   // Restore original severity so shared seed data is unaffected for other tests.
   const changedTrigger = page.getByRole("combobox").filter({ hasText: nextSeverity });
   await changedTrigger.click();
   await page.getByRole("option", { name: originalSeverity, exact: true }).click();
   await expect(page.getByText("Severity updated.")).toBeVisible({ timeout: 30_000 });
-  expect((await fetchFinding(page, finding.id)).severity).toBe(originalSeverity);
+  await expect.poll(async () => (await fetchFinding(page, finding.id)).severity).toBe(originalSeverity);
 });
 
 test("closing a finding via Apply Close persists through the AIST finding-close endpoint", async ({ page }) => {
