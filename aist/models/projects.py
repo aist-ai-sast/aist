@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import logging
 import shutil
 import tarfile
@@ -15,11 +16,12 @@ from typing import TYPE_CHECKING, BinaryIO
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.files.storage import default_storage
-from django.db import IntegrityError, models, transaction
+from django.db import models, transaction
 from django.db.models import Prefetch, prefetch_related_objects
 from django.utils import timezone
 from dojo.models import Finding, Product
 
+from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models.organizations import Organization, OrgIntegration, OrgIntegrationType
 from aist.models.scm import RepositoryInfo
 from aist.utils.archive import (
@@ -28,6 +30,7 @@ from aist.utils.archive import (
     _safe_extract_zip_member,
     safe_join,
 )
+from aist.utils.container_images import validate_builder_base_image
 
 if TYPE_CHECKING:
     from aist.models.launching import LaunchSchedule
@@ -62,6 +65,16 @@ ERR_INVALID_GIT_REF = "A Git branch or commit must be a valid Git ref name."
 
 
 ERR_SCRIPT_BINDING_REQUIRES_BRANCH = "A generated script can be bound only to a GIT_BRANCH version."
+
+
+class ScriptUpdateScope(models.TextChoices):
+    LOCAL = "local", "Project revision"
+    GLOBAL = "global", "Shared default"
+
+
+class ScriptSource(models.TextChoices):
+    VERSION = "version", "Version revision"
+    SHARED_DEFAULT = "shared_default", "Shared default"
 
 
 class AISTProject(models.Model):
@@ -219,19 +232,11 @@ class ProjectIntegrationOverride(models.Model):
 class AISTProjectScript(models.Model):
 
     """
-    Versioned snapshot of a project's entrypoint script.
+    A project's entrypoint script and builder base image stored as one revision.
 
-    Project-specific revisions are append-only: each new save creates a new row.
-    The shared default (``is_shared=True``, ``project=None``) is the singleton
-    template used when creating new versions without an explicit script.
-    It may be updated in-place via ``scope=global`` (superuser only).
-    Use ``get_shared_default()`` to obtain it.
-
-    ``AISTProjectVersion.script`` always references a project-scoped script
-    (``project=version.project``), never the shared singleton directly —
-    this guarantees org isolation and immutable version history.
-    Use ``get_or_create_for_project()`` to snapshot the current global template
-    into a project-scoped copy without content duplication.
+    Create or reuse project revisions through ``get_or_create_for_project()``;
+    ``save()`` updates an existing row. The shared default is updated in place.
+    Version bindings accept only revisions owned by the same project.
     """
 
     project = models.ForeignKey(
@@ -246,6 +251,10 @@ class AISTProjectScript(models.Model):
         help_text="True for the singleton shared default script (project=None).",
     )
     content = models.TextField()
+    base_image = models.CharField(
+        max_length=512, blank=True, default="", validators=[validate_builder_base_image],
+        help_text="Ubuntu/Debian-compatible builder base pinned by digest; blank keeps the legacy default.",
+    )
     sha256 = models.CharField(max_length=64, editable=False)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -275,29 +284,24 @@ class AISTProjectScript(models.Model):
         return f"Script rev for {self.project} @ {self.created_at} (sha256={self.sha256[:8]})"
 
     def save(self, *args, **kwargs):
-        self.sha256 = hashlib.sha256(self.content.encode()).hexdigest()
+        self.sha256 = self.revision_digest(self.content, self.base_image)
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = {*kwargs["update_fields"], "sha256"}
         super().save(*args, **kwargs)
+
+    @staticmethod
+    def revision_digest(content: str, base_image: str) -> str:
+        # Keep identifiers of existing default-environment revisions stable.
+        value = json.dumps([content, base_image], ensure_ascii=False) if base_image else content
+        return hashlib.sha256(value.encode()).hexdigest()
 
     @classmethod
     def get_shared_default(cls) -> AISTProjectScript:
-        """
-        Return the singleton shared default script, creating it if absent.
-
-        Safe under concurrent access: the partial unique index on is_shared=True
-        ensures only one row can exist.  If two workers race to create the
-        singleton simultaneously, the loser catches IntegrityError and falls
-        back to a plain GET, so callers always receive a valid instance.
-        """
-        from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT  # noqa: PLC0415
-
-        try:
-            script, _ = cls.objects.get_or_create(
-                is_shared=True,
-                defaults={"project": None, "content": DEFAULT_ENTRYPOINT_SCRIPT},
-            )
-        except IntegrityError:
-            # Another worker won the race and already created the singleton.
-            script = cls.objects.get(is_shared=True)
+        """Return the shared default; the unique constraint protects concurrent creation."""
+        script, _ = cls.objects.get_or_create(
+            is_shared=True,
+            defaults={"project": None, "content": DEFAULT_ENTRYPOINT_SCRIPT},
+        )
         return script
 
     @classmethod
@@ -306,40 +310,44 @@ class AISTProjectScript(models.Model):
         content: str,
         project: AISTProject,
         user=None,
+        base_image: str = "",
     ) -> tuple[AISTProjectScript, bool]:
         """
         Return a project-scoped script with the given content, creating it if absent.
 
-        Deduplicates by sha256 within the project so identical content reuses the
+        Deduplicates the configuration within the project so an identical pair reuses the
         same row instead of proliferating copies.  The returned script always has
         ``project=project`` and ``is_shared=False``.
         """
-        sha = hashlib.sha256(content.encode()).hexdigest()
-        existing = cls.objects.filter(sha256=sha, project=project, is_shared=False).first()
-        if existing:
-            return existing, False
-        return cls.objects.create(
-            content=content,
-            project=project,
-            is_shared=False,
-            created_by=user,
-        ), True
+        if base_image:
+            validate_builder_base_image(base_image)
+        sha = cls.revision_digest(content, base_image)
+        with transaction.atomic():
+            AISTProject.objects.select_for_update().only("pk").get(pk=project.pk)
+            existing = cls.objects.filter(
+                sha256=sha, content=content, base_image=base_image, project=project, is_shared=False,
+            ).first()
+            if existing:
+                return existing, False
+            return cls.objects.create(
+                content=content, base_image=base_image, project=project,
+                is_shared=False, created_by=user,
+            ), True
 
     @classmethod
     def for_new_version(cls, project: AISTProject) -> AISTProjectScript:
         """
         Return the script a newly created version of ``project`` starts with.
 
-        The latest project revision (set at project creation or via API), else a
-        project-scoped copy of the shared default. Every code path that creates a
-        version without an explicit script uses this, so a new version never runs
-        something other than what the project was configured with.
+        Return the newest project revision, or snapshot the shared default when
+        the project has none.
         """
         latest_revision = project.script_revisions.order_by("-created_at").first()
         if latest_revision:
             return latest_revision
+        default = cls.get_shared_default()
         script, _ = cls.get_or_create_for_project(
-            content=cls.get_shared_default().content,
+            content=default.content, base_image=default.base_image,
             project=project,
         )
         return script
@@ -350,14 +358,16 @@ class AISTProjectScript(models.Model):
         content: str,
         version: AISTProjectVersion,
         user=None,
+        base_image: str | None = None,
     ) -> tuple[AISTProjectScript, bool]:
         """
-        Store ``content`` as a project revision and make it the script of ``version``.
+        Store the script and environment as one revision bound to ``version``.
 
-        Only a GIT_BRANCH version is accepted: branch pipelines copy the branch
-        script into each resolved GIT_HASH version, so binding the branch is what
-        makes the script run. No other version is touched. The project row lock
-        serializes concurrent calls, so identical content never yields two revisions.
+        Only GIT_BRANCH versions are accepted. New launches freeze the branch
+        revision; queued launches and populated commit versions retain theirs.
+        No other version is touched. The project row lock
+        serializes concurrent calls, so an identical configuration never yields duplicate revisions.
+        Omitting ``base_image`` preserves the branch's image; an explicit value replaces it.
         """
         with transaction.atomic():
             # Lock order project → version, parent before child.
@@ -369,7 +379,10 @@ class AISTProjectScript(models.Model):
             )
             if locked_version.version_type != VersionType.GIT_BRANCH:
                 raise ValidationError({"version": ERR_SCRIPT_BINDING_REQUIRES_BRANCH})
-            script, created = cls.get_or_create_for_project(content=content, project=project, user=user)
+            script, created = cls.get_or_create_for_project(
+                content=content, project=project, user=user,
+                base_image=locked_version.effective_script.base_image if base_image is None else base_image,
+            )
             locked_version.script = script
             locked_version.clean()
             locked_version.save(update_fields=["script", "updated"])

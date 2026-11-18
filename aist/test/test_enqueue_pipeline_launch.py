@@ -22,6 +22,7 @@ from aist.models import (
     AISTLaunchConfigAction,
     AISTProject,
     AISTProjectLaunchConfig,
+    AISTProjectScript,
     AISTProjectVersion,
     ApiTokenScope,
     LaunchSchedule,
@@ -118,7 +119,13 @@ class EnqueuePipelineLaunchTests(AISTApiBase):
                 **relations,
             )
             self.assertTrue(result.created)
-            self.assertEqual(result.request.params_snapshot, expected)
+            frozen_params = dict(result.request.params_snapshot)
+            revision_id = frozen_params.pop("script_revision_id")
+            revision = AISTProjectScript.objects.get(pk=revision_id, project=self.project)
+            self.assertFalse(revision.is_shared)
+            self.assertEqual(frozen_params, expected)
+            if requests:
+                self.assertEqual(revision_id, requests[0].params_snapshot["script_revision_id"])
             self.assertEqual(result.request.origin, origin)
             self.assertEqual(result.request.authority_kind, authority_kind)
             requests.append(result.request)
@@ -297,7 +304,7 @@ class ConcurrentEnqueueCoalescingTests(TransactionTestCase):
         organization = Organization.objects.create(name="Coalescing organization", product_type=product_type)
         product = Product.objects.create(
             name="Coalescing product",
-            description="",
+            description="Test project",
             prod_type=product_type,
             sla_configuration=sla,
         )

@@ -1,0 +1,100 @@
+    <dialog class="modal modal-lg" id="{{ provider }}ImportModal" tabindex="-1"
+         aria-labelledby="{{ provider }}ImportModalLabel">
+                <form id="{{ provider }}-import-form">
+                    {% csrf_token %}
+                    <div class="modal-header">
+                        <h4 class="modal-title" id="{{ provider }}ImportModalLabel">
+                            Import projects from {{ provider_label }}
+                        </h4>
+                        <button type="button" class="close" onclick="this.closest('dialog').close()"
+                                aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="{{ provider }}-import-error"
+                             class="alert alert-danger"
+                             style="display:none;"></div>
+
+                        <div class="form-group">
+                            <label for="{{ provider }}-org-select" class="control-label" style="display:block;">
+                                Organization
+                            </label>
+                            <select class="form-control"
+                                    id="{{ provider }}-org-select"
+                                    name="organization_id">
+                                <option value="">— select organization —</option>
+                                {% for org in organizations_for_create %}
+                                    <option value="{{ org.id }}">{{ org.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <p class="help-block">
+                                The organization's default {{ provider_label }} integration will be used for authentication.
+                                <a href="/integrations" target="_blank">Manage integrations.</a>
+                            </p>
+                        </div>
+                        <div id="{{ provider }}-integration-info" class="alert alert-info" style="display:none;"></div>
+
+
+                        <hr>
+
+                        <div id="{{ provider }}-projects-container" style="display:none;">
+                            <p class="text-muted small">
+                                Select one or more projects to import as AIST projects.
+                            </p>
+                            <div class="form-group">
+                                <input type="text"
+                                       class="form-control"
+                                       id="{{ provider }}-projects-search"
+                                       placeholder="Filter projects by name, path or description...">
+                            </div>
+                            <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+                                <table class="table table-condensed table-hover" id="{{ provider }}-projects-table">
+                                    <thead>
+                                    <tr>
+                                        <th style="width: 30px;">
+                                            <input type="checkbox" id="{{ provider }}-select-all">
+                                        </th>
+                                        {% if show_language %}<th style="width: 80px;">ID</th>{% endif %}
+                                        <th>{{ repository_label }}</th>
+                                        {% if show_language %}<th style="width: 120px;">Language</th>{% endif %}
+                                        <th>Description</th>
+                                        <th style="width: 120px;">Default branch</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody id="{{ provider }}-projects-tbody">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    <div class="flex items-center gap-2 mt-3">
+                        <input type="checkbox" id="{{ provider }}-auto-analyze">
+                        <label class="text-sm" for="{{ provider }}-auto-analyze">
+                            Auto-analyze project (generate init script &amp; exclusions via Claude)
+                        </label>
+                    </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button"
+                                class="btn btn-secondary"
+                                onclick="this.closest('dialog').close()">
+                            Close
+                        </button>
+                        <button type="button"
+                                class="btn btn-primary"
+                                id="{{ provider }}-list-btn">
+                            List projects
+                        </button>
+
+                        <span id="{{ provider }}-projects-loading"
+                              class="text-muted"
+                              style="display: none; margin-left: 8px;">
+                            <i class="fa-solid fa-spinner fa-spin"></i> Loading projects...
+                        </span>
+                        <button type="button"
+                                class="btn btn-success"
+                                id="{{ provider }}-import-btn"
+                                disabled>
+                            Import selected
+                        </button>
+                    </div>
+                </form>
+    </dialog>

@@ -1,4 +1,4 @@
 interface:
   display_name: "AIST Init Script Generator"
-  short_description: "Generate project-specific init script for SAST using AIST default logic"
-  default_prompt: "Use $aist-init-script-generator with target_repo_path to generate a project-specific init script. Preserve git clone and env exports from aist/default_script.py and adapt the rest to the target repository build flow."
+  short_description: "Generate a pinned base image and init script pair"
+  default_prompt: "Use $aist-init-script-generator with project_id, project_version_id, and target_repo_path to generate and verify a digest-pinned builder base image and init script, then bind the pair to the requested branch within the authorized scope."

@@ -7,9 +7,11 @@ from django.test import TestCase
 from dojo.models import Product, Product_Type, SLA_Configuration
 
 from aist.models import AISTProject, AISTProjectScript, AISTProjectVersion, VersionType
-from aist.pipeline_args import SastPipelineArguments
+from aist.pipeline_args import PipelineArguments, SastPipelineArguments
+from aist.test.project_fixtures import create_project, create_project_version
 
 GENERATED = "#!/bin/bash\necho generated-by-claude"
+BASE_IMAGE = "registry.example/build/ubuntu:24.04@sha256:" + "a" * 64
 
 
 class CreateForVersionTests(TestCase):
@@ -30,37 +32,111 @@ class CreateForVersionTests(TestCase):
         )
         self.foreign_main = self._version(self.other_project, "main", VersionType.GIT_BRANCH)
 
+    def test_base_image_change_creates_revision_and_identical_configuration_reuses_it(self):
+        old, _ = AISTProjectScript.get_or_create_for_project(content=GENERATED, project=self.project)
+        new, created = AISTProjectScript.get_or_create_for_project(
+            content=GENERATED, project=self.project, base_image=BASE_IMAGE,
+        )
+        same, reused = AISTProjectScript.get_or_create_for_project(
+            content=GENERATED, project=self.project, base_image=BASE_IMAGE,
+        )
+        self.assertTrue(created)
+        self.assertFalse(reused)
+        self.assertEqual(new, same)
+        self.assertNotEqual(old.sha256, new.sha256)
+        old.refresh_from_db()
+        self.assertEqual(old.base_image, "")
+
+    def test_regeneration_preserves_branch_base_image(self):
+        self.main.script = AISTProjectScript.objects.create(
+            project=self.project, content="echo original", base_image=BASE_IMAGE,
+        )
+        self.main.save(update_fields=["script"])
+        script, _ = AISTProjectScript.create_for_version(content=GENERATED, version=self.main)
+        self.assertEqual(script.base_image, BASE_IMAGE)
+
+    def test_invalid_generated_image_leaves_branch_and_revision_history_unchanged(self):
+        original, _ = AISTProjectScript.create_for_version(content=GENERATED, version=self.main)
+        count = self.project.script_revisions.count()
+        with self.assertRaises(ValidationError):
+            AISTProjectScript.create_for_version(
+                content="echo replacement", base_image="ubuntu:24.04", version=self.main,
+            )
+        self.main.refresh_from_db()
+        self.assertEqual(self.main.script_id, original.id)
+        self.assertEqual(self.project.script_revisions.count(), count)
+
+    def test_queued_launch_keeps_environment_after_branch_is_edited(self):
+        original = AISTProjectScript.objects.create(
+            project=self.project, content="echo original", base_image=BASE_IMAGE,
+        )
+        self.main.script = original
+        self.main.save(update_fields=["script"])
+        launch = PipelineArguments.for_sast(
+            project=self.project, raw_params={"project_version": self.main.id},
+        )
+        snapshot = launch.params_snapshot
+        AISTProjectScript.create_for_version(content=GENERATED, version=self.main)
+        resumed = SastPipelineArguments.from_dict(snapshot)
+        with resumed.build_configuration_context() as configuration:
+            self.assertEqual(Path(configuration.script_path).read_text(encoding="utf-8"), "echo original")
+            self.assertEqual(configuration.base_image, BASE_IMAGE)
+        resolved = resumed.resolve_effective_project_version(resolved_commit="b" * 40)
+        self.assertEqual(resolved.script_id, original.id)
+
+    def test_caller_cannot_override_frozen_revision_from_another_project(self):
+        foreign = AISTProjectScript.objects.create(project=self.other_project, content="echo foreign")
+        launch = PipelineArguments.for_sast(
+            project=self.project,
+            raw_params={"project_version": self.main.id, "script_revision_id": foreign.id},
+        )
+        self.assertNotEqual(launch.params_snapshot["script_revision_id"], foreign.id)
+
+    def test_queued_shared_default_is_a_project_snapshot(self):
+        shared = AISTProjectScript.get_shared_default()
+        launch = PipelineArguments.for_sast(
+            project=self.project, raw_params={"project_version": self.main.id},
+        )
+        snapshot = launch.params_snapshot
+        shared.content = "echo new global default"
+        shared.save(update_fields=["content"])
+        resumed = SastPipelineArguments.from_dict(snapshot)
+        self.assertEqual(resumed.selected_script.project_id, self.project.id)
+        self.assertFalse(resumed.selected_script.is_shared)
+        self.assertNotEqual(resumed.selected_script.content, shared.content)
+        self.assertEqual(launch.params_snapshot, snapshot)
+
     @staticmethod
     def _project(name, prod_type, sla):
-        product = Product.objects.create(name=name, description="d", prod_type=prod_type, sla_configuration_id=sla.id)
-        return AISTProject.objects.create(product=product, supported_languages=[], compilable=False, profile={})
+        return create_project(name=name, product_type=prod_type, sla=sla)
 
     @staticmethod
     def _version(project, name, version_type, **extra):
-        return AISTProjectVersion.objects.create(project=project, version=name, version_type=version_type, **extra)
+        return create_project_version(project=project, name=name, version_type=version_type, **extra)
 
     def _make_args(self, project_version: dict) -> SastPipelineArguments:
-        args = SastPipelineArguments.__new__(SastPipelineArguments)
-        args.project = self.project
-        args.project_version = project_version
-        args.pipeline_path = None
-        return args
+        return SastPipelineArguments(project=self.project, project_version=project_version)
 
     def test_binds_only_the_requested_branch(self):
-        script, created = AISTProjectScript.create_for_version(content=GENERATED, version=self.main)
-
-        self.assertTrue(created)
-        self.assertEqual(script.project_id, self.project.id)
-        self.assertFalse(script.is_shared)
-        self.main.refresh_from_db()
-        self.assertEqual(self.main.script_id, script.id)
-        for untouched, expected_script_id in (
-            (self.develop, self.develop_script.id),
-            (self.old_hash, None),
-            (self.foreign_main, None),
-        ):
-            untouched.refresh_from_db()
-            self.assertEqual(untouched.script_id, expected_script_id, untouched.version)
+        for base_image in ("", BASE_IMAGE):
+            with self.subTest(base_image=base_image):
+                script, created = AISTProjectScript.create_for_version(
+                    content=GENERATED, base_image=base_image, version=self.main,
+                )
+                self.assertTrue(created)
+                self.assertEqual(script.project_id, self.project.id)
+                self.assertFalse(script.is_shared)
+                self.assertEqual(script.content, GENERATED)
+                self.assertEqual(script.base_image, base_image)
+                self.main.refresh_from_db()
+                self.assertEqual(self.main.script_id, script.id)
+                for untouched, expected_script_id in (
+                    (self.develop, self.develop_script.id),
+                    (self.old_hash, None),
+                    (self.foreign_main, None),
+                ):
+                    untouched.refresh_from_db()
+                    self.assertEqual(untouched.script_id, expected_script_id, untouched.version)
 
     def test_same_content_reuses_the_revision(self):
         first, _ = AISTProjectScript.create_for_version(content=GENERATED, version=self.main)

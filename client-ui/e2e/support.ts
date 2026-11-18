@@ -1,6 +1,6 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type BrowserContext, type Page } from "@playwright/test";
 
-const cachedAuthCookies = new Map<string, Awaited<ReturnType<Page["context"]["cookies"]>>>();
+const cachedAuthCookies = new Map<string, Awaited<ReturnType<BrowserContext["cookies"]>>>();
 
 export type E2ECredentials = {
   username: string;

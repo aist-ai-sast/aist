@@ -9,13 +9,14 @@ from rest_framework import generics, serializers, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
-from aist.api.project_versions import (
-    SCRIPT_SOURCE_SHARED_DEFAULT,
-    SCRIPT_SOURCE_VERSION,
-    _serialize_version_script,
+from aist.api.project_scripts import (
+    AISTProjectActiveScriptSerializer,
+    AISTProjectScriptContentSerializer,
+    AISTProjectScriptSerializer,
 )
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy, queryset_for_action
+from aist.authz.permissions import IsInternalService
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.integrations.claude import claude_auth_env
 from aist.integrations.resolver import resolve_integration
@@ -27,8 +28,10 @@ from aist.models import (
     OrgIntegrationType,
     VersionType,
 )
+from aist.models.projects import ScriptSource, ScriptUpdateScope
 from aist.pipeline_args import analyzer_selection_signature, launch_analyzers
 from aist.profile import ProjectProfile
+from aist.utils.container_images import validate_builder_base_image
 from aist.utils.pipeline_imports import _load_analyzers_config
 
 # Script content hard cap: 256 KB is more than enough for any real entrypoint script.
@@ -87,47 +90,6 @@ class AISTProjectSerializer(serializers.ModelSerializer):
         ]
 
 
-class AISTProjectScriptSerializer(serializers.ModelSerializer):
-    created_by_username = serializers.CharField(
-        source="created_by.username", read_only=True, allow_null=True,
-    )
-
-    class Meta:
-        model = AISTProjectScript
-        fields = ["id", "sha256", "created_at", "created_by_id", "created_by_username"]
-
-
-class AISTProjectScriptContentSerializer(serializers.ModelSerializer):
-    created_by_username = serializers.CharField(
-        source="created_by.username", read_only=True, allow_null=True,
-    )
-
-    class Meta:
-        model = AISTProjectScript
-        fields = ["id", "content", "sha256", "is_shared", "created_at", "created_by_id", "created_by_username"]
-
-
-class ActiveScriptVersionSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    version = serializers.CharField()
-    type = serializers.ChoiceField(choices=VersionType.choices)
-
-
-class AISTProjectActiveScriptSerializer(AISTProjectScriptContentSerializer):
-
-    """Response of the active-script endpoint: the script the project's next run uses."""
-
-    inherited = serializers.BooleanField(help_text="True when the script is the shared default.")
-    source = serializers.ChoiceField(choices=[SCRIPT_SOURCE_VERSION, SCRIPT_SOURCE_SHARED_DEFAULT])
-    version = ActiveScriptVersionSerializer(
-        allow_null=True,
-        help_text="The version whose next run uses this script (newest branch), or null without versions.",
-    )
-
-    class Meta(AISTProjectScriptContentSerializer.Meta):
-        fields = [*AISTProjectScriptContentSerializer.Meta.fields, "inherited", "source", "version"]
-
-
 def _validate_script_content(value: str) -> str:
     """Shared validator: size cap only. Shellcheck is advisory — see validate_with_shellcheck."""
     if len(value.encode()) > _SCRIPT_MAX_BYTES:
@@ -137,11 +99,18 @@ def _validate_script_content(value: str) -> str:
 
 
 class AISTProjectScriptCreateSerializer(serializers.Serializer):
-    content = serializers.CharField(allow_blank=False)
+    content = serializers.CharField(required=False, allow_blank=False, trim_whitespace=False)
+    source_script_id = serializers.PrimaryKeyRelatedField(
+        source="source_script", queryset=AISTProjectScript.objects.none(), required=False,
+        help_text="Copy this accessible revision's original content when only the environment changes.",
+    )
+    base_image = serializers.CharField(
+        required=False, allow_blank=True, max_length=512, validators=[validate_builder_base_image],
+    )
     set_active = serializers.BooleanField(default=True)
     scope = serializers.ChoiceField(
-        choices=["local", "global"],
-        default="local",
+        choices=ScriptUpdateScope.choices,
+        default=ScriptUpdateScope.LOCAL,
         help_text=(
             "'local' creates a project-specific revision (only this project is affected). "
             "'global' updates the shared default script in-place (all projects using the "
@@ -149,7 +118,32 @@ class AISTProjectScriptCreateSerializer(serializers.Serializer):
         ),
     )
 
+    def get_fields(self):
+        fields = super().get_fields()
+        project = self.context.get("project")
+        if project is not None:
+            fields["source_script_id"].queryset = AISTProjectScript.objects.filter(
+                Q(project=project, is_shared=False) | Q(project__isnull=True, is_shared=True),
+            )
+        return fields
+
+    def validate(self, attrs):
+        if ("content" in attrs) == ("source_script" in attrs):
+            msg = "Provide either content or source_script_id."
+            raise serializers.ValidationError(msg)
+        source = attrs.get("source_script")
+        if source is not None:
+            if attrs["scope"] == ScriptUpdateScope.GLOBAL and not source.is_shared:
+                msg = "Global environment changes must reference the shared default."
+                raise serializers.ValidationError({"source_script_id": msg})
+            if attrs["scope"] == ScriptUpdateScope.LOCAL:
+                attrs["content"] = source.content
+        return attrs
+
     def validate_content(self, value: str) -> str:
+        if not value.strip():
+            msg = "Script content must not be blank."
+            raise serializers.ValidationError(msg)
         return _validate_script_content(value)
 
 
@@ -461,26 +455,25 @@ class AISTProjectScriptListCreateAPI(AISTAPIView):
     )
     def post(self, request, project_id: int) -> Response:
         project = self.resolve(id=project_id)
-        serializer = AISTProjectScriptCreateSerializer(data=request.data)
+        serializer = AISTProjectScriptCreateSerializer(data=request.data, context={"project": project})
         serializer.is_valid(raise_exception=True)
 
-        content = serializer.validated_data["content"]
+        content = serializer.validated_data.get("content")
         scope = serializer.validated_data["scope"]
         set_active = serializer.validated_data["set_active"]
 
-        if scope == "global":
-            if not request.user.is_superuser:
-                msg = "Only superusers may update the shared default script (scope=global)."
+        if scope == ScriptUpdateScope.GLOBAL:
+            if not IsInternalService().has_permission(request, self):
+                msg = "Updating the shared default requires a platform superuser session or service credential."
                 raise PermissionDenied(msg)
-            # Lock the shared singleton row before reading + writing to prevent
-            # a lost-update race when two requests update the global script
-            # concurrently.  select_for_update() acquires a row-level lock that
-            # is held until the surrounding atomic block commits.
+            # Serialize shared-default edits to avoid lost updates.
             try:
                 with transaction.atomic():
                     script = AISTProjectScript.objects.select_for_update().get(is_shared=True)
-                    script.content = content
-                    script.save(update_fields=["content", "sha256"])
+                    if content is not None:
+                        script.content = content
+                    script.base_image = serializer.validated_data.get("base_image", script.base_image)
+                    script.save(update_fields=["content", "base_image", "sha256"])
             except AISTProjectScript.DoesNotExist:
                 return Response(
                     {"detail": "Shared default script not found. Run migrations to initialise it."},
@@ -489,10 +482,12 @@ class AISTProjectScriptListCreateAPI(AISTAPIView):
             response_status = status.HTTP_200_OK
         else:
             # Create a project-scoped revision (deduplicated by sha256).
+            source_script = serializer.validated_data.get("source_script") or project.active_script
             script, created = AISTProjectScript.get_or_create_for_project(
                 content=content,
                 project=project,
                 user=request.user,
+                base_image=serializer.validated_data.get("base_image", source_script.base_image),
             )
             if set_active:
                 # "Active" means the version the next run uses — never a stale commit version.
@@ -558,13 +553,10 @@ class AISTProjectActiveScriptAPI(AISTAPIView):
         project = self.resolve(id=project_id)
         AISTProject.prefetch_active_scripts([project])
         version = project.active_version
-        source = SCRIPT_SOURCE_VERSION if version is not None and version.script_id else SCRIPT_SOURCE_SHARED_DEFAULT
-        payload = _serialize_version_script(project.active_script, source)
-        payload["version"] = (
-            {"id": version.id, "version": version.version, "type": version.version_type}
-            if version is not None else None
-        )
-        return Response(payload)
+        source = ScriptSource.VERSION if version is not None and version.script_id else ScriptSource.SHARED_DEFAULT
+        return Response(AISTProjectActiveScriptSerializer(
+            project.active_script, context={"source": source, "version": version},
+        ).data)
 
 
 def project_meta_payload(project: AISTProject) -> dict:

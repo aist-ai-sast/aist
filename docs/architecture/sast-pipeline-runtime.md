@@ -32,10 +32,45 @@ runtime path:
   starts or resumes one external provider run, and returns a bounded outcome
   plus its recovery checkpoint.
 
-The builder prepares source and dependencies in a container selected for the
-project. Analyzer containers then use the prepared workspace and the
-per-pipeline analyzer selection derived from languages, time class, and launch
-configuration.
+The builder prepares source and dependencies through the project's init script.
+AIST owns the versioned pair of init script and builder base image and freezes
+the selected revision at admission. It passes both to the execution package as
+explicit inputs. The package applies the image to its shared builder Dockerfile
+before executing init; it has no knowledge of project identity or revision
+storage. The shared builder currently requires an Ubuntu/Debian-compatible base.
+Each builder starts from its own build's immutable image ID, so another build
+replacing the shared image tag cannot change its selected environment.
+See [project configuration](../product/project-and-source-onboarding.md#which-script-a-run-uses)
+for revision selection and image pinning.
+Analyzer selection comes from languages, time class, and launch configuration.
+Source analyzers consume the prepared workspace in their own containers.
+
+Build analyzers can declare a separate tool runtime and capture adapter. The
+execution package reserves a run-scoped Docker volume and mounts it read-only
+in the builder. After init selects the build analyzer, the package populates the
+volume from its image. Skipped build analyzers do not require their images to be
+built or run. Tools remain owned by analyzer images;
+project init installs only project dependencies and supplies a build command.
+After init, the adapter executes in the builder with its exported environment,
+installed toolchain and filesystem. It writes capture artifacts to temporary
+storage shared through a Docker volume. A separate container from the same resolved analyzer image then reads
+those artifacts and produces the report. Sharing workspace mounts alone would
+not preserve the builder's installed dependencies or environment.
+
+This capture path is currently implemented for C/C++ CodeQL. Other build
+analyzers retain their existing execution paths until their images provide a
+compatible runtime and adapter. The execution package contains no project or
+build-system target knowledge: project configuration chooses the build commands
+and native target or preset selection. An analyzer runtime must support the
+builder's architecture and system libraries.
+
+Capture covers the compilation actually performed by the supplied command.
+Incremental or cached builds can omit source files, and success does not certify
+every platform, target or extractor diagnostic. Compatible targets can share
+one capture; incompatible configurations require separate runs. Container CPU
+and memory limits are configurable independently for builder and analysis;
+setting a limit does not supply physical worker capacity. The upstream package
+README documents the configuration contract.
 
 When source acquisition needs a project VPN, the builder joins the
 execution-specific VPN sidecar. Analyzer containers consume the prepared
@@ -76,19 +111,20 @@ file, an unusable token, an output directory it cannot write — is not a provid
 outage: the next attempt would fail identically. AIST ends such a pipeline at
 once with its own outcome code instead of retrying it.
 
-What ends an external provider run is silence, not duration. A run that keeps
-delivering — a run identity, further log output — is left alone however long it
-takes, and its capacity lease is renewed while its worker holds it. A run that
-delivers nothing for longer than a working one would is ended. A separate ceiling
-on total run length is a safety limit a healthy scan does not reach; either bound
-may be configured off and the other still applies.
+An external provider run becomes terminal only after an explicit domain outcome.
+Transport failures and unresolved stop requests remain recoverable, with no
+retry-count limit. Progress timestamps support observation; silence or elapsed
+duration alone does not terminate the run. When the provider becomes reachable,
+the next attempt can observe its terminal outcome and import the result through
+the normal finalization path.
 
-Before a run is abandoned for either reason, the provider is asked once more
-whether it has become terminal, and a result that exists by then is imported
-through the same validation and finalization path as any other.
-
-Containers and temporary paths remain scoped to one pipeline. SAST cancellation
-stops local work immediately. DAST cancellation persists intent first, then the
+Containers and temporary paths remain scoped to one pipeline. Tool runtime
+volumes are removed after the builder exits; cancellation also reclaims volumes
+labeled for that pipeline once their containers have stopped. Capture artifacts
+are removed after each analyzer, including failed runs; their anonymous Docker
+volume is reclaimed when its containers are removed. Final reports remain in
+run output. SAST cancellation stops local work. DAST
+cancellation persists intent first, then the
 connector carries the stop request across the provider boundary until a terminal
 outcome is observed.
 

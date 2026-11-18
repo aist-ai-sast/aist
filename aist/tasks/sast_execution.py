@@ -39,6 +39,7 @@ from aist.utils.vpn import vpn_sidecar_context
 _import_sast_pipeline_package()
 
 from celery.exceptions import Ignore  # noqa: E402
+from pipeline.build_configuration import SastRuntimeConfiguration  # noqa: E402
 from pipeline.config_utils import AnalyzersConfigHelper  # type: ignore[import-not-found]  # noqa: E402
 from pipeline.execution import execute_pipeline  # type: ignore[import-not-found]  # noqa: E402
 from pipeline.sast_execution import SastExecutionInput  # type: ignore[import-not-found]  # noqa: E402
@@ -159,32 +160,33 @@ def _run_sast(run: _SastRun, sast, runtime: _SastRuntime) -> PipelineLaunchData:
                 source=ActionRunSource.RUNNER,
                 status=ActionRunStatus.STARTED,
             )
-        with sast.script_path_context() as script_path:
+        with sast.build_configuration_context() as configuration:
             execution_result = execute_pipeline(
                 PipelineExecutionType.SAST,
                 SastExecutionInput(
                     execution_id=pipeline_id,
-                    runtime_arguments={
-                        "script_path": script_path,
-                        "output_dir": runtime.output_dir,
-                        "languages": sast.languages,
-                        "analyzer_config": AnalyzersConfigHelper(),
-                        "dockerfile_path": sast.dockerfile_path,
-                        "context_dir": sast.pipeline_src_path,
-                        "image_name": sast.builder_image_name,
-                        "project_path": runtime.project_build_path,
-                        "force_rebuild": False,
-                        "rebuild_images": sast.rebuild_images,
-                        "version": sast.project_version,
-                        "log_level": run.log_level,
-                        "min_time_class": str(sast.time_class_level),
-                        "analyzers": sast.analyzers,
-                        "pipeline_id": pipeline_id,
-                        "additional_env": sast.runtime_env,
-                        "network": f"container:{vpn_container}" if vpn_container else None,
-                        "bridge_client": runtime.bridge_client,
-                        "agent_bridge_runtime_env": runtime.agent_runtime_env,
-                    },
+                    runtime_arguments=SastRuntimeConfiguration(
+                        script_path=configuration.script_path,
+                        base_image=configuration.base_image,
+                        output_dir=runtime.output_dir,
+                        languages=sast.languages,
+                        analyzer_config=AnalyzersConfigHelper(),
+                        dockerfile_path=sast.dockerfile_path,
+                        context_dir=sast.pipeline_src_path,
+                        image_name=sast.builder_image_name,
+                        project_path=runtime.project_build_path,
+                        force_rebuild=False,
+                        rebuild_images=sast.rebuild_images,
+                        version=sast.project_version,
+                        log_level=run.log_level,
+                        min_time_class=str(sast.time_class_level),
+                        analyzers=sast.analyzers,
+                        pipeline_id=pipeline_id,
+                        additional_env=sast.runtime_env,
+                        network=f"container:{vpn_container}" if vpn_container else None,
+                        bridge_client=runtime.bridge_client,
+                        agent_bridge_runtime_env=runtime.agent_runtime_env,
+                    ),
                 ),
             )
     return PipelineLaunchData(execution_result.launch_data)

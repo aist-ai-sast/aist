@@ -38,6 +38,7 @@
 
         {# Loaded with the widgets it drives: a page's own inline script may call into it while the body is still parsing. #}
         <script src="{% static "aist/js/platform-components.js" %}?v={% static_v "aist/js/platform-components.js" %}"></script>
+        <script src="{% static "aist/js/csrf.js" %}?v={% static_v "aist/js/csrf.js" %}"></script>
 
         {# Before Alpine: it registers its components on alpine:init. #}
         <script src="{% static "aist/js/page-behaviours.js" %}?v={% static_v "aist/js/page-behaviours.js" %}"></script>

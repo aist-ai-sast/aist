@@ -72,9 +72,30 @@ rejected. The client UI has no Regenerate control.
 
 ## Which script a run uses
 
+Each project script revision also stores its builder base image. In the script
+editor, **Builder base image** accepts an Ubuntu/Debian-compatible image reference
+pinned by SHA-256 digest (`repository:tag@sha256:…`). A project-specific edit of
+either value creates or reuses a revision of the pair. Editing the shared default
+updates that singleton in place and requires a platform superuser session or
+service credential. Selecting an earlier revision for a
+source version restores both values. Script regeneration keeps a compatible
+configured image; when a different environment is needed, it verifies and stores
+the replacement together with the script. Changing only the image preserves the original script content,
+including values masked in the editor.
+
+An empty image retains the legacy Ubuntu 22.04 default. Existing revisions keep
+that behavior; they do not gain a pinned base automatically. A digest fixes the
+base image contents, but dependencies installed by the script also need pinned
+versions for a reproducible environment. Analyzer tools are managed separately
+and do not belong in the project's init script or base image.
+
 A pipeline runs its source version's own script, or the shared default when the
-version has none. A branch run copies the branch's script to the commit version
-it resolves, so a script assigned to a branch applies to its later runs. The
+version has none. Admission freezes a project-scoped revision of the script and
+base image for the queued run, including when the shared default is selected.
+Subsequent edits do not change that run's environment configuration. A branch run
+assigns its admitted revision when creating a resolved commit version or filling
+an unbound one. An already configured commit retains its binding; the queued run
+still uses its own frozen revision. The
 script shown for a version is exactly what that version's next pipeline runs; a
 project revision that no version uses is never shown as active.
 

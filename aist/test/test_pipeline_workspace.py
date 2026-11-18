@@ -1,5 +1,5 @@
 """
-Tests for the common execution paths owned by PipelineArguments.
+Tests for workspace lifecycle through the pipeline launch envelope.
 
 User scenario: each pipeline run gets an isolated workspace directory; after the run
 the directory is cleaned up so per-run dirs do not accumulate on disk.
@@ -12,7 +12,8 @@ import tempfile
 from pathlib import Path
 
 from aist.models import AISTPipeline, AISTStatus, LocalTriageBatch, LocalTriageBatchState
-from aist.pipeline_args import BUILD_DIR_WARNING, PipelineArguments, SastPipelineArguments
+from aist.pipeline_args import PipelineArguments, SastPipelineArguments
+from aist.services.execution_workspace import BUILD_DIR_WARNING
 from aist.test.test_api import AISTApiBase
 
 

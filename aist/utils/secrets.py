@@ -94,13 +94,13 @@ def mask_sensitive_text(text: str) -> str:
         return text
 
     masked_lines: list[str] = []
-    for line in text.splitlines():
+    for line in text.splitlines(keepends=True):
         masked_line = _mask_urls_in_line(line)
         masked_line = _mask_kv_line(masked_line, ":")
         masked_line = _mask_kv_line(masked_line, "=")
         masked_line = _mask_bare_tokens_in_line(masked_line)
         masked_lines.append(masked_line)
-    return "\n".join(masked_lines)
+    return "".join(masked_lines)
 
 
 # Keys that look sensitive by Django's heuristics but are NOT secrets.

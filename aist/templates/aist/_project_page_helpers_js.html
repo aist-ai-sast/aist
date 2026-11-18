@@ -1,0 +1,34 @@
+var globalAlert = document.getElementById("aist-projects-alert");
+var scriptScope = { LOCAL: "{{ script_update_scope.LOCAL|escapejs }}", GLOBAL: "{{ script_update_scope.GLOBAL|escapejs }}" };
+var scriptSource = { VERSION: "{{ script_source.VERSION|escapejs }}", SHARED_DEFAULT: "{{ script_source.SHARED_DEFAULT|escapejs }}" };
+var getCsrfToken = aistCsrfToken;
+function showGlobalAlert(message, kind) {
+    if (!globalAlert)
+        return;
+    globalAlert.className = "alert alert-" + (kind || "success");
+    globalAlert.textContent = message;
+    globalAlert.style.display = "block";
+    setTimeout(function () {
+        globalAlert.style.display = "none";
+    }, 3000);
+}
+function extractApiErrorMessage(data, fallbackMsg) {
+    if (!data || typeof data !== "object") {
+        return fallbackMsg;
+    }
+    if (typeof data.detail === "string" && data.detail) {
+        return data.detail;
+    }
+    var firstKey = Object.keys(data)[0];
+    if (!firstKey) {
+        return fallbackMsg;
+    }
+    var value = data[firstKey];
+    if (Array.isArray(value) && value.length) {
+        return String(value[0]);
+    }
+    if (typeof value === "string" && value) {
+        return value;
+    }
+    return fallbackMsg;
+}

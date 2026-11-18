@@ -9,6 +9,7 @@ FROM python:3.13.11-alpine3.22@sha256:ab45bd32143151fe060d48218b91df43a289166e72
 FROM node:22-alpine@sha256:e4bf2a82ad0a4037d28035ae71529873c069b13eb0455466ae0bc13363826e34 AS client-build
 WORKDIR /app/client-ui
 COPY client-ui/ ./
+COPY aist/static/aist/js/csrf.* /app/aist/static/aist/js/
 RUN npm ci --no-audit --no-fund && npm run build
 
 FROM base AS build
@@ -88,6 +89,7 @@ COPY \
   /
 COPY wsgi.py manage.py ./
 COPY aist/ ./aist/
+COPY --from=client-build /app/aist/static/aist/js/csrf.js ./aist/static/aist/js/csrf.js
 COPY aist_site/ ./aist_site/
 COPY .codex/ ./.codex/
 COPY vendor/defectdojo/ ./vendor/defectdojo/

@@ -1,0 +1,544 @@
+function initProjectEditor() {
+    var table = document.getElementById("aist-projects-table");
+    var filterInput = document.getElementById("aist-projects-filter");
+    var modal = document.getElementById("aistProjectModal");
+    var form = document.getElementById("aist-project-edit-form");
+    var errorBox = document.getElementById("aist-project-edit-error");
+    var fieldId = document.getElementById("ap-project-id");
+    var fieldProduct = document.getElementById("ap-product-name");
+    var fieldLangs = document.getElementById("ap-supported-languages");
+    var fieldCompilable = document.getElementById("ap-compilable");
+    var fieldProfile = document.getElementById("ap-profile");
+    var deleteBtn = document.getElementById("aist-project-delete-btn");
+    var regenerateBtn = document.getElementById("aist-project-regenerate-btn");
+    var regenerateVersion = document.getElementById("aist-project-regenerate-version");
+    var regenerateHint = document.getElementById("aist-project-regenerate-hint");
+    var fieldScriptContent = document.getElementById("ap-script-content");
+    var fieldBaseImage = document.getElementById("ap-base-image");
+    var scriptMeta = document.getElementById("ap-script-meta");
+    var scriptLoading = document.getElementById("ap-script-loading");
+    var scriptScopeBlock = document.getElementById("ap-script-scope");
+    var scriptHelp = document.getElementById("ap-script-help");
+    var scopeGlobalRadio = document.getElementById("ap-scope-global");
+    var scopeLocalRadio = document.getElementById("ap-scope-local");
+    var scriptVersionGroup = document.getElementById("ap-script-version-group");
+    var fieldScriptVersion = document.getElementById("ap-script-version");
+    var originalScriptContent = "";
+    var originalScriptId = null;
+    var loadedVersionId = null;
+    var loadGeneration = 0;
+    var originalBaseImage = "";
+    var currentScriptIsShared = false;
+    function updateVersionGroupVisibility() {
+        if (!scriptVersionGroup)
+            return;
+        // Show when scope=local is selected, or when project already has its own script
+        // (scope block hidden — no shared-vs-local choice needed).
+        var scopeBlockHidden = !scriptScopeBlock || scriptScopeBlock.style.display === "none";
+        var localSelected = scopeLocalRadio && scopeLocalRadio.checked;
+        scriptVersionGroup.style.display = (localSelected || scopeBlockHidden) ? "block" : "none";
+    }
+    if (scopeGlobalRadio) {
+        scopeGlobalRadio.addEventListener("change", updateVersionGroupVisibility);
+    }
+    if (scopeLocalRadio) {
+        scopeLocalRadio.addEventListener("change", updateVersionGroupVisibility);
+    }
+    function buildVersionScriptUrl(projectId, versionId) {
+        return projectVersionScriptUrlTemplate
+            .replace("/0/versions/0/", "/" + projectId + "/versions/" + versionId + "/");
+    }
+    function applyScriptMeta(data) {
+        if (!scriptMeta)
+            return;
+        if (!data || !data.sha256) {
+            scriptMeta.textContent = "";
+            return;
+        }
+        var badge = "";
+        if (data.source === scriptSource.SHARED_DEFAULT) {
+            badge = ' <span class="label label-warning">inherited from global default</span>';
+        }
+        scriptMeta.innerHTML = "sha256: " + data.sha256.slice(0, 12) + "…" + badge;
+    }
+    function applyScriptResult(result) {
+        if (scriptLoading)
+            scriptLoading.style.display = "none";
+        if (!(result.ok && result.data && result.data.content != null)) {
+            if (fieldScriptContent)
+                fieldScriptContent.style.display = "";
+            if (scriptMeta)
+                scriptMeta.textContent = "No script loaded.";
+            return;
+        }
+        originalScriptId = result.data.id;
+        originalBaseImage = result.data.base_image || "";
+        if (fieldBaseImage)
+            fieldBaseImage.value = originalBaseImage;
+        currentScriptIsShared = !!result.data.is_shared;
+        if (fieldScriptContent) {
+            fieldScriptContent.value = result.data.content;
+            fieldScriptContent.style.display = "";
+        }
+        // A textarea normalizes CRLF; keep image-only edits tied to the original revision.
+        originalScriptContent = fieldScriptContent ? fieldScriptContent.value : result.data.content;
+        applyScriptMeta(result.data);
+        if (scriptScopeBlock) {
+            if (currentScriptIsShared) {
+                scriptScopeBlock.style.display = "block";
+                if (scopeGlobalRadio)
+                    scopeGlobalRadio.checked = true;
+                if (scriptHelp)
+                    scriptHelp.textContent =
+                        "Select scope above: update the shared default or fork a project-specific copy.";
+            }
+            else {
+                scriptScopeBlock.style.display = "none";
+                if (scriptHelp)
+                    scriptHelp.textContent =
+                        "Saving changes creates a new project-specific revision.";
+            }
+        }
+        updateVersionGroupVisibility();
+    }
+    // Re-render a row's Script cell from the active-script API, so the cell only ever
+    // shows the script the next run uses (a save to another version leaves it as is).
+    function refreshScriptCell(row) {
+        if (!row)
+            return;
+        var projectId = row.getAttribute("data-project-id");
+        fetch(activeScriptUrlTemplate.replace("/0/", "/" + projectId + "/"), { credentials: "same-origin" })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) {
+            if (!data || !data.sha256)
+                return;
+            var cell = row.querySelector(".script-cell");
+            if (cell) {
+                var code = document.createElement("code");
+                code.title = data.sha256;
+                code.textContent = data.sha256.slice(0, 8) + "\u2026";
+                var label = document.createElement("span");
+                label.className = "text-muted small";
+                var name = data.source === scriptSource.VERSION && data.version ? data.version.version : "default";
+                // Same cap as the server-rendered cell (truncatechars:24).
+                label.textContent = name.length > 24 ? name.slice(0, 23) + "\u2026" : name;
+                cell.replaceChildren(code, " ", label);
+            }
+            row.setAttribute("data-project-active-script-id", String(data.id));
+            row.setAttribute("data-project-active-version-id", data.version ? String(data.version.id) : "");
+        })
+            .catch(function () { });
+    }
+    function loadScriptForCurrentSelection(projectId) {
+        if (!projectId)
+            return;
+        var versionId = (fieldScriptVersion && fieldScriptVersion.value) || "";
+        var url = versionId
+            ? buildVersionScriptUrl(projectId, versionId)
+            : activeScriptUrlTemplate.replace("/0/", "/" + projectId + "/");
+        var generation = ++loadGeneration;
+        loadedVersionId = null;
+        if (scriptLoading)
+            scriptLoading.style.display = "block";
+        fetch(url, { credentials: "same-origin" })
+            .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+            .then(function (result) {
+            if (generation !== loadGeneration)
+                return;
+            if (result.ok && result.data && result.data.content != null)
+                loadedVersionId = versionId;
+            applyScriptResult(result);
+        })
+            .catch(function () {
+            if (generation !== loadGeneration)
+                return;
+            if (scriptLoading)
+                scriptLoading.style.display = "none";
+            if (fieldScriptContent)
+                fieldScriptContent.style.display = "";
+            if (scriptMeta)
+                scriptMeta.textContent = "Failed to load script.";
+        });
+    }
+    if (fieldScriptVersion) {
+        aistOnSelectChange(fieldScriptVersion, function () {
+            var projectId = fieldId ? (fieldId.value || "") : "";
+            if (!projectId)
+                return;
+            var dirty = (fieldScriptContent && fieldScriptContent.value !== originalScriptContent) ||
+                (fieldBaseImage && fieldBaseImage.value.trim() !== originalBaseImage);
+            if (dirty && !window.confirm("You have unsaved changes in the script. Loading another version will discard them. Continue?")) {
+                fieldScriptVersion.value = loadedVersionId || "";
+                aistEnhanceSelect(fieldScriptVersion);
+                return;
+            }
+            loadScriptForCurrentSelection(projectId);
+        });
+    }
+    var activeScriptUrlTemplate = "{{ active_script_url_template|escapejs }}";
+    var projectScriptsUrlTemplate = "{{ project_scripts_url_template|escapejs }}";
+    var projectVersionScriptUrlTemplate = "{{ project_version_script_url_template|escapejs }}";
+    var currentRow = null;
+    var pendingRows = new WeakSet();
+    var regenerateButtonLabel = regenerateBtn ? regenerateBtn.textContent : "";
+    function editorIsCurrent(row, generation) {
+        return currentRow === row && loadGeneration === generation && modal.open;
+    }
+    function showEditorError(row, generation, message) {
+        if (editorIsCurrent(row, generation)) {
+            errorBox.textContent = message;
+            errorBox.style.display = "block";
+        }
+        else {
+            showGlobalAlert(message, "danger");
+        }
+    }
+    function beginMutation(row) {
+        if (pendingRows.has(row))
+            return false;
+        pendingRows.add(row);
+        form.inert = true;
+        return true;
+    }
+    function endMutation(row) {
+        pendingRows.delete(row);
+        if (currentRow === row)
+            form.inert = false;
+    }
+    async function mutationResult(response, fallback) {
+        var data = await response.json();
+        if (!response.ok || !data || data.ok === false) {
+            throw new Error(extractApiErrorMessage((data && data.errors) || data, fallback));
+        }
+        return data;
+    }
+    function openEditModal(row) {
+        if (pendingRows.has(row)) {
+            showGlobalAlert("Please wait for this project's current update to finish.", "info");
+            return;
+        }
+        form.inert = false;
+        if (regenerateBtn)
+            regenerateBtn.textContent = regenerateButtonLabel;
+        currentRow = row;
+        var id = row.getAttribute("data-project-id") || "";
+        var name = row.getAttribute("data-project-name") || "";
+        var langs = row.getAttribute("data-project-langs") || "";
+        var compilable = row.getAttribute("data-project-compilable") === "true";
+        var repoType = row.getAttribute("data-project-repo-type") || "";
+        var repoBaseUrl = row.getAttribute("data-project-repo-base-url") || "";
+        var profileRaw = row.getAttribute("data-project-profile") || "";
+        fieldId.value = id;
+        if (window.__aistSetCurrentProjectIdForPreset) {
+            window.__aistSetCurrentProjectIdForPreset(id);
+        }
+        fieldProduct.value = name;
+        fieldLangs.value = langs;
+        fieldCompilable.checked = compilable;
+        if (fieldProfile) {
+            fieldProfile.value = profileRaw || "";
+        }
+        if (errorBox) {
+            errorBox.style.display = "none";
+            errorBox.textContent = "";
+        }
+        originalScriptContent = "";
+        originalScriptId = null;
+        originalBaseImage = "";
+        if (fieldBaseImage)
+            fieldBaseImage.value = "";
+        currentScriptIsShared = false;
+        if (fieldScriptContent) {
+            fieldScriptContent.value = "";
+            fieldScriptContent.style.display = "none";
+        }
+        if (scriptMeta)
+            scriptMeta.textContent = "";
+        if (scriptScopeBlock)
+            scriptScopeBlock.style.display = "none";
+        if (scriptVersionGroup)
+            scriptVersionGroup.style.display = "none";
+        if (fieldScriptVersion) {
+            fieldScriptVersion.innerHTML = "";
+        }
+        if (fieldScriptVersion) {
+            var versionsRaw = row.getAttribute("data-project-versions") || "[]";
+            try {
+                var versions = JSON.parse(versionsRaw);
+                versions.forEach(function (v) {
+                    var opt = document.createElement("option");
+                    opt.value = String(v.id);
+                    opt.textContent = v.label;
+                    fieldScriptVersion.appendChild(opt);
+                });
+            }
+            catch (e) { /* no versions: fall through to the empty option */ }
+            if (!fieldScriptVersion.options.length) {
+                // No version yet: the script is stored as a revision, which the
+                // first version starts from.
+                var none = document.createElement("option");
+                none.value = "";
+                none.textContent = "— No version yet (first version will use it) —";
+                fieldScriptVersion.appendChild(none);
+            }
+            // Default to the version the next run uses — the one the Script cell shows.
+            var activeVersionId = row.getAttribute("data-project-active-version-id") || "";
+            if (activeVersionId)
+                fieldScriptVersion.value = activeVersionId;
+        }
+        populateRegenerateVersions(row);
+        loadScriptForCurrentSelection(id);
+        modal.showModal();
+    }
+    function applyRowUpdate(row, payload) {
+        if (!row || !payload)
+            return;
+        row.setAttribute("data-project-compilable", payload.compilable ? "true" : "false");
+        row.setAttribute("data-project-langs", (payload.supported_languages || []).join(", "));
+        row.setAttribute("data-project-profile", JSON.stringify(payload.profile || {}));
+        row.setAttribute("data-project-org-id", payload.organization_id != null ? String(payload.organization_id) : "");
+        row.setAttribute("data-project-org-name", payload.organization_name || "");
+        var langsCell = row.querySelector(".langs-cell");
+        if (langsCell) {
+            if (payload.supported_languages && payload.supported_languages.length) {
+                langsCell.textContent = payload.supported_languages.join(", ");
+            }
+            else {
+                langsCell.innerHTML = "<span class=\"text-muted\">–</span>";
+            }
+        }
+        var profileCell = row.querySelector(".profile-cell");
+        if (profileCell) {
+            var preview = "";
+            if (payload.profile && Object.keys(payload.profile).length) {
+                try {
+                    preview = JSON.stringify(payload.profile);
+                }
+                catch (e) {
+                    preview = "";
+                }
+            }
+            if (preview) {
+                if (preview.length > 80) {
+                    preview = preview.slice(0, 77) + "…";
+                }
+                var code = document.createElement("code");
+                code.textContent = preview;
+                profileCell.replaceChildren(code);
+            }
+            else {
+                profileCell.innerHTML = "<span class=\"text-muted\">–</span>";
+            }
+        }
+        var compCell = row.querySelector(".compilable-cell");
+        if (compCell) {
+            if (payload.compilable) {
+                compCell.innerHTML = "<span class=\"label label-success\">Yes</span>";
+            }
+            else {
+                compCell.innerHTML = "<span class=\"label label-default\">No</span>";
+            }
+        }
+    }
+    if (table) {
+        table.addEventListener("click", function (ev) {
+            var btn = ev.target;
+            if (!btn)
+                return;
+            if (!btn.classList.contains("aist-project-edit-btn")) {
+                btn = btn.closest(".aist-project-edit-btn");
+                if (!btn)
+                    return;
+            }
+            var row = btn.closest("tr[data-project-id]");
+            if (!row)
+                return;
+            openEditModal(row);
+        });
+    }
+    if (filterInput && table) {
+        filterInput.addEventListener("keyup", function () {
+            var needle = (filterInput.value || "").toLowerCase();
+            var rows = table.querySelectorAll("tbody tr[data-project-id]");
+            Array.prototype.forEach.call(rows, function (r) {
+                var name = (r.getAttribute("data-project-name") || "").toLowerCase();
+                var id = (r.getAttribute("data-project-id") || "").toLowerCase();
+                if (!needle || name.indexOf(needle) !== -1 || id.indexOf(needle) !== -1) {
+                    r.style.display = "";
+                }
+                else {
+                    r.style.display = "none";
+                }
+            });
+        });
+    }
+    if (form) {
+        form.addEventListener("submit", async function (ev) {
+            ev.preventDefault();
+            if (!currentRow || pendingRows.has(currentRow))
+                return;
+            if (loadedVersionId === null || loadedVersionId !== (fieldScriptVersion.value || "")) {
+                errorBox.textContent = "Wait for the selected version's configuration to load before saving.";
+                errorBox.style.display = "block";
+                return;
+            }
+            var row = currentRow;
+            var generation = loadGeneration;
+            var projectId = row.getAttribute("data-project-id");
+            var updateUrl = row.getAttribute("data-update-url");
+            if (!updateUrl)
+                return;
+            // Keep the submitted project and values independent of any subsequently opened editor.
+            var formData = new FormData(form);
+            var chosenScope = currentScriptIsShared && scopeGlobalRadio && scopeGlobalRadio.checked
+                ? scriptScope.GLOBAL : scriptScope.LOCAL;
+            var chosenVersionId = chosenScope === scriptScope.LOCAL ? fieldScriptVersion.value || "" : "";
+            var newScript = fieldScriptContent.value;
+            var newBaseImage = fieldBaseImage.value.trim();
+            var shouldSaveScript = newScript !== originalScriptContent || newBaseImage !== originalBaseImage ||
+                (currentScriptIsShared && chosenScope === scriptScope.LOCAL);
+            var scriptBody = { base_image: newBaseImage, scope: chosenScope, set_active: !chosenVersionId };
+            if (newScript === originalScriptContent && originalScriptId != null) {
+                scriptBody.source_script_id = originalScriptId;
+            }
+            else {
+                scriptBody.content = newScript;
+            }
+            var headers = { "X-Requested-With": "XMLHttpRequest", "X-CSRFToken": getCsrfToken() };
+            var jsonHeaders = Object.assign({ "Content-Type": "application/json" }, headers);
+            if (!beginMutation(row))
+                return;
+            try {
+                if (shouldSaveScript) {
+                    var saved = await mutationResult(await fetch(projectScriptsUrlTemplate.replace("/0/", "/" + projectId + "/"), {
+                        method: "POST", credentials: "same-origin", headers: jsonHeaders, body: JSON.stringify(scriptBody)
+                    }), "Failed to save script.");
+                    if (chosenVersionId) {
+                        await mutationResult(await fetch(buildVersionScriptUrl(projectId, chosenVersionId), {
+                            method: "PATCH", credentials: "same-origin", headers: jsonHeaders,
+                            body: JSON.stringify({ script_id: saved.id })
+                        }), "Failed to assign script to version.");
+                    }
+                    if (editorIsCurrent(row, generation)) {
+                        applyScriptResult({ ok: true, data: Object.assign({}, saved, {
+                                content: newScript, base_image: newBaseImage,
+                                source: saved.is_shared ? scriptSource.SHARED_DEFAULT : scriptSource.VERSION
+                            }) });
+                    }
+                    refreshScriptCell(row);
+                }
+                var result = await mutationResult(await fetch(updateUrl, {
+                    method: "POST", credentials: "same-origin", headers: headers, body: formData
+                }), "Failed to update project.");
+                applyRowUpdate(row, result.project);
+                if (editorIsCurrent(row, generation))
+                    modal.close();
+                showGlobalAlert("Project has been updated.", "success");
+            }
+            catch (error) {
+                showEditorError(row, generation, error.message || "Unexpected error while saving project.");
+            }
+            finally {
+                endMutation(row);
+            }
+        });
+    }
+    if (deleteBtn) {
+        deleteBtn.addEventListener("click", async function () {
+            var row = currentRow;
+            if (!row || pendingRows.has(row))
+                return;
+            var deleteUrl = row.getAttribute("data-delete-url");
+            if (!deleteUrl || !window.confirm("Are you sure you want to delete this project? This action cannot be undone."))
+                return;
+            var generation = loadGeneration;
+            if (!beginMutation(row))
+                return;
+            try {
+                var response = await fetch(deleteUrl, {
+                    method: "DELETE", credentials: "same-origin",
+                    headers: { "X-Requested-With": "XMLHttpRequest", "X-CSRFToken": getCsrfToken() }
+                });
+                if (response.status !== 204)
+                    throw new Error("Failed to delete project.");
+                row.remove();
+                if (editorIsCurrent(row, generation)) {
+                    modal.close();
+                    currentRow = null;
+                }
+                showGlobalAlert("Project has been deleted.", "success");
+            }
+            catch (error) {
+                showEditorError(row, generation, error.message || "Unexpected error while deleting project.");
+            }
+            finally {
+                endMutation(row);
+            }
+        });
+    }
+    // Regenerate targets one branch: only GIT_BRANCH versions are offered, newest
+    // first (the server renders versions ordered by -created).
+    function populateRegenerateVersions(row) {
+        if (!regenerateVersion || !regenerateBtn)
+            return;
+        regenerateVersion.innerHTML = "";
+        var branches = [];
+        try {
+            branches = JSON.parse(row.getAttribute("data-project-versions") || "[]")
+                .filter(function (v) { return v.type === "{{ version_type.GIT_BRANCH|escapejs }}"; });
+        }
+        catch (e) {
+            branches = [];
+        }
+        branches.forEach(function (v) {
+            var opt = document.createElement("option");
+            opt.value = String(v.id);
+            opt.textContent = v.version;
+            regenerateVersion.appendChild(opt);
+        });
+        var hint = branches.length ? "" : "Add a branch version to this project first.";
+        regenerateVersion.disabled = !branches.length;
+        regenerateBtn.disabled = !branches.length;
+        if (regenerateHint) {
+            regenerateHint.textContent = hint;
+            regenerateHint.style.display = hint ? "block" : "none";
+        }
+    }
+    if (regenerateBtn) {
+        regenerateBtn.addEventListener("click", async function () {
+            var row = currentRow;
+            if (!row || pendingRows.has(row))
+                return;
+            var regenerateUrl = row.getAttribute("data-regenerate-url");
+            var versionId = regenerateVersion ? regenerateVersion.value : "";
+            if (!regenerateUrl || !versionId)
+                return;
+            var branchName = regenerateVersion.options[regenerateVersion.selectedIndex].textContent;
+            if (!window.confirm("Regenerate the init script and profile exclusions via Claude for branch \"" +
+                branchName + "\"? This clones that branch fresh and, once analysis completes, " +
+                "assigns the new script to it and overwrites the profile exclusions."))
+                return;
+            var generation = loadGeneration;
+            if (!beginMutation(row))
+                return;
+            regenerateBtn.textContent = "Queuing…";
+            try {
+                await mutationResult(await fetch(regenerateUrl, {
+                    method: "POST", credentials: "same-origin",
+                    headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest", "X-CSRFToken": getCsrfToken() },
+                    body: JSON.stringify({ project_version_id: Number(versionId) })
+                }), "Failed to queue regeneration.");
+                showGlobalAlert("Regeneration queued — Claude is analyzing the repository in the background. " +
+                    "Check back in a few minutes for the updated script and profile.", "success");
+            }
+            catch (error) {
+                showEditorError(row, generation, error.message || "Unexpected error while queuing regeneration.");
+            }
+            finally {
+                if (editorIsCurrent(row, generation))
+                    regenerateBtn.textContent = regenerateButtonLabel;
+                endMutation(row);
+            }
+        });
+    }
+}

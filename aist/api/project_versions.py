@@ -4,6 +4,7 @@ from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers, status
 from rest_framework.response import Response
 
+from aist.api.project_scripts import AISTProjectResolvedScriptSerializer
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.models import (
@@ -13,10 +14,7 @@ from aist.models import (
     AISTProjectVersion,
     VersionType,
 )
-from aist.models.projects import ERR_INVALID_GIT_REF, is_valid_git_ref
-
-SCRIPT_SOURCE_VERSION = "version"
-SCRIPT_SOURCE_SHARED_DEFAULT = "shared_default"
+from aist.models.projects import ERR_INVALID_GIT_REF, ScriptSource, is_valid_git_ref
 
 
 class AISTProjectVersionCreateSerializer(serializers.ModelSerializer):
@@ -145,31 +143,6 @@ class ProjectVersionCreateAPI(AISTAPIView):
         return Response(out.data, status=status.HTTP_201_CREATED)
 
 
-def _resolve_version_script(version, project) -> tuple[AISTProjectScript, str]:
-    """
-    Return the script a pipeline for this version runs, and where it comes from.
-
-    ``version.script`` (source="version"), else the shared default
-    (source="shared_default") — ``AISTProjectVersion.effective_script``.
-    """
-    source = SCRIPT_SOURCE_VERSION if version.script_id else SCRIPT_SOURCE_SHARED_DEFAULT
-    return version.effective_script, source
-
-
-def _serialize_version_script(script: AISTProjectScript, source: str) -> dict:
-    return {
-        "id": script.id,
-        "content": script.content,
-        "sha256": script.sha256,
-        "is_shared": script.is_shared,
-        "created_at": script.created_at.isoformat() if script.created_at else None,
-        "created_by_id": script.created_by_id,
-        "created_by_username": script.created_by.username if script.created_by else None,
-        "inherited": source != SCRIPT_SOURCE_VERSION,
-        "source": source,
-    }
-
-
 class ProjectVersionScriptUpdateAPI(AISTAPIView):
 
     """GET/PATCH endpoint for a project version's entrypoint script."""
@@ -179,7 +152,7 @@ class ProjectVersionScriptUpdateAPI(AISTAPIView):
     @extend_schema(
         methods=["get"],
         responses={
-            200: OpenApiResponse(description="Script for the version (own or inherited)"),
+            200: AISTProjectResolvedScriptSerializer,
             404: OpenApiResponse(description="Project or version not found"),
         },
         tags=[AISTApiTag.PROJECTS.value],
@@ -201,8 +174,10 @@ class ProjectVersionScriptUpdateAPI(AISTAPIView):
         except AISTProjectVersion.DoesNotExist:
             return Response({"detail": "Version not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        script, source = _resolve_version_script(version, project)
-        return Response(_serialize_version_script(script, source), status=status.HTTP_200_OK)
+        source = ScriptSource.VERSION if version.script_id else ScriptSource.SHARED_DEFAULT
+        return Response(AISTProjectResolvedScriptSerializer(
+            version.effective_script, context={"source": source},
+        ).data)
 
     @extend_schema(
         methods=["patch"],

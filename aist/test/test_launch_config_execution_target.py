@@ -1,23 +1,17 @@
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
-from django.utils import timezone
 from dojo.models import Product, Product_Type, SLA_Configuration
 
-from aist.integrations.dast_config import DastTargetSnapshot
 from aist.models import (
     AISTProject,
     AISTProjectLaunchConfig,
     AISTProjectVersion,
-    DastProjectBinding,
     Organization,
-    OrgIntegration,
-    OrgIntegrationType,
     PipelineExecutionType,
     VersionType,
 )
-from aist.services.dast_targets import refresh_dast_targets
-from aist.test.test_dast_target_models import _integration_config, _target_wire
+from aist.test.dast_fixtures import create_dast_binding, create_dast_integration, create_dast_target, target_wire
 
 
 class LaunchConfigExecutionTargetTests(TestCase):
@@ -27,7 +21,7 @@ class LaunchConfigExecutionTargetTests(TestCase):
         organization = Organization.objects.create(name="Launch target org", product_type=product_type)
         product = Product.objects.create(
             name="Launch target product",
-            description="",
+            description="Test project",
             prod_type=product_type,
             sla_configuration=sla,
         )
@@ -37,24 +31,11 @@ class LaunchConfigExecutionTargetTests(TestCase):
             version="main",
             version_type=VersionType.GIT_BRANCH,
         )
-        integration = OrgIntegration.objects.create(
-            organization=organization,
-            integration_type=OrgIntegrationType.DAST,
-            name="Launch target DAST",
-            config=_integration_config("pub_launch_target"),
-            is_active=True,
+        integration, _ = create_dast_integration(
+            organization=organization, public_id="pub_launch_target", name="Launch target DAST",
         )
-        target = refresh_dast_targets(
-            integration,
-            [DastTargetSnapshot.from_snapshot(_target_wire("app"))],
-            seen_at=timezone.now(),
-        )[0]
-        self.binding = DastProjectBinding.objects.create(
-            project=self.project,
-            target=target,
-            source_repo_key="app",
-            parameter_snapshot={"depth": "light"},
-        )
+        target = create_dast_target(integration=integration, wire=target_wire("app"))
+        self.binding = create_dast_binding(project=self.project, target=target, parameters={"depth": "light"})
 
     def test_sast_and_dast_configs_select_only_their_own_execution_target(self):
         sast = AISTProjectLaunchConfig(
@@ -117,7 +98,7 @@ class LaunchConfigExecutionTargetTests(TestCase):
     def test_dast_binding_must_be_enabled_and_belong_to_same_project(self):
         other_product = Product.objects.create(
             name="Other launch target product",
-            description="",
+            description="Test project",
             prod_type=self.project.product.prod_type,
             sla_configuration=self.project.product.sla_configuration,
         )

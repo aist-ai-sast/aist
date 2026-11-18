@@ -237,7 +237,7 @@ class PipelineArgsAIFilterIntegrationTests(TestCase):
 
     def test_a_version_of_another_project_is_a_validation_error(self):
         other_product = Product.objects.create(
-            name="Other Product", description="", prod_type=self.prod_type, sla_configuration_id=self.sla.id,
+            name="Other Product", description="Test project", prod_type=self.prod_type, sla_configuration_id=self.sla.id,
         )
         other_project = AISTProject.objects.create(product=other_product, supported_languages=[], profile={})
         foreign = AISTProjectVersion.objects.create(project=other_project, version_type=VersionType.GIT_BRANCH, version="main")
@@ -332,17 +332,13 @@ class ScriptFromDBTests(TestCase):
         prod_type = Product_Type.objects.create(name="PT db")
         self.product = Product.objects.create(
             name="DB Script Product",
-            description="",
+            description="Test project",
             prod_type=prod_type,
             sla_configuration_id=sla.id,
         )
 
     def _make_args(self, project, project_version):
-        args = SastPipelineArguments.__new__(SastPipelineArguments)
-        args.project = project
-        args.project_version = project_version
-        args.pipeline_path = None
-        return args
+        return SastPipelineArguments(project=project, project_version=project_version)
 
     def test_version_script_writes_temp_file_and_cleans_up(self):
         """When a version has a script, its content is written to a temp file that is removed after context exits."""

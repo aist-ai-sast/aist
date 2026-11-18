@@ -17,7 +17,8 @@ from aist.api.projects import (
     update_project_from_payload,
 )
 from aist.forms import AISTLaunchConfigForm, AISTProjectVersionForm
-from aist.models import AISTLaunchConfigAction, AISTProject, AISTStatus
+from aist.models import AISTLaunchConfigAction, AISTProject, AISTStatus, VersionType
+from aist.models.projects import ScriptSource, ScriptUpdateScope
 from aist.queries import (
     get_authorized_aist_organizations,
     get_authorized_aist_projects,
@@ -167,6 +168,9 @@ def aist_project_list_view(request: HttpRequest) -> HttpResponse:
         request,
         "aist/projects.html",
         {
+            "script_update_scope": ScriptUpdateScope,
+            "script_source": ScriptSource,
+            "version_type": VersionType,
             "organizations": organizations,
             "organizations_for_create": organizations_for_create,
             "unassigned_projects": unassigned_projects,

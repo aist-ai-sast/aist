@@ -1,0 +1,156 @@
+function initProjectPresets() {
+    var createUrlTpl = "{% url 'aist:project_launch_config_create_ui' project_id=0 %}";
+    var modalEl = document.getElementById("modalCreateLaunchPreset");
+    var formEl = document.getElementById("formCreateLaunchPreset");
+    var errEl = document.getElementById("launchPresetAlert");
+    var scopeEl = modalEl ? modalEl.querySelector(".aist-pipeline-scope") : null;
+    var presetStatusEl = modalEl ? modalEl.querySelector("#aist-preset-status") : null;
+    var presetSaveBtn = formEl ? formEl.querySelector("#btn-save-launch-config") : null;
+    var currentProjectId = null;
+    var generation = 0;
+    var saveLabel = presetSaveBtn ? presetSaveBtn.textContent : "";
+    window.__aistSetCurrentProjectIdForPreset = function (pid) {
+        currentProjectId = pid;
+    };
+    var btnOpen = document.getElementById("btnOpenCreateLaunchPreset");
+    if (btnOpen && modalEl) {
+        btnOpen.addEventListener("click", function () {
+            if (!currentProjectId)
+                return;
+            generation++;
+            if (presetSaveBtn) {
+                presetSaveBtn.disabled = false;
+                presetSaveBtn.textContent = saveLabel;
+            }
+            if (scopeEl)
+                scopeEl.setAttribute("data-aist-project-id", String(currentProjectId));
+            if (window.__AIST_SET_LAUNCH_CONFIG_ID__) {
+                window.__AIST_SET_LAUNCH_CONFIG_ID__("");
+            }
+            if (window.__AIST_REFRESH_PIPELINE_SCOPE__) {
+                window.__AIST_REFRESH_PIPELINE_SCOPE__();
+            }
+            if (presetStatusEl) {
+                presetStatusEl.textContent = "Not saved yet.";
+            }
+            if (formEl)
+                formEl.action = createUrlTpl.replace("/0/", "/" + String(currentProjectId) + "/");
+            if (errEl) {
+                errEl.style.display = "none";
+                errEl.textContent = "";
+            }
+            modalEl.showModal();
+            setTimeout(function () {
+                if (window.__AIST_REFRESH_PIPELINE_SCOPE__) {
+                    window.__AIST_REFRESH_PIPELINE_SCOPE__();
+                }
+            }, 0);
+        });
+    }
+    if (formEl) {
+        formEl.addEventListener("submit", async function (e) {
+            e.preventDefault();
+            if (!currentProjectId || (presetSaveBtn && presetSaveBtn.disabled))
+                return;
+            var requestGeneration = generation;
+            var savedSuccessfully = false;
+            if (presetSaveBtn)
+                presetSaveBtn.disabled = true;
+            if (errEl) {
+                errEl.classList.add("d-none");
+                errEl.classList.remove("alert-danger", "alert-success");
+                errEl.textContent = "";
+            }
+            var fd = new FormData(formEl);
+            try {
+                var resp = await fetch(formEl.action, {
+                    method: "POST",
+                    headers: {
+                        "X-CSRFToken": getCsrfToken(),
+                    },
+                    body: fd,
+                });
+                if (requestGeneration !== generation || !modalEl.open)
+                    return;
+                var data = null;
+                var contentType = resp.headers.get("content-type") || "";
+                if (contentType.indexOf("application/json") !== -1) {
+                    data = await resp.json().catch(function () { return null; });
+                }
+                else {
+                    var textResp = await resp.text();
+                    if (requestGeneration !== generation || !modalEl.open)
+                        return;
+                    if (errEl) {
+                        errEl.textContent = textResp || "Failed to create preset.";
+                        errEl.classList.remove("d-none", "alert-success");
+                        errEl.classList.add("alert-danger");
+                        errEl.style.display = "block";
+                    }
+                    if (presetStatusEl) {
+                        presetStatusEl.textContent = "Save failed.";
+                    }
+                    return;
+                }
+                if (requestGeneration !== generation || !modalEl.open)
+                    return;
+                if (!resp.ok || !data || !data.ok) {
+                    var msg = "Failed to create preset.";
+                    if (data && data.errors)
+                        msg = JSON.stringify(data.errors);
+                    if (data && data.non_field_errors && data.non_field_errors.length)
+                        msg = data.non_field_errors.join("\n");
+                    if (errEl) {
+                        errEl.textContent = msg;
+                        errEl.classList.remove("d-none", "alert-success");
+                        errEl.classList.add("alert-danger");
+                        errEl.style.display = "block";
+                    }
+                    if (presetStatusEl) {
+                        presetStatusEl.textContent = "Save failed.";
+                    }
+                    return;
+                }
+                if (data && data.item && data.item.id && window.__AIST_SET_LAUNCH_CONFIG_ID__) {
+                    window.__AIST_SET_LAUNCH_CONFIG_ID__(data.item.id);
+                }
+                if (scopeEl && data && data.item && data.item.id) {
+                    scopeEl.setAttribute("data-aist-launch-config-id", String(data.item.id));
+                    var btnAction = scopeEl.querySelector("#btn-open-create-action");
+                    if (btnAction)
+                        btnAction.disabled = false;
+                    var hintEl = scopeEl.querySelector("#aist-action-hint");
+                    if (hintEl)
+                        hintEl.textContent = "Actions will be attached to this preset.";
+                }
+                if (presetStatusEl && data && data.item && data.item.id) {
+                    presetStatusEl.textContent = "Saved \u2713 (ID #" + data.item.id + ")";
+                }
+                savedSuccessfully = true;
+                if (presetSaveBtn) {
+                    presetSaveBtn.textContent = "Saved";
+                    presetSaveBtn.disabled = true;
+                }
+                if (errEl) {
+                    errEl.textContent = "Preset saved. You can add actions now.";
+                    errEl.classList.remove("d-none", "alert-danger");
+                    errEl.classList.add("alert-success");
+                    errEl.style.display = "block";
+                }
+            }
+            catch (ex) {
+                if (requestGeneration === generation && modalEl.open && errEl) {
+                    errEl.textContent = String(ex);
+                    errEl.classList.remove("d-none", "alert-success");
+                    errEl.classList.add("alert-danger");
+                    errEl.style.display = "block";
+                }
+            }
+            finally {
+                if (requestGeneration === generation && modalEl.open && presetSaveBtn && !savedSuccessfully) {
+                    presetSaveBtn.disabled = false;
+                }
+            }
+        });
+    }
+}

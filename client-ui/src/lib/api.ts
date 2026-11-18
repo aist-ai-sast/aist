@@ -1,5 +1,7 @@
 import axios, { AxiosError, type AxiosRequestConfig, type AxiosResponse } from "axios";
 
+import "../../../aist/static/aist/js/csrf.js";
+
 import { getRoute } from "./routes";
 
 export const AUTH_EXPIRED_EVENT = "aist:auth-expired";
@@ -28,9 +30,7 @@ export class ApiError extends Error {
 }
 
 export function getCookie(name: string) {
-  if (typeof document === "undefined") return null;
-  const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`));
-  return match ? decodeURIComponent(match[2]) : null;
+  return aistReadCookie(name);
 }
 
 declare global {

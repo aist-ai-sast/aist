@@ -20,6 +20,15 @@ TEST_GITLAB_PAT = "xglpat-abcdef12345678".removeprefix("x")
 
 
 class SecretsMaskingUtilsTests(AISTApiBase):
+    def test_script_masking_preserves_line_endings_and_trailing_newlines(self):
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=newline):
+                content = newline.join(["#!/bin/bash", "password=secret-value", "echo ready", "", ""])
+                self.assertEqual(
+                    mask_sensitive_data({"content": content})["content"],
+                    content.replace("secret-value", MASKED_VALUE),
+                )
+
     def test_mask_sensitive_text_masks_generic_secrets_and_url_credentials(self):
         text = "https://user:my-password@example.com/repo.git?api_key=secret-value\npassword=hunter2"
 

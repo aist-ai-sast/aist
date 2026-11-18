@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -10,7 +9,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from django.conf import settings
-from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -29,7 +27,8 @@ from aist.models import (
     VersionType,
 )
 from aist.profile import ProjectProfile
-from aist.services.pipeline_lifecycle import pipelines_with_released_sources
+from aist.services.execution_workspace import ExecutionWorkspace
+from aist.source_version import ProjectVersionDescriptor
 from aist.utils.pipeline_imports import _import_sast_pipeline_package, _load_analyzers_config
 
 _import_sast_pipeline_package()
@@ -42,7 +41,6 @@ _logger = logging.getLogger(__name__)
 # Error messages (for TRY003/EM101/EM102)
 MSG_PROJECT_NOT_FOUND_TPL = "AISTProject with id={} not found"
 MSG_DOCKERFILE_NOT_FOUND = "Dockerfile does not exist"
-BUILD_DIR_WARNING = "AIST_PROJECTS_BUILD_DIR is not set"
 
 # Launch environment variables the platform computes itself from the project and its SCM
 # integration. REPO_URL embeds the integration credential (PAT / HTTP password), so neither
@@ -56,6 +54,12 @@ LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
 DEFAULT_LOG_LEVEL = "INFO"
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectBuildConfiguration:
+    script_path: str
+    base_image: str
 
 
 class SastLaunchParamsSerializer(serializers.Serializer):
@@ -133,7 +137,7 @@ def analyzer_selection_signature(project_id: object, languages: list[str], max_t
 @dataclass
 class SastPipelineArguments:
     project: AISTProject
-    project_version: dict = field(default_factory=dict)
+    project_version: ProjectVersionDescriptor = field(default_factory=ProjectVersionDescriptor)
     selected_analyzers: list[str] = field(default_factory=list)
     selected_languages: list[str] = field(default_factory=list)
     log_level: str = DEFAULT_LOG_LEVEL
@@ -142,8 +146,11 @@ class SastPipelineArguments:
     time_class_level: TimeClass = TimeClass.SLOW
     is_initialized: bool = False
     additional_environments: dict = field(default_factory=dict)
+    script_revision_id: int | None = None
 
     def __post_init__(self):
+        if isinstance(self.project_version, dict):
+            self.project_version = ProjectVersionDescriptor.from_dict(self.project_version)
         configured_pipeline = getattr(settings, "AIST_PIPELINE_CODE_PATH", None)
         self.pipeline_path: Path | None = Path(configured_pipeline) if configured_pipeline else None
 
@@ -158,8 +165,10 @@ class SastPipelineArguments:
         """
         commit = (resolved_commit or "").strip()
         effective = None
-        pv_id = (self.project_version or {}).get("id")
+        pv_id = self.project_version.id
         if pv_id:
+            # Snapshotting the shared default may lock the project; do it before locking its version.
+            script = self.freeze_script() if commit else None
             effective = (
                 AISTProjectVersion.objects
                 .select_for_update()
@@ -172,14 +181,14 @@ class SastPipelineArguments:
                 project_id=effective.project_id,
                 version=commit,
                 version_type=VersionType.GIT_HASH,
-                defaults={"resolved_from_branch": effective, "script": effective.script},
+                defaults={"resolved_from_branch": effective, "script": script},
             )
             update_fields = []
             if resolved_version.resolved_from_branch_id is None:
                 resolved_version.resolved_from_branch = effective
                 update_fields.append("resolved_from_branch")
-            if not created and resolved_version.script_id is None and effective.script_id:
-                resolved_version.script = effective.script
+            if not created and resolved_version.script_id is None:
+                resolved_version.script = script
                 update_fields.append("script")
             if update_fields:
                 resolved_version.save(update_fields=[*update_fields, "updated"])
@@ -190,7 +199,7 @@ class SastPipelineArguments:
             effective = resolved_version
 
         if effective is not None:
-            self.project_version = effective.as_dict()
+            self.project_version = ProjectVersionDescriptor.from_dict(effective.as_dict())
 
         return effective
 
@@ -207,13 +216,18 @@ class SastPipelineArguments:
         launch's findings. The result is what :meth:`from_dict` reads.
 
         Raises ``TypeError`` when the params are not a dict and ``ValueError`` (``AIFilterError`` for the AI
-        filter) naming the first invalid param. Keys this serializer does not know are kept unchanged.
+        filter) naming the first invalid param. Other unknown keys are retained; script_revision_id
+        is discarded and reserved launch fields are derived by the platform.
         """
         if raw_params is None:
             raw_params = {}
         if not isinstance(raw_params, dict):
             msg = "params must be a JSON object (dict)"
             raise TypeError(msg)
+
+        raw_params = dict(raw_params)
+        # Revision identity is captured at admission, never selected through launch parameters.
+        raw_params.pop("script_revision_id", None)
 
         serializer = SastLaunchParamsSerializer(data={key: value for key, value in raw_params.items() if value is not None})
         if not serializer.is_valid():
@@ -252,7 +266,7 @@ class SastPipelineArguments:
 
         return cls(
             project=project,
-            project_version=data["project_version"],
+            project_version=ProjectVersionDescriptor.from_dict(data["project_version"]),
             selected_analyzers=data["analyzers"],
             selected_languages=data["selected_languages"],
             log_level=data["log_level"],
@@ -260,6 +274,7 @@ class SastPipelineArguments:
             ai=LaunchAISettings.from_normalized_params(data),
             time_class_level=TimeClass.of(data["time_class_level"]),
             additional_environments=data["env"],
+            script_revision_id=data.get("script_revision_id"),
         )
 
     @property
@@ -268,13 +283,7 @@ class SastPipelineArguments:
 
     @property
     def languages(self) -> list[str]:
-        seen = set()
-        out: list[str] = []
-        for lang in chain(self.selected_languages or [], self.project.supported_languages or []):
-            if lang not in seen:
-                seen.add(lang)
-                out.append(lang)
-        return out
+        return list(dict.fromkeys(chain(self.selected_languages or [], self.project.supported_languages or [])))
 
     @property
     def runtime_env(self) -> dict:
@@ -299,18 +308,16 @@ class SastPipelineArguments:
 
     @property
     def output_version(self) -> str:
-        return self.project_version.get("version", "default")
+        return self.project_version.version or "default"
 
-    @contextmanager
-    def script_path_context(self) -> Generator[str]:
-        """
-        Write the version's script to a temp file and yield its path.
-        The temp file is removed when the context exits.
-
-        The script is ``AISTProjectVersion.effective_script`` — the same rule the
-        version-script API shows — so what the UI reports is what runs.
-        """
-        pv_id = (self.project_version or {}).get("id")
+    @property
+    def selected_script(self) -> AISTProjectScript:
+        """Read the admitted revision, or resolve the version for an unadmitted launch."""
+        if self.script_revision_id is not None:
+            return AISTProjectScript.objects.get(
+                pk=self.script_revision_id, project=self.project, is_shared=False,
+            )
+        pv_id = self.project_version.id
         pv = None
         if pv_id:
             pv = (
@@ -324,12 +331,32 @@ class SastPipelineArguments:
                 "Project version for project %s has no script; falling back to shared default.",
                 self.project.id,
             )
-        script = pv.effective_script if pv is not None else AISTProjectScript.get_shared_default()
+        return pv.effective_script if pv is not None else AISTProjectScript.get_shared_default()
+
+    def freeze_script(self) -> AISTProjectScript:
+        """Keep a project-owned revision stable across admission and execution."""
+        script = self.selected_script
+        if script.is_shared:
+            script, _ = AISTProjectScript.get_or_create_for_project(
+                project=self.project, content=script.content, base_image=script.base_image,
+            )
+        self.script_revision_id = script.pk
+        return script
+
+    @contextmanager
+    def build_configuration_context(self) -> Generator[ProjectBuildConfiguration]:
+        """Materialize the script and base image from one revision for this execution."""
+        script = self.freeze_script()
         script_path = self._write_script_to_temp(script)
         try:
-            yield script_path
+            yield ProjectBuildConfiguration(script_path, script.base_image)
         finally:
             Path(script_path).unlink(missing_ok=True)
+
+    @contextmanager
+    def script_path_context(self) -> Generator[str]:
+        with self.build_configuration_context() as configuration:
+            yield configuration.script_path
 
     def _write_script_to_temp(self, script) -> str:
         """Write script content to an executable temp file and return its path."""
@@ -426,64 +453,15 @@ class PipelineArguments:
             return PipelineExecutionType.SAST
         return PipelineExecutionType.DAST
 
+    @property
+    def workspace(self) -> ExecutionWorkspace:
+        return ExecutionWorkspace(self.project.pk, self.project.product.name, self.payload.output_version)
+
     def prepare_execution(self, pipeline_id: str) -> tuple[Path, Path]:
-        """Prepare the common workspace and durable result root for one pipeline run."""
-        workspace = self._workspace_path(pipeline_id)
-        self._cleanup_terminal_workspaces(keep_pipeline_id=pipeline_id)
-        workspace.mkdir(parents=True, exist_ok=True)
-        return workspace, self._output_path(pipeline_id)
+        return self.workspace.prepare_execution(pipeline_id)
 
     def cleanup_workspace(self, pipeline_id: str) -> None:
-        """Remove one pipeline workspace without touching its durable results."""
-        if not getattr(settings, "AIST_PROJECTS_BUILD_DIR", None):
-            return
-        try:
-            workspace = self._workspace_path(pipeline_id)
-            if workspace.exists():
-                shutil.rmtree(workspace)
-                _logger.info("Cleaned up pipeline workspace: %s", workspace)
-        except Exception:
-            _logger.exception("Failed to clean up pipeline workspace (pipeline_id=%s)", pipeline_id)
-
-    def _workspace_path(self, pipeline_id: str) -> Path:
-        configured = getattr(settings, "AIST_PROJECTS_BUILD_DIR", None)
-        if not configured:
-            raise RuntimeError(BUILD_DIR_WARNING)
-        return self._path_within(
-            Path(configured),
-            self.project.product.name or "project",
-            self.payload.output_version or "default",
-            "runs",
-            pipeline_id,
-        )
-
-    def _output_path(self, pipeline_id: str) -> Path:
-        configured = getattr(settings, "AIST_OUTPUT_PATH", None)
-        root = Path(configured) if configured else Path(tempfile.gettempdir()) / "aist" / "output"
-        return self._path_within(
-            root,
-            self.project.product.name or "project",
-            self.payload.output_version or "default",
-            pipeline_id,
-        )
-
-    @staticmethod
-    def _path_within(root: Path, *parts: str) -> Path:
-        resolved_root = root.resolve()
-        resolved = resolved_root.joinpath(*parts).resolve()
-        try:
-            resolved.relative_to(resolved_root)
-        except ValueError:
-            msg = f"Pipeline path escapes configured root: {resolved}"
-            raise ValueError(msg)
-        return resolved
-
-    def _cleanup_terminal_workspaces(self, *, keep_pipeline_id: str) -> None:
-        released = pipelines_with_released_sources().filter(project_id=self.project.pk).exclude(id=keep_pipeline_id)
-        for pipeline_id in list(released.values_list("id", flat=True)):
-            with transaction.atomic():
-                if released.select_for_update(skip_locked=True).filter(pk=pipeline_id).exists():
-                    self.cleanup_workspace(pipeline_id)
+        self.workspace.cleanup_workspace(pipeline_id)
 
     @property
     def sast(self) -> SastPipelineArguments:
@@ -503,7 +481,7 @@ class PipelineArguments:
     def effective_project_version(self) -> AISTProjectVersion | None:
         if isinstance(self.payload, DastPipelineArguments):
             return self.payload.trigger_project_version
-        version_id = (self.payload.project_version or {}).get("id")
+        version_id = self.payload.project_version.id
         if not version_id:
             return None
         return AISTProjectVersion.objects.filter(pk=version_id, project=self.project).first()
@@ -512,10 +490,11 @@ class PipelineArguments:
     def params_snapshot(self) -> dict:
         if isinstance(self.payload, DastPipelineArguments):
             return dict(self.payload.parameters)
+        script = self.sast.freeze_script()
         return self.normalize_params(
             project=self.project,
             raw_params={
-                "project_version": dict(self.payload.project_version),
+                "project_version": self.payload.project_version.as_dict(),
                 "analyzers": list(self.payload.selected_analyzers),
                 "selected_languages": list(self.payload.selected_languages),
                 "log_level": self.payload.log_level,
@@ -524,7 +503,7 @@ class PipelineArguments:
                 "time_class_level": self.payload.time_class_level,
                 "env": dict(self.payload.additional_environments),
             },
-        )
+        ) | {"script_revision_id": script.pk}
 
     @property
     def capability_snapshot(self) -> dict:

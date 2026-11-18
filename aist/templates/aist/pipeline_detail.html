@@ -393,18 +393,7 @@
                     });
                 }
 
-                function getCsrfToken() {
-                    const fromInput = document.querySelector('input[name="csrfmiddlewaretoken"]')?.value;
-                    if (fromInput) return fromInput;
-
-                    const fromMeta = document.querySelector('meta[name="csrf-token"]')?.content;
-                    if (fromMeta) return fromMeta;
-
-                    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
-                    if (m) return decodeURIComponent(m[1]);
-
-                    return '';
-                }
+                var getCsrfToken = aistCsrfToken;
 
                 function postJSON(url, payload) {
                     const csrf = getCsrfToken();

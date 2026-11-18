@@ -1,0 +1,61 @@
+function initEmptyProject() {
+    var emptyProjectOpenBtn = document.getElementById("empty-project-open");
+    var emptyProjectModal = document.getElementById("emptyProjectModal");
+    var emptyProjectForm = document.getElementById("empty-project-form");
+    var emptyProjectErrorBox = document.getElementById("empty-project-error");
+    var emptyProjectCreateUrl = "{% url 'aist_api:project_list' %}";
+    if (emptyProjectOpenBtn && emptyProjectModal) {
+        emptyProjectOpenBtn.addEventListener("click", function () {
+            if (emptyProjectErrorBox) {
+                emptyProjectErrorBox.textContent = "";
+                emptyProjectErrorBox.style.display = "none";
+            }
+            emptyProjectModal.showModal();
+        });
+    }
+    if (emptyProjectForm) {
+        emptyProjectForm.addEventListener("submit", function (ev) {
+            ev.preventDefault();
+            var formData = new FormData(emptyProjectForm);
+            var payload = {
+                organization_id: Number(formData.get("organization_id")),
+                product_name: String(formData.get("product_name") || "").trim()
+            };
+            var csrf = getCsrfToken();
+            var headers = {
+                "X-Requested-With": "XMLHttpRequest",
+                "Content-Type": "application/json"
+            };
+            if (csrf) {
+                headers["X-CSRFToken"] = csrf;
+            }
+            fetch(emptyProjectCreateUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: headers,
+                body: JSON.stringify(payload)
+            }).then(function (resp) {
+                return resp.json().then(function (data) {
+                    return { ok: resp.ok, data: data };
+                });
+            }).then(function (result) {
+                if (!result.ok || !result.data.ok) {
+                    var msg = (result.data && result.data.detail) || "Failed to create project.";
+                    if (emptyProjectErrorBox) {
+                        emptyProjectErrorBox.textContent = msg;
+                        emptyProjectErrorBox.style.display = "block";
+                    }
+                    return;
+                }
+                emptyProjectModal.close();
+                showGlobalAlert("Empty project has been created.", "success");
+                window.location.reload();
+            }).catch(function () {
+                if (emptyProjectErrorBox) {
+                    emptyProjectErrorBox.textContent = "Unexpected error while creating project.";
+                    emptyProjectErrorBox.style.display = "block";
+                }
+            });
+        });
+    }
+}

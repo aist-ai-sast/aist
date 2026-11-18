@@ -1,0 +1,56 @@
+function createImportPicker(tbody, container, selectAll, importButton, checkboxClass, searchInput) {
+    function selected() {
+        return Array.from(tbody.querySelectorAll("input:checked"), function (checkbox) {
+            return checkbox.value;
+        });
+    }
+    function refresh() {
+        importButton.disabled = selected().length === 0;
+    }
+    function reset() {
+        tbody.replaceChildren();
+        container.style.display = "none";
+        selectAll.checked = false;
+        refresh();
+    }
+    function filter() {
+        var needle = searchInput ? searchInput.value.toLowerCase() : "";
+        Array.from(tbody.rows).forEach(function (row) {
+            row.hidden = !row.textContent.toLowerCase().includes(needle);
+        });
+    }
+    function render(items, identifier, columns) {
+        tbody.replaceChildren();
+        items.forEach(function (item) {
+            var row = tbody.insertRow();
+            var checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.className = checkboxClass;
+            checkbox.value = identifier(item);
+            row.insertCell().appendChild(checkbox);
+            columns(item).forEach(function (value) {
+                row.insertCell().textContent = value == null ? "" : String(value);
+            });
+        });
+        container.style.display = "block";
+        selectAll.checked = false;
+        filter();
+        refresh();
+    }
+    selectAll.addEventListener("change", function () {
+        tbody.querySelectorAll("input").forEach(function (checkbox) {
+            checkbox.checked = selectAll.checked;
+        });
+        refresh();
+    });
+    tbody.addEventListener("change", function (event) {
+        if (!event.target.classList.contains(checkboxClass))
+            return;
+        if (!event.target.checked)
+            selectAll.checked = false;
+        refresh();
+    });
+    if (searchInput)
+        searchInput.addEventListener("input", filter);
+    return { reset: reset, render: render, selected: selected };
+}

@@ -2,7 +2,7 @@
 import type { InternalAxiosRequestConfig } from "axios";
 import { describe, expect, it, vi } from "vitest";
 
-import { apiClient, ApiError, fetchFileContent, postFormData, toUserMessage } from "./api";
+import { apiClient, ApiError, fetchFileContent, getCookie, postFormData, toUserMessage } from "./api";
 
 describe("toUserMessage", () => {
   it("joins DRF field-level validation errors into a readable message", () => {
@@ -115,7 +115,15 @@ describe("toUserMessage", () => {
 });
 
 describe("postFormData", () => {
-  it("sends the FormData body without forcing a JSON Content-Type header", async () => {
+  it.each(["cookie", "bootstrap", "empty-cookie"])("sends multipart data with the %s CSRF token", async (source) => {
+    const previousCookie = getCookie("csrftoken");
+    const previousBootstrap = window.__AIST_CSRF__;
+    const cookieToken = "cookie-token";
+    const bootstrapToken = "bootstrap-token";
+    document.cookie = source === "cookie"
+      ? `csrftoken=${cookieToken}; path=/`
+      : source === "empty-cookie" ? "csrftoken=; path=/" : "csrftoken=; max-age=0; path=/";
+    window.__AIST_CSRF__ = bootstrapToken;
     // buildHeaders() forces Content-Type: application/json for every non-GET
     // request that doesn't already set one — that would break a multipart
     // upload, since the browser must set `multipart/form-data; boundary=...`
@@ -148,8 +156,13 @@ describe("postFormData", () => {
       expect(capturedConfig?.data).toBeInstanceOf(FormData);
       const contentType = capturedConfig?.headers?.["Content-Type"];
       expect(contentType).not.toBe("application/json");
+      expect(capturedConfig?.headers?.["X-CSRFToken"]).toBe(source === "cookie" ? cookieToken : bootstrapToken);
     } finally {
       apiClient.defaults.adapter = originalAdapter;
+      window.__AIST_CSRF__ = previousBootstrap;
+      document.cookie = previousCookie === null
+        ? "csrftoken=; max-age=0; path=/"
+        : `csrftoken=${encodeURIComponent(previousCookie)}; path=/`;
     }
   });
 });
@@ -176,4 +189,15 @@ describe("finding source links", () => {
       await expect(fetchFileContent(link)).rejects.toThrow("Source link must be a root-relative path");
     },
   );
+});
+
+describe("getCookie", () => {
+  it("reads a legal literal percent without throwing a URI decoding error", () => {
+    document.cookie = "display_preference=100%; path=/";
+    try {
+      expect(getCookie("display_preference")).toBe("100%");
+    } finally {
+      document.cookie = "display_preference=; max-age=0; path=/";
+    }
+  });
 });

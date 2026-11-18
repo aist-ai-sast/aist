@@ -1,0 +1,150 @@
+function initScmImport(config) {
+    function element(suffix) { return document.getElementById(config.prefix + suffix); }
+    var modal = document.getElementById(config.prefix + "ImportModal");
+    var form = element("-import-form");
+    var organization = element("-org-select");
+    var listButton = element("-list-btn");
+    var importButton = element("-import-btn");
+    var errorBox = element("-import-error");
+    var loading = element("-projects-loading");
+    var picker = createImportPicker(element("-projects-tbody"), element("-projects-container"), element("-select-all"), importButton, config.prefix + "-project-checkbox", element("-projects-search"));
+    var listedOrg = "";
+    var generation = 0;
+    var importing = false;
+    function error(message) {
+        errorBox.textContent = message;
+        errorBox.style.display = message ? "block" : "none";
+    }
+    function reset() {
+        generation++;
+        listedOrg = "";
+        picker.reset();
+        error("");
+        loading.style.display = "none";
+        listButton.disabled = !organization.value || importing;
+    }
+    element("-import-open").addEventListener("click", function () {
+        reset();
+        modal.showModal();
+    });
+    aistOnSelectChange(organization, function () {
+        reset();
+        var info = element("-integration-info");
+        info.style.display = "none";
+        info.textContent = "";
+        if (organization.value)
+            listButton.click();
+    });
+    listButton.addEventListener("click", async function () {
+        if (!organization.value || importing)
+            return;
+        reset();
+        var requestGeneration = generation;
+        var requestedOrg = organization.value;
+        listButton.disabled = true;
+        loading.style.display = "inline-block";
+        try {
+            var response = await fetch(config.listUrl, {
+                method: "POST", credentials: "same-origin",
+                headers: { "X-Requested-With": "XMLHttpRequest", "X-CSRFToken": getCsrfToken() },
+                body: new FormData(form)
+            });
+            var data = await response.json();
+            // A later organization selection owns the dialog, even if an older response arrives last.
+            if (requestGeneration !== generation)
+                return;
+            if (!response.ok || !data.ok) {
+                error(data.error || "Failed to load projects from " + config.label + ".");
+                return;
+            }
+            listedOrg = requestedOrg;
+            var projects = data.projects || [];
+            if (!projects.length) {
+                error("No projects returned from " + config.label + ".");
+                return;
+            }
+            picker.render(projects, config.identifier, config.columns);
+        }
+        catch (exception) {
+            if (requestGeneration === generation)
+                error("Unexpected error while loading " + config.label + " projects.");
+        }
+        finally {
+            if (requestGeneration === generation) {
+                listButton.disabled = !organization.value;
+                loading.style.display = "none";
+            }
+        }
+    });
+    importButton.addEventListener("click", async function () {
+        var ids = picker.selected();
+        if (importing || !ids.length || !listedOrg || listedOrg !== organization.value)
+            return;
+        var org = listedOrg;
+        var autoAnalyze = element("-auto-analyze").checked;
+        importing = true;
+        form.inert = true;
+        try {
+            var results = await Promise.all(ids.map(async function (id) {
+                var payload = { organization_id: org, auto_analyze: autoAnalyze };
+                payload[config.payloadKey] = id;
+                try {
+                    var response = await fetch(config.importUrl, {
+                        method: "POST", credentials: "same-origin",
+                        headers: {
+                            "X-Requested-With": "XMLHttpRequest", "Content-Type": "application/json",
+                            "X-CSRFToken": getCsrfToken()
+                        },
+                        body: JSON.stringify(payload)
+                    });
+                    return response.ok;
+                }
+                catch (exception) {
+                    return false;
+                }
+            }));
+            if (results.some(function (ok) { return !ok; })) {
+                error("Some projects failed to import. Please check server logs.");
+                return;
+            }
+            modal.close();
+            showGlobalAlert("Selected " + config.label + " projects have been imported.", "success");
+            window.location.reload();
+        }
+        finally {
+            importing = false;
+            form.inert = false;
+        }
+    });
+    reset();
+}
+function initScmImports() {
+    initScmImport({
+        prefix: "gitlab", label: "GitLab", payloadKey: "project_id",
+        listUrl: "{% url 'aist:gitlab_projects_list' %}",
+        importUrl: "{% url 'aist_api:import_project_from_gitlab' %}",
+        identifier: function (project) { return project.id || ""; },
+        columns: function (project) {
+            return [project.id || "", project.path_with_namespace || project.name || "",
+                project.language || "–", project.description || "", project.default_branch || ""];
+        }
+    });
+    initScmImport({
+        prefix: "gerrit", label: "Gerrit", payloadKey: "project_path",
+        listUrl: "{% url 'aist:gerrit_projects_list' %}",
+        importUrl: "{% url 'aist_api:import_project_from_gerrit' %}",
+        identifier: function (project) { return project.project_path || project.name || ""; },
+        columns: function (project) {
+            return [project.project_path || project.name || "", project.description || "", project.default_branch || ""];
+        }
+    });
+    initScmImport({
+        prefix: "gitea", label: "Gitea", payloadKey: "repo_full_name",
+        listUrl: "{% url 'aist:gitea_projects_list' %}",
+        importUrl: "{% url 'aist_api:import_project_from_gitea' %}",
+        identifier: function (project) { return project.full_name || project.name || ""; },
+        columns: function (project) {
+            return [project.full_name || project.name || "", project.description || "", project.default_branch || ""];
+        }
+    });
+}

@@ -379,6 +379,7 @@ class AISTProjectScriptScopeAPITests(AISTApiBase):
         """A script belonging to a different project must not be visible."""
         other_product = Product.objects.create(
             name="Other Product 2",
+            description="Test project",
             prod_type=self.prod_type,
             sla_configuration_id=self.sla.id,
         )
