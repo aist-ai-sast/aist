@@ -17,7 +17,6 @@ from aist.api.project_scripts import (
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, AISTAuthzMixin, ResourcePolicy, queryset_for_action
 from aist.authz.permissions import IsInternalService
-from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.integrations.claude import claude_auth_env
 from aist.integrations.resolver import resolve_integration
 from aist.models import (
@@ -36,23 +35,6 @@ from aist.utils.pipeline_imports import _load_analyzers_config
 
 # Script content hard cap: 256 KB is more than enough for any real entrypoint script.
 _SCRIPT_MAX_BYTES = 256 * 1024
-
-
-def _create_initial_script(project: AISTProject, content: str, user=None) -> AISTProjectScript:
-    """
-    Create a project-scoped script revision for a newly created project.
-
-    The script is deduplicated by sha256 within the project.  It is stored as
-    a project revision (script.project=project) and will be used as the default
-    when the first AISTProjectVersion is created for this project.
-    """
-    content_stripped = (content or "").strip() or DEFAULT_ENTRYPOINT_SCRIPT
-    script, _ = AISTProjectScript.get_or_create_for_project(
-        content=content_stripped,
-        project=project,
-        user=user,
-    )
-    return script
 
 
 class ProjectProfileField(serializers.JSONField):
@@ -286,8 +268,8 @@ class AISTProjectListAPI(AISTAuthzMixin, generics.ListAPIView):
                 profile=serializer.validated_data["profile"] or {},
             )
             # Create an initial project-scoped script revision for use when the first version is created.
-            script_content = (serializer.validated_data.get("script_content") or "").strip()
-            _create_initial_script(project, script_content, user=request.user)
+            script_content = serializer.validated_data.get("script_content", "")
+            AISTProjectScript.create_initial_for_project(project, script_content, user=request.user)
 
         out = AISTProjectSerializer(project)
         return Response({"ok": True, "project": out.data}, status=status.HTTP_201_CREATED)

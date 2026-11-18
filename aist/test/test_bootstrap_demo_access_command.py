@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from collections import Counter
 from datetime import timedelta
 
@@ -42,10 +44,19 @@ from aist.models import (
 from aist.profile import ProjectProfile
 from aist.services.dast_queue import queue_is_addressable
 from aist.services.pipeline_lifecycle import TERMINAL_PIPELINE_STATUSES
+from aist.test import PROJECT_ROOT
 from aist.utils.pipeline import has_unfinished_pipeline
 
 
 class BootstrapDemoAccessCommandTests(TestCase):
+    def test_command_help_in_fresh_process(self):
+        result = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "manage.py"), "bootstrap_demo_access", "--help"],
+            check=False, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--demo", result.stdout)
+
     def setUp(self):
         self.password = "DemoPassword123!"  # noqa: S105
         get_user_model().objects.create_superuser(

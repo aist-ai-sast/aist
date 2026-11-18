@@ -8,7 +8,6 @@ from django.db import transaction
 from dojo.authorization.roles_permissions import Permissions
 from dojo.models import DojoMeta, Product
 
-from aist.api.projects import _create_initial_script
 from aist.default_script import DEFAULT_ENTRYPOINT_SCRIPT
 from aist.models import (
     AISTProject,
@@ -76,7 +75,7 @@ def seed_imported_project(project: AISTProject, default_branch: str) -> AISTProj
     lookup, which has no VPN/proxy awareness. Returns the branch version, or
     ``None`` when the default branch is unknown.
     """
-    _create_initial_script(project, DEFAULT_ENTRYPOINT_SCRIPT)
+    AISTProjectScript.create_initial_for_project(project, DEFAULT_ENTRYPOINT_SCRIPT)
     if not default_branch:
         return None
     version, _ = AISTProjectVersion.objects.get_or_create(

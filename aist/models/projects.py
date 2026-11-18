@@ -335,6 +335,23 @@ class AISTProjectScript(models.Model):
             ), True
 
     @classmethod
+    def create_initial_for_project(cls, project: AISTProject, content: str, user=None) -> AISTProjectScript:
+        """
+        Create a project-scoped script revision for a newly created project.
+
+        The script is deduplicated by sha256 within the project.  It is stored as
+        a project revision (script.project=project) and will be used as the default
+        when the first AISTProjectVersion is created for this project.
+        """
+        content_stripped = (content or "").strip() or DEFAULT_ENTRYPOINT_SCRIPT
+        script, _ = cls.get_or_create_for_project(
+            content=content_stripped,
+            project=project,
+            user=user,
+        )
+        return script
+
+    @classmethod
     def for_new_version(cls, project: AISTProject) -> AISTProjectScript:
         """
         Return the script a newly created version of ``project`` starts with.

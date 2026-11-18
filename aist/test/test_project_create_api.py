@@ -84,10 +84,7 @@ class AISTProjectCreateAPITests(AISTApiBase):
         self.assertIsNone(s1.project_id)
 
     def test_create_project_with_custom_script_content(self):
-        target_pt = Product_Type.objects.create(name="Org SC")
-        role_maintainer, _ = Role.objects.get_or_create(id=Roles.Maintainer, defaults={"name": "Maintainer"})
-        Product_Type_Member.objects.create(product_type=target_pt, user=self.user, role=role_maintainer)
-        org = Organization.objects.create(name="Org SC", product_type=target_pt)
+        org = self._make_maintainer_org("SC")
         custom_content = "#!/bin/bash\necho custom"
 
         with self.captureOnCommitCallbacks(execute=True):
@@ -96,7 +93,7 @@ class AISTProjectCreateAPITests(AISTApiBase):
                 data={
                     "organization_id": org.id,
                     "product_name": "Custom Script Product",
-                    "script_content": custom_content,
+                    "script_content": f"  {custom_content}\n\n",
                 },
                 format="json",
             )
@@ -107,6 +104,7 @@ class AISTProjectCreateAPITests(AISTApiBase):
         first_version = project.versions.get()
         self.assertEqual(first_version.version_type, VersionType.GIT_BRANCH)
         self.assertEqual(first_version.script.content, custom_content)
+        self.assertEqual(first_version.script.created_by_id, self.user.pk)
         self.assertEqual(project.active_script.content, custom_content)
 
     def test_create_empty_project_forbidden_without_add_permission(self):
