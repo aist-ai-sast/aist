@@ -26,10 +26,8 @@ The long-lived deployment contains:
 The container `client-build` stage runs `npm run build`. Vite first builds the
 shared browser CSRF helpers with the pinned `js-cookie` dependency, then builds
 the React application. Django and nginx images take the generated helper from
-that stage before static-file collection. Its source is
-`client-ui/src/lib/csrf-runtime.js`; the checked-in
-`aist/static/aist/js/csrf.js` is generated for local static serving and is refreshed
-by the same build command.
+that stage before static-file collection. The same build command refreshes the
+checked-in helper used for local static serving.
 
 The bridge has the repository and workspace mounts it needs to launch the CLI.
 A skill writes its results through the platform's Django shell, which it reaches
