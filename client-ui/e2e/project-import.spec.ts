@@ -1,6 +1,15 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 
 import { loginByApi } from "./support";
+
+async function addOrganizationOptions(organization: Locator, options: Array<[label: string, value: string]>) {
+  await organization.evaluate((element, choices) => {
+    const select = element as HTMLSelectElement;
+    for (const [label, value] of choices) {
+      select.add(new Option(label, value));
+    }
+  }, options);
+}
 
 for (const provider of ["gitlab", "gerrit", "gitea"]) {
   test(`${provider} keeps repository selection attached to the organization that supplied it`, async ({ page }) => {
@@ -30,11 +39,10 @@ for (const provider of ["gitlab", "gerrit", "gitea"]) {
     await page.goto("/aist-admin/aist/projects/");
     await page.locator(`#${provider}-import-open`).click();
     const organization = page.locator(`#${provider}-org-select`);
-    await organization.evaluate((element) => {
-      const select = element as HTMLSelectElement;
-      select.add(new Option("Old organization", "organization-old"));
-      select.add(new Option("Current organization", "organization-current"));
-    });
+    await addOrganizationOptions(organization, [
+      ["Old organization", "organization-old"],
+      ["Current organization", "organization-current"],
+    ]);
     await organization.selectOption("organization-old", { force: true });
     await oldStarted;
     await organization.selectOption("organization-current", { force: true });
@@ -60,6 +68,14 @@ for (const provider of ["gitlab", "gerrit", "gitea"]) {
     expect(imports).toEqual([{ organization_id: "organization-current", auto_analyze: false, [key]: provider === "gitlab" ? "73" : literalName }]);
     await expect(page.locator(`#${provider}-import-form`)).not.toHaveAttribute("inert", "");
     await expect(page.locator(`#${provider}ImportModal`)).toBeVisible();
+    await page.route(`**/projects/${provider}/list/`, (route) => route.fulfill({
+      status: 503, json: { ok: false, error: "Listing temporarily unavailable" },
+    }));
+    await organization.selectOption("organization-old", { force: true });
+    await expect(page.locator(`#${provider}-import-error`)).toContainText("Listing temporarily unavailable");
+    await expect(rows.locator("tr")).toHaveCount(0);
+    await expect(page.locator(`#${provider}-import-btn`)).toBeDisabled();
+    expect(imports).toHaveLength(1);
   });
 }
 
@@ -77,11 +93,10 @@ test("GitHub invalidates repository selection when its organization changes", as
   await page.goto("/aist-admin/aist/projects/");
   await page.locator("#github-import-open").click();
   const organization = page.locator("#github-org-select");
-  await organization.evaluate((element) => {
-    const select = element as HTMLSelectElement;
-    select.add(new Option("First organization", "71"));
-    select.add(new Option("Current organization", "72"));
-  });
+  await addOrganizationOptions(organization, [
+    ["First organization", "71"],
+    ["Current organization", "72"],
+  ]);
   await organization.selectOption("71", { force: true });
   await page.locator("#github-list-btn").click();
   const checkbox = page.locator('#github-repos-tbody input[type="checkbox"]');
