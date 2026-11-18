@@ -2,6 +2,7 @@ from django.urls import reverse
 
 from aist.models import (
     AISTProjectLaunchConfig,
+    AISTProjectScript,
     LaunchSchedule,
     Organization,
     PipelineExecutionType,
@@ -61,8 +62,14 @@ class LegacySastExecutionCompatibilityTests(AISTApiBase):
         request = PipelineLaunchRequest.objects.get(pk=legacy_item["id"])
         self.assertEqual(request.execution_type, PipelineExecutionType.SAST)
         self.assertEqual(request.state, PipelineLaunchRequestState.PENDING)
+        snapshot = dict(request.params_snapshot)
+        revision = AISTProjectScript.objects.get(pk=snapshot.pop("script_revision_id"))
+        self.assertEqual(revision.project_id, self.project.id)
+        self.assertFalse(revision.is_shared)
+        self.assertEqual(revision.content, self.pv.effective_script.content)
+        self.assertEqual(revision.base_image, self.pv.effective_script.base_image)
         self.assertEqual(
-            request.params_snapshot,
+            snapshot,
             PipelineArguments.normalize_params(project=self.project, raw_params=self.config.params),
         )
 
