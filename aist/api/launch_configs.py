@@ -142,13 +142,9 @@ class LaunchConfigCreateRequestSerializer(serializers.Serializer):
         if binding is None:
             raise serializers.ValidationError({"dast_binding_id": "DAST launch config requires an explicit binding."})
         _validate_dast_launch(binding, trigger, project_id=self.context["project"].pk)
-        try:
-            attrs["params"] = DastBindingParameters.from_snapshot(
-                attrs["params"],
-                target=binding.target.get_snapshot(),
-            ).to_snapshot()
-        except DastConfigError as exc:
-            raise serializers.ValidationError({"params": str(exc)}) from exc
+        attrs["params"] = _normalize_launch_params(
+            project=self.context["project"], execution_type=execution_type, binding=binding, raw_params=attrs["params"],
+        )
         return attrs
 
 
@@ -208,13 +204,12 @@ class LaunchConfigUpdateRequestSerializer(serializers.ModelSerializer):
                 "dast_binding_id": "DAST launch config requires an explicit binding.",
             })
         _validate_dast_launch(binding, trigger, project_id=self.instance.project_id)
-        try:
-            attrs["params"] = DastBindingParameters.from_snapshot(
-                attrs.get("params", self.instance.params),
-                target=binding.target.get_snapshot(),
-            ).to_snapshot()
-        except DastConfigError as exc:
-            raise serializers.ValidationError({"params": str(exc)}) from exc
+        attrs["params"] = _normalize_launch_params(
+            project=self.instance.project,
+            execution_type=self.instance.execution_type,
+            binding=binding,
+            raw_params=attrs.get("params", self.instance.params),
+        )
         return attrs
 
     def to_internal_value(self, data):
@@ -493,6 +488,22 @@ def validate_action_payload(payload) -> dict:
     return serializer.validated_data
 
 
+def _normalize_launch_params(
+    *,
+    project: AISTProject,
+    execution_type: str,
+    binding: DastProjectBinding | None,
+    raw_params: object,
+) -> dict:
+    """The stored form of a launch config's params; a rejection is raised as a ``params`` validation error."""
+    try:
+        if execution_type == PipelineExecutionType.SAST:
+            return PipelineArguments.normalize_params(project=project, raw_params=raw_params)
+        return DastBindingParameters.from_snapshot(raw_params, target=binding.target.get_snapshot()).to_snapshot()
+    except (TypeError, ValueError) as exc:
+        raise serializers.ValidationError({"params": str(exc)}) from exc
+
+
 def create_launch_config_for_project(
     *,
     project: AISTProject,
@@ -506,20 +517,13 @@ def create_launch_config_for_project(
 ) -> AISTProjectLaunchConfig:
     """
     Shared create logic for BOTH API and UI.
-    SSOT for params validation/defaulting: PipelineArguments.normalize_params.
+    SSOT for params validation/defaulting: _normalize_launch_params.
     """
-    if execution_type == PipelineExecutionType.SAST:
-        normalized = PipelineArguments.normalize_params(project=project, raw_params=raw_params)
-    elif execution_type == PipelineExecutionType.DAST and dast_binding is not None:
-        try:
-            normalized = DastBindingParameters.from_snapshot(
-                raw_params,
-                target=dast_binding.target.get_snapshot(),
-            ).to_snapshot()
-        except DastConfigError as exc:
-            raise serializers.ValidationError({"params": str(exc)}) from exc
-    else:
+    if execution_type == PipelineExecutionType.DAST and dast_binding is None:
         raise serializers.ValidationError({"dast_binding_id": "DAST launch config requires an explicit binding."})
+    normalized = _normalize_launch_params(
+        project=project, execution_type=execution_type, binding=dast_binding, raw_params=raw_params,
+    )
 
     with transaction.atomic():
         AISTProject.objects.select_for_update().only("pk").get(pk=project.pk)
@@ -684,7 +688,9 @@ class ProjectLaunchConfigDetailAPI(AISTAPIView):
             if "params" in data:
                 normalized = data["params"]
                 if obj.execution_type == PipelineExecutionType.SAST:
-                    normalized = PipelineArguments.normalize_params(project=obj.project, raw_params=normalized)
+                    normalized = _normalize_launch_params(
+                        project=obj.project, execution_type=obj.execution_type, binding=None, raw_params=normalized,
+                    )
                 obj.params = normalized
             if "dast_binding" in data:
                 obj.dast_binding = data["dast_binding"]

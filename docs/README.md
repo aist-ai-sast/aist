@@ -38,6 +38,7 @@ external system. Runbooks contain commands, diagnostics, and recovery.
   [Azure DevOps](integrations/azure-devops.md)
 - Delivery and network: [Slack](integrations/slack.md) and
   [VPN](integrations/vpn.md)
+- Project builds: [Build environment](integrations/build-environment.md)
 - Execution provider: [DAST](integrations/dast.md)
 
 The [work-item support matrix](product/work-item-links.md#supported-providers)

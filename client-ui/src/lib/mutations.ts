@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { fetchBlob, fetchJson, postFormData } from "./api";
 import { getRoute } from "./routes";
+import type { IntegrationType } from "./integrationTypes";
 
 export type FindingCloseReason = "mitigated" | "false_positive" | "out_of_scope" | "duplicate";
 export type FindingSeverity = "Critical" | "High" | "Medium" | "Low" | "Info";
@@ -328,7 +329,7 @@ export function useSetProjectIntegrationOverride(projectId: number) {
       configOverride,
       isDisabled,
     }: {
-      integrationType: string;
+      integrationType: IntegrationType;
       orgIntegrationId?: number | null;
       configOverride?: Record<string, unknown>;
       isDisabled?: boolean;
@@ -356,7 +357,7 @@ export function useSetProjectIntegrationOverride(projectId: number) {
 export function useDeleteProjectIntegrationOverride(projectId: number) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (integrationType: string) =>
+    mutationFn: (integrationType: IntegrationType) =>
       fetchJson(
         getRoute("project_integration_override_detail_url", {
           project_id: projectId,
@@ -404,9 +405,7 @@ export function useDeleteDastProjectBinding(projectId: number) {
   });
 }
 
-// DAST launch configs are created in the AIST admin launch dashboard, alongside SAST ones.
-// client-ui deliberately has no create mutation: it had no list, edit, start or schedule
-// surface to go with it, so a config created here was unreachable afterwards.
+// DAST launch configs are created in the AIST admin launch dashboard; client-ui has no surface that lists or starts them.
 
 // ---------------------------------------------------------------------------
 // Work item link mutations
@@ -474,11 +473,13 @@ export type VpnSecretPayload = {
 };
 
 export type OrgIntegrationPayload = {
-  integration_type: string;
+  integration_type: IntegrationType;
   name: string;
   config?: Record<string, unknown>;
   secret?: string;
   vpn_secret?: VpnSecretPayload;
+  /** The whole variable set; a variable without ``value`` keeps its stored value. */
+  build_env?: { name: string; value?: string }[];
   vpn_integration?: number | null;
   is_active?: boolean;
 };

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from dojo.models import Product_Type
 from encrypted_model_fields.fields import EncryptedCharField
 
@@ -16,6 +17,9 @@ from aist.integrations.dast_config import (
     DastIntegrationConfig,
 )
 from aist.integrations.resolver import ResolvedIntegration
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +74,7 @@ class OrgIntegrationType(models.TextChoices):
     GERRIT = "GERRIT", "Gerrit"
     GITEA = "GITEA", "Gitea"
     DAST = "DAST", "DAST"
+    BUILD_ENV = "BUILD_ENV", "Build environment"
 
 
 class VpnLinkViolation(models.TextChoices):
@@ -185,6 +190,16 @@ class OrgIntegration(models.Model):
         if errors:
             raise ValidationError(errors)
 
+    def replace_build_env(self, variables: Mapping[str, str | None]) -> None:
+        """Make ``variables`` the whole set of build-environment variables; a ``None`` value keeps the stored one."""
+        with transaction.atomic():
+            # Concurrent replacements of one set are serialized on this integration's row.
+            type(self).objects.select_for_update().filter(pk=self.pk).first()
+            for name, value in variables.items():
+                if value is not None:
+                    self.build_env_vars.update_or_create(name=name, defaults={"value": value})
+            self.build_env_vars.exclude(name__in=list(variables)).delete()
+
     def get_dast_config(self) -> DastIntegrationConfig:
         if self.integration_type != OrgIntegrationType.DAST:
             msg = "DAST config requested for a non-DAST integration."
@@ -247,3 +262,25 @@ class OrgIntegrationVPNSecret(models.Model):
 
     def __str__(self) -> str:
         return f"VPNSecret for {self.integration}"
+
+
+class OrgIntegrationBuildEnvVar(models.Model):
+
+    """One builder environment variable of a BUILD_ENV integration; ``value`` is encrypted at rest."""
+
+    integration = models.ForeignKey(
+        OrgIntegration,
+        on_delete=models.CASCADE,
+        related_name="build_env_vars",
+    )
+    name = models.CharField(max_length=128)
+    value = EncryptedCharField(max_length=4096)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(fields=["integration", "name"], name="unique_build_env_var_name"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.integration} / {self.name}"

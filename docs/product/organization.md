@@ -10,8 +10,8 @@ configuration.
 
 An organization owns its product type and AIST projects. Each project owns
 source versions, pipeline runs, findings, launch configuration, and review
-history. Organization configuration holds SCM, VPN, AI, DAST, Slack, and email
-integrations, plus work-item providers. Credentials remain with the
+history. Organization configuration holds SCM, VPN, AI, DAST, Slack, email, and
+build environment integrations, plus work-item providers. Credentials remain with the
 organization configuration rather than being copied to projects.
 
 ## Users and projects

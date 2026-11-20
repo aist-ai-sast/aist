@@ -6,6 +6,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { ReactNode } from "react";
 
+import type { BuildEnvVariableStatus, ProjectIntegrationOverride } from "../lib/queries";
+import type { Project } from "../types";
+
 let canManage = true;
 vi.mock("../components/PermissionGate", () => ({
   default: ({ children, fallback = null }: { children: ReactNode; fallback?: ReactNode }) =>
@@ -25,10 +28,11 @@ let mockIntegrations: Array<{
   has_secret: boolean;
   config: Record<string, string>;
   vpn_integration: number | null;
+  build_env?: BuildEnvVariableStatus[];
   dast_state?: { validation_state: string; sync_status?: string; sync_error_code?: string };
 }> = [];
 let mockValidationStatus: { state: string; valid: boolean | null; detail: string } | undefined;
-let mockProjects: Array<{ id: number; name: string; organizationId: number; productId: number }> = [];
+let mockProjects: Project[] = [];
 let mockDastTargets: Array<Record<string, unknown>> = [];
 let mockDastBindings: Array<Record<string, unknown>> = [];
 const importDastMutateAsync = vi.fn().mockResolvedValue({ id: 7 });
@@ -41,13 +45,18 @@ const createDastLaunchConfigMutateAsync = vi.fn().mockResolvedValue({ id: 31 });
 const syncCapabilitiesMutateAsync = vi.fn().mockResolvedValue({ task_id: "sync-1" });
 const disableDastMutateAsync = vi.fn().mockResolvedValue({ id: 7, is_active: false });
 const deleteIntegrationMutateAsync = vi.fn().mockResolvedValue(undefined);
+const createIntegrationMutateAsync = vi.fn().mockResolvedValue({ id: 21 });
+const updateIntegrationMutateAsync = vi.fn().mockResolvedValue({ id: 21 });
+const setOverrideMutateAsync = vi.fn().mockResolvedValue({});
+const deleteOverrideMutateAsync = vi.fn().mockResolvedValue(undefined);
+let mockOverrides: ProjectIntegrationOverride[] = [];
 
 vi.mock("../lib/queries", async () => ({
   isDastSyncInFlight: (await vi.importActual<typeof import("../lib/queries")>("../lib/queries")).isDastSyncInFlight,
   useManageableOrgs: () => ({ data: [{ id: 1, name: "Acme" }], isLoading: false }),
   useOrgIntegrations: () => ({ data: mockIntegrations, isLoading: false, isError: false }),
   useWorkItemProviders: () => ({ data: [], isLoading: false, isError: false }),
-  useProjectIntegrationOverrides: () => ({ data: [] }),
+  useProjectIntegrationOverrides: () => ({ data: mockOverrides }),
   useProjects: () => ({ data: mockProjects }),
   useOrganizationDastTargets: () => ({ data: mockDastTargets, isLoading: false }),
   useProjectDastBindings: () => ({ data: mockDastBindings, isLoading: false }),
@@ -61,8 +70,8 @@ vi.mock("../lib/mutations", async () => ({
   invalidateDastLifecycleQueries: (
     await vi.importActual<typeof import("../lib/mutations")>("../lib/mutations")
   ).invalidateDastLifecycleQueries,
-  useCreateOrgIntegration: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useUpdateOrgIntegration: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreateOrgIntegration: () => ({ mutateAsync: createIntegrationMutateAsync, isPending: false }),
+  useUpdateOrgIntegration: () => ({ mutateAsync: updateIntegrationMutateAsync, isPending: false }),
   useDeleteOrgIntegration: () => ({ mutateAsync: deleteIntegrationMutateAsync, isPending: false }),
   useDisableDastIntegration: () => ({ mutateAsync: disableDastMutateAsync, isPending: false }),
   useValidateOrgIntegration: () => ({ mutateAsync: vi.fn().mockResolvedValue({ task_id: "t1" }), isPending: false, variables: undefined }),
@@ -73,8 +82,8 @@ vi.mock("../lib/mutations", async () => ({
   useUpdateWorkItemProvider: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useDeleteWorkItemProvider: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useValidateWorkItemProvider: () => ({ mutateAsync: vi.fn(), isPending: false, variables: undefined }),
-  useSetProjectIntegrationOverride: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useDeleteProjectIntegrationOverride: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useSetProjectIntegrationOverride: () => ({ mutateAsync: setOverrideMutateAsync, isPending: false }),
+  useDeleteProjectIntegrationOverride: () => ({ mutateAsync: deleteOverrideMutateAsync, isPending: false }),
   useUpsertDastProjectBinding: () => ({ mutateAsync: upsertBindingMutateAsync, isPending: false }),
   useDeleteDastProjectBinding: () => ({ mutateAsync: deleteBindingMutateAsync, isPending: false }),
   useCreateDastLaunchConfig: () => ({ mutateAsync: createDastLaunchConfigMutateAsync, isPending: false }),
@@ -99,6 +108,23 @@ function renderPage(
   return { ...view, rerenderPage: () => view.rerender(tree()) };
 }
 
+function orgSection() {
+  return screen.getByText("Org Integrations").closest("section")!;
+}
+
+/** Open a new integration form in the Org Integrations section, pick ``typeLabel`` and type ``name``. */
+function startNewIntegration(typeLabel: string, name?: string) {
+  const section = orgSection();
+  fireEvent.click(within(section).getByRole("button", { name: /add/i }));
+  const typeSelect = within(section).getByText("Type").closest("div")!;
+  fireEvent.click(within(typeSelect).getByRole("combobox"));
+  fireEvent.click(screen.getByRole("option", { name: typeLabel }));
+  if (name !== undefined) {
+    fireEvent.change(within(section).getByPlaceholderText("e.g. Production"), { target: { value: name } });
+  }
+  return section;
+}
+
 describe("OrgIntegrationsPage — DAST integration", () => {
   beforeEach(() => {
     mockIntegrations = [];
@@ -116,12 +142,7 @@ describe("OrgIntegrationsPage — DAST integration", () => {
   it("shows Gateway URL and Integrator Token fields when DAST is selected", () => {
     renderPage();
 
-    const orgIntegrationsSection = screen.getByText("Org Integrations").closest("section")!;
-    fireEvent.click(within(orgIntegrationsSection).getByRole("button", { name: /add/i }));
-
-    const typeSelect = within(orgIntegrationsSection).getByText("Type").closest("div")!;
-    fireEvent.click(within(typeSelect).getByRole("combobox"));
-    fireEvent.click(screen.getByRole("option", { name: "DAST" }));
+    startNewIntegration("DAST");
 
     expect(screen.getByText("Gateway URL")).toBeInTheDocument();
     expect(screen.getByText("Integrator Token")).toBeInTheDocument();
@@ -213,12 +234,7 @@ describe("OrgIntegrationsPage — DAST integration", () => {
 
   it("imports a versioned bundle and clears token-bearing UI and mutation state after submit", async () => {
     renderPage();
-    const section = screen.getByText("Org Integrations").closest("section")!;
-    fireEvent.click(within(section).getByRole("button", { name: /add/i }));
-    const typeSelect = within(section).getByText("Type").closest("div")!;
-    fireEvent.click(within(typeSelect).getByRole("combobox"));
-    fireEvent.click(screen.getByRole("option", { name: "DAST" }));
-    fireEvent.change(within(section).getByPlaceholderText("e.g. Production"), { target: { value: "Primary DAST" } });
+    const section = startNewIntegration("DAST", "Primary DAST");
     fireEvent.click(within(section).getAllByRole("button", { name: "Show" })[0]);
     const bundle = {
       bundle_version: 1,
@@ -263,7 +279,7 @@ describe("OrgIntegrationsPage — DAST integration", () => {
     ];
 
     renderPage();
-    const section = screen.getByText("Org Integrations").closest("section")!;
+    const section = orgSection();
     fireEvent.click(within(section).getByRole("button", { name: /edit/i }));
     fireEvent.change(within(section).getByPlaceholderText("e.g. Production"), {
       target: { value: "Renamed gateway" },
@@ -298,7 +314,7 @@ describe("OrgIntegrationsPage — DAST integration", () => {
     ];
 
     renderPage();
-    const section = screen.getByText("Org Integrations").closest("section")!;
+    const section = orgSection();
     fireEvent.click(within(section).getByRole("button", { name: /edit/i }));
     const save = within(section).getByRole("button", { name: "Save changes" });
     expect(save).toBeEnabled();
@@ -394,7 +410,7 @@ describe("OrgIntegrationsPage — DAST project bindings", () => {
         vpn_integration: null,
       },
     ];
-    mockProjects = [{ id: 9, name: "Checkout", organizationId: 1, productId: 3 }];
+    mockProjects = [{ id: 9, name: "Checkout", organizationId: 1, productId: 3, canOperate: true }];
     mockDastTargets = [target];
     mockDastBindings = [];
     vi.clearAllMocks();
@@ -793,5 +809,289 @@ describe("OrgIntegrationsPage — DAST catalog sync", () => {
 
     await waitFor(() => expect(toastPush).toHaveBeenCalledWith("DAST target catalog synchronized.", "success"));
     expect(invalidatedKeys(invalidateSpy)).toContain(JSON.stringify(["dast-bindings"]));
+  });
+});
+
+describe("OrgIntegrationsPage — build environment integration", () => {
+  const storedConan = {
+    id: 21,
+    name: "conan",
+    integration_type: "BUILD_ENV",
+    is_active: true,
+    has_secret: false,
+    config: {},
+    vpn_integration: null,
+    build_env: [
+      { name: "CONAN_LOGIN_USERNAME_ACME", has_value: true },
+      { name: "CONAN_PASSWORD_ACME", has_value: true },
+      { name: "OLD_TOKEN", has_value: true },
+    ],
+  };
+
+  beforeEach(() => {
+    mockIntegrations = [];
+    mockProjects = [];
+    mockOverrides = [];
+    canManage = true;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => cleanup());
+
+  function startNewBuildEnv() {
+    startNewIntegration("Build environment", "conan");
+  }
+
+  function addVariable(name: string, value: string) {
+    fireEvent.click(screen.getByRole("button", { name: "+ Add variable" }));
+    const names = screen.getAllByLabelText("Variable name");
+    const values = screen.getAllByPlaceholderText("value");
+    fireEvent.change(names[names.length - 1], { target: { value: name } });
+    fireEvent.change(values[values.length - 1], { target: { value } });
+  }
+
+  it("creates the integration with its variables and no access token", async () => {
+    renderPage();
+    startNewBuildEnv();
+    expect(screen.queryByText("Access Token")).not.toBeInTheDocument();
+
+    addVariable("CONAN_LOGIN_USERNAME_ACME", "ci-bot");
+    addVariable("CONAN_PASSWORD_ACME", "remote-password");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createIntegrationMutateAsync).toHaveBeenCalledTimes(1));
+    const payload = createIntegrationMutateAsync.mock.calls[0][0];
+    expect(payload).toMatchObject({
+      integration_type: "BUILD_ENV",
+      name: "conan",
+      build_env: [
+        { name: "CONAN_LOGIN_USERNAME_ACME", value: "ci-bot" },
+        { name: "CONAN_PASSWORD_ACME", value: "remote-password" },
+      ],
+    });
+    expect(payload).not.toHaveProperty("secret");
+  });
+
+  it("cannot save a new variable without a value", () => {
+    renderPage();
+    startNewBuildEnv();
+
+    addVariable("CONAN_PASSWORD_ACME", "");
+
+    expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+  });
+
+  it("lists the integration with its variable count", () => {
+    mockIntegrations = [storedConan];
+
+    renderPage();
+
+    expect(within(orgSection()).getByText("conan")).toBeInTheDocument();
+    expect(within(orgSection()).getByText("3 variables")).toBeInTheDocument();
+  });
+
+  it("rotates one value, keeps another and removes a third in one save", async () => {
+    mockIntegrations = [storedConan];
+    renderPage();
+    fireEvent.click(within(orgSection()).getByRole("button", { name: "Edit" }));
+
+    const names = screen.getAllByLabelText("Variable name");
+    expect(names.map((input) => (input as HTMLInputElement).value)).toEqual([
+      "CONAN_LOGIN_USERNAME_ACME",
+      "CONAN_PASSWORD_ACME",
+      "OLD_TOKEN",
+    ]);
+    names.forEach((input) => expect(input).toBeDisabled());
+    const values = screen.getAllByPlaceholderText("stored — leave blank to keep");
+    values.forEach((input) => expect((input as HTMLInputElement).value).toBe(""));
+
+    fireEvent.change(values[1], { target: { value: "rotated-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Remove OLD_TOKEN" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(updateIntegrationMutateAsync).toHaveBeenCalledTimes(1));
+    expect(updateIntegrationMutateAsync.mock.calls[0][0]).toMatchObject({
+      integrationId: 21,
+      payload: {
+        build_env: [
+          { name: "CONAN_LOGIN_USERNAME_ACME" },
+          { name: "CONAN_PASSWORD_ACME", value: "rotated-password" },
+        ],
+      },
+    });
+    expect(updateIntegrationMutateAsync.mock.calls[0][0].payload.build_env[0]).not.toHaveProperty("value");
+  });
+
+  it("lets a project switch the build environment off", async () => {
+    mockIntegrations = [storedConan];
+    mockProjects = [{ id: 9, name: "acme-client", organizationId: 1, productId: 3, canOperate: true }];
+    renderPage();
+
+    const overrides = screen.getByText("Per-Project Overrides").closest("section")!;
+    fireEvent.click(within(overrides).getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "acme-client" }));
+    fireEvent.click(within(overrides).getByLabelText("Disable Build environment"));
+
+    await waitFor(() =>
+      expect(setOverrideMutateAsync).toHaveBeenCalledWith({ integrationType: "BUILD_ENV", isDisabled: true }),
+    );
+    expect(toastPush).toHaveBeenCalledWith("Build environment disabled for this project.", "success");
+  });
+
+  it("shows a project's overrides read-only to someone who cannot operate the project", () => {
+    mockIntegrations = [storedConan];
+    mockProjects = [{ id: 9, name: "acme-client", organizationId: 1, productId: 3, canOperate: false }];
+    mockOverrides = [{
+      id: 5, project: 9, integration_type: "BUILD_ENV", org_integration: 21, config_override: {}, is_disabled: false,
+    }];
+    renderPage();
+
+    const overrides = screen.getByText("Per-Project Overrides").closest("section")!;
+    fireEvent.click(within(overrides).getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "acme-client" }));
+
+    expect(within(overrides).getByText(/changing them requires Maintainer or Owner on the project/)).toBeInTheDocument();
+    const [, buildEnvPicker] = within(overrides).getAllByRole("combobox");
+    expect(buildEnvPicker).toBeDisabled();
+    expect(within(overrides).getByLabelText("Disable Build environment")).toBeDisabled();
+    expect(within(overrides).queryByTitle("Clear override")).not.toBeInTheDocument();
+  });
+
+  it("lets a project switch a disabled build environment back on", async () => {
+    mockIntegrations = [storedConan];
+    mockProjects = [{ id: 9, name: "acme-client", organizationId: 1, productId: 3, canOperate: true }];
+    mockOverrides = [{
+      id: 5, project: 9, integration_type: "BUILD_ENV", org_integration: null, config_override: {}, is_disabled: true,
+    }];
+    renderPage();
+
+    const overrides = screen.getByText("Per-Project Overrides").closest("section")!;
+    fireEvent.click(within(overrides).getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "acme-client" }));
+    expect(within(overrides).getByText("disabled for this project")).toBeInTheDocument();
+    fireEvent.click(within(overrides).getByLabelText("Disable Build environment"));
+
+    await waitFor(() => expect(deleteOverrideMutateAsync).toHaveBeenCalledWith("BUILD_ENV"));
+    expect(toastPush).toHaveBeenCalledWith(
+      "Build environment override cleared — org default will be used.",
+      "success",
+    );
+  });
+});
+
+describe("OrgIntegrationsPage — source control, VPN, Claude and notification integrations", () => {
+  const officeVpn = {
+    id: 5,
+    name: "Office VPN",
+    integration_type: "VPN",
+    is_active: true,
+    has_secret: false,
+    config: {},
+    vpn_integration: null,
+  };
+
+  beforeEach(() => {
+    mockIntegrations = [];
+    canManage = true;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => cleanup());
+
+  it("creates a self-hosted GitLab integration routed through the organization's VPN", async () => {
+    mockIntegrations = [officeVpn];
+    renderPage();
+    const section = startNewIntegration("GitLab", "Internal GitLab");
+    fireEvent.change(within(section).getByPlaceholderText("https://gitlab.com"), {
+      target: { value: " https://git.example.test " },
+    });
+    fireEvent.change(within(section).getByLabelText("Access Token"), { target: { value: " glpat-token " } });
+    fireEvent.click(within(section).getByRole("combobox", { name: "VPN Integration" }));
+    fireEvent.click(screen.getByRole("option", { name: "Office VPN" }));
+    fireEvent.click(within(section).getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createIntegrationMutateAsync).toHaveBeenCalledTimes(1));
+    expect(createIntegrationMutateAsync).toHaveBeenCalledWith({
+      integration_type: "GITLAB",
+      name: "Internal GitLab",
+      config: { base_url: "https://git.example.test" },
+      is_active: true,
+      vpn_integration: 5,
+      secret: "glpat-token",
+    });
+  });
+
+  it("updates a VPN integration with only the credentials the operator entered", async () => {
+    mockIntegrations = [officeVpn];
+    renderPage();
+    const section = orgSection();
+    fireEvent.click(within(section).getByRole("button", { name: /edit/i }));
+    expect(within(section).queryByText("VPN Integration")).not.toBeInTheDocument();
+    fireEvent.change(within(section).getByLabelText("Username"), { target: { value: " ci-bot " } });
+    fireEvent.change(within(section).getByPlaceholderText("10.0.0.1"), { target: { value: "10.8.0.1" } });
+    fireEvent.click(within(section).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(updateIntegrationMutateAsync).toHaveBeenCalledTimes(1));
+    const { integrationId, payload } = updateIntegrationMutateAsync.mock.calls[0][0];
+    expect(integrationId).toBe(5);
+    expect(payload).toEqual({
+      integration_type: "VPN",
+      name: "Office VPN",
+      config: { ping_target: "10.8.0.1" },
+      is_active: true,
+      vpn_secret: { vpn_username: "ci-bot" },
+    });
+    expect(payload).not.toHaveProperty("secret");
+    expect(payload.vpn_integration).toBeUndefined();
+  });
+
+  it("creates a Claude Code integration that authenticates with the pasted OAuth token", async () => {
+    renderPage();
+    const section = startNewIntegration("Claude Code", "Triage");
+    expect(within(section).getByText("claude setup-token")).toBeInTheDocument();
+    fireEvent.change(within(section).getByLabelText("Access Token"), { target: { value: "oauth-token" } });
+    fireEvent.click(within(section).getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createIntegrationMutateAsync).toHaveBeenCalledTimes(1));
+    expect(createIntegrationMutateAsync).toHaveBeenCalledWith({
+      integration_type: "CLAUDE_CODE",
+      name: "Triage",
+      config: { auth_mode: "oauth" },
+      is_active: true,
+      vpn_integration: null,
+      secret: "oauth-token",
+    });
+  });
+
+  it("asks for the Slack default channel before a Slack integration can be created", () => {
+    renderPage();
+    const section = startNewIntegration("Slack", "Alerts");
+    expect(within(section).getByText("Bot Token")).toBeInTheDocument();
+    expect(within(section).getByRole("button", { name: "Create" })).toBeDisabled();
+
+    fireEvent.change(within(section).getByPlaceholderText("#alerts or channel ID"), { target: { value: "#security" } });
+
+    expect(within(section).getByRole("button", { name: "Create" })).toBeEnabled();
+  });
+
+  it("creates an Email integration from its sender address, without a token", async () => {
+    renderPage();
+    const section = startNewIntegration("Email", "Mailer");
+    expect(within(section).queryByText(/Token/)).not.toBeInTheDocument();
+    expect(within(section).getByRole("button", { name: "Create" })).toBeDisabled();
+
+    fireEvent.change(within(section).getByPlaceholderText("noreply@example.com"), {
+      target: { value: "security@example.test" },
+    });
+    fireEvent.click(within(section).getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(createIntegrationMutateAsync).toHaveBeenCalledTimes(1));
+    expect(createIntegrationMutateAsync).toHaveBeenCalledWith({
+      integration_type: "EMAIL",
+      name: "Mailer",
+      config: { from_email: "security@example.test" },
+      is_active: true,
+      vpn_integration: null,
+    });
   });
 });

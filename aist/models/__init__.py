@@ -36,6 +36,7 @@ from aist.models.launching import (
 from aist.models.organizations import (
     Organization,
     OrgIntegration,
+    OrgIntegrationBuildEnvVar,
     OrgIntegrationType,
     OrgIntegrationVPNSecret,
 )
@@ -130,6 +131,7 @@ __all__ = [
     "LocalTriageBatch",
     "LocalTriageBatchState",
     "OrgIntegration",
+    "OrgIntegrationBuildEnvVar",
     "OrgIntegrationType",
     "OrgIntegrationVPNSecret",
     "OrgMemberAccessScope",

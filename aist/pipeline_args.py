@@ -15,6 +15,7 @@ from rest_framework import serializers
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+from aist.integrations.build_env import SYSTEM_ENV_KEYS, build_environment
 from aist.integrations.dast_config import DastBindingParameters
 from aist.launch_data import LaunchAISettings
 from aist.models import (
@@ -41,14 +42,6 @@ _logger = logging.getLogger(__name__)
 # Error messages (for TRY003/EM101/EM102)
 MSG_PROJECT_NOT_FOUND_TPL = "AISTProject with id={} not found"
 MSG_DOCKERFILE_NOT_FOUND = "Dockerfile does not exist"
-
-# Launch environment variables the platform computes itself from the project and its SCM
-# integration. REPO_URL embeds the integration credential (PAT / HTTP password), so neither
-# key may be accepted from a caller nor written to a persisted launch config or a frozen
-# launch request snapshot. They are injected for one run only by
-# SastPipelineArguments.runtime_env.
-SYSTEM_ENV_KEYS = frozenset({"REPO_URL", "PROJECT_NAME"})
-
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
@@ -216,7 +209,8 @@ class SastPipelineArguments:
         launch's findings. The result is what :meth:`from_dict` reads.
 
         Raises ``TypeError`` when the params are not a dict and ``ValueError`` (``AIFilterError`` for the AI
-        filter) naming the first invalid param. Other unknown keys are retained; script_revision_id
+        filter, ``BuildEnvConflictError`` for an ``env`` key the project's build environment defines) naming
+        the first invalid param. Other unknown keys are retained; script_revision_id
         is discarded and reserved launch fields are derived by the platform.
         """
         if raw_params is None:
@@ -235,6 +229,7 @@ class SastPipelineArguments:
             msg = f"{field_name}: {errors[0]}"
             raise ValueError(msg)
         params = serializer.validated_data
+        build_environment(project).check_launch_env(params["env"])
 
         ai = LaunchAISettings.from_params(raw_params)
         ai = replace(ai, triage_type=ProjectProfile.from_dict(project.profile).triage_type_for(ai))

@@ -24,6 +24,7 @@ from aist.models import (
     Organization,
     OrgIntegration,
     OrgIntegrationType,
+    OrgIntegrationVPNSecret,
     PipelineExecutionType,
 )
 from aist.test.test_api import AISTApiBase
@@ -631,6 +632,27 @@ class VpnSecretSerializerParseTests(AISTApiBase):
         )
         self.assertEqual(resp.status_code, 201)
         self.assertNotIn("vpn_secret", resp.data)
+
+    def test_vpn_secret_sent_for_a_non_vpn_integration_is_ignored(self):
+        created = self.client.post(
+            self.list_url,
+            {
+                "integration_type": "GITLAB",
+                "name": "GitLab with stray VPN",
+                "config": {},
+                "secret": "token",
+                "vpn_secret": {"ovpn_content": _BASE_OVPN},
+            },
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.data)
+        detail_url = reverse("aist_api:org_integration_detail", kwargs={"integration_id": created.data["id"]})
+
+        patched = self.client.patch(detail_url, {"vpn_secret": {"vpn_username": "alice"}}, format="json")
+
+        self.assertEqual(patched.status_code, 200, patched.data)
+        self.assertNotIn("vpn_secret", patched.data)
+        self.assertFalse(OrgIntegrationVPNSecret.objects.filter(integration_id=created.data["id"]).exists())
 
     def test_upload_ovpn_with_tls_crypt_v2(self):
         """tls-crypt-v2 block must be extracted and tls_key_type set correctly."""

@@ -89,6 +89,12 @@ base image contents, but dependencies installed by the script also need pinned
 versions for a reproducible environment. Analyzer tools are managed separately
 and do not belong in the project's init script or base image.
 
+A build that fetches private dependencies — for example from an authenticated
+Conan remote — reads the credentials from environment variables supplied by the
+organization's [build environment](../integrations/build-environment.md) rather
+than from values written into the script. The builder receives them on every
+run; they are not part of the script revision.
+
 A pipeline runs its source version's own script, or the shared default when the
 version has none. Admission freezes a project-scoped revision of the script and
 base image for the queued run, including when the shared default is selected.

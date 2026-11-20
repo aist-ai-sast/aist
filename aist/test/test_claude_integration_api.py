@@ -112,7 +112,7 @@ class ClaudeIntegrationProbeTests(AISTApiBase):
     """
     Unit-level tests for the probe helper in aist/integrations/claude.py.
 
-    The probe is wired into the existing ``_validate_integration`` dispatch;
+    The probe is wired into the ``validate_integration`` dispatch;
     end-to-end API validation flow is already covered by
     ``OrgIntegrationValidateAPITests``.
     """

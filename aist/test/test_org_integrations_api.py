@@ -10,6 +10,7 @@ from dojo.models import Product_Type, Product_Type_Member, Role
 from rest_framework.test import APIClient
 
 from aist.models import Organization, OrgIntegration, OrgIntegrationType, ProjectIntegrationOverride
+from aist.tasks.validate import validate_integration as validate_integration_task
 from aist.test.test_api import AISTApiBase
 from aist.test.vpn_fixtures import refused_vpn_routes
 
@@ -382,6 +383,38 @@ class OrgIntegrationValidateAPITests(AISTApiBase):
         )
         resp = self.client.get(url)
         self.assertEqual(resp.status_code, 404)
+
+    def test_validating_an_email_integration_reports_it_is_not_checked_remotely(self):
+        integration = OrgIntegration.objects.create(
+            organization=self.org, integration_type=OrgIntegrationType.EMAIL, name="Mail", config={},
+        )
+
+        result = validate_integration_task.apply(args=[integration.pk]).get()
+
+        self.assertEqual(
+            result,
+            {
+                "valid": True,
+                "detail": "Email configuration is not automatically validated.",
+                "_integration_id": integration.pk,
+            },
+        )
+
+    def test_validating_a_stored_type_without_a_probe_reports_it_invalid(self):
+        integration = OrgIntegration.objects.create(
+            organization=self.org, integration_type="RETIRED", name="Retired", config={},
+        )
+
+        result = validate_integration_task.apply(args=[integration.pk]).get()
+
+        self.assertEqual(
+            result,
+            {
+                "valid": False,
+                "detail": "No validator for integration type RETIRED",
+                "_integration_id": integration.pk,
+            },
+        )
 
 
 class ProjectIntegrationOverrideAPITests(AISTApiBase):

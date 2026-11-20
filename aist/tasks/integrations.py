@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass, field, replace
 
 from celery import shared_task
 
+from aist.integrations.scm import gerrit_rest, gitea_headers
+
 logger = logging.getLogger(__name__)
 
 
@@ -145,19 +147,6 @@ def fetch_gitlab_project_info(self, integration_id: int, project_id: int, async_
         }
 
 
-def _gerrit_rest(integration, session):
-    """Build a pygerrit2 REST client for an integration over the given session."""
-    import pygerrit2  # noqa: PLC0415
-
-    base_url = ((integration.config or {}).get("base_url") or "").rstrip("/")
-    username = ((integration.config or {}).get("username") or "").strip()
-    password = (integration.secret or "").strip()
-    auth = pygerrit2.HTTPBasicAuth(username, password) if username and password else None
-    rest = pygerrit2.GerritRestAPI(url=base_url, auth=auth)
-    rest.session = session
-    return rest, base_url
-
-
 @shared_task(name="aist.tasks.integrations.fetch_gerrit_projects", bind=True)
 def fetch_gerrit_projects(self, integration_id: int, async_user_id=None) -> dict:
     """
@@ -175,7 +164,7 @@ def fetch_gerrit_projects(self, integration_id: int, async_user_id=None) -> dict
         .get(pk=integration_id)
     )
     with integration.scoped_session(execution_id=f"gerrit-list-{integration_id}") as session:
-        rest, base_url = _gerrit_rest(integration, session)
+        rest, base_url = gerrit_rest(integration, session)
         # ?d includes the project description; ?tree/HEAD not requested to keep it light.
         data = rest.get("/projects/?d")
         projects = []
@@ -211,7 +200,7 @@ def fetch_gerrit_project_info(self, integration_id: int, project_path: str, asyn
         .get(pk=integration_id)
     )
     with integration.scoped_session(execution_id=f"gerrit-import-{integration_id}") as session:
-        rest, base_url = _gerrit_rest(integration, session)
+        rest, base_url = gerrit_rest(integration, session)
         proj_id = quote(project_path, safe="")
         try:
             info = rest.get(f"/projects/{proj_id}")
@@ -236,12 +225,6 @@ def fetch_gerrit_project_info(self, integration_id: int, project_path: str, asyn
         }
 
 
-def _gitea_headers(integration) -> dict:
-    """Gitea's documented auth header — not Bearer, not Basic."""
-    token = (integration.secret or "").strip()
-    return {"Authorization": f"token {token}"} if token else {}
-
-
 @shared_task(name="aist.tasks.integrations.fetch_gitea_projects", bind=True)
 def fetch_gitea_projects(self, integration_id: int, async_user_id=None) -> dict:
     """
@@ -259,7 +242,7 @@ def fetch_gitea_projects(self, integration_id: int, async_user_id=None) -> dict:
         .get(pk=integration_id)
     )
     base_url = ((integration.config or {}).get("base_url") or "").rstrip("/")
-    headers = _gitea_headers(integration)
+    headers = gitea_headers(integration)
     summaries: list[GiteaRepoSummary] = []
     with integration.scoped_session(execution_id=f"gitea-list-{integration_id}") as session:
         limit = 50
@@ -318,7 +301,7 @@ def fetch_gitea_project_info(self, integration_id: int, repo_full_name: str, asy
         .get(pk=integration_id)
     )
     base_url = ((integration.config or {}).get("base_url") or "").rstrip("/")
-    headers = _gitea_headers(integration)
+    headers = gitea_headers(integration)
     with integration.scoped_session(execution_id=f"gitea-import-{integration_id}") as session:
         resp = session.get(f"{base_url}/api/v1/repos/{repo_full_name}", headers=headers, timeout=15)
         if resp.status_code == 404:

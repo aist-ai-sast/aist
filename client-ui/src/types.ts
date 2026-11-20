@@ -147,6 +147,8 @@ export type Project = {
   name: string;
   organizationId?: number | null;
   organizationName?: string | null;
+  /** Whether the current user may change this project's configuration. */
+  canOperate: boolean;
 };
 
 export type RiskScore = {

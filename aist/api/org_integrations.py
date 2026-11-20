@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import logging
 import re
-import shutil
-import subprocess
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
@@ -18,6 +17,7 @@ from aist.api.common import VpnLinkField
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy
 from aist.execution.observability import AuditContext, audit_event
+from aist.integrations.build_env import build_env_name_violation
 from aist.integrations.dast_capability_sync import SYNC_STATUS_STALLED, reported_sync_status
 from aist.integrations.dast_config import (
     DastConfigError,
@@ -34,6 +34,7 @@ from aist.models import (
     DastOnboardingBundleUse,
     Organization,
     OrgIntegration,
+    OrgIntegrationBuildEnvVar,
     OrgIntegrationType,
     OrgIntegrationVPNSecret,
     ProjectIntegrationOverride,
@@ -44,7 +45,8 @@ from aist.services.dast_integration_lifecycle import (
     disable_dast_integration,
 )
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ---------------------------------------------------------------------------
 # OVPN helpers
@@ -356,6 +358,41 @@ class OrgIntegrationVPNSecretSerializer(serializers.ModelSerializer):
         ]
 
 
+class BuildEnvVarSerializer(serializers.ModelSerializer):
+
+    """One build-environment variable. ``value`` is write-only; omitting it keeps the stored value."""
+
+    has_value = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrgIntegrationBuildEnvVar
+        fields = ["name", "value", "has_value"]
+        extra_kwargs = {
+            "value": {
+                "write_only": True,
+                "required": False,
+                "trim_whitespace": False,
+                "style": {"input_type": "password"},
+            },
+        }
+
+    def get_has_value(self, obj) -> bool:
+        return bool(obj.value)
+
+    def validate_name(self, value: str) -> str:
+        violation = build_env_name_violation(value)
+        if violation is not None:
+            msg = f"{value} {violation.value}."
+            raise serializers.ValidationError(msg)
+        return value
+
+    def validate_value(self, value: str) -> str:
+        if "\n" in value or "\r" in value:
+            msg = "A value cannot contain a line break."
+            raise serializers.ValidationError(msg)
+        return value
+
+
 class DastIntegrationStateSerializer(serializers.Serializer):
 
     validation_state = serializers.CharField()
@@ -369,6 +406,38 @@ class DastIntegrationStateSerializer(serializers.Serializer):
         choices=[*DastCapabilitySyncStatus.values, SYNC_STATUS_STALLED],
         help_text="Lifecycle of the latest catalog synchronization; STALLED once an in-flight sync is presumed lost.",
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _IntegrationTypeSpec:
+
+    """
+    The rules one integration type adds to the fields every integration shares.
+
+    Each hook is an ``OrgIntegrationSerializer`` method called with the serializer as its first argument.
+    """
+
+    # Writable nested field only this type accepts and shows.
+    nested: str | None = None
+    # Error raised when another type writes ``nested``; None ignores that write.
+    foreign_nested_error: str | None = None
+    # Read-only fields only this type shows.
+    read_fields: frozenset[str] = frozenset()
+    # Whether this type's requests may route through a VPN integration.
+    vpn_routable: bool = True
+    # Raises ValidationError for attrs this type refuses; may canonicalize attrs in place.
+    validate_attrs: Callable[[OrgIntegrationSerializer, dict], None] | None = None
+    # Adjusts the response data of an integration of this type in place.
+    represent: Callable[[OrgIntegrationSerializer, OrgIntegration, dict], None] | None = None
+    # Called with the nested write (None when absent) after the integration is created.
+    after_create: Callable[[OrgIntegrationSerializer, OrgIntegration, Any], None] | None = None
+    # Taken before an update and passed to ``after_update`` with the nested write.
+    snapshot: Callable[[OrgIntegrationSerializer, OrgIntegration], Any] | None = None
+    after_update: Callable[[OrgIntegrationSerializer, OrgIntegration, Any, Any], None] | None = None
+
+    @property
+    def shown_fields(self) -> frozenset[str]:
+        return self.read_fields | ({self.nested} if self.nested else frozenset())
 
 
 class OrgIntegrationSerializer(serializers.ModelSerializer):
@@ -389,9 +458,11 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
     integration_type_display = serializers.CharField(source="get_integration_type_display", read_only=True)
     # Present in responses only when integration_type == VPN (removed in to_representation otherwise)
     vpn_secret = OrgIntegrationVPNSecretSerializer(required=False)
+    # Present only for BUILD_ENV integrations. A write replaces the whole set of variables.
+    build_env = BuildEnvVarSerializer(source="build_env_vars", many=True, required=False)
     dast_state = serializers.SerializerMethodField()
 
-    # VPN routing FK — nullable, only applicable to non-VPN integration types
+    # VPN routing FK — nullable; not applicable to VPN or BUILD_ENV integrations
     vpn_integration = VpnLinkField(
         allow_null=True,
         required=False,
@@ -413,6 +484,7 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             "secret",
             "has_secret",
             "vpn_secret",
+            "build_env",
             "vpn_integration",
             "dast_state",
             "is_active",
@@ -445,17 +517,23 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
         # Application-level guards specific to integration_type. Centralised
         # here so the view stays a thin dispatcher and DB constraints are
         # never exposed as 500s to API clients.
+        if self.instance is not None and attrs.get("integration_type", self.instance.integration_type) != (
+            self.instance.integration_type
+        ):
+            raise serializers.ValidationError({"integration_type": "The type of an existing integration cannot change."})
         itype = attrs.get("integration_type") or (
             self.instance.integration_type if self.instance is not None else None
         )
-        if itype == OrgIntegrationType.CLAUDE_CODE:
-            self._validate_claude_attrs(attrs)
-        if itype == OrgIntegrationType.GERRIT:
-            self._validate_gerrit_attrs(attrs)
-        if itype == OrgIntegrationType.GITEA:
-            self._validate_gitea_attrs(attrs)
-        if itype == OrgIntegrationType.DAST:
-            self._validate_dast_attrs(attrs)
+        spec = _spec_for(itype)
+        if spec.validate_attrs is not None:
+            spec.validate_attrs(self, attrs)
+        for owner in _INTEGRATION_TYPE_SPECS.values():
+            if (
+                owner.foreign_nested_error is not None
+                and owner.nested != spec.nested
+                and self.fields[owner.nested].source in attrs
+            ):
+                raise serializers.ValidationError({owner.nested: owner.foreign_nested_error})
         organization = self.context.get("organization")
         name = attrs.get("name") or (self.instance.name if self.instance is not None else None)
         if organization is not None and itype and name:
@@ -507,6 +585,25 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"config": str(exc)}) from exc
         attrs["config"] = config.to_snapshot()
 
+    def _validate_build_env_attrs(self, attrs):
+        """Variables carry the credentials: no secret or VPN route, unique names, a value for every new name."""
+        if attrs.get("secret"):
+            raise serializers.ValidationError({"secret": "A build environment integration keeps its values in variables."})
+        if attrs.get("vpn_integration") is not None:
+            raise serializers.ValidationError({"vpn_integration": "A build environment integration has no network route."})
+        variables = attrs.get("build_env_vars")
+        if variables is None:
+            return
+        stored = set(self.instance.build_env_vars.values_list("name", flat=True)) if self.instance is not None else set()
+        seen: set[str] = set()
+        for variable in variables:
+            name = variable["name"]
+            if name in seen:
+                raise serializers.ValidationError({"build_env": f"{name} is listed more than once."})
+            seen.add(name)
+            if "value" not in variable and name not in stored:
+                raise serializers.ValidationError({"build_env": f"{name} needs a value."})
+
     def _validate_claude_attrs(self, attrs):
         """
         All CLAUDE_CODE-specific create/update guards in one place.
@@ -556,33 +653,50 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        # Only include vpn_secret for VPN integrations; for all others it's irrelevant noise
-        if instance.integration_type != OrgIntegrationType.VPN:
-            data.pop("vpn_secret", None)
-        # VPN integrations cannot themselves route through another VPN
-        if instance.integration_type == OrgIntegrationType.VPN:
+        spec = _spec_for(instance.integration_type)
+        for field in _TYPE_FIELDS - spec.shown_fields:
+            data.pop(field, None)
+        if not spec.vpn_routable:
             data.pop("vpn_integration", None)
-        if instance.integration_type == OrgIntegrationType.DAST:
-            data["config"] = instance.get_dast_config().to_snapshot()
-        else:
-            data.pop("dast_state", None)
+        if spec.represent is not None:
+            spec.represent(self, instance, data)
         return data
 
     def update(self, instance, validated_data):
-        previous_dast_connection = None
-        if instance.integration_type == OrgIntegrationType.DAST:
-            previous_dast_connection = (
-                instance.config,
-                instance.secret,
-                instance.vpn_integration_id,
-                instance.is_active,
-            )
+        spec = _spec_for(instance.integration_type)
+        before = spec.snapshot(self, instance) if spec.snapshot is not None else None
         # On PATCH: if secret is not provided at all, keep existing value.
         if "secret" not in self.initial_data:
             validated_data.pop("secret", None)
-        vpn_data = validated_data.pop("vpn_secret", None)
+        nested_writes = self._pop_nested_writes(validated_data)
         instance = super().update(instance, validated_data)
-        if instance.integration_type == OrgIntegrationType.VPN and vpn_data is not None:
+        if spec.after_update is not None:
+            spec.after_update(self, instance, nested_writes.get(spec.nested), before)
+        return instance
+
+    def create(self, validated_data):
+        nested_writes = self._pop_nested_writes(validated_data)
+        instance = super().create(validated_data)
+        spec = _spec_for(instance.integration_type)
+        if spec.after_create is not None:
+            spec.after_create(self, instance, nested_writes.get(spec.nested))
+        return instance
+
+    def _pop_nested_writes(self, validated_data) -> dict[str, Any]:
+        """Remove every type-owned nested write from ``validated_data``, keyed by field name."""
+        return {
+            spec.nested: validated_data.pop(self.fields[spec.nested].source, None)
+            for spec in _INTEGRATION_TYPE_SPECS.values()
+            if spec.nested is not None
+        }
+
+    def _create_vpn_secret(self, instance, vpn_data):
+        OrgIntegrationVPNSecret.objects.create(integration=instance, **(vpn_data or {}))
+        instance.refresh_from_db()
+
+    def _update_vpn_secret(self, instance, vpn_data, _before):
+        """Apply a VPN secret write and mark DAST integrations routed through this VPN for revalidation."""
+        if vpn_data is not None:
             vpn_secret, _ = OrgIntegrationVPNSecret.objects.get_or_create(integration=instance)
             vpn_ser = OrgIntegrationVPNSecretSerializer(
                 vpn_secret,
@@ -593,31 +707,68 @@ class OrgIntegrationSerializer(serializers.ModelSerializer):
             vpn_ser.is_valid(raise_exception=True)
             vpn_ser.save()
             instance.refresh_from_db()
-        if instance.integration_type == OrgIntegrationType.DAST:
-            current_dast_connection = (
-                instance.config,
-                instance.secret,
-                instance.vpn_integration_id,
-                instance.is_active,
-            )
-            if current_dast_connection != previous_dast_connection:
-                schedule_dast_validation(instance)
-        elif instance.integration_type == OrgIntegrationType.VPN and (
-            vpn_data is not None
-            or any(field in self.initial_data for field in ("config", "secret", "is_active"))
-        ):
+        if vpn_data is not None or any(field in self.initial_data for field in ("config", "secret", "is_active")):
             mark_vpn_linked_dast_validations_pending(instance)
-        return instance
 
-    def create(self, validated_data):
-        vpn_data = validated_data.pop("vpn_secret", None)
-        instance = super().create(validated_data)
-        if instance.integration_type == OrgIntegrationType.VPN:
-            OrgIntegrationVPNSecret.objects.create(integration=instance, **(vpn_data or {}))
-            instance.refresh_from_db()
-        elif instance.integration_type == OrgIntegrationType.DAST:
+    def _create_build_env(self, instance, variables):
+        if variables is not None:
+            instance.replace_build_env({variable["name"]: variable["value"] for variable in variables})
+
+    def _update_build_env(self, instance, variables, _before):
+        """Replace the variables; a variable sent without a value keeps its stored value."""
+        if variables is not None:
+            instance.replace_build_env({variable["name"]: variable.get("value") for variable in variables})
+
+    def _represent_dast(self, instance, data):
+        data["config"] = instance.get_dast_config().to_snapshot()
+
+    def _dast_connection(self, instance):
+        """What a DAST validation probe depends on."""
+        return (instance.config, instance.secret, instance.vpn_integration_id, instance.is_active)
+
+    def _schedule_dast_validation(self, instance, _nested):
+        schedule_dast_validation(instance)
+
+    def _revalidate_changed_dast_connection(self, instance, _nested, before):
+        if self._dast_connection(instance) != before:
             schedule_dast_validation(instance)
-        return instance
+
+
+_INTEGRATION_TYPE_SPECS: dict[OrgIntegrationType, _IntegrationTypeSpec] = {
+    OrgIntegrationType.VPN: _IntegrationTypeSpec(
+        nested="vpn_secret",
+        vpn_routable=False,
+        after_create=OrgIntegrationSerializer._create_vpn_secret,
+        after_update=OrgIntegrationSerializer._update_vpn_secret,
+    ),
+    OrgIntegrationType.BUILD_ENV: _IntegrationTypeSpec(
+        nested="build_env",
+        foreign_nested_error="Only a build environment integration has variables.",
+        vpn_routable=False,
+        validate_attrs=OrgIntegrationSerializer._validate_build_env_attrs,
+        after_create=OrgIntegrationSerializer._create_build_env,
+        after_update=OrgIntegrationSerializer._update_build_env,
+    ),
+    OrgIntegrationType.DAST: _IntegrationTypeSpec(
+        read_fields=frozenset({"dast_state"}),
+        validate_attrs=OrgIntegrationSerializer._validate_dast_attrs,
+        represent=OrgIntegrationSerializer._represent_dast,
+        after_create=OrgIntegrationSerializer._schedule_dast_validation,
+        snapshot=OrgIntegrationSerializer._dast_connection,
+        after_update=OrgIntegrationSerializer._revalidate_changed_dast_connection,
+    ),
+    OrgIntegrationType.CLAUDE_CODE: _IntegrationTypeSpec(validate_attrs=OrgIntegrationSerializer._validate_claude_attrs),
+    OrgIntegrationType.GERRIT: _IntegrationTypeSpec(validate_attrs=OrgIntegrationSerializer._validate_gerrit_attrs),
+    OrgIntegrationType.GITEA: _IntegrationTypeSpec(validate_attrs=OrgIntegrationSerializer._validate_gitea_attrs),
+}
+# A type without an entry has only the fields every integration shares.
+_GENERIC_SPEC = _IntegrationTypeSpec()
+# Fields shown only for the type that owns them.
+_TYPE_FIELDS = frozenset().union(*(spec.shown_fields for spec in _INTEGRATION_TYPE_SPECS.values()))
+
+
+def _spec_for(integration_type: str | None) -> _IntegrationTypeSpec:
+    return _INTEGRATION_TYPE_SPECS.get(integration_type, _GENERIC_SPEC)
 
 
 class ProjectIntegrationOverrideSerializer(serializers.ModelSerializer):
@@ -672,7 +823,7 @@ class OrgIntegrationListCreateAPI(AISTAPIView):
     )
     def get(self, request, org_id: int):
         org = self.resolve(pk=org_id)
-        qs = org.integrations.all()
+        qs = org.integrations.prefetch_related("build_env_vars")
         return Response(OrgIntegrationSerializer(qs, many=True).data)
 
     @extend_schema(
@@ -1126,158 +1277,6 @@ class OrgIntegrationValidateStatusAPI(AISTAPIView):
                 return Response({"state": "PENDING", "valid": None, "detail": ""})
             return Response({"state": "FAILURE", "valid": False, "detail": "Validation failed — see server logs."})
         return Response({"state": ar.state, "valid": None, "detail": ""})
-
-
-def _validate_integration(integration: OrgIntegration) -> tuple[bool, str]:
-    """Return (valid, detail) without raising on credential failures."""
-    itype = integration.integration_type
-    secret = integration.secret or ""
-    config = integration.config or {}
-
-    if itype == OrgIntegrationType.GITLAB:
-        import gitlab  # noqa: PLC0415
-
-        base_url = config.get("base_url") or "https://gitlab.com"
-        try:
-            with integration.scoped_session(execution_id=f"validate-{integration.pk}") as session:
-                gl = gitlab.Gitlab(base_url, private_token=secret or None, session=session)
-                gl.auth()
-        except Exception as exc:
-            logger.exception("Integration[%s] GITLAB validation error", integration.pk)
-            return False, f"Validation failed ({type(exc).__name__}) — see server logs."
-        else:
-            return True, ""
-
-    if itype == OrgIntegrationType.SLACK:
-        from aist.notifications import AISTSlackNotificationManager  # noqa: PLC0415
-
-        try:
-            mgr = AISTSlackNotificationManager()
-            ok = mgr.test_token(secret)
-        except Exception as exc:
-            logger.exception("Integration[%s] SLACK validation error", integration.pk)
-            return False, f"Validation failed ({type(exc).__name__}) — see server logs."
-        else:
-            return ok, "" if ok else "Slack auth failed"
-
-    if itype == OrgIntegrationType.GITHUB:
-        # GitHub App auth is validated at installation time; no stored secret to test.
-        return True, "GitHub uses App-level auth; no credential stored."
-
-    if itype == OrgIntegrationType.GERRIT:
-        from aist.tasks.integrations import _gerrit_rest  # noqa: PLC0415
-
-        if not (config.get("base_url") or "").strip():
-            return False, "Gerrit integration requires a base_url in config."
-        try:
-            with integration.scoped_session(execution_id=f"validate-{integration.pk}") as session:
-                rest, _base_url = _gerrit_rest(integration, session)
-                rest.get("/accounts/self")
-        except Exception as exc:
-            logger.exception("Integration[%s] GERRIT validation error", integration.pk)
-            return False, f"Validation failed ({type(exc).__name__}) — see server logs."
-        else:
-            return True, ""
-
-    if itype == OrgIntegrationType.GITEA:
-        from aist.tasks.integrations import _gitea_headers  # noqa: PLC0415
-
-        base_url = (config.get("base_url") or "").rstrip("/")
-        if not base_url:
-            return False, "Gitea integration requires a base_url in config."
-        try:
-            with integration.scoped_session(execution_id=f"validate-{integration.pk}") as session:
-                # /api/v1/user requires the "read:user" scope, which a token scoped only
-                # for repository access (the actual use of this integration) won't have.
-                # /api/v1/repos/search only needs "read:repository", matching what
-                # fetch_gitea_projects actually calls.
-                resp = session.get(
-                    f"{base_url}/api/v1/repos/search",
-                    headers=_gitea_headers(integration),
-                    params={"limit": 1},
-                    timeout=15,
-                )
-                resp.raise_for_status()
-        except Exception as exc:
-            logger.exception("Integration[%s] GITEA validation error", integration.pk)
-            return False, f"Validation failed ({type(exc).__name__}) — see server logs."
-        else:
-            return True, ""
-
-    if itype == OrgIntegrationType.EMAIL:
-        # Basic SMTP connectivity check would require opening a socket; skip for now.
-        return True, "Email configuration is not automatically validated."
-
-    if itype == OrgIntegrationType.VPN:
-        return _validate_vpn_integration(integration)
-
-    if itype == OrgIntegrationType.CLAUDE_CODE:
-        # All Claude-specific knowledge lives in aist/integrations/claude.py
-        # (architectural invariant I1). Dispatch is a one-liner.
-        from aist.integrations.claude import probe_claude_token  # noqa: PLC0415
-        return probe_claude_token(integration)
-
-    if itype == OrgIntegrationType.DAST:
-        # All DAST-specific knowledge lives in aist/integrations/dast.py, mirroring
-        # the Claude single-concentrator invariant above. Dispatch is a one-liner.
-        from aist.integrations.dast import probe_dast_gateway  # noqa: PLC0415
-        return probe_dast_gateway(integration)
-
-    return False, f"No validator for integration type {itype}"
-
-
-def _parse_remote_from_ovpn(ovpn_content: str) -> str | None:
-    """Return the hostname from the first 'remote <host> [port] [proto]' line."""
-    for line in ovpn_content.splitlines():
-        parts = line.strip().split()
-        if len(parts) >= 2 and parts[0] == "remote":
-            return parts[1]
-    return None
-
-
-def _validate_vpn_integration(integration: OrgIntegration) -> tuple[bool, str]:
-    """
-    Validate a VPN integration by pinging the VPN server endpoint.
-
-    Uses config.ping_target if set; otherwise parses the 'remote' directive from
-    the .ovpn content.  Does NOT establish a VPN tunnel — this is a lightweight
-    reachability check only.
-    """
-    vpn_secret = getattr(integration, "vpn_secret", None)
-    if not vpn_secret or not vpn_secret.ovpn_content:
-        return False, "No VPN configuration stored. Upload an .ovpn file first."
-
-    config = integration.config or {}
-    ping_target = config.get("ping_target") or _parse_remote_from_ovpn(vpn_secret.ovpn_content)
-    if not ping_target:
-        return False, (
-            "Cannot determine server address. "
-            "Set config.ping_target or add a 'remote <host>' directive in the .ovpn content."
-        )
-
-    try:
-        ping_bin = shutil.which("ping")
-        if ping_bin is None:
-            return False, "Ping binary is not available on the server."
-        result = subprocess.run(
-            [ping_bin, "-c", "1", "-W", "5", ping_target],
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
-        is_reachable = result.returncode == 0
-        detail = (
-            f"{ping_target} is reachable."
-            if is_reachable
-            else f"{ping_target} unreachable (ping returned {result.returncode})."
-        )
-    except subprocess.TimeoutExpired:
-        return False, f"Ping to {ping_target} timed out."
-    except Exception as exc:
-        logger.exception("VPN reachability check failed for %s", ping_target)
-        return False, f"Reachability check failed ({type(exc).__name__}) — see server logs."
-    else:
-        return is_reachable, detail
 
 
 # ---------------------------------------------------------------------------

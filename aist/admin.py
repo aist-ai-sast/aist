@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.contrib import admin
 
-from aist.models import OrgIntegration, OrgIntegrationVPNSecret, OrgMembershipHistory
+from aist.models import OrgIntegration, OrgIntegrationBuildEnvVar, OrgIntegrationVPNSecret, OrgMembershipHistory
 
 
 @admin.register(OrgIntegration)
@@ -83,6 +83,26 @@ class OrgIntegrationVPNSecretAdmin(admin.ModelAdmin):
     @admin.display(boolean=True, description="Username")
     def has_username(self, obj):
         return bool(obj.vpn_username)
+
+
+@admin.register(OrgIntegrationBuildEnvVar)
+class OrgIntegrationBuildEnvVarAdmin(admin.ModelAdmin):
+
+    """Read-only list of build-environment variable names; values are managed only through the REST API."""
+
+    list_display = ("integration", "name")
+    search_fields = ("name", "integration__name")
+    readonly_fields = ("integration", "name")
+    exclude = ("value",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(OrgMembershipHistory)

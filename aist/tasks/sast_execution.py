@@ -9,6 +9,7 @@ from django.db import transaction
 from dojo.models import Finding, Test
 
 from aist.celery_signals import ActionRunSource, ActionRunStatus, record_action_run
+from aist.integrations.build_env import BuildEnvironment, build_environment
 from aist.integrations.claude import claude_subprocess_env
 from aist.integrations.egress import resolve_source_vpn
 from aist.launch_data import PipelineLaunchData
@@ -94,6 +95,7 @@ class _SastRuntime:
     agent_runtime_env: dict
     bridge_client: object
     vpn: ResolvedIntegration | None
+    build_env: BuildEnvironment
 
 
 def _execute_sast_pipeline(run: _SastRun, params: dict) -> None:
@@ -144,6 +146,7 @@ def _prepare_sast_runtime(run: _SastRun, pipeline: AISTPipeline, arguments: Pipe
         agent_runtime_env=build_agent_runtime_env(pipeline),
         bridge_client=build_bridge_client_from_settings(auth_env=claude_auth),
         vpn=resolve_source_vpn(pipeline.project),
+        build_env=build_environment(pipeline.project),
     )
 
 
@@ -183,6 +186,7 @@ def _run_sast(run: _SastRun, sast, runtime: _SastRuntime) -> PipelineLaunchData:
                         analyzers=sast.analyzers,
                         pipeline_id=pipeline_id,
                         additional_env=sast.runtime_env,
+                        secret_env=runtime.build_env.secret_values(),
                         network=f"container:{vpn_container}" if vpn_container else None,
                         bridge_client=runtime.bridge_client,
                         agent_bridge_runtime_env=runtime.agent_runtime_env,

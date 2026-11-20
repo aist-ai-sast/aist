@@ -76,6 +76,26 @@ When source acquisition needs a project VPN, the builder joins the
 execution-specific VPN sidecar. Analyzer containers consume the prepared
 workspace and do not automatically inherit that private network path.
 
+When the project resolves to a [build environment](../integrations/build-environment.md),
+AIST decrypts its variables for one run and passes them to the execution package
+apart from the launch parameters. Before the builder starts, the package refuses
+a name that the builder reserves or that the launch environment also sets; it
+then adds the variables to the builder's environment and masks their values in
+the relayed builder output. Everything that runs inside the builder — init,
+the build command and the files it executes, and a build-capture adapter — sees
+them. Separate analyzer containers receive only the variables each analyzer
+declares by name, so they do not inherit the builder's environment wholesale.
+
+For every container it starts, the package hands environment values to Docker
+through an owner-only environment file in a private temporary directory, removed
+once the container exits, rather than on the command line or in the Docker
+client's own environment. A name or value such a file cannot carry, such as a
+value with a line break, fails the run before the container starts.
+
+The builder runs as root and mounts the worker host's Docker socket to start
+analyzer containers, so the code a build executes holds the worker's
+Docker-daemon trust; see [security boundaries](../security/threat-register.md).
+
 The connector receives its command, its provider token, and its output directory
 as owner-only files rather than environment variables, so the worker and the
 container must agree on who that owner is. The worker hands ownership to the

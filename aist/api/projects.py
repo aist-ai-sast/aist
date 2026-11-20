@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.shortcuts import get_object_or_404
 from dojo.models import Product, SLA_Configuration
 from drf_spectacular.utils import OpenApiResponse, extend_schema
@@ -70,6 +70,16 @@ class AISTProjectSerializer(serializers.ModelSerializer):
             "updated",
             "repository",
         ]
+
+
+class AISTProjectListItemSerializer(AISTProjectSerializer):
+    can_operate = serializers.BooleanField(
+        read_only=True,
+        help_text="True when the requesting user may change this project's configuration (PROJECT_OPERATE).",
+    )
+
+    class Meta(AISTProjectSerializer.Meta):
+        fields = [*AISTProjectSerializer.Meta.fields, "can_operate"]
 
 
 def _validate_script_content(value: str) -> str:
@@ -198,7 +208,7 @@ class AISTProjectListAPI(AISTAuthzMixin, generics.ListAPIView):
 
     """List all current AISTProjects."""
 
-    serializer_class = AISTProjectSerializer
+    serializer_class = AISTProjectListItemSerializer
     authz = ResourcePolicy(resource=AISTProject, read=Action.PRODUCT_READ, write=Action.PROJECT_OPERATE)
 
     @extend_schema(
@@ -210,8 +220,10 @@ class AISTProjectListAPI(AISTAuthzMixin, generics.ListAPIView):
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
+        operable = self.authorized_queryset(action=Action.PROJECT_OPERATE).filter(pk=OuterRef("pk"))
         return (
             self.authorized_queryset_for_request()
+            .annotate(can_operate=Exists(operable))
             .select_related("product")
             .order_by("created")
         )

@@ -27,6 +27,11 @@ from pydantic import SecretStr
 
 from aist.integrations.resolver import resolve_integration
 from aist.models import OrgIntegrationType
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
+
+_import_sast_pipeline_package()
+
+from pipeline.redaction import Redactor  # noqa: E402
 
 if TYPE_CHECKING:
     from aist.models import AISTProject, OrgIntegration
@@ -182,8 +187,4 @@ def redact_claude_secret(text: str, env: dict[str, SecretStr]) -> str:
     the redactor agent-agnostic: the same function works for any future
     agent that uses the generic ``subprocess_env`` channel.
     """
-    for secret in env.values():
-        value = secret.get_secret_value()
-        if value:
-            text = text.replace(value, _REDACTED)
-    return text
+    return Redactor.of((secret.get_secret_value() for secret in env.values()), mask=_REDACTED)(text)

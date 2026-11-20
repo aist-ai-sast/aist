@@ -127,6 +127,15 @@ class AISTApiBase(TestCase):
             version="other",
         )
 
+    def client_for_member(self, username: str, role_id: int, product_type=None) -> APIClient:
+        """An API client of a new user holding ``role_id`` on ``product_type``, the base product type by default."""
+        user = get_user_model().objects.create_user(username=username, email=f"{username}@example.com", password="pass")  # noqa: S106
+        role, _ = Role.objects.get_or_create(id=role_id, defaults={"name": f"Role {role_id}"})
+        Product_Type_Member.objects.create(product_type=product_type or self.prod_type, user=user, role=role)
+        client = APIClient()
+        client.force_authenticate(user=user)
+        return client
+
     def login_as_superuser(self):
         """Promote the base user to superuser and log the session client in, as the /aist-admin/ pages require."""
         self.user.is_superuser = True

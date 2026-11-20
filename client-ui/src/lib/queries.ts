@@ -22,6 +22,7 @@ import type {
 import { fetchJson, normalizeList } from "./api";
 import { type FindingsFilterUrlState, toFindingsApiFilters } from "./findingsFilterUrl";
 import { getRoute } from "./routes";
+import type { IntegrationType } from "./integrationTypes";
 
 type WorkItemLinkApi = {
   id: number;
@@ -81,6 +82,7 @@ type AistProjectApi = {
   product_name: string;
   organization_id?: number | null;
   organization_name?: string | null;
+  can_operate: boolean;
 };
 
 type ProductSummaryApi = {
@@ -382,6 +384,7 @@ export function useProjects() {
         name: item.product_name,
         organizationId: item.organization_id ?? null,
         organizationName: item.organization_name ?? null,
+        canOperate: item.can_operate,
       }));
     },
   });
@@ -1159,15 +1162,22 @@ export type VpnSecretStatus = {
   has_username: boolean;
 };
 
+/** A build-environment variable; its value is never returned. */
+export type BuildEnvVariableStatus = {
+  name: string;
+  has_value: boolean;
+};
+
 export type OrgIntegration = {
   id: number;
   organization: number;
-  integration_type: string;
+  integration_type: IntegrationType;
   integration_type_display: string;
   name: string;
   config: Record<string, unknown>;
   has_secret: boolean;
   vpn_secret?: VpnSecretStatus;
+  build_env?: BuildEnvVariableStatus[];
   vpn_integration?: number | null;
   is_active: boolean;
   created: string;
@@ -1195,7 +1205,7 @@ export function isDastSyncInFlight(integration: OrgIntegration): boolean {
 export type ProjectIntegrationOverride = {
   id: number;
   project: number;
-  integration_type: string;
+  integration_type: IntegrationType;
   org_integration: number | null;
   config_override: Record<string, unknown>;
   is_disabled: boolean;

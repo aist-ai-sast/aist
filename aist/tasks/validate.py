@@ -7,6 +7,7 @@ from celery import shared_task
 from django.db.models import Q
 from django.utils import timezone
 
+from aist.integrations import validation as integration_validation
 from aist.integrations.dast_capability_sync import (
     SYNC_IN_FLIGHT_GRACE,
     DastCapabilitySyncTicket,
@@ -69,9 +70,7 @@ def validate_integration(self, integration_id: int, async_user_id=None) -> dict:
     """
     try:
         integration = OrgIntegration.objects.select_related("vpn_integration", "vpn_secret").get(pk=integration_id)
-        from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
-
-        valid, detail = _validate_integration(integration)
+        valid, detail = integration_validation.validate_integration(integration)
     except Exception:
         # Store integration_id in FAILURE meta so the status endpoint can verify
         # task ownership before returning any error details to the caller.

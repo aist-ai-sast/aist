@@ -9,6 +9,7 @@ from django.urls import reverse
 from dojo.models import Product, Product_Type, SLA_Configuration
 from rest_framework.test import APIClient
 
+from aist.integrations.validation import validate_integration
 from aist.models import (
     AISTProject,
     AISTProjectVersion,
@@ -309,7 +310,7 @@ class GiteaProjectsListViewTests(TestCase):
 
 class GiteaIntegrationValidateTests(TestCase):
 
-    """Unit-level coverage of the GITEA branch in ``_validate_integration``."""
+    """Unit-level coverage of the GITEA probe behind ``validate_integration``."""
 
     def setUp(self):
         self.org = Organization.objects.create(name="Validate Org")
@@ -329,13 +330,11 @@ class GiteaIntegrationValidateTests(TestCase):
         (needs "read:user") — a token scoped only for repo access, which is all this
         integration actually uses, would otherwise fail validation with a 403.
         """
-        from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
-
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_get.return_value = mock_resp
 
-        valid, detail = _validate_integration(self.integration)
+        valid, detail = validate_integration(self.integration)
 
         self.assertTrue(valid)
         self.assertEqual(detail, "")
@@ -346,24 +345,20 @@ class GiteaIntegrationValidateTests(TestCase):
 
     @patch("requests.Session.get")
     def test_validate_auth_failure_returns_invalid(self, mock_get):
-        from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
-
         mock_resp = MagicMock()
         mock_resp.raise_for_status.side_effect = requests.HTTPError("401 Unauthorized")
         mock_get.return_value = mock_resp
 
-        valid, detail = _validate_integration(self.integration)
+        valid, detail = validate_integration(self.integration)
 
         self.assertFalse(valid)
         self.assertIn("HTTPError", detail)
 
     def test_validate_missing_base_url_returns_invalid_without_network_call(self):
-        from aist.api.org_integrations import _validate_integration  # noqa: PLC0415
-
         self.integration.config = {}
         self.integration.save(update_fields=["config"])
 
-        valid, detail = _validate_integration(self.integration)
+        valid, detail = validate_integration(self.integration)
 
         self.assertFalse(valid)
         self.assertIn("base_url", detail)

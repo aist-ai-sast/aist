@@ -31,7 +31,7 @@ class DastGatewayProbeTests(TestCase):
 
     """
     Unit-level tests for ``probe_dast_gateway`` — the probe wired into the existing
-    ``_validate_integration`` dispatch (aist/api/org_integrations.py) for the "Validate" button.
+    ``validate_integration`` dispatch (aist/integrations/validation.py) for the "Validate" button.
     """
 
     def setUp(self):

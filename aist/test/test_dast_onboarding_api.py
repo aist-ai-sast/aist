@@ -217,6 +217,66 @@ class DastOnboardingAPITests(AISTApiBase):
         self.assertEqual(integration.secret, TOKEN)
 
     @patch("aist.integrations.dast_validation.current_app.send_task")
+    def test_a_general_integration_edit_revalidates_only_a_changed_connection(self, send_task):
+        with self.captureOnCommitCallbacks(execute=True):
+            integration_id = self._import().data["id"]
+        vpn = OrgIntegration.objects.create(
+            organization=self.organization,
+            integration_type=OrgIntegrationType.VPN,
+            name="Route B",
+            is_active=True,
+        )
+        send_task.reset_mock()
+        detail_url = reverse("aist_api:org_integration_detail", kwargs={"integration_id": integration_id})
+
+        with self.captureOnCommitCallbacks(execute=True):
+            renamed = self.client.patch(detail_url, {"name": "Renamed only"}, format="json")
+
+        self.assertEqual(renamed.status_code, 200, renamed.data)
+        send_task.assert_not_called()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            rerouted = self.client.patch(detail_url, {"vpn_integration": vpn.pk}, format="json")
+
+        self.assertEqual(rerouted.status_code, 200, rerouted.data)
+        send_task.assert_called_once()
+        self.assertEqual(rerouted.data["vpn_integration"], vpn.pk)
+        self.assertEqual(rerouted.data["config"]["gateway_url"], "https://gateway.example")
+        self.assertEqual(rerouted.data["dast_state"]["validation_state"], DastIntegrationValidationState.VALIDATING)
+        self.assertNotIn("vpn_secret", rerouted.data)
+        self.assertNotIn("build_env", rerouted.data)
+
+    @patch("aist.integrations.dast_validation.current_app.send_task")
+    def test_editing_the_vpn_a_dast_integration_routes_through_marks_it_for_revalidation(self, send_task):
+        vpn = OrgIntegration.objects.create(
+            organization=self.organization,
+            integration_type=OrgIntegrationType.VPN,
+            name="Route A",
+            is_active=True,
+        )
+        with self.captureOnCommitCallbacks(execute=True):
+            integration_id = self._import(vpn_integration_id=vpn.pk).data["id"]
+        state = OrgIntegration.objects.get(pk=integration_id).dast_state
+        state.validation_state = DastIntegrationValidationState.READY
+        state.save(update_fields=["validation_state"])
+        vpn_url = reverse("aist_api:org_integration_detail", kwargs={"integration_id": vpn.pk})
+
+        renamed = self.client.patch(vpn_url, {"name": "Route A renamed"}, format="json")
+
+        self.assertEqual(renamed.status_code, 200, renamed.data)
+        state.refresh_from_db()
+        self.assertEqual(state.validation_state, DastIntegrationValidationState.READY)
+
+        edited = self.client.patch(vpn_url, {"vpn_secret": {"vpn_username": "route-user"}}, format="json")
+
+        self.assertEqual(edited.status_code, 200, edited.data)
+        self.assertTrue(edited.data["vpn_secret"]["has_username"])
+        self.assertNotIn("vpn_integration", edited.data)
+        self.assertNotIn("dast_state", edited.data)
+        state.refresh_from_db()
+        self.assertEqual(state.validation_state, DastIntegrationValidationState.PENDING_VALIDATION)
+
+    @patch("aist.integrations.dast_validation.current_app.send_task")
     def test_a_route_that_may_not_carry_this_organization_traffic_is_refused(self, send_task):
         with self.captureOnCommitCallbacks(execute=True):
             integration_id = self._import().data["id"]
