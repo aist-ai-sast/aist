@@ -54,3 +54,8 @@ container environment:
 
 Frontend checks use `run-client-ui-tests.zsh`. See `.github/workflows/` for the
 CI definitions and `AGENTS.md` for repository-specific contribution rules.
+
+## License
+
+AIST is released under the [BSD 3-Clause License](LICENSE). The upstream
+DefectDojo platform in `vendor/defectdojo` keeps its own license.

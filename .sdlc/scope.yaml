@@ -282,6 +282,7 @@ rules:
     paths:
       - docs/**
       - README.md
+      - LICENSE
 
   # ---- build, deploy and submodules
 
