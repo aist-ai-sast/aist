@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from math import inf
 
 from celery import shared_task
+from celery.exceptions import Ignore
+from django.conf import settings
 
 from aist.execution.adapters import UnknownLaunchAdapterError
 from aist.execution.contracts import ProviderOperation
@@ -12,9 +16,13 @@ from aist.models import (
     AISTPipeline,
     DastExecutionState,
 )
+from aist.services.pipeline_lifecycle import TERMINAL_PIPELINE_STATUSES
 from aist.tasks.dast_execution import run_dast_execution
 from aist.tasks.sast_execution import run_sast_execution
 from aist.utils.pipeline_imports import cleanup_pipeline_containers
+
+logger = logging.getLogger(__name__)
+_STOP_RETRY_SECONDS = 15
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,8 +41,8 @@ class _WorkerExecutionRuntime:
         return run_dast_execution(self.task, pipeline_id, operation=operation)
 
 
-@shared_task
-def stop_pipeline_execution(pipeline_id: str, *, async_user_id=None) -> None:
+@shared_task(bind=True, max_retries=None)
+def stop_pipeline_execution(self, pipeline_id: str, *, async_user_id=None) -> None:
     """
     Signal a running execution's containers from the host that owns them.
 
@@ -46,15 +54,27 @@ def stop_pipeline_execution(pipeline_id: str, *, async_user_id=None) -> None:
     """
     del async_user_id  # unused; accepted only for the DojoAsyncTask contract
     cleanup_pipeline_containers(pipeline_id)
+    if DastExecutionState.objects.filter(
+        pipeline_id=pipeline_id,
+        cancel_requested_at__isnull=False,
+    ).exclude(pipeline__status__in=TERMINAL_PIPELINE_STATUSES).exists():
+        # A sweep may land between observers; keep delivering the persisted operator decision.
+        raise self.retry(countdown=_STOP_RETRY_SECONDS)
 
 
-# A provider run is terminal only after an explicit domain outcome. Transport recovery is
-# therefore unbounded; last_progress_at remains telemetry and never becomes a stop decision.
-@shared_task(bind=True, max_retries=None)
+# Billiard also falls back to the pool limit for 0, so an unbounded execution needs infinity.
+@shared_task(
+    bind=True, max_retries=None,
+    time_limit=settings.AIST_PIPELINE_TASK_TIME_LIMIT or inf,
+    soft_time_limit=0,
+)
 def run_pipeline_execution(self, pipeline_id: str, async_user_id=None) -> None:
-    """Execute one persisted pipeline; the broker carries only ``pipeline_id``."""
+    """Execute one persisted SAST or DAST pipeline with its own worker limit."""
     del async_user_id
-    execution_type = AISTPipeline.objects.values_list("execution_type", flat=True).get(pk=pipeline_id)
+    execution_type = AISTPipeline.objects.filter(pk=pipeline_id).values_list("execution_type", flat=True).first()
+    if execution_type is None:
+        logger.info("Ignoring execution for deleted pipeline %s", pipeline_id)
+        raise Ignore
     try:
         driver = execution_driver_registry.resolve(execution_type)
     except UnknownLaunchAdapterError as exc:
@@ -72,5 +92,6 @@ def run_pipeline_execution(self, pipeline_id: str, async_user_id=None) -> None:
             task_id=getattr(self.request, "id", None),
             retries=int(getattr(self.request, "retries", 0) or 0),
         ):
-            return None
+            # A normal return would overwrite the live delivery's backend state with SUCCESS.
+            raise Ignore
     return driver.invoke(_WorkerExecutionRuntime(self), pipeline_id)

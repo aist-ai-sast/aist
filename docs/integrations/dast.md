@@ -116,18 +116,20 @@ connector container, which loads this integration's gateway URL and service
 token and starts, observes, and can cancel the provider run. AIST retains
 cancellation intent, pipeline state, and the final import decision throughout.
 
-A DAST scan is expected to be long. Nothing caps it at a working day, and the
-platform does not treat duration as a fault: a run is bounded by whether the
-provider is still delivering, not by how long it has been going. Two limits sit
-above that, both operator-configured — a ceiling on total run length that a
-healthy scan never reaches, and a window in which the provider must show some
-sign of life. Only silence ends a run early. See
-[DAST operations](../runbooks/dast-operations.md#cancel-and-recover) for the
-settings and how to read the resulting pipeline outcome.
+A DAST scan has no default duration limit in AIST. Provider silence is telemetry,
+not a reason to terminate a run. Transport failures are retried until the provider
+reports a terminal outcome or an operator cancels the scan. SAST and DAST share
+the configurable [execution task limit](../runbooks/deployment-and-recovery.md#execution-task-limits),
+which defaults to unlimited; other background tasks retain their own limits.
+See [DAST operations](../runbooks/dast-operations.md#what-ends-a-run) for recovery.
 
-Before the platform gives up on a run for either reason, it asks the provider one
-last time whether that run has finished. A scan that completed while AIST was no
-longer waiting is imported normally rather than recorded as lost.
+If Celery records a terminal task result while AIST holds a running provider
+identity and an active execution lease, reconciliation republishes the execution.
+The replacement resumes the same provider run from the saved log cursor and
+renews the lease. An orphaned connector is removed without sending a stop request to the provider before the
+replacement connects. A persisted operator cancellation still requests a provider
+stop. A running state without a saved provider identity is not recovered this way:
+AIST cannot establish which run it would resume.
 
 The connector validates the run and correlation identities returned by the
 gateway. When the provider reaches a terminal state, the execution runtime

@@ -64,6 +64,30 @@ Apply both to every service that runs application code — the web service, Cele
 Beat, the Celery workers, and the startup initializer — so a worker never
 imports under different rules than the request that queued it.
 
+## Execution task limits
+
+`AIST_PIPELINE_TASK_TIME_LIMIT` controls the hard time limit of one SAST or DAST
+execution task, in seconds. Set it in the deployment environment consumed by the
+Celery workers. Its default is `0`, meaning unlimited: a large project's build
+and analysis can run longer than 12 hours. Other Celery tasks retain their existing
+limits, including the global 12-hour default.
+
+A positive value caps the whole execution attempt, including SAST build and
+analysis together. It does not add resumable SAST builds: a lost SAST task finishes
+with warnings. DAST can resume a saved provider run; see
+[DAST recovery](dast-operations.md#cancel-and-recover).
+
+The task uses an infinite hard timeout for the unlimited setting because both
+`None` and `0` inherit pool defaults in the installed Celery/Billiard path.
+This setting introduces no soft timeout. Keep the global Celery soft timeout
+disabled on execution workers: an explicitly configured global soft timeout is
+still inherited and can interrupt a build or provider observer.
+
+Apply the same setting to all execution workers and restart them after changing
+it. The change applies to new deliveries, not attempts already executing in a
+worker pool. Removing the duration limit does not protect an execution from
+worker failure or a deployment restart; drain active work before restarting.
+
 ## Preserve database state
 
 Set an explicit host path for PostgreSQL data in the deployment environment:

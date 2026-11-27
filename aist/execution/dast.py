@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from django.db import transaction
+from django.db.models import Q
 
 from aist.execution.coalescing import canonical_coalesce_key
 from aist.execution.contracts import (
@@ -120,11 +121,9 @@ class DastPipelineLaunchAdapter:
     def should_recover(pipeline) -> bool:
         """Resume provider work until it reports an explicit terminal domain state."""
         return DastExecutionState.objects.filter(
+            Q(outcome__in=[DastExecutionOutcome.STOP_PENDING, DastExecutionOutcome.UNREACHABLE])
+            | (Q(outcome=DastExecutionOutcome.RUNNING, run_id__isnull=False) & ~Q(run_id="")),
             pipeline=pipeline,
-            outcome__in=[
-                DastExecutionOutcome.STOP_PENDING,
-                DastExecutionOutcome.UNREACHABLE,
-            ],
         ).exists()
 
     @staticmethod

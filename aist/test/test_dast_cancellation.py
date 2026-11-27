@@ -1,5 +1,8 @@
-from unittest.mock import patch
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock, patch
 
+from celery.exceptions import Retry
 from django.urls import reverse
 from django.utils import timezone
 from dojo.authorization.roles_permissions import Roles
@@ -26,9 +29,16 @@ from aist.models import (
 )
 from aist.services.dast_targets import refresh_dast_targets
 from aist.tasks import dast_execution
+from aist.tasks.pipeline import stop_pipeline_execution
 from aist.test.test_api import AISTApiBase
 from aist.test.test_dast_target_models import _integration_config, _target_wire
 from aist.utils.pipeline import stop_pipeline
+from aist.utils.pipeline_imports import _import_sast_pipeline_package
+
+_import_sast_pipeline_package()
+
+from pipeline.dast.connector import DastConnector, DastGatewayClient  # noqa: E402
+from pipeline.dast.contracts import DastConnectorInput, DastLogPage, DastRunState, DastRunStatus  # noqa: E402
 
 
 class DastCancellationTests(AISTApiBase):
@@ -122,6 +132,7 @@ class DastCancellationTests(AISTApiBase):
 
     def test_cancel_before_dispatch_never_waits_for_a_provider_run(self):
         pipeline, request = self._pipeline_with_request(state=PipelineLaunchRequestState.PUBLISHED)
+        DastExecutionState.objects.filter(pipeline=pipeline).update(run_id=None, log_cursor=0)
 
         with (
             patch("aist.tasks.pipeline.stop_pipeline_execution.delay") as dispatched,
@@ -138,6 +149,58 @@ class DastCancellationTests(AISTApiBase):
         dispatched.assert_not_called()
         revoke.assert_called_once_with("dast-task-id")
         finish.assert_called_once_with(pipeline.id, degraded=True)
+
+    def test_cancel_while_no_connector_exists_retries_and_reaches_the_replacement(self):
+        pipeline, _request = self._pipeline_with_request()
+        command = dast_execution.DastStartCommand(
+            idempotency_key="launch-123", correlation_id=pipeline.pk, target_id="target",
+            capability_revision=f"sha256:{'a' * 64}", trigger=None, parameters={},
+        )
+        gateway = Mock(spec=DastGatewayClient)
+        gateway.status.return_value = DastRunStatus(
+            run_id="provider-run-id", correlation_id=pipeline.pk, status=DastRunState.RUNNING,
+            selection=None, error_code=None, result_ready=False,
+        )
+        gateway.logs.return_value = DastLogPage(events=(), next_cursor=4, has_more=False)
+        observer_running = False
+        signalled = []
+
+        def sweep(_pipeline_id):
+            if observer_running:
+                signalled.append(True)
+
+        def stop_attempt(_pipeline_id):
+            with self.assertRaises(Retry):
+                stop_pipeline_execution.run(pipeline.pk)
+
+        def poll(_seconds):
+            stop_attempt(pipeline.pk)
+            self.assertTrue(signalled)
+            raise KeyboardInterrupt
+
+        with (
+            tempfile.TemporaryDirectory() as output,
+            patch("aist.tasks.pipeline.cleanup_pipeline_containers", side_effect=sweep),
+            patch.object(stop_pipeline_execution, "retry", side_effect=Retry) as retry,
+            patch.object(stop_pipeline_execution, "delay", side_effect=stop_attempt),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                stop_pipeline(pipeline)
+            gateway.stop.assert_not_called()
+            retry.assert_called_once_with(countdown=15)
+            observer_running = True
+            connector = DastConnector(gateway=gateway, output_dir=Path(output), sleep=poll)
+            connector.run(DastConnectorInput(
+                gateway_url="https://dast.internal", command=command,
+                recovery=dast_execution.DastRecoveryState.initial(command).for_run("provider-run-id").with_cursor(4),
+                stop_requested=False,
+            ))
+            gateway.stop.assert_called_once_with("provider-run-id")
+            self.assertEqual(retry.call_count, 2)
+            pipeline.status = AISTStatus.FINISHED_WITH_WARNINGS
+            pipeline.save(update_fields=["status"])
+            stop_pipeline_execution.run(pipeline.pk)
+            self.assertEqual(retry.call_count, 2)
 
     def test_cancel_after_terminal_pipeline_is_an_idempotent_noop(self):
         pipeline, request = self._pipeline_with_request()

@@ -5,9 +5,11 @@ from unittest.mock import patch
 
 from django.db import close_old_connections
 from django.test import TransactionTestCase
+from django.urls import reverse
 from django.utils import timezone
 from dojo.models import Product, Product_Type, SLA_Configuration
 
+from aist.execution.dispatching import LaunchAcceptance, accept_published_launch
 from aist.execution.leases import DEFAULT_EXECUTION_LEASE_POLICY
 from aist.execution.reconciliation import (
     DEAD_EXECUTION_TASK,
@@ -40,6 +42,7 @@ from aist.models import (
 from aist.services.dast_targets import refresh_dast_targets
 from aist.test.test_api import AISTApiBase
 from aist.test.test_dast_target_models import _integration_config, _target_wire
+from aist.utils.pipeline import stop_pipeline
 
 
 class LaunchRequestReconciliationTests(AISTApiBase):
@@ -252,6 +255,58 @@ class LaunchRequestReconciliationTests(AISTApiBase):
         self.assertEqual(request.failure_code, "")
 
     def test_dead_dast_task_resumes_known_provider_run_without_releasing_lease(self):
+        for outcome in (DastExecutionOutcome.RUNNING, DastExecutionOutcome.STOP_PENDING, DastExecutionOutcome.UNREACHABLE):
+            with self.subTest(outcome=outcome):
+                self._reconcile_dead_dast(outcome=outcome, run_id="provider-run-id")
+
+    def test_dead_dast_task_without_accepted_run_keeps_failure_behavior(self):
+        for run_id in (None, ""):
+            with self.subTest(run_id=run_id):
+                self._reconcile_dead_dast(outcome=DastExecutionOutcome.RUNNING, run_id=run_id)
+
+    def test_stale_dead_task_observation_does_not_replace_a_newly_resumed_worker(self):
+        self._reconcile_dead_dast(outcome=DastExecutionOutcome.RUNNING, run_id="provider-run-id", replace_owner=True)
+
+    def test_stop_after_recovery_publication_keeps_resume_admissible_and_capacity_held(self):
+        self._stop_recovered_run(via_launch_request=False)
+
+    def test_cancel_launch_request_after_recovery_keeps_resume_admissible_and_capacity_held(self):
+        self._stop_recovered_run(via_launch_request=True)
+
+    def _stop_recovered_run(self, *, via_launch_request):
+        pipeline = self._reconcile_dead_dast(outcome=DastExecutionOutcome.RUNNING, run_id="provider-run-id")
+        request = pipeline.launch_request
+        with (
+            patch("aist.tasks.pipeline.stop_pipeline_execution.delay") as signal,
+            patch("aist.utils.pipeline._revoke_task") as revoke,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            if via_launch_request:
+                response = self.client.post(reverse(
+                    "aist_api:pipeline_launch_request_cancel", kwargs={"request_id": request.pk},
+                ))
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data["stopped_pipeline_id"], pipeline.pk)
+            else:
+                stop_pipeline(pipeline)
+
+        pipeline.refresh_from_db()
+        request.refresh_from_db()
+        state = pipeline.dast_execution_state
+        self.assertEqual(pipeline.status, AISTStatus.EXECUTING)
+        self.assertEqual(request.state, PipelineLaunchRequestState.PUBLISHED)
+        self.assertEqual(state.outcome, DastExecutionOutcome.STOP_PENDING)
+        self.assertIsNotNone(state.cancel_requested_at)
+        self.assertEqual((state.run_id, state.log_cursor), ("provider-run-id", 9))
+        self.assertIsNone(PipelineExecutionLease.objects.get(pipeline=pipeline).released_at)
+        revoke.assert_not_called()
+        signal.assert_called_once_with(pipeline.pk)
+        self.assertEqual(
+            accept_published_launch(pipeline_id=pipeline.pk, task_id=str(request.task_id)),
+            LaunchAcceptance.ACCEPTED,
+        )
+
+    def _reconcile_dead_dast(self, *, outcome, run_id, replace_owner=False):
         now = timezone.now()
         request = PipelineLaunchRequest.objects.create(
             project=self.project,
@@ -272,24 +327,44 @@ class LaunchRequestReconciliationTests(AISTApiBase):
         )
         DastExecutionState.objects.create(
             pipeline=pipeline,
-            run_id="provider-run-id",
+            run_id=run_id,
             log_cursor=9,
-            outcome=DastExecutionOutcome.STOP_PENDING,
+            outcome=outcome,
         )
         request.pipeline = pipeline
         request.save(update_fields=["pipeline", "updated"])
         lease = self._lease(request, pipeline=pipeline, now=now)
 
+        def task_state(_task_id):
+            if replace_owner:
+                # Another reconciler republishes and a worker accepts before this one obtains the lock.
+                new_task_id = uuid.uuid4()
+                PipelineLaunchRequest.objects.filter(pk=request.pk).update(task_id=new_task_id)
+                AISTPipeline.objects.filter(pk=pipeline.pk).update(run_task_id=str(new_task_id))
+            return "FAILURE"
+
         with (
             patch("aist.execution.reconciliation.current_app.send_task") as send_task,
             self.captureOnCommitCallbacks(execute=True),
         ):
-            stats = reconcile_launch_requests(now=now, task_state_getter=lambda _task_id: "FAILURE")
+            stats = reconcile_launch_requests(now=now, task_state_getter=task_state)
 
         request.refresh_from_db()
         pipeline.refresh_from_db()
         execution_state = pipeline.dast_execution_state
         lease.refresh_from_db()
+        if replace_owner:
+            self.assertEqual(pipeline.status, AISTStatus.EXECUTING)
+            self.assertEqual(request.state, PipelineLaunchRequestState.DISPATCHED)
+            self.assertEqual(stats["resumed_executions"], 0)
+            send_task.assert_not_called()
+            return pipeline
+        if not run_id:
+            self.assertEqual(request.failure_code, DEAD_EXECUTION_TASK)
+            self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
+            self.assertIsNotNone(lease.released_at)
+            send_task.assert_not_called()
+            return pipeline
         self.assertEqual(request.failure_code, EXECUTION_RECOVERY_REPUBLISHED)
         self.assertEqual(request.state, PipelineLaunchRequestState.PUBLISHED)
         self.assertEqual(str(request.task_id), pipeline.run_task_id)
@@ -298,12 +373,14 @@ class LaunchRequestReconciliationTests(AISTApiBase):
         self.assertEqual(execution_state.log_cursor, 9)
         self.assertIsNone(lease.released_at)
         self.assertEqual(lease.heartbeat_at, now)
+        self.assertEqual(lease.expires_at, now + DEFAULT_EXECUTION_LEASE_POLICY.ttl)
         self.assertEqual(stats["resumed_executions"], 1)
         send_task.assert_called_once_with(
             "aist.tasks.pipeline.run_pipeline_execution",
             args=[pipeline.id],
             task_id=pipeline.run_task_id,
         )
+        return pipeline
 
     def test_pipeline_waiting_for_deduplication_is_not_reconciled_as_dead(self):
         """

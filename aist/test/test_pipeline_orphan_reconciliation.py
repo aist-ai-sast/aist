@@ -7,6 +7,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from celery.exceptions import Ignore
 from django.core.management import call_command
 from django.utils import timezone
 from dojo.models import DojoMeta
@@ -120,6 +121,7 @@ class PipelineOrphanReconciliationTests(SastWorkerTestMixin, AISTApiBase):
                     "aist.tasks.pipeline.accept_published_launch",
                     return_value=LaunchAcceptance.DUPLICATE,
                 ),
+                self.assertRaises(Ignore),
             ):
                 run_pipeline_execution.run(pipeline.id)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.db import transaction
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import serializers, status
@@ -9,8 +10,8 @@ from rest_framework.response import Response
 
 from aist.api.schema import AISTApiTag
 from aist.authz import Action, AISTAPIView, ResourcePolicy
-from aist.execution.cancellation import cancel_launch_request
-from aist.models import PipelineLaunchRequest, PipelineLaunchRequestState
+from aist.execution.cancellation import CANCELLABLE_STATES, cancel_launch_request
+from aist.models import AISTStatus, PipelineLaunchRequest, PipelineLaunchRequestState
 from aist.utils.pipeline import stop_pipeline
 
 # Read = Product_View (Reader+); write (clear/delete) = Product_Edit (Maintainer+).
@@ -204,7 +205,7 @@ class PipelineLaunchRequestDetailAPI(AISTAPIView):
 
 class PipelineLaunchRequestCancelAPI(AISTAPIView):
 
-    """Cancel a not-yet-dispatched request, or stop the pipeline if already dispatched."""
+    """Cancel an unstarted request, or request a stop for an execution including recovery."""
 
     authz = _LAUNCH_REQUEST_POLICY
 
@@ -219,15 +220,24 @@ class PipelineLaunchRequestCancelAPI(AISTAPIView):
         },
     )
     def post(self, request, request_id: int, *args, **kwargs):
-        # POST → write action → resolve enforces Product_Edit on the item's product.
-        obj = self.resolve(id=request_id)
-        if obj.state == PipelineLaunchRequestState.DISPATCHED:
-            if obj.pipeline_id is None:
-                return Response({"detail": "Dispatched request has no pipeline to stop."}, status=status.HTTP_409_CONFLICT)
-            stop_pipeline(obj.pipeline)
-            return Response({"state": obj.state, "stopped_pipeline_id": obj.pipeline_id}, status=status.HTTP_200_OK)
+        # Dispatch and reconciliation lock the request too: PUBLISHED may be a recovery
+        # of a running pipeline, whose cancellation must still reach its provider.
+        with transaction.atomic():
+            obj = get_object_or_404(
+                self.authorized_queryset_for_request().select_for_update(of=("self",)), pk=request_id,
+            )
+            recovering = (
+                obj.state in CANCELLABLE_STATES
+                and obj.pipeline_id is not None
+                and obj.pipeline.status != AISTStatus.ADMITTED
+            )
+            if obj.state == PipelineLaunchRequestState.DISPATCHED or recovering:
+                if obj.pipeline_id is None:
+                    return Response({"detail": "Dispatched request has no pipeline to stop."}, status=status.HTTP_409_CONFLICT)
+                stop_pipeline(obj.pipeline)
+                return Response({"state": obj.state, "stopped_pipeline_id": obj.pipeline_id}, status=status.HTTP_200_OK)
 
-        cancelled = cancel_launch_request(request_id=obj.pk)
+            cancelled = cancel_launch_request(request_id=obj.pk)
         if not cancelled:
             return Response(
                 {"detail": "Request already left a cancellable state."},

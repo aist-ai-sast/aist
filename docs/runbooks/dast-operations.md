@@ -105,8 +105,15 @@ AIST persists cancellation intent before contacting DAST. The signal that stops
 the run's own containers is dispatched to a worker, the only process that can
 reach them, so a stop needs a healthy worker as much as it needs a reachable
 provider. Temporary provider unreachability can leave the pipeline waiting for
-reconciliation. Do not delete launch requests, leases, or pipeline rows to force
-completion; that removes the durable state needed for safe retry and recovery.
+reconciliation. The stop worker repeats delivery every 15 seconds until the DAST
+pipeline is terminal, so a stop requested while a replacement connector is being
+started is delivered once that connector exists. Do not delete launch requests,
+leases, or pipeline rows to force completion; that removes the durable state
+needed for safe retry and recovery.
+
+Cancelling the launch request from the queue also requests a provider stop when
+its pipeline has started, including while recovery has republished the request.
+The request remains available for resume and keeps its lease until completion.
 
 When a run appears stuck, check in order:
 
@@ -118,26 +125,60 @@ When a run appears stuck, check in order:
 
 ### What ends a run
 
-A long scan is not a stuck one. Two independent limits end an autonomous run, and
-both are set from the environment on the Celery worker and beat services:
+A long scan is not a stuck one. AIST waits for a terminal provider outcome or an
+explicit cancellation. Provider silence does not end a run; unreachable and
+stop-pending attempts retry with backoff from 15 seconds up to five minutes.
+The former execution, provider-stall and unreachable-grace timeout settings are
+no longer used.
 
-| Setting | Default | What it bounds |
-|---|---|---|
-| `AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS` | 1 hour | How long the provider may deliver nothing — no run identity, no new log output — before the run is given up. This is what ends a run in practice, and what stops an unreachable provider from being retried indefinitely. `0` removes it. |
-| `AIST_DAST_EXECUTION_TIMEOUT_SECONDS` | 7 days | The ceiling on total run length. A safety limit, not a scan budget; a healthy scan does not reach it. `0` removes it. |
-| `AIST_DAST_UNREACHABLE_GRACE_SECONDS` | 1 hour | How long a run past that ceiling is still retried before it is abandoned. |
+SAST and DAST use the shared `AIST_PIPELINE_TASK_TIME_LIMIT`, defaulting to `0`
+(unlimited). See [execution task limits](deployment-and-recovery.md#execution-task-limits)
+for configuration and restart requirements. A dead attempt with a saved running
+provider identity and an unreleased lease is resumed by reconciliation.
 
-Removing both bounds leaves nothing that ends a run whose provider has gone away,
-so remove at most one. Raising the ceiling is the safe adjustment; the stall window
-is what protects the integration's single capacity slot.
+Deploy the updated application and its `sast-pipeline` submodule together before
+allowing recovery. The connector image is checked against its source digest and
+rebuilt when needed.
 
-Before abandoning a run for either reason, AIST asks the provider once more whether
-it has finished, and imports the result if one exists by then. A pipeline whose
-outcome is `TIMEOUT` therefore means the provider had nothing to hand over, not
-merely that AIST stopped waiting.
+### Reconnect to a live provider run
 
-Both bounds are recorded per run when it first starts, so changing a setting affects
-runs started afterwards. A run already in flight keeps the ceiling it was given.
+Automatic reconciliation normally handles a dead task whose provider run is still
+`RUNNING`. To remove a confirmed orphan manually:
+
+1. Check the provider run is alive. Record the pipeline's `run_id`, `log_cursor`,
+   launch-request task ID and lease. Confirm the Celery task is in a terminal
+   result state (`FAILURE`, `REVOKED` or `SUCCESS`) and no worker is still executing
+   it. Do not use this procedure to replace a healthy observer.
+2. Pause automatic reconciliation/dispatch on the worker host while inspecting and
+   removing the orphan, so recovery cannot replace it between these steps. Confirm
+   no reconciliation or dispatch task is already in flight. The pipeline must still
+   be nonterminal, its launch request dispatched, and its lease unreleased.
+3. On the Docker host that owns the connector, substitute the pipeline ID below.
+   Kill only the connector with **SIGKILL**, then wait until its `--rm` container
+   disappears. Never use `docker stop` for reattachment: SIGTERM asks the connector
+   to stop the provider run. Keep the VPN sidecar alive.
+
+   ```bash
+   pipeline_id=5444ec565ecd487fbdaeb4bccc75e3b9
+   connector="sast_aist-dast-connector_v2_${pipeline_id}"
+   docker inspect --format '{{.Id}} {{.State.Status}}' "$connector"
+   docker kill --signal=KILL "$connector"
+   docker ps -a --filter "name=^/${connector}$" --format '{{.ID}} {{.Status}}'
+   ```
+
+4. Once the last command shows no container, re-enable dispatch/reconciliation and
+   let the normal reconciliation pass run. It records
+   `EXECUTION_RECOVERY_REPUBLISHED`, replaces the task ID and renews the same lease.
+   Verify the pipeline remains executing, the connector observes the original
+   `run_id`, and logs advance from the saved cursor. Cancellation intent, if present,
+   is preserved and delivered as a stop request.
+
+A pipeline already marked `FINISHED_WITH_WARNINGS` with a released lease is not
+automatically reopened. Do not simply publish another task or clear its status:
+the integration slot may already belong to another launch. Such an incident needs
+an operator-reviewed repair of the request, pipeline and capacity ownership before
+reattachment. Alternatively, leave the provider running and import its completed
+report through [manual import](#import-an-external-result).
 
 ### VPN sidecars during a long run
 
@@ -272,8 +313,8 @@ promotion.
 | Binding stale | Capability revision, schema digest, target availability, and parameter snapshot |
 | Launch remains pending | Stored authority, readiness, capacity, and request expiry |
 | Cancellation remains pending | Worker health, provider reachability, and reconciliation progress. The signal that stops the run's containers is dispatched to a worker; with none running, the intent is recorded but never delivered |
-| A run ends as `TIMEOUT` | Whether the provider stopped delivering log output, and for how long, against `AIST_DAST_PROVIDER_STALL_TIMEOUT_SECONDS`. AIST reads the provider's status once more before abandoning a run, so this outcome means the provider had no result to hand over |
-| A long scan is cut short | The two run bounds above, and whether the provider keeps emitting log output. Duration alone never ends a run |
+| A run ends as `TIMEOUT` | The provider's terminal status and logs. AIST no longer imposes a provider-silence timeout |
+| A long scan loses its worker | Celery hard-limit or worker-loss logs, the saved provider `run_id`, the open execution lease, and reconciliation progress. See the task limit and reconnection procedure above |
 | Import rejected | Report scan type, non-empty run identity, expected target binding, allowed source identities, size, and the registered finding schema. Descriptive run metadata does not reject an import; values AIST cannot interpret appear as absent |
 | A pipeline shows no coverage or token figures | Whether the report described its run at all. A provider that reports nothing about the run imports normally and simply has nothing to show; nothing is missing on the AIST side |
 | A pipeline reports inconsistent run accounting | The provider's own breakdown against the total it reported in the same report. The import, its tests, and its findings are unaffected, so treat this as a provider reporting defect |

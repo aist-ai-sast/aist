@@ -410,6 +410,9 @@ def reconcile_launch_requests(
             )
             if request is None:
                 continue
+            if snapshot and request.task_id != snapshot["task_id"]:
+                # A concurrent recovery changed owners while the broker state was being read.
+                continue
             stats.processed += 1
             _reconcile_locked_request(
                 request,

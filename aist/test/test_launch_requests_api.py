@@ -6,10 +6,12 @@ from unittest.mock import patch
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from dojo.authorization.roles_permissions import Roles
 
 from aist.models import (
     AISTPipeline,
     AISTProjectLaunchConfig,
+    AISTStatus,
     PipelineExecutionLease,
     PipelineExecutionType,
     PipelineLaunchOrigin,
@@ -186,6 +188,49 @@ class LaunchRequestCancelAPITests(AISTApiBase):
         self.assertEqual(resp.status_code, 200)
         item.refresh_from_db()
         self.assertEqual(item.state, PipelineLaunchRequestState.CANCELLED)
+
+    def test_cancel_published_unstarted_pipeline_releases_capacity(self):
+        pipeline = self.make_pipeline("unstarted", status=AISTStatus.ADMITTED)
+        item = PipelineLaunchRequest.objects.create(
+            project=self.project, state=PipelineLaunchRequestState.PUBLISHED, pipeline=pipeline,
+        )
+        lease = self._lease(item)
+
+        response = self.client.post(self._url(item), format="json")
+
+        self.assertEqual(response.status_code, 200)
+        item.refresh_from_db()
+        pipeline.refresh_from_db()
+        lease.refresh_from_db()
+        self.assertEqual(item.state, PipelineLaunchRequestState.CANCELLED)
+        self.assertEqual(pipeline.status, AISTStatus.FINISHED_WITH_WARNINGS)
+        self.assertIsNotNone(lease.released_at)
+
+    def test_reader_cannot_cancel_recovery_request(self):
+        client = self.client_for_member("reader", Roles.Reader)
+        self._assert_recovery_cancel_forbidden(client, self.project, self.pv)
+
+    def test_other_organization_cannot_cancel_recovery_request(self):
+        self._assert_recovery_cancel_forbidden(self.client, self.other_project, self.other_pv)
+
+    def _assert_recovery_cancel_forbidden(self, client, project, version):
+        pipeline = self.make_pipeline("recovering", status=AISTStatus.EXECUTING, project_version=version)
+        item = PipelineLaunchRequest.objects.create(
+            project=project, state=PipelineLaunchRequestState.PUBLISHED, pipeline=pipeline,
+        )
+        lease = self._lease(item)
+
+        with patch("aist.api.queue.stop_pipeline") as stop:
+            response = client.post(self._url(item), format="json")
+
+        self.assertEqual(response.status_code, 404)
+        stop.assert_not_called()
+        item.refresh_from_db()
+        pipeline.refresh_from_db()
+        lease.refresh_from_db()
+        self.assertEqual(item.state, PipelineLaunchRequestState.PUBLISHED)
+        self.assertEqual(pipeline.status, AISTStatus.EXECUTING)
+        self.assertIsNone(lease.released_at)
 
     def test_cancel_claimed_request_releases_its_lease(self):
         item = PipelineLaunchRequest.objects.create(

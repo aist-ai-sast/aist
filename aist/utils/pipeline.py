@@ -220,13 +220,12 @@ def _request_dast_pipeline_stop(pipeline_id: str) -> None:
         execution_state.outcome = DastExecutionOutcome.STOP_PENDING
         execution_state.save(update_fields=["cancel_requested_at", "outcome", "updated"])
         task_id = pipeline.run_task_id
-        # A stop reaches the provider only through the connector, so cancellation stays
-        # cooperative while an execution owns this pipeline. It completes locally when nobody
-        # does: either the request was never dispatched, or no worker holds it and no provider
-        # run exists to cancel -- otherwise Stop would wait on a connector that never starts.
+        # A recovery outbox is PUBLISHED too: only an absent provider identity permits
+        # cancellation before dispatch to finish locally instead of reaching a connector.
         cancelled_before_dispatch = (
             launch_request is not None
             and launch_request.state != PipelineLaunchRequestState.DISPATCHED
+            and not execution_state.run_id
         )
         nothing_to_cancel_remotely = not execution_state.run_id and not pipeline.run_task_id
         if cancelled_before_dispatch or nothing_to_cancel_remotely:
